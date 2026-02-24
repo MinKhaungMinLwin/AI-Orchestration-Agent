@@ -7,7 +7,7 @@
 Install **Just** (task runner):
 
 ```bash
-curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+curl -fsSL https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin
 ```
 
 ---
