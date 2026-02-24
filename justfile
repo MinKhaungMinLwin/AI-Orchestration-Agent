@@ -127,6 +127,18 @@ start:
         just start-remote; \
     fi
 
+### Deploy in Runway, dont have docker-compose
+start-runway-ai:
+    set -a && . .env && . .env.docker && set +a && nohup uv run app/tstation-ai/main.py > /dev/null 2>&1 &
+
+stop-runway-ai:
+    pkill -f "app/tstation-ai/main.py" || true
+
+start-runway-ui-demo:
+    set -a && . .env && . .env.docker && set +a && nohup uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777 --server.address 0.0.0.0 > /dev/null 2>&1 &
+
+stop-runway-ui-demo:
+    pkill -f "streamlit run app/tstation-ui-demo/Home.py" || true
 
 ## Helper
 help:
