@@ -1,0 +1,56 @@
+model_list:
+  ## API Model
+  # LLM
+  - model_name: solar-pro3
+    litellm_params:
+      model: openai/solar-pro3
+      temperature: 0.7
+      top_p: 0.95
+      api_base: https://api.upstage.ai/v1
+      api_key: "os.environ/UPSTAGE_API_KEY"
+
+  - model_name: solar-pro2
+    litellm_params:
+      model: openai/solar-pro2
+      temperature: 0.7
+      top_p: 0.95
+      api_base: https://api.upstage.ai/v1
+      api_key: "os.environ/UPSTAGE_API_KEY"
+
+  - model_name: solar-mini
+    litellm_params:
+      model: openai/solar-mini
+      temperature: 0.7
+      top_p: 0.95
+      api_base: https://api.upstage.ai/v1
+      api_key: "os.environ/UPSTAGE_API_KEY"
+
+  # Embedding Passage
+  - model_name: embedding-passage
+    litellm_params:
+      model: openai/solar-embedding-1-large-passage
+      api_base: https://api.upstage.ai/v1
+      api_key: "os.environ/UPSTAGE_API_KEY"
+
+  # Embedding Query
+  - model_name: embedding-query
+    litellm_params:
+      model: openai/solar-embedding-1-large-query
+      api_base: https://api.upstage.ai/v1
+      api_key: "os.environ/UPSTAGE_API_KEY"
+
+
+#### Settings
+general_settings:
+  master_key: "os.environ/AI_GATEWAY_API_KEY"
+
+litellm_settings:
+  drop_params: false
+  num_retries: 3
+  retry_after: 2
+  request_timeout: 30
+  callbacks: ["otel"]
+
+# Fallbacks when error
+fallbacks:
+  - solar-pro3: ["solar-pro2", "solar-mini"]
