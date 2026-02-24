@@ -1,0 +1,121 @@
+logging {
+    level  = "info"
+    format = "logfmt"
+}
+
+// Loki - Logging
+local.file_match "log_files" {
+    path_targets = [{"__path__" = "/app/logs/*.log"}]
+    sync_period = "5s"
+}
+
+loki.source.file "log_scrape" {
+    targets    = local.file_match.log_files.targets
+    forward_to = [loki.process.extract_log_info.receiver]
+    tail_from_end = true
+}
+
+loki.process "extract_log_info" {
+    stage.regex {
+        expression = "\\[(?P<timestamp>[^\\]]+)\\] \\[(?P<level>[A-Z]+)\\]"
+    }
+
+    stage.labels {
+        values = {
+            level = "level",
+        }
+    }
+
+    forward_to = [loki.relabel.add_static_label.receiver]
+}
+
+loki.relabel "add_static_label" {
+    forward_to = [loki.write.grafana_loki.receiver]
+
+    rule {
+        target_label = "os"
+        replacement  = constants.os
+    }
+    rule {
+        target_label = "job"
+        replacement  = env("PROJECT_NAME") + "-" + env("ENV") + "-logs"
+    }
+    rule {
+        target_label = "env"
+        replacement  = env("ENV")
+    }
+}
+
+loki.write "grafana_loki" {
+    endpoint {
+        url = env("LOKI_URL")
+        basic_auth {
+            username = env("GF_SECURITY_ADMIN_USER")
+            password = env("GF_SECURITY_ADMIN_PASSWORD")
+        }
+    }
+}
+
+// Metrics BE
+prometheus.scrape "backend" {
+    targets = [
+        {
+            __address__ = env("PROJECT_NAME") + ":" + env("APP_PORT"),
+            job         = env("PROJECT_NAME") + "-" + env("ENV") + "-metrics",
+            env         = env("ENV"),
+        },
+    ]
+    metrics_path    = "/api/metrics"
+    scheme          = "http"
+    authorization {
+        type        = "Bearer"
+        credentials = env("API_SECRET_KEY")
+    }
+    scrape_interval = "10s"
+    scrape_timeout  = "10s"
+    forward_to      = [prometheus.remote_write.prometheus.receiver]
+}
+
+// Node Exporter
+prometheus.exporter.unix "node_exporter" {
+    disable_collectors = ["mdadm", "zfs", "powersupplyclass"]
+
+    procfs_path = "/host/proc"
+    sysfs_path  = "/host/sys"
+    rootfs_path = "/rootfs"
+
+    include_exporter_metrics = true
+}
+
+prometheus.scrape "node_exporter_scrape" {
+    targets = prometheus.exporter.unix.node_exporter.targets
+
+    scrape_interval = "10s"
+    scrape_timeout  = "10s"
+    forward_to = [prometheus.relabel.add_static_label.receiver]
+}
+
+prometheus.relabel "add_static_label" {
+    forward_to = [prometheus.remote_write.prometheus.receiver]
+
+    rule {
+        target_label = "job"
+        replacement  = env("PROJECT_NAME") + "-" + env("ENV") + "-node-exporter"
+    }
+
+    rule {
+        target_label = "env"
+        replacement  = env("ENV")
+    }
+}
+
+// Prometheus
+prometheus.remote_write "prometheus" {
+    endpoint {
+        url = env("PROMETHEUS_URL")
+        basic_auth {
+            username = env("GF_SECURITY_ADMIN_USER")
+            password = env("GF_SECURITY_ADMIN_PASSWORD")
+        }
+    }
+}
