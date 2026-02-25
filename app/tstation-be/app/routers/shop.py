@@ -43,18 +43,17 @@ SHOP_LIST_SQL = text("""
 
 # 예약 가능 시간 슬롯 (다수 매장 일괄 조회)
 TIME_SLOTS_SQL = text("""
-    SELECT SHOP_ID, TM
+    SELECT SHOP_ID, CAL_DAY || TM as TM
     FROM VI_SHOP_OPEN_DT
     WHERE SHOP_ID IN :shop_ids
-      AND CAL_DAY = :cal_day
     ORDER BY SHOP_ID, TM
 """).bindparams(bindparam("shop_ids", expanding=True))
 
 # 매장 이미지 (다수 매장 일괄 조회)
 IMAGES_SQL = text("""
-    SELECT SHOP_ID, SHOP_IMG_PATH
+    SELECT SHOP_SEQ as SHOP_ID, SHOP_IMG_PATH
     FROM ET_SHOP_IMG_INFO
-    WHERE SHOP_ID IN :shop_ids
+    WHERE SHOP_SEQ IN :shop_ids
     ORDER BY SHOP_ID
 """).bindparams(bindparam("shop_ids", expanding=True))
 
@@ -68,7 +67,7 @@ IMAGES_SQL = text("""
     response_model=ShopListResponse,
     summary="주변 매장 조회 및 예약 가능 시간 확인",
     description=(
-        "고객의 현재 위치(X, Y 좌표)를 기반으로 가까운 매장을 추천하고, "
+        "고객의 현재 위치(X, Y 좌표)를 기반으로 가까운 매장을 추천하고, (예 126.92344, 37.61624)"
         "지정 날짜의 예약 가능 시간 슬롯과 매장 이미지를 함께 반환합니다."
     ),
 )
@@ -80,7 +79,7 @@ async def get_nearby_shops(
         description="예약 조회 날짜 (YYYYMMDD). 미입력 시 오늘 날짜 사용",
         pattern=r"^\d{8}$",
     ),
-    limit: int = Query(10, ge=1, le=50, description="반환할 최대 매장 수"),
+    limit: int = Query(1, ge=1, le=50, description="반환할 최대 매장 수"),
     db: AsyncSession = Depends(get_db),
 ) -> ShopListResponse:
     target_day = cal_day or date.today().strftime("%Y%m%d")
@@ -112,17 +111,18 @@ async def get_nearby_shops(
         times_by_shop[t["shop_id"]].append(TimeSlot(tm=str(t["tm"])))
 
     # ── 3. 매장 이미지 일괄 조회 ────────────────────────────────────────────
-    # img_rows = (
-    #     await db.execute(
-    #         IMAGES_SQL,
-    #         {"shop_ids": shop_ids},
-    #     )
-    # ).mappings().all()
+    img_rows = (
+        await db.execute(
+            IMAGES_SQL,
+            {"shop_ids": shop_ids},
+        )
+    ).mappings().all()
 
-    # images_by_shop: dict[str, list[str]] = defaultdict(list)
-    # for img in img_rows:
-    #     if img["shop_img_path"]:
-    #         images_by_shop[img["shop_id"]].append(img["shop_img_path"])
+    # 현재 매장 수는 4,075개 이미지 개수는 421개
+    images_by_shop: dict[str, list[str]] = defaultdict(list)
+    for img in img_rows:
+        if img["shop_img_path"]:
+            images_by_shop[img["shop_id"]].append(img["shop_img_path"])
 
     # ── 4. 결과 조합 ────────────────────────────────────────────────────────
     shops = [
@@ -140,8 +140,8 @@ async def get_nearby_shops(
             shop_ypos=r["shop_ypos"],
             distance=float(r["distance"]) if r["distance"] is not None else None,
             available_times=times_by_shop[r["shop_id"]],
-            images=[]
-            # images=images_by_shop[r["shop_id"]],
+            # images=[]
+            images=images_by_shop[r["shop_id"]],
         )
         for r in rows
     ]

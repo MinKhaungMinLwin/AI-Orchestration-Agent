@@ -77,49 +77,51 @@ def _handle_regular_response(payload: dict) -> str:
 
 
 def _handle_stream_response(payload: dict) -> Generator[str, None, None]:
-    """Handle streaming response with SSE"""
     try:
         response = requests.post(
             f"{BASE_URL}/tstation/chat",
             json=payload,
             stream=True,
             headers={
-                'Accept': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'Authorization': f'Bearer {API_KEY}',
-            }
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Authorization": f"Bearer {API_KEY}",
+            },
         )
+
         response.raise_for_status()
-        response.encoding = 'utf-8'
+        response.encoding = "utf-8"
 
-        # Process SSE stream
-        for line in response.iter_lines(decode_unicode=True):
-            if line:
-                # SSE format: "data: {json_content}"
-                if line.startswith("data: "):
-                    data_content = line[6:]  # Remove "data: " prefix
+        buffer = ""
 
-                    # Check for end of stream
+        for chunk in response.iter_content(chunk_size=1, decode_unicode=True):
+
+            if not chunk:
+                continue
+
+            buffer += chunk
+
+            # process full SSE event
+            while "\n\n" in buffer:
+
+                event, buffer = buffer.split("\n\n", 1)
+
+                if event.startswith("data: "):
+
+                    data_content = event[6:]
+
                     if data_content.strip() == "[DONE]":
-                        break
+                        return
 
                     try:
-                        # Parse JSON chunk
-                        chunk_data = json.loads(data_content)
+                        data = json.loads(data_content)
 
-                        # Extract content from chunk
-                        if (chunk_data.get("choices") and
-                                len(chunk_data["choices"]) > 0 and
-                                chunk_data["choices"][0].get("delta") and
-                                chunk_data["choices"][0]["delta"].get("content")):
-                            content = chunk_data["choices"][0]["delta"]["content"]
-                            if isinstance(content, bytes):
-                                content = content.decode('utf-8')
-                            yield content
+                        if data.get("type") == "token":
+                            yield data["content"]
 
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        continue
+                    except json.JSONDecodeError:
+                        pass
 
     except Exception as e:
-        yield f"Error when streaming API: {e}"
+        yield f"\nError: {e}"

@@ -1,0 +1,127 @@
+{
+    "holistic_shopping": {
+        "name": "전체 타이어 구매 도우미",
+        "explanation": "실제 Hankook 타이어 제품을 선택하고 구매 및 장착 예약까지 전체 과정을 지원합니다",
+        "questions": [
+            "내 차량에 Kinergy EX 195/65R15와 Ventus S2 AS 중 어떤 것이 더 적합한가요?",
+            "BMW 320i에 Ventus S1 evo3가 적합한가요?",
+            "150,000원 이하에서 가장 좋은 Hankook 타이어를 추천해주세요",
+            "Kinergy EX와 Ventus air S를 비교해주세요",
+            "내 위치 근처에서 구매 가능한 Hankook 타이어를 찾아주세요",
+            "Ventus S1 evo3를 구매하고 장착 예약을 도와주세요",
+            "승차감과 성능이 좋은 Hankook 타이어를 추천해주세요"
+        ]
+    },
+
+    "product_search": {
+        "name": "타이어 제품 검색",
+        "explanation": "특정 Hankook 타이어 모델 및 사이즈를 검색합니다",
+        "questions": [
+            "Kinergy EX 195/65R15 타이어를 보여주세요",
+            "Ventus S1 evo3 225/40R19 사이즈를 찾아주세요",
+            "200,000원 이하 Hankook 타이어를 보여주세요",
+            "Ventus S2 AS 225/55R17 제품을 보여주세요",
+            "내 차량에 맞는 Hankook 타이어를 찾아주세요",
+            "Ventus air S 타이어를 보여주세요",
+            "BMW에 적합한 Hankook 타이어를 찾아주세요"
+        ]
+    },
+
+    "product_compatibility": {
+        "name": "차량 호환성 확인",
+        "explanation": "특정 Hankook 타이어가 차량에 호환되는지 확인합니다",
+        "questions": [
+            "Ventus S1 evo3가 BMW 320i에 호환되나요?",
+            "Kinergy EX 195/65R15를 Hyundai Avante에 장착할 수 있나요?",
+            "Ventus S2 AS가 Kia K5에 적합한가요?",
+            "내 차량에 맞는 Hankook 타이어를 보여주세요",
+            "225/40R19 사이즈에 호환되는 Hankook 타이어는 무엇인가요?",
+            "Audi A4에 Ventus S1 evo3를 장착할 수 있나요?",
+            "SUV 차량에 Ventus air S가 적합한가요?"
+        ]
+    },
+
+    "pricing": {
+        "name": "가격 및 할인 정보",
+        "explanation": "실제 Hankook 타이어 가격 및 할인 정보를 확인합니다",
+        "questions": [
+            "Kinergy EX 195/65R15 가격은 얼마인가요?",
+            "Ventus S2 AS 225/55R17 할인 가격을 알려주세요",
+            "Ventus air S 245/45R18 가격을 보여주세요",
+            "Ventus S1 evo3와 Ventus S2 AS 가격을 비교해주세요",
+            "Ventus S1 evo3에 적용 가능한 쿠폰이 있나요?",
+            "Kinergy EX 장착 포함 총 가격은 얼마인가요?",
+            "현재 가장 저렴한 Hankook 타이어를 보여주세요"
+        ]
+    },
+
+    "inventory": {
+        "name": "재고 확인",
+        "explanation": "가까운 매장에서 Hankook 타이어 재고를 확인합니다",
+        "questions": [
+            "Kinergy EX 195/65R15 재고가 있나요?",
+            "Ventus S1 evo3 재고가 있는 매장을 찾아주세요",
+            "Ventus S2 AS 225/55R17 재고를 확인해주세요",
+            "오늘 Ventus air S 장착이 가능한가요?",
+            "Kinergy EX 재고가 있는 매장을 보여주세요",
+            "Ventus S1 evo3 당일 장착이 가능한가요?",
+            "내 근처 Hankook 타이어 재고를 확인해주세요"
+        ]
+    },
+
+    "store_locator": {
+        "name": "매장 찾기",
+        "explanation": "Hankook 타이어를 구매 및 장착할 수 있는 T-Station 매장을 찾습니다",
+        "questions": [
+            "Ventus S1 evo3 재고가 있는 가까운 T-Station 매장을 찾아주세요",
+            "Kinergy EX 재고가 있는 매장은 어디인가요?",
+            "Ventus S2 AS 장착이 가능한 매장을 찾아주세요",
+            "내 근처 T-Station 매장을 보여주세요",
+            "Ventus air S 장착 가능한 매장을 찾아주세요",
+            "현재 영업 중인 T-Station 매장을 보여주세요",
+            "추천 T-Station 매장을 알려주세요"
+        ]
+    },
+
+    "product_recommendation": {
+        "name": "타이어 추천",
+        "explanation": "차량 및 운전 스타일에 맞는 Hankook 타이어를 추천합니다",
+        "questions": [
+            "BMW 320i에 가장 적합한 Hankook 타이어를 추천해주세요",
+            "Ventus S1 evo3와 Ventus S2 AS 중 어떤 것이 더 좋은가요?",
+            "일상 주행에 적합한 Hankook 타이어를 추천해주세요",
+            "200,000원 이하에서 가장 좋은 Hankook 타이어를 추천해주세요",
+            "고속도로 주행에 적합한 타이어를 추천해주세요",
+            "조용하고 승차감이 좋은 Hankook 타이어를 추천해주세요",
+            "T-Station에서 가장 인기 있는 Hankook 타이어는 무엇인가요?"
+        ]
+    },
+
+    "order_booking": {
+        "name": "주문 및 장착 예약",
+        "explanation": "Hankook 타이어 주문 및 장착 예약을 진행합니다",
+        "questions": [
+            "Ventus S1 evo3를 주문하고 장착 예약해주세요",
+            "Kinergy EX 195/65R15 구매를 도와주세요",
+            "Ventus S2 AS 장착 예약을 진행해주세요",
+            "Ventus S1 evo3 주문 상태를 확인해주세요",
+            "가까운 매장에서 장착 예약해주세요",
+            "이전에 구매한 Hankook 타이어를 다시 주문해주세요",
+            "장착 예약을 취소해주세요"
+        ]
+    },
+
+    "faq_support": {
+        "name": "고객 지원 및 FAQ",
+        "explanation": "Hankook 타이어 및 T-Station 서비스 관련 지원을 제공합니다",
+        "questions": [
+            "Ventus S1 evo3 보증 기간은 얼마인가요?",
+            "Kinergy EX 장착 서비스를 제공하나요?",
+            "타이어 장착 시간은 얼마나 걸리나요?",
+            "Hankook 타이어 환불이 가능한가요?",
+            "지원되는 결제 방법은 무엇인가요?",
+            "장착 서비스에 포함된 항목은 무엇인가요?",
+            "Ventus S2 AS 주문 관련 지원을 받고 싶습니다"
+        ]
+    }
+}
