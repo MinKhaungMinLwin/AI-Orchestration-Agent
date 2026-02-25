@@ -5,7 +5,7 @@ import streamlit as st
 from api.chat import get_examples, send_chat_message
 
 st.set_page_config(page_title="T-Station", layout="wide")
-st.title("T-Station Demo")
+st.title("T-Station AI Demo")
 
 # Sidebar
 st.sidebar.header("User Information")

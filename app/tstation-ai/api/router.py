@@ -7,6 +7,9 @@ from config.sec import get_api_key
 # Monitoring
 from api import monitoring
 
+# T-station
+from api.tstation import chat as tstation_chat
+from api.tstation import example_question as tstation_example_question
 
 router = APIRouter()
 
@@ -21,7 +24,12 @@ elif settings.ENV == Environment.DEV:
     # Healthcheck & Metrics
     router.include_router(monitoring.router, tags=["Healthcheck & Metrics"], prefix="")
 
-    # Queue System
+    # T-Station Chat
+    router.include_router(tstation_chat.router, tags=["T-Station Chat"], prefix="/tstation")
+    router.include_router(tstation_example_question.router, tags=["T-Station Chat"], prefix="/tstation")
+
+
+# Queue System
     # router.include_router(queue.router, tags=["Queue System"], prefix="/queue", dependencies=[Depends(get_api_key)])
 
 

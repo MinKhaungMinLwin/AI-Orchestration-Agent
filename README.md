@@ -85,7 +85,7 @@ source {your_py312_venv_path}/bin/activate
 set -a && source .env && set +a && uv run app/tstation-ai/main.py
 
 # BE (Port 8001)
-set -a && source .env && set +a && uv run app/tstation-be/main.py
+set -a && source app/tstation-be/.env && set +a && uv run app/tstation-be/main.py
 
 # UI demo (Port 7777)
 set -a && source .env && set +a && uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777 --server.address 0.0.0.0
