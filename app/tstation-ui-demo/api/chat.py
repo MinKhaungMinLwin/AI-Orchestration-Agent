@@ -6,7 +6,7 @@ from typing import Dict, Generator, List, Union
 import requests
 import streamlit as st
 
-BASE_URL = "http://tstation-ai:8000/api"
+BASE_URL = "http://localhost:8000/api"
 API_KEY = os.getenv("API_SECRET_KEY", None)
 HEADERS = {}
 if API_KEY:

@@ -21,7 +21,7 @@ stream_mode = True
 
 # Examples
 st.sidebar.header("Example Questions")
-language = st.sidebar.selectbox("Choose your language", ["ko", "vi", "en"], index=1 if os.getenv("ENV") == "local" else 0)
+language = st.sidebar.selectbox("Choose your language", ["ko", "en"], index=1 if os.getenv("ENV") == "local" else 0)
 
 examples = get_examples(language)
 if examples and "categories" in examples:
