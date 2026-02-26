@@ -18,7 +18,7 @@ from config.env import settings
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.agents.a_main_leading_agent import LeadingAgent
+from services.tstation.agents.main_leading_agent import LeadingAgent, discovery_subagent
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,8 @@ class TStationChatService(object):
 
         logger.debug(f"Received /tstation/chat request: {request}")
 
-        leading_agent = LeadingAgent()
+        # leading_agent = LeadingAgent()
+        leading_agent = discovery_subagent
 
         # STREAM MODE
         if request.stream:
