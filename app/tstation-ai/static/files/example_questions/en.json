@@ -15,16 +15,43 @@
         "name": "Discovery & Recommendation",
         "explanation": "Explore and recommend suitable tires using ProductRecommendation and ProductDescription mock APIs.",
         "questions": [
-        "Recommend a tire for my car 123가4567",
-        "I drive vehicle 123가4567, which tire is best for comfort?",
+            "Recommend a tire for my car 12가3456",
+            "I drive vehicle 34나7890, which tire is best?",
+            "What is the most comfortable tire for 56다1234?",
+            "Suggest a premium tire for my car 78라5678",
+            "Which tire is safest for 90마9012?",
 
-        "Suggest a value tire under budget",
-        "Which tire is best for quiet driving?",
-        "Show me the best discount tire available",
+            "Suggest a value tire under budget",
+            "Which tire is best for quiet driving?",
+            "Show me the best discount tire available",
+            "Recommend a fuel-efficient tire",
+            "Best tire for long mileage?",
 
-        "Tell me more about HKIN001",
+            "Best tire for electric vehicle?",
+            "I drive a Tesla Model 3, what tire should I choose?",
+            "Recommend the quietest tire for EV",
 
-        "Does HKIN001 fit my car 123가4567?"
+            "Recommend an SUV tire for 56다1234",
+            "Best highway tire for Hyundai Tucson NX4",
+            "Which tire lasts longest for SUV driving?",
+
+            "Best winter tire?",
+            "Recommend a tire for snow driving",
+            "Which tire performs well in icy roads?",
+
+            "Tell me more about HKKR001",
+            "Explain the features of HKKR004",
+            "Give me detailed specs of HKKR006",
+
+            "Does HKKR001 fit my car 12가3456?",
+            "Is HKKR004 compatible with 78라5678?",
+            "Check if HKKR003 matches vehicle 56다1234",
+            "Will HKKR002 fit 34나7890?",
+            "Is HKKR007 suitable for 90마9012?",
+
+            "Tell me more about HKKR999",
+            "Does HKKR999 fit my car 12가3456?",
+            "Recommend a tire for car 00가0000"
     ]
     },
 
