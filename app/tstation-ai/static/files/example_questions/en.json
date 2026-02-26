@@ -1,127 +1,66 @@
 {
-    "holistic_shopping": {
+    "holistic": {
         "name": "Complete Tire Shopping Assistant",
-        "explanation": "Help customers select, compare, purchase, and install real Hankook tire products available on T-Station",
+        "explanation": "Handle full conversational journey from recommendation to compatibility check and validation using mock T-Station products.",
         "questions": [
-            "Help me choose between Hankook Kinergy EX 195/65R15 and Ventus S2 AS 225/55R17 for my car",
-            "I drive a BMW 3 Series — should I choose Ventus S1 evo3 or Ventus S2 AS?",
-            "Find the best Hankook tire under 150,000 KRW available on T-Station",
-            "Help me compare Kinergy EX and Ventus air S for daily commuting",
-            "Recommend the best Hankook tire currently in stock near my location",
-            "Help me buy Ventus S1 evo3 and schedule installation at a nearby store",
-            "What is the best Hankook tire for performance and comfort combined?"
+            "Recommend a tire for my Hyundai Sonata and check if it fits my car number 123가4567",
+            "I want a value tire and confirm if it is compatible with my vehicle",
+            "Suggest the best tire and explain why, then check compatibility",
+            "Recommend a tire for comfort and show if it matches my car",
+            "Help me choose a tire and verify fitment before I decide"
         ]
     },
 
-    "product_search": {
-        "name": "Product Search",
-        "explanation": "Search for specific Hankook tire models, sizes, and available products",
+    "discovery": {
+        "name": "Discovery & Recommendation",
+        "explanation": "Explore and recommend suitable tires using ProductRecommendation and ProductDescription mock APIs.",
         "questions": [
-            "Show me Hankook Kinergy EX 195/65R15 available on T-Station",
-            "Find Ventus S1 evo3 tires in size 225/40R19",
-            "Show Hankook tires available under 200,000 KRW",
-            "Find Ventus S2 AS 225/55R17 currently available",
-            "Show Hankook tires compatible with sedan vehicles",
-            "Find Ventus air S tires available in my area",
-            "Show Hankook tires recommended for BMW vehicles"
+        "Recommend a tire for my car 123가4567",
+        "I drive vehicle 123가4567, which tire is best for comfort?",
+
+        "Suggest a value tire under budget",
+        "Which tire is best for quiet driving?",
+        "Show me the best discount tire available",
+
+        "Tell me more about HKIN001",
+
+        "Does HKIN001 fit my car 123가4567?"
+    ]
+    },
+
+    "validation": {
+        "name": "Compatibility & Validation",
+        "explanation": "Validate compatibility between vehicle and product using ProductCompatibility mock API.",
+        "questions": [
+            "Is HKIN001 compatible with car number 123가4567?",
+            "Check if HKIN002 fits my vehicle 123가4567",
+            "Can I install HKIN003 on 123가4567?",
+            "Verify compatibility between HKIN001 and my car",
+            "Does HKIN002 match my tire size?"
         ]
     },
 
-    "product_compatibility": {
-        "name": "Vehicle Compatibility Check",
-        "explanation": "Check compatibility between Hankook tires and specific vehicles",
+    "conversion": {
+        "name": "Conversion & Purchase Intent",
+        "explanation": "Simulate purchase intent and transition from discovery to order stage.",
         "questions": [
-            "Is Ventus S1 evo3 compatible with my BMW 320i?",
-            "Can I install Kinergy EX 195/65R15 on my Hyundai Avante?",
-            "Is Ventus S2 AS 225/55R17 suitable for my Kia K5?",
-            "What Hankook tires are compatible with my vehicle size 225/40R19?",
-            "Check if Ventus S1 evo3 is compatible with my Audi A4",
-            "Show compatible Hankook tires for my current tire size",
-            "Is Ventus air S suitable for my SUV?"
+            "I want to buy HKIN001",
+            "Proceed with HKIN002",
+            "I will take the recommended tire",
+            "Order HKIN001 if compatible",
+            "Let’s go ahead with HKIN003"
         ]
     },
 
-    "pricing": {
-        "name": "Pricing and Promotions",
-        "explanation": "Check prices, discounts, and promotions for real Hankook tire products",
+    "service": {
+        "name": "Post-Purchase & Support",
+        "explanation": "Handle support and post-purchase inquiries.",
         "questions": [
-            "What is the current price of Kinergy EX 195/65R15 on T-Station?",
-            "Is Ventus S2 AS 225/55R17 available with discount?",
-            "Show the discounted price of Ventus air S 245/45R18",
-            "Compare prices between Ventus S1 evo3 and Ventus S2 AS",
-            "Are there coupons available for Ventus S1 evo3?",
-            "What is the final installation price for Kinergy EX?",
-            "Show the cheapest Hankook tires available now"
-        ]
-    },
-
-    "inventory": {
-        "name": "Inventory Availability",
-        "explanation": "Check real-time stock availability of Hankook tire products",
-        "questions": [
-            "Is Kinergy EX 195/65R15 currently in stock near me?",
-            "Which store has Ventus S1 evo3 available today?",
-            "Check availability of Ventus S2 AS 225/55R17",
-            "Can I install Ventus air S today at a nearby store?",
-            "Show stores that have Kinergy EX in stock",
-            "Is Ventus S1 evo3 available for same-day installation?",
-            "Check inventory of Hankook tires in my area"
-        ]
-    },
-
-    "store_locator": {
-        "name": "Store Locator",
-        "explanation": "Find T-Station stores that sell and install Hankook tires",
-        "questions": [
-            "Find the nearest T-Station store with Ventus S1 evo3 available",
-            "Which T-Station store has Kinergy EX in stock?",
-            "Find stores that can install Ventus S2 AS today",
-            "Show T-Station stores near my current location",
-            "Which store offers installation for Ventus air S?",
-            "Find T-Station stores open now",
-            "Recommend the best T-Station store near me"
-        ]
-    },
-
-    "product_recommendation": {
-        "name": "Product Recommendation",
-        "explanation": "Recommend specific Hankook tire models based on vehicle and driving needs",
-        "questions": [
-            "Recommend the best Hankook tire for my BMW 320i",
-            "Should I choose Ventus S1 evo3 or Ventus S2 AS for performance driving?",
-            "Recommend Hankook tires for daily commuting",
-            "What is the best Hankook tire under 200,000 KRW?",
-            "Recommend Hankook tires for highway driving",
-            "Recommend quiet and comfortable Hankook tires",
-            "What is the most popular Hankook tire on T-Station?"
-        ]
-    },
-
-    "order_booking": {
-        "name": "Order and Installation Booking",
-        "explanation": "Place orders and schedule installation for Hankook tires",
-        "questions": [
-            "Order Ventus S1 evo3 and schedule installation",
-            "Help me buy Kinergy EX 195/65R15",
-            "Book installation for Ventus S2 AS 225/55R17",
-            "Check my order status for Ventus S1 evo3",
-            "Schedule installation at nearest T-Station store",
-            "Reorder my previous Hankook tire purchase",
-            "Cancel my tire installation booking"
-        ]
-    },
-
-    "faq_support": {
-        "name": "FAQ and Customer Support",
-        "explanation": "Provide support and information about Hankook tire products and services",
-        "questions": [
-            "What warranty is included with Ventus S1 evo3?",
-            "Does T-Station provide installation for Kinergy EX?",
-            "How long does tire installation take?",
-            "Can I return or exchange my Hankook tire?",
-            "What payment methods are supported on T-Station?",
-            "What is included in the installation service?",
-            "Contact support regarding my Ventus S2 AS order"
+            "Where is my order?",
+            "Check my order status",
+            "What is the warranty policy?",
+            "How long does installation take?",
+            "I need help with my previous purchase"
         ]
     }
 }
