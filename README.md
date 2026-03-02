@@ -58,7 +58,7 @@ curl -X GET \
 ## 2. 🛠️ Development
 - Dependency
 ```bash
-curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+curl -fsSL https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 

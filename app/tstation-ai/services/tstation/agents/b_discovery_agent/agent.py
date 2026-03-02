@@ -1,13 +1,13 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 
 from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
-from langchain.tools import tool
-from services.tstation.agents.discovery_agent.tools import product_recommendation, product_compatibility, product_description
+from services.tstation.agents.b_discovery_agent.tools import product_recommendation, product_compatibility, product_description
 
 DISCOVERY_AGENT_SYSTEM_PROMPT = """
-You are the DiscoveryAgent of the T-Station AI system.
-Company: Hankook Tire.
+You are the Discovery Agent of the T-Station AI system.
+Internal Name: Discovery Agent
+External Name: T-Station AI
+Company: Hankook Tire
 
 You are a conversational AI assistant specialized in the DISCOVERY phase
 (understanding customer needs & recommending products).

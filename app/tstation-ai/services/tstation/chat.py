@@ -13,12 +13,11 @@ from langchain_openai import ChatOpenAI
 from celery_app import redis as redis_client
 from common.curr_time import get_current_time
 from common.detect_language import SupportedLanguage, detect_language
-from common.openai import MetadataTracing, OpenAIWithTracing, TracingRequest
 from config.env import settings
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.agents.main_leading_agent import LeadingAgent, discovery_subagent
+from services.tstation.agents.router import leading_agent, discovery_subagent
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +27,21 @@ class TStationChatService(object):
 
     @staticmethod
     def chat(request: TStationChatRequest):
+        """
+
+        T-Station AI Chat
+
+        Workflow
+        1. Classify the request
+        2. Delegate to the appropriate agent
+
+        """
 
         logger.debug(f"Received /tstation/chat request: {request}")
 
-        # leading_agent = LeadingAgent()
+        # 1. Classify the request
+
+        # leading_agent = leading_agent
         leading_agent = discovery_subagent
 
         # STREAM MODE
@@ -67,10 +77,10 @@ class TStationChatService(object):
 
     @staticmethod
     def _stream_response(
-            leading_agent: LeadingAgent,
+            agent,
             request: TStationChatRequest
     ):
 
-        for event in leading_agent.stream(request.messages):
+        for event in agent.stream(request.messages):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
