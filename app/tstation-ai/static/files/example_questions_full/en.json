@@ -1,4 +1,15 @@
 {
+    "holistic": {
+        "name": "Complete Tire Shopping Assistant",
+        "explanation": "Handle full conversational journey from recommendation to compatibility check and validation using mock T-Station products.",
+        "questions": [
+            "Recommend a tire for my Hyundai Sonata and check if it fits my car number 123가4567",
+            "I want a value tire and confirm if it is compatible with my vehicle",
+            "Suggest the best tire and explain why, then check compatibility",
+            "Recommend a tire for comfort and show if it matches my car",
+            "Help me choose a tire and verify fitment before I decide"
+        ]
+    },
 
     "discovery": {
         "name": "Discovery & Recommendation",
@@ -43,6 +54,31 @@
             "Recommend a tire for car 00가0000"
     ]
     },
+
+    "validation": {
+        "name": "Compatibility & Validation",
+        "explanation": "Validate compatibility between vehicle and product using ProductCompatibility mock API.",
+        "questions": [
+            "Is HKIN001 compatible with car number 123가4567?",
+            "Check if HKIN002 fits my vehicle 123가4567",
+            "Can I install HKIN003 on 123가4567?",
+            "Verify compatibility between HKIN001 and my car",
+            "Does HKIN002 match my tire size?"
+        ]
+    },
+
+    "conversion": {
+        "name": "Conversion & Purchase Intent",
+        "explanation": "Simulate purchase intent and transition from discovery to order stage.",
+        "questions": [
+            "I want to buy HKIN001",
+            "Proceed with HKIN002",
+            "I will take the recommended tire",
+            "Order HKIN001 if compatible",
+            "Let’s go ahead with HKIN003"
+        ]
+    },
+
     "service": {
         "name": "Post-Purchase & Support",
         "explanation": "Handle support and post-purchase inquiries.",

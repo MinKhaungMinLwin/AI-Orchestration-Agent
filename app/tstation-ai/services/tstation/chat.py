@@ -17,7 +17,7 @@ from config.env import settings
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.agents.router import leading_agent, discovery_subagent
+from services.tstation.agents.router import AgentDomain, leading_agent, discovery_subagent, LLM
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +40,15 @@ class TStationChatService(object):
         logger.debug(f"Received /tstation/chat request: {request}")
 
         # 1. Classify the request
+        domain = TStationChatService.classify_domain_request(request)
+        agent = AgentDomain(domain=domain).get_agent()
 
-        # leading_agent = leading_agent
-        leading_agent = discovery_subagent
-
+        # 2. Delegate to the appropriate agent
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
                 TStationChatService._stream_response(
-                    leading_agent,
+                    agent,
                     request
                 ),
                 media_type="text/event-stream",
@@ -73,6 +73,32 @@ class TStationChatService(object):
             logger.exception(f"Server Error: {e}")
             raise Exception("Internal Server Error")
 
+
+    @staticmethod
+    def classify_domain_request(request: TStationChatRequest) -> AgentDomain.Domain:
+
+        from langchain_litellm import ChatLiteLLM
+
+        llm = ChatLiteLLM(
+            model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            # model = "bedrock/ap-northeast-1/arn:aws:bedrock:ap-northeast-1:763865062538:inference-profile/minimax.minimax-m2-1",
+            temperature=0.3,
+            streaming=True,
+        )
+
+        structured_model = llm.with_structured_output(
+            AgentDomain,
+            strict=True,
+        )
+
+        try:
+            result: AgentDomain = structured_model.invoke(request.messages)
+            logger.debug(f"Domain classification result: {result}")
+            return result.domain
+
+        except Exception as e:
+            logger.exception(f"Domain classification failed: {e}")
+            return AgentDomain.Domain.LEADING
 
 
     @staticmethod

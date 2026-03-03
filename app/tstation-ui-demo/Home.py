@@ -1,15 +1,21 @@
 import os
-from textwrap import dedent
 
 import streamlit as st
 from api.chat import get_examples, send_chat_message
 
 st.set_page_config(page_title="T-Station", layout="wide")
-st.title("T-Station AI Demo (Only Support Discovery Domain)")
+st.title("T-Station AI Demo")
+
+
+# Note
+st.sidebar.markdown("## Domain Support")
+st.sidebar.markdown("- Discovery: Product Description AF")
+st.sidebar.markdown("- Support: FAQ AF")
+
 
 # Sidebar
 st.sidebar.header("User Information")
-user_options = ["Test-User-Streamlit", "Other"]
+user_options = ["Test-User", "Other"]
 selected = st.sidebar.selectbox("User ID", user_options, index=0)
 if selected == "Other":
     user_id = st.sidebar.text_input("Add your User ID", value="Test-User-Streamlit")
@@ -33,7 +39,7 @@ if examples and "categories" in examples:
     selected_category_name = st.sidebar.selectbox(
         "Choose category",
         category_options,
-        index=1
+        index=0
     )
     selected_category_key = category_keys[category_options.index(selected_category_name)]
     selected_explanation = categories[selected_category_key]["explanation"]
