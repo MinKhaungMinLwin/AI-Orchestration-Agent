@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.uv_cache
+
+# This should be removed when the template is actually being used
+uv.lock
+
+
+# JetBrain
+.idea
+
+# Project
+*.env*
+!.env.example
+docker/volumes
+docker_local
+logs
+**.pem**
+**.crt*
+dataset
+test
+temp/*
+
+# App
+app/tstation-ai/static/public/*
+app/tstation-ai/api/router_local.py
