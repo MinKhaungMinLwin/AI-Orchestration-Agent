@@ -44,14 +44,15 @@
     ]
     },
     "service": {
-        "name": "Post-Purchase & Support",
-        "explanation": "Handle support and post-purchase inquiries.",
+        "name": "Customer Support & FAQ",
+        "explanation": "Handle reservation changes, returns, warranty inquiries, and store service questions.",
         "questions": [
-            "Where is my order?",
-            "Check my order status",
-            "What is the warranty policy?",
-            "How long does installation take?",
-            "I need help with my previous purchase"
+            "How do I cancel or change my installation appointment?",
+            "Can I return tires after installation?",
+            "What is the standard warranty on Hankook tires?",
+            "Do you offer free alignment checks?",
+            "How can I contact the store directly?",
+            "What is your return and refund policy?"
         ]
     }
 }

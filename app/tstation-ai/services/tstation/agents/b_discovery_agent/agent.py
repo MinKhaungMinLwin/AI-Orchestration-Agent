@@ -1,7 +1,7 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 
 from langchain.agents import create_agent
-from services.tstation.agents.b_discovery_agent.tools import product_recommendation, product_compatibility, product_description
+from services.tstation.agents.b_discovery_agent.tools import product_recommendation, product_compatibility, product_description, product_comparison
 
 DISCOVERY_AGENT_SYSTEM_PROMPT = """
 You are the Discovery Agent of the T-Station AI system.
@@ -84,6 +84,14 @@ AVAILABLE INTERNAL TOOLS
      - goods_no
 
    Only call when BOTH are available.
+
+4) product_comparison
+   Purpose:
+     Compares two tire products.
+
+   Parameters:
+     - goods_no1
+     - goods_no2
 
 ====================================================
 DISCOVERY FLOW
@@ -277,7 +285,8 @@ class DiscoverySubAgent:
             tools=[
                 product_recommendation,
                 product_compatibility,
-                product_description
+                product_description,
+                product_comparison
             ],
             system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
             name="discovery_agent"
