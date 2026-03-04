@@ -1,6 +1,6 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
-from services.tstation.agents.f_faq_agent.tools import search_faq
+from services.tstation.agents.faq_agent.tools import search_faq
 
 FAQ_AGENT_SYSTEM_PROMPT = """
 You are the FAQ Agent of the T-Station AI system.

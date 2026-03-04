@@ -35,6 +35,9 @@ leading_agent = LeadingAgent(LLM)
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
 discovery_subagent = DiscoverySubAgent(LLM)
 
+# FAQ Agent
+from services.tstation.agents.faq_agent.agent import FAQSubAgent
+faq_subagent = FAQSubAgent(LLM)
 
 ## Router
 class AgentDomain(BaseModel):
@@ -61,8 +64,8 @@ class AgentDomain(BaseModel):
         # elif self.domain == self.Domain.SHOPPING:
         #     return shopping_agent
         #
-        # elif self.domain == self.Domain.SUPPORT:
-        #     return support_agent
+        elif self.domain == self.Domain.SUPPORT:
+            return faq_subagent
 
         else:
             return leading_agent

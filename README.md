@@ -1,6 +1,16 @@
-# T-Station AI for Hankook
+# T-Station AI for Hankook Tire
 
-## 🚀 Deployment
+T-Station AI is a conversational commerce chatbot for Hankook Tire Korea. It uses a multi-agent architecture with FastAPI to handle customer inquiries about tires, providing product recommendations, compatibility checks, and FAQ support.
+
+## Architecture Overview
+
+The system consists of three main components:
+
+- **tstation-ai** (port 8000/9000): Main AI service with FastAPI, LangChain agents, RAG (Qdrant), and task queue (Celery/Redis)
+- **tstation-be** (port 8001): Backend service connecting to Oracle database
+- **tstation-ui-demo** (port 7777): Streamlit-based demo UI
+
+## Deployment
 
 ### 1. Install Dependencies
 
@@ -10,17 +20,9 @@ Install **Just** (task runner):
 curl -fsSL https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin
 ```
 
----
-
 ### 2. Environment Setup
 
-Create or update the `.env` file:
-
-```env
-# Replace ADD_KEY with your key
-```
-
----
+Create or update the `.env` file with required keys (see `.env.example`).
 
 ### 3. Start Application
 
@@ -28,23 +30,12 @@ Create or update the `.env` file:
 just start
 ```
 
----
+### 4. API Access
 
-### 4. API Access & Test
+- **Base URL**: `http://{YOUR_IP}:{NGINX_PORT}/api`
+- **Authentication**: `Authorization: Bearer {API_SECRET_KEY}`
 
-* **Base URL**
-
-```
-http://{YOUR_IP}:{NGINX_PORT}/api
-```
-
-* **Authentication**
-
-```
-Authorization: Bearer {API_SECRET_KEY}
-```
-
-* **Test API**
+### 5. Test API
 
 ```bash
 curl -X GET \
@@ -53,40 +44,30 @@ curl -X GET \
   -H "Authorization: Bearer {API_SECRET_KEY}"
 ```
 
----
+## Development
 
-## 2. 🛠️ Development
-- Dependency
-```bash
-curl -fsSL https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+### Prerequisites
 
-- Helper
-```bash
-just help
-```
+- Python 3.12
+- Just (task runner)
+- uv (package manager)
 
--  Developer mode: You must have python 3.12 to activate
-```bash
-source {your_py312_venv_path}/bin/activate
-```
+### Running Services
 
 ```bash
-// Example
-(py3.12) @user:~/dr-prompt: just setup
-(py3.12) @user:~/dr-prompt: source .venv/bin/activate
-```
-
-
-## Run server Runway
-```bash
-# AI (Port 8000)
+# AI service (port 9000)
 set -a && source .env && set +a && uv run app/tstation-ai/main.py
 
-# BE (Port 8001)
+# BE service (port 8000)
 set -a && source app/tstation-be/.env && set +a && uv run app/tstation-be/main.py
 
-# UI demo (Port 7777)
-set -a && source .env && set +a && uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777 --server.address 0.0.0.0
+# UI demo (port 7777)
+uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777 --server.address 0.0.0.0
+```
+
+### Code Quality
+
+```bash
+just lint    # Check code with ruff
+just fmt     # Format code with ruff + isort
 ```
