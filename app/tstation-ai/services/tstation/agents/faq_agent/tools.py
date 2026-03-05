@@ -80,65 +80,10 @@ MOCK_FAQ_DB = [
 
 
 @tool
-def search_faq(query: str) -> dict:
+def search_faq(query: str) -> list[dict]:
     """
     Mock FAQ AF: GET /api/faq/search
     Supports Korean query by mapping keywords.
     """
 
-    query_lower = query.lower()
-
-    # -----------------------------------------
-    # 한국어 → 영어 키워드 매핑
-    # -----------------------------------------
-
-    keyword_map = {
-        "예약": "appointment",
-        "변경": "change",
-        "취소": "cancel",
-        "장착": "installation",
-        "반품": "return",
-        "환불": "return",
-        "보증": "warranty",
-        "보장": "warranty",
-        "얼라인먼트": "alignment",
-        "정렬": "alignment",
-        "점검": "check",
-        "타이어": "tire"
-    }
-
-    translated_keywords = []
-
-    for kr, en in keyword_map.items():
-        if kr in query_lower:
-            translated_keywords.append(en)
-
-    # 영어 키워드도 포함
-    translated_keywords.append(query_lower)
-
-    results = []
-
-    for faq in MOCK_FAQ_DB:
-
-        question = faq["CUST_QUEST"].lower()
-        answer = faq["PC_ANS_CONT"].lower()
-
-        for keyword in translated_keywords:
-
-            if keyword in question or keyword in answer:
-
-                results.append({
-                    "CUST_QUEST": faq["CUST_QUEST"],
-                    "PC_ANS_CONT": faq["PC_ANS_CONT"],
-                    "LRCL_CD": faq["LRCL_CD"],
-                    "MDCL_CD": faq["MDCL_CD"]
-                })
-
-                break
-
-    return {
-        "query": query,
-        "translated_keywords": translated_keywords,
-        "total_found": len(results),
-        "results": results
-    }
+    return MOCK_FAQ_DB
