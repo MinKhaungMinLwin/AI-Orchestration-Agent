@@ -47,12 +47,10 @@
         "name": "Customer Support & FAQ",
         "explanation": "Handle reservation changes, returns, warranty inquiries, and store service questions.",
         "questions": [
-            "How do I cancel or change my installation appointment?",
-            "Can I return tires after installation?",
+            "How do I cancel or change my tire installation appointment?",
+            "Can I return tires after they have been installed?",
             "What is the standard warranty on Hankook tires?",
-            "Do you offer free alignment checks?",
-            "How can I contact the store directly?",
-            "What is your return and refund policy?"
+            "Do you offer free alignment checks?"
         ]
     }
 }
