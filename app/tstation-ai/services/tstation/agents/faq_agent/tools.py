@@ -4,12 +4,6 @@ from langchain.tools import tool
 # MOCK FAQ DATABASE – T-STATION (CS_CUST_INQ_MGMT_INFO)
 # ==========================================
 
-from langchain.tools import tool
-
-# ==========================================
-# MOCK FAQ DATABASE – T-STATION (CS_CUST_INQ_MGMT_INFO)
-# ==========================================
-
 MOCK_FAQ_DB = [
     # ---------------------------------------------------------
     # Category: Reservation (01)
@@ -84,32 +78,7 @@ MOCK_FAQ_DB = [
     }
 ]
 
-@tool
-def search_faq(query: str) -> dict:
-    """
-    Mock FAQ AF: GET /api/faq/search
-    Searches the FAQ database based on a keyword.
-    Supports both English and Korean queries.
-    """
-    query_lower = query.lower().strip()
-    results = []
 
-    for faq in MOCK_FAQ_DB:
-        # Simple mock search matching keywords in question or answer
-        # Lowercase is applied to handle English safely; Korean characters remain unaffected.
-        if query_lower in faq["CUST_QUEST"].lower() or query_lower in faq["PC_ANS_CONT"].lower():
-            results.append({
-                "CUST_QUEST": faq["CUST_QUEST"],
-                "PC_ANS_CONT": faq["PC_ANS_CONT"],
-                "LRCL_CD": faq["LRCL_CD"],
-                "MDCL_CD": faq["MDCL_CD"]
-            })
-
-    return {
-        "query": query,
-        "total_found": len(results),
-        "results": results
-    }
 @tool
 def search_faq(query: str) -> dict:
     """
