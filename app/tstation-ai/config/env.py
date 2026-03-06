@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     AI_GATEWAY_API_KEY: str
     # External AI Providers
     UPSTAGE_API_KEY: str
+    OPENAI_API_KEY: str
 
     ### -------------------------------
     # Queue System

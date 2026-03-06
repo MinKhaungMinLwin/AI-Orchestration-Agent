@@ -21,9 +21,9 @@ from pydantic import BaseModel, Field
 from langchain_litellm import ChatLiteLLM
 
 LLM = ChatLiteLLM(
-    model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    # model = "bedrock/ap-northeast-1/arn:aws:bedrock:ap-northeast-1:763865062538:inference-profile/minimax.minimax-m2-1",
-    temperature=0.7,
+    # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    openai_api_key=settings.OPENAI_API_KEY,
+    model="gpt-5.2",
     streaming=True,
 )
 
