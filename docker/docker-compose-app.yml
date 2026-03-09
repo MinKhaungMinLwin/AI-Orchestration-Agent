@@ -24,6 +24,21 @@ services:
     networks:
       - project-net
 
+  # TStation BE OpenAPI MCP
+  tstaion-be-mcp:
+    image: ckanthony/openapi-mcp:latest
+    expose:
+      - 8000
+    env_file:
+      - ../.env
+      - ../.env.docker
+    command: >
+      --spec ${TSTATION_BE_SPEC_URL}
+      --port 80000
+    restart: unless-stopped
+    networks:
+      - project-net
+
   # === APP UI ===
   tstation-ui-demo:
     build: ../app/tstation-ui-demo
