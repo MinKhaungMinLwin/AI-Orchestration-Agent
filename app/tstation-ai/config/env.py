@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     API_SECRET_KEY: str
     TZ_OFFSET: int = 7
 
+    # TSTATION-BE
+    TSTATION_BE_API: str
+    TSTATION_BE_MCP: str
     ### -------------------------------
     # AI Internal Gateway
     ### -------------------------------

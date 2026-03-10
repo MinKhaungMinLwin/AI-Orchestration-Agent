@@ -31,6 +31,7 @@ logs
 dataset
 test
 temp/*
+playground/
 
 # App
 app/tstation-ai/static/public/*

@@ -1,278 +1,283 @@
+from common.tstation_be_api_client.hkt_api_client.client import Client
+from config.env import settings
 from langchain.tools import tool
-from typing import List, Dict
 
-# ==========================================
-# KOREA MARKET MOCK DATA – T-STATION
-# ==========================================
+# Product Compatibility
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_compatiblity_get import sync as get_compatibility
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.vehicle_verify_owner_api_vehicle_verify_owner_post import sync as post_vehicle_verify_owner
+from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_compatible_product_api_product_compatible_get import sync as get_compatible_product
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync as get_user_vehicles
 
-MOCK_PRODUCTS: List[Dict] = [
-    {
-        "goods_no": "HKKR001",
-        "goods_nm": "Hankook Ventus S1 evo3 K127",
-        "category": "Performance",
-        "price": 189000,
-        "vehicle": ["Sedan"],
-        "dry": 5,
-        "wet": 4,
-        "snow": 1,
-        "comfort": 3,
-        "silence": 3,
-        "life": 3
-    },
-    {
-        "goods_no": "HKKR008",
-        "goods_nm": "Hankook Ventus Prime4 K135",
-        "category": "Premium Sedan",
-        "price": 168000,
-        "vehicle": ["Sedan"],
-        "dry": 4,
-        "wet": 5,
-        "snow": 2,
-        "comfort": 5,
-        "silence": 5,
-        "life": 5
-    },
-    {
-        "goods_no": "HKKR003",
-        "goods_nm": "Hankook Dynapro HPX",
-        "category": "SUV",
-        "price": 175000,
-        "vehicle": ["SUV"],
-        "dry": 4,
-        "wet": 4,
-        "snow": 2,
-        "comfort": 4,
-        "silence": 4,
-        "life": 5
-    },
-    {
-        "goods_no": "HKKR014",
-        "goods_nm": "Hankook Dynapro AT2",
-        "category": "All-Terrain",
-        "price": 182000,
-        "vehicle": ["SUV"],
-        "dry": 4,
-        "wet": 3,
-        "snow": 3,
-        "comfort": 3,
-        "silence": 3,
-        "life": 5
-    },
-    {
-        "goods_no": "HKKR004",
-        "goods_nm": "Hankook iON evo IK01",
-        "category": "EV",
-        "price": 210000,
-        "vehicle": ["EV"],
-        "dry": 4,
-        "wet": 4,
-        "snow": 2,
-        "comfort": 5,
-        "silence": 5,
-        "life": 4
-    },
-    {
-        "goods_no": "HKKR005",
-        "goods_nm": "Hankook Winter i*cept evo3",
-        "category": "Winter",
-        "price": 165000,
-        "vehicle": ["Sedan", "SUV"],
-        "dry": 3,
-        "wet": 4,
-        "snow": 5,
-        "comfort": 4,
-        "silence": 3,
-        "life": 4
-    }
-]
+# Product Description
+from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync as get_product_description
 
-# ==========================================
-# MOCK CAR DATABASE – KOREA
-# ==========================================
+# Product Recommendation
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync as get_products_recommendations
+from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 
-MOCK_CAR_DB = {
-    "12가3456": {
-        "model": "Hyundai Sonata DN8",
-        "type": "Sedan",
-        "tire_size": "235/45R18"
+client = Client(base_url=settings.TSTATION_BE_API)
+
+DOMAIN_TOOL_MAP = {
+    "discovery": {
+        # Product Compatibility
+        "check_compatibility",
+        "vehicle_verify_owner",
+        "get_compatible_product",
+        "get_user_vehicles",
+
+        # Product Recommendation
+        "get_recommendations",
+
+        # Product Description
+        "get_description",
     },
-    "34나7890": {
-        "model": "Kia K5",
-        "type": "Sedan",
-        "tire_size": "225/45R17"
+    "transaction": {
+        # Price
+        "get_price",
+
+        # Inventory
+        "get_logistics_inventory",
+        "get_md_inventory",
+        "get_store_inventory",
+
+        # Store
+        "get_nearby_stores",
+        "get_store_list",
+        "get_store_detail",
     },
-    "56다1234": {
-        "model": "Hyundai Tucson",
-        "type": "SUV",
-        "tire_size": "235/55R19"
+    "shopping": {
+        # Quick Order
+        "create_quick_order",
+
+        # Order / Delivery
+        "get_order_delivery",
     },
-    "78라5678": {
-        "model": "Tesla Model 3",
-        "type": "EV",
-        "tire_size": "245/40R19"
+    "support": {
+        # FAQ
+        "get_faq",
+
+        # Escalation
+        "escalate",
     }
 }
 
-# =========================================================
-# TOOL 1 – PRODUCT RECOMMENDATION
-# =========================================================
 
 @tool
-def product_recommendation(strategy: str = "balanced", limit: int = 3) -> dict:
+def get_compatibility_tool(car_no: str, goods_no: str):
     """
-    Recommend products based on strategy.
+    Check tire compatibility between a vehicle and a product.
 
-    strategy:
-    - balanced → overall performance
-    - value → best price-performance ratio
-    - comfort → highest comfort & silence score
+    Using the vehicle number (CAR_NO), the API retrieves the front and rear tire sizes
+    from PR_CAR_BASE and PR_CAR_ATTR. Using the product number (GOODS_NO), it retrieves
+    the tire specifications (section width, aspect ratio, and rim inch) from PR_GOODS_BASE.
+    The system then verifies whether the tire product is compatible with the vehicle.
+
+    Until the CarZen API integration is completed, the system prioritizes internal
+    database information for compatibility checks.
+
+    Args:
+        car_no (str): Vehicle number.
+        goods_no (str): Product number.
+
+    Raises:
+        errors.UnexpectedStatus:
+            If the server returns an undocumented status code and
+            Client.raise_on_unexpected_status is True.
+
+        httpx.TimeoutException:
+            If the request takes longer than Client.timeout.
+
+    Returns:
+        CompatibilityResponse | HTTPValidationError
     """
+    res = get_compatibility(
+        client=client,
+        car_no=car_no,
+        goods_no=goods_no
+    )
+    print("[TOOL][get_compatibility_tool]")
+    print(res)
 
-    products = MOCK_PRODUCTS.copy()
+    return res
 
-    if strategy == "value":
-        products.sort(
-            key=lambda x: (x["life"] + x["wet"]) / x["price"],
-            reverse=True
+@tool
+def post_vehicle_verify_owner_tool(car_no: str):
+    """
+    Verify vehicle ownership.
+
+    This API verifies whether the user is the registered owner of a vehicle
+    based on the provided request information.
+
+    Args:
+        car_no (str): Request payload containing the information
+            required to verify vehicle ownership.
+
+    Raises:
+        errors.UnexpectedStatus:
+            If the server returns an undocumented status code and
+            Client.raise_on_unexpected_status is True.
+
+        httpx.TimeoutException:
+            If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[HTTPValidationError | VerifyOwnerResponse]
+    """
+    body = VerifyOwnerRequest(car_no=car_no)
+    res = post_vehicle_verify_owner(
+            client=client,
+            body=body,
         )
-    elif strategy == "comfort":
-        products.sort(
-            key=lambda x: x["comfort"] + x["silence"],
-            reverse=True
-        )
-    else:
-        products.sort(
-            key=lambda x: (
-                    x["dry"] + x["wet"] + x["comfort"] + x["life"]
-            ),
-            reverse=True
-        )
+    print("[TOOL][post_vehicle_verify_owner_tool]")
+    print(res)
 
-    return {
-        "strategy": strategy,
-        "total": len(products),
-        "items": products[:limit]
-    }
-
-# =========================================================
-# TOOL 2 – PRODUCT COMPATIBILITY
-# =========================================================
+    return res
 
 @tool
-def product_compatibility(car_no: str, goods_no: str) -> dict:
+def get_compatible_product_tool(goods_no: str):
     """
-    Check if a product is compatible with a car using car number.
+    Get compatible products.
+
+    Retrieve products that are compatible with the given product number.
+    This is typically used to find alternative or similar tire products
+    that match the same specifications or compatibility conditions.
+
+    Args:
+        goods_no (str): Product number.
+
+    Raises:
+        errors.UnexpectedStatus:
+            If the server returns an undocumented status code and
+            Client.raise_on_unexpected_status is True.
+
+        httpx.TimeoutException:
+            If the request takes longer than Client.timeout.
+
+    Returns:
+        Any | HTTPValidationError
     """
+    res = get_compatible_product(
+        client=client,
+        goods_no=goods_no,
+    )
+    print("[TOOL][get_compatible_product_tool]")
+    print(res)
 
-    car = MOCK_CAR_DB.get(car_no)
-    product = next((p for p in MOCK_PRODUCTS if p["goods_no"] == goods_no), None)
-
-    if not car:
-        return {"error": "Car not found"}
-
-    if not product:
-        return {"error": "Product not found"}
-
-    is_compatible = car["type"] in product["vehicle"]
-
-    return {
-        "car_no": car_no,
-        "car_model": car["model"],
-        "car_type": car["type"],
-        "tire_size": car["tire_size"],
-        "goods_no": goods_no,
-        "product_name": product["goods_nm"],
-        "supported_vehicle_types": product["vehicle"],
-        "is_compatible": is_compatible
-    }
-
-# =========================================================
-# TOOL 3 – PRODUCT DESCRIPTION
-# =========================================================
+    return res
 
 @tool
-def product_description(goods_no: str) -> dict:
+def get_user_vehicles_tool(car_no: str):
     """
-    Return product marketing description and technical summary.
+    Get user vehicles.
+
+    Retrieve vehicle information associated with the given vehicle
+    registration number.
+
+    Args:
+        car_no (str): Vehicle registration number.
+
+    Raises:
+        errors.UnexpectedStatus:
+            If the server returns an undocumented status code and
+            Client.raise_on_unexpected_status is True.
+
+        httpx.TimeoutException:
+            If the request takes longer than Client.timeout.
+
+    Returns:
+        Any | HTTPValidationError
     """
+    res = get_user_vehicles(
+        client=client,
+        car_no=car_no,
+    )
+    print("[TOOL][get_user_vehicles_tool]")
+    print(res)
 
-    product = next((p for p in MOCK_PRODUCTS if p["goods_no"] == goods_no), None)
+    return res
 
-    if not product:
-        return {"error": "Product not found"}
-
-    category = product["category"]
-
-    if category == "EV":
-        slogan = "Optimized for Electric Driving."
-        remark = "Designed for EV efficiency, quietness, and instant torque handling."
-    elif category in ["SUV", "All-Terrain"]:
-        slogan = "Powerful Performance for SUV."
-        remark = "Built for durability and stable driving in diverse road conditions."
-    elif category == "Winter":
-        slogan = "Confident Winter Driving."
-        remark = "Engineered for strong grip and safety in snow and ice."
-    elif category == "Performance":
-        slogan = "High-Speed Precision Control."
-        remark = "Enhanced cornering stability and superior dry & wet grip."
-    else:
-        slogan = "Balanced Comfort and Efficiency."
-        remark = "Provides smooth ride comfort with reliable fuel efficiency."
-
-    return {
-        "goods_no": goods_no,
-        "name": product["goods_nm"],
-        "category": category,
-        "price": product["price"],
-        "slogan": slogan,
-        "remark": remark,
-        "technical_scores": {
-            "dry": product["dry"],
-            "wet": product["wet"],
-            "snow": product["snow"],
-            "comfort": product["comfort"],
-            "silence": product["silence"],
-            "life": product["life"]
-        }
-    }
-
-# =========================================================
-# TOOL 4 – PRODUCT COMPARISON
-# =========================================================
 
 @tool
-def product_comparison(goods_no_1: str, goods_no_2: str) -> dict:
+def get_product_description_tool(goods_no: str):
     """
-    Compare two products and return structured side-by-side data.
+    Get product description.
+
+    Retrieve detailed product information by joining PR_GOODS_BASE and PR_PATTERN_BASE
+    using the product number.
+
+    The API returns:
+    - Key features (PC_PROD_REMARK_DESC)
+    - Technology description (PC_PROD_TECH_DESC)
+    - Product slogan (SLOGAN)
+
+    It also retrieves image and thumbnail paths from PR_PTRN_IMG_INFO.
+
+    Args:
+        goods_no (str): Product number.
+
+    Raises:
+        errors.UnexpectedStatus:
+            If the server returns an undocumented status code and
+            Client.raise_on_unexpected_status is True.
+
+        httpx.TimeoutException:
+            If the request takes longer than Client.timeout.
+
+    Returns:
+        HTTPValidationError | ProductDescResponse
     """
 
-    p1 = next((p for p in MOCK_PRODUCTS if p["goods_no"] == goods_no_1), None)
-    p2 = next((p for p in MOCK_PRODUCTS if p["goods_no"] == goods_no_2), None)
+    res = get_product_description(
+        client=client,
+        goods_no=goods_no
+    )
+    print("[TOOL][get_product_description_tool]")
+    print(res)
 
-    if not p1 or not p2:
-        return {"error": "Product not found"}
+    return res
 
-    return {
-        "product_1": {
-            "goods_no": p1["goods_no"],
-            "name": p1["goods_nm"],
-            "price": p1["price"],
-            "scores": {
-                "dry": p1["dry"],
-                "wet": p1["wet"],
-                "comfort": p1["comfort"],
-                "life": p1["life"]
-            }
-        },
-        "product_2": {
-            "goods_no": p2["goods_no"],
-            "name": p2["goods_nm"],
-            "price": p2["price"],
-            "scores": {
-                "dry": p2["dry"],
-                "wet": p2["wet"],
-                "comfort": p2["comfort"],
-                "life": p2["life"]
-            }
-        }
-    }
+
+@tool
+def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
+    """
+    Product Recommendation
+
+    Returns the top N products based on the selected recommendation type (rcmd_type).
+
+    Recommendation types:
+    - tstation: T-Station recommended products
+      (FST_DISP_YN='Y', sorted by highest TOT_SCR*10, from PR_GOODS_RCMD_SUM)
+
+    - discount: Highest discount rate
+      (sorted by highest EXTRA_FVR_SALE_PER, from PR_GOODS_DSCNT_PRC_INFO)
+
+    - value: Best value products
+      (discounted price ≤ 200,000 KRW, sorted by high durability and fuel efficiency,
+      from PR_GOODS_DSCNT_PRC_INFO + PR_GOODS_RCMD_SUM)
+
+    Args:
+        rcmd_type (RcmdType): Recommendation type.
+        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
+
+    Raises:
+        errors.UnexpectedStatus:
+            If the server returns an undocumented status code and
+            Client.raise_on_unexpected_status is True.
+
+        httpx.TimeoutException:
+            If the request takes longer than Client.timeout.
+
+    Returns:
+        HTTPValidationError | RecommendationResponse
+    """
+
+    res = get_products_recommendations(
+        client=client,
+        rcmd_type=rcmd_type,
+        limit=limit,
+    )
+    print("[TOOL][get_products_recommendations_tool]")
+    print(res)
+
+    return res

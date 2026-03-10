@@ -10,20 +10,12 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
-# LLM = ChatOpenAI(
-#     base_url="https://api.upstage.ai/v1",
-#     api_key=settings.UPSTAGE_API_KEY,
-#     model="solar-pro3",
-#     temperature=0.7,
-#     streaming=True,
-# )
-
 from langchain_litellm import ChatLiteLLM
 
 LLM = ChatLiteLLM(
-    # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
     openai_api_key=settings.OPENAI_API_KEY,
-    model="gpt-5.2",
+    # model="gpt-5.2",
+    model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
     streaming=True,
 )
 
@@ -34,10 +26,11 @@ leading_agent = LeadingAgent(LLM)
 # Discovery Agent
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
 discovery_subagent = DiscoverySubAgent(LLM)
+# Transaction Agent
 
-# FAQ Agent
-from services.tstation.agents.faq_agent.agent import FAQSubAgent
-faq_subagent = FAQSubAgent(LLM)
+# Shopping Agent
+
+# Support Agent
 
 ## Router
 class AgentDomain(BaseModel):
@@ -64,8 +57,8 @@ class AgentDomain(BaseModel):
         # elif self.domain == self.Domain.SHOPPING:
         #     return shopping_agent
         #
-        elif self.domain == self.Domain.SUPPORT:
-            return faq_subagent
+        # elif self.domain == self.Domain.SUPPORT:
+        #     return support_agent
 
         else:
             return leading_agent
