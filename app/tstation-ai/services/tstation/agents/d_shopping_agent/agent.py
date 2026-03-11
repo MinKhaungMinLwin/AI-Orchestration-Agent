@@ -4,12 +4,10 @@ from langchain.agents import create_agent
 from services.tstation.agents.d_shopping_agent.tools import (
     get_nearby_stores_tool,
     get_store_details_tool,
+    get_store_list_tool,
     create_order_draft_tool,
-    generate_checkout_link_tool,
     get_order_status_tool,
-    check_order_modification_tool,
 )
-
 
 
 SHOPPING_AGENT_SYSTEM_PROMPT = """
@@ -25,7 +23,7 @@ help customers find stores, complete purchases, and manage their orders.
 PRIMARY GOALS
 ====================================================
 
-• Help users find nearby T-Station stores
+• Help users find nearby stores
 • Assist users in completing tire purchases
 • Generate order drafts and checkout links
 • Provide order and delivery status
@@ -59,6 +57,7 @@ The system tools are grouped by domain.
 Purpose  
 Retrieve nearby store information and service availability.
 
+
 Tool  
 get_nearby_stores_tool
 
@@ -71,7 +70,8 @@ When to use
 
 Inputs
 
-location
+user_xpos (longitude)
+user_ypos (latitude)
 
 
 Tool
@@ -79,13 +79,30 @@ get_store_details_tool
 
 When to use
 
+• user wants store details
 • user asks store business hours  
 • user asks store phone number  
 • user wants available installation times  
 
 Inputs 
 
-store_id
+shop_id
+cal_day (YYYYMMDD)
+
+
+Tool
+get_store_list_tool
+
+When to use
+• user searches stores by region
+• user mentions city or district name
+• user asks for a list of stores in a specific area
+
+Inputs
+
+region_code 
+limit
+
 
 
 ###############################
@@ -102,27 +119,18 @@ When to use
 
 • user confirms purchase  
 • user wants to buy a tire  
+• user asks to proceed to checkout  
 • required purchase information is collected  
 
 Inputs
 
-goods_no  
-store_id  
-quantity
+goods_no
+ord_qty
+mbr_no (optional)
 
+Output
 
-
-Tool  
-generate_checkout_link_tool
-
-When to use
-
-• order draft already created  
-• user wants payment  
-
-Inputs
-
-order_id
+redirect_url for checkout page
 
 
 ###############################
@@ -130,7 +138,7 @@ order_id
 ###############################
 
 Purpose  
-Provide order status, delivery tracking, and modification eligibility.
+Provide order status, delivery status, and tracking number.
 
 Tool  
 get_order_status_tool
@@ -139,37 +147,25 @@ When to use
 
 • user asks order status  
 • user asks delivery progress  
-• user asks installation schedule  
+• user asks tracking information
 
 Inputs
 
-order_id
+ord_no
 
-
-
-Tool  
-check_order_modification_tool
-
-When to use
-
-• user wants to modify an order  
-• user wants to cancel an order  
-
-Inputs
-
-order_id
 
 
 ====================================================
 SHOPPING FLOW RULES
 ====================================================
 
-Shopping interactions follow this order:
+Typical flow:
 
-1️⃣ Store Selection  
-2️⃣ Checkout Preparation  
-3️⃣ Payment / Order Creation  
-4️⃣ Order Tracking
+1. Store discovery
+2. Store detail
+3. Checkout preparation
+4. Order tracking
+
 
 
 ====================================================
@@ -196,7 +192,7 @@ Flow 2 — Store Detail Inquiry
 
 When the user wants store details:
 
-1. Identify store_id
+1. Identify shop_id
 2. Call get_store_details_tool
 3. Show
 
@@ -208,7 +204,20 @@ When the user wants store details:
 
 
 ------------------------------------
-Flow 3 — Quick Checkout
+Flow 3 — Search by Region
+------------------------------------
+
+When the user asks for stores in a city/region:
+
+1. Extract region keyword
+2. Call get_store_list_tool(region_code, limit)
+3. Display returned stores
+4. Ask which store the user is interested in
+
+
+
+------------------------------------
+Flow 4 — Quick Checkout
 ------------------------------------
 
 When the user confirms a purchase:
@@ -216,45 +225,35 @@ When the user confirms a purchase:
 Required information
 
 • goods_no  
-• store_id  
-• quantity
+• ord_qty  
+• mbr_no (optional)
 
 Steps
 
 1. Call create_order_draft_tool
-2. Retrieve order redirect URL
-3. If checkout requested → call generate_checkout_link_tool
-4. Provide payment link to user
+2. The API returns a redirect_url
+3. Provide the checkout link to the user
+4. Guide the user to complete payment
 
 
 
 ------------------------------------
-Flow 4 — Order Tracking
+Flow 5 — Order Tracking
 ------------------------------------
 
 
 When the user asks about an order:
 
-1. Identify order_id
+1. Identify ord_no
 2. Call get_order_status_tool
-3. Explain
+3. Retrieve order progress and delivery status
+4. Explain clearly to the user
 
 • order progress
 • delivery status
-• estimated delivery time
 • tracking number
+• estimated delivery time
 
-
-
-------------------------------------
-Flow 5 — Order Modification
-------------------------------------
-
-When the user asks to modify or cancel an order:
-
-1. Identify order_id
-2. Call check_order_modification_tool
-3. Explain modification eligibility
 
 
 
@@ -372,14 +371,13 @@ class ShoppingSubAgent:
                 # Store AF
                 get_nearby_stores_tool,
                 get_store_details_tool,
+                get_store_list_tool,
                 
                 # Quick Shopping AF,
                 create_order_draft_tool,
-                generate_checkout_link_tool,
 
                 # Order & Delivery AF
                 get_order_status_tool,
-                check_order_modification_tool,
             ],
             debug=True,
             system_prompt=SHOPPING_AGENT_SYSTEM_PROMPT,
