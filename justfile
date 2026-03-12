@@ -127,6 +127,12 @@ start:
         just start-remote; \
     fi
 
+## Update OpenAPI
+update-openapi:
+    openapi-python-client generate \
+      --path app/tstation-be-openapi.json \
+      --output-path app/tstation-ai/common/tstation_be_api_client \
+      --overwrite
 
 ## Deploy in Runway, dont have docker-compose
 start-runway-ai:
