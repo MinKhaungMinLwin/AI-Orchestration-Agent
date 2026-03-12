@@ -35,22 +35,28 @@ client = Client(base_url=settings.TSTATION_BE_API)
 
 @tool
 def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: Optional[List[str]] = None):
-    """
-    주변 매장 목록 조회
-    
+    """주변 매장 목록 조회
+
     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+
+    Args:
+        user_xpos (float): 고객 현재 X 좌표.
+        user_ypos (float): 고객 현재 Y 좌표.
+        svc_codes (Optional[List[str]]): 서비스 구분 코드 목록. 입력된 코드 중 하나라도 보유한 매장을 반환합니다. 예: ["101", "102"]
     """
     body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, svc_codes=svc_codes)
-    res = get_nearby_stores(client=client, body=body)
     print("[TOOL][get_nearby_stores_tool]\n", res)
     return res
 
 @tool
 def get_store_list_tool(region_code: Optional[str] = None, limit: int = 20):
-    """
-    매장 목록 조회
-    
+    """매장 목록 조회
+
     지역명(도로명주소 LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+
+    Args:
+        region_code (Optional[str]): 지역 검색어 (ROAD_ADDR_BASE LIKE 검색, 예: '서울', '강남')
+        limit (int): 반환할 최대 매장 수 Default: 20.
     """
     res = get_store_list(client=client, region_code=region_code, limit=limit)
     print("[TOOL][get_store_list_tool]\n", res)
@@ -58,10 +64,13 @@ def get_store_list_tool(region_code: Optional[str] = None, limit: int = 20):
 
 @tool
 def get_store_detail_tool(shop_id: str, cal_day: str):
-    """
-    매장 상세 정보 및 예약 가능 시간 조회
-    
+    """매장 상세 정보 및 예약 가능 시간 조회
+
     매장 ID와 날짜를 기준으로 매장 정보와 예약 가능 시간 슬롯(시 단위)을 반환합니다.
+
+    Args:
+        shop_id (str): 매장 ID
+        cal_day (str): 조회 날짜 (YYYYMMDD)
     """
     res = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
     print("[TOOL][get_store_detail_tool]\n", res)
@@ -74,10 +83,14 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 
 @tool
 def get_final_price_tool(goods_no: str, member_type: Optional[str] = None):
-    """
-    상품 가격 및 할인 조회
-    
+    """상품 가격 및 할인 조회
+
     상품 번호로 기본 판매가, 최대 혜택가(프로모션·쿠폰 적용), 공임비 및 오늘의 공임비를 반환합니다.
+    (샘플번호: G000000314254)
+
+    Args:
+        goods_no (str): 상품 번호 (예: G000000314254)
+        member_type (Optional[str]): 회원 유형 (예: 'general', 'PARTNER')
     """
     res = get_price(client=client, goods_no=goods_no, member_type=member_type)
     print("[TOOL][get_final_price_tool]\n", res)
@@ -90,40 +103,45 @@ def get_final_price_tool(goods_no: str, member_type: Optional[str] = None):
 
 @tool
 def get_logistics_inventory_tool(goods_no: str):
-    """
-    상품 물류 재고 조회
-    
+    """상품 물류 재고 조회
+
     물류 재고(오라클 함수 FN_GET_GOODS_STOCK_QTY)를 반환합니다.
+
+    Args:
+        goods_no (str): 상품 번호
     """
     body = LogisticsRequest(goods_no=goods_no)
     res = get_logistics_inventory(client=client, body=body)
     print("[TOOL][get_logistics_inventory_tool]\n", res)
     return res
 
+
 @tool
 def get_md_inventory_tool(goods_no: str, shop_id: str):
-    """
-    MD 재고 조회 (참고용)
-    
+    """MD 재고 조회 (참고용)
+
     PR_INV_MD_STOCK_INFO (백업용 DB) - INV_QTY (재고 수량)
+
+    Args:
+        goods_no (str): 상품 번호
+        shop_id (str): 매장 ID
     """
     body = MdInventoryRequest(goods_no=goods_no, shop_id=shop_id)
     res = get_md_inventory(client=client, body=body)
     print("[TOOL][get_md_inventory_tool]\n", res)
     return res
 
+
 @tool
 def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: List[Dict[str, Any]]):
-    """
-    매장 재고 가용 여부 조회
-    
-    상품 목록과 매장 목록을 입력받아 오늘 장착 가능 매장(todayShopArray)과 T바로배송 가능 매장(tnaShopArray)을 반환합니다.
+    """매장 재고 가용 여부 조회
+
+    상품 목록과 매장 목록을 입력받아 오늘 장착 가능 매장(todayShopArray)과 T바로배송 가능 매장(tnaShopArray)을 반환합니다. (외부 API: getStockCheckShopList)
     
     Args:
-        goods_list: List of dicts, e.g., [{"goodsNo": "G123", "qty": 4}]
-        shop_id_list: List of dicts, e.g., [{"shopId": "F0001"}]
+        goods_list (List[Dict[str, Any]]): 재고 확인 상품 목록 (예: [{"goodsNo": "G123", "qty": 4}])
+        shop_id_list (List[Dict[str, Any]]): 재고 확인 매장 목록 (예: [{"shopId": "F0001"}])
     """
-    # Parse generic dicts into Pydantic models required by the API
     g_items = [GoodsItem(goodsNo=g["goodsNo"], qty=g["qty"]) for g in goods_list]
     s_items = [ShopIdItem(shopId=s["shopId"]) for s in shop_id_list]
     
