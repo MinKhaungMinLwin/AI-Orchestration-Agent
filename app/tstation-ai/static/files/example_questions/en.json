@@ -13,14 +13,18 @@
             "Does G000000310122 fit my car 12가3456?"
         ]
     },
-    "service": {
-        "name": "Customer Support & FAQ",
-        "explanation": "Handle reservation changes, returns, warranty inquiries, and store service questions.",
+    "support": {
+        "name": "Support & Policies",
+        "explanation": "Handle warranty claims, returns, policies, FAQs, and escalate to human agents when needed.",
         "questions": [
-            "How do I cancel or change my tire installation appointment?",
-            "Can I return tires after they have been installed?",
-            "What is the standard warranty on Hankook tires?",
-            "Do you offer free alignment checks?"
+            "What is covered under the Hankook tire warranty?",
+            "How do I file a warranty claim for a defective tire?",
+            "What is your return and refund policy?",
+            "Can I exchange tires if I bought the wrong size?",
+            "How long does it take to process a warranty claim?",
+            "I need to speak with a customer service representative",
+            "My tire has a defect, what should I do?",
+            "What is the process for filing a complaint?"
         ]
     }
 }

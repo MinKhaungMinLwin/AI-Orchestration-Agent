@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 T-Station AI is an AI-powered service for Hankook Tire. It consists of three main components:
 
-- **tstation-ai** (port 9000): Main AI service with FastAPI, LangChain agents, RAG (Qdrant), and task queue (Celery/Redis)
+- **tstation-ai** (port 8000): Main AI service with FastAPI, LangChain agents, RAG (Qdrant), and task queue (Celery/Redis)
 - **tstation-be** (port 8001): Backend service connecting to Oracle database
 - **tstation-ui-demo** (port 7777): Streamlit-based demo UI
 
@@ -26,7 +26,7 @@ source .venv/bin/activate
 
 ### Running Services
 ```bash
-# Run AI service (port 9000)
+# Run AI service (port 8000)
 set -a && source .env && set +a && uv run app/tstation-ai/main.py
 
 # Run BE service (port 8001)
@@ -44,57 +44,34 @@ just fmt        # Format code with ruff + isort
 
 ### Docker Deployment
 ```bash
-just start      # Start services with Docker
-just stop       # Stop Docker services
-just start-local   # Local development with Docker
+just start           # Start services with Docker (uses ENV=local by default)
+just start-local     # Local development with Docker
+just stop            # Stop Docker services
+just start-remote    # Remote deployment with Docker (requires ENV=dev|stag|prod)
+just stop-remote     # Stop remote Docker services
+```
+
+### Runway Deployment
+```bash
+just start-runway-ai      # Start AI service in Runway
+just stop-runway-ai       # Stop AI service in Runway
+just start-runway-be      # Start BE service in Runway
+just stop-runway-be       # Stop BE service in Runway
+just start-runway         # Start all services in Runway
+just stop-runway         # Stop all services in Runway
 ```
 
 ## Architecture
 
 ### AI Agents (`app/tstation-ai/services/tstation/agents/`)
-- **a_leading_agent**: Primary agent that routes requests
-- **b_discovery_agent**: Discovery agent
-- **faq_agent**: FAQ retrieval using RAG (Qdrant vector store)
-- **store_agent**: Store-related agent
-- **router.py**: Domain router that dispatches to appropriate agent
-
-### Key Dependencies
-- FastAPI + Uvicorn for API
-- LangChain for AI/LLM agents
-- Qdrant for vector storage (RAG)
-- Celery + Redis for async task queue
-- Langfuse for tracing/observability
-- OpenAI API for LLM
-
-### Configuration
-- Environment variables in `.env` (see `.env.example`)
-- Settings in `app/tstation-ai/config/env.py`
-- Python 3.12 required
-- Package management via `uv` (see `pyproject.toml`)
-
-## Code Standards
-
-- Line length: 120 characters
-- Python 3.12 target
-- Use ruff for linting/formatting
-- Use isort for import sorting
-- Agent directories use prefix ordering (a_leading_, b_discovery_, etc.)
-
-
-
-## AI Agents
-
-The system uses a multi-agent architecture with domain routing:
-
-| Agent | Purpose |
-|-------|---------|
-| **Leading Agent** | Central orchestrator, routes to sub-agents |
-| **Discovery Agent** | Product recommendations, compatibility checks, descriptions |
-| **FAQ Agent** | RAG-based policy inquiries using Qdrant + OpenAI |
-| **Store Agent** | Store integration (in development) |
+- **a_leading_agent**: Primary orchestrator, domain routing
+- **b_discovery_agent**: Product recommendations, compatibility checks
+- **c_transaction_agent**: Purchase intent handling
+- **d_shopping_agent**: Price, stock, store inquiries
+- **e_support_agent**: Warranty, returns, policies, FAQ
+- **router.py**: Domain router that classifies and dispatches to appropriate agent
 
 ### Domain Classification
-
 | Domain | Description |
 |--------|-------------|
 | LEADING | General/unclear queries |
@@ -103,8 +80,7 @@ The system uses a multi-agent architecture with domain routing:
 | TRANSACTION | Purchase intent |
 | SUPPORT | Warranty, returns, policies |
 
-## Key Dependencies
-
+### Key Dependencies
 - **FastAPI** + Uvicorn for API
 - **LangChain** for AI/LLM agents
 - **Qdrant** for vector storage (RAG)
@@ -112,14 +88,22 @@ The system uses a multi-agent architecture with domain routing:
 - **Langfuse** for tracing/observability
 - **LiteLLM** with Bedrock Claude Haiku 4.5
 
-## Configuration
-
-Environment variables are defined in `.env` (see `.env.example`):
-
+### Configuration
+Environment variables in `.env` (see `.env.example`):
 - `ENV`: Environment mode (`local`, `dev`, `staging`, `prod`)
 - `AI_DEFAULT_PROVIDER`: LLM provider (default: `openai`)
 - `REDIS_URL`: Redis connection for queue
 - `AWS_BEARER_TOKEN_BEDROCK`: AWS Bedrock authentication
+
+Python 3.12 required. Package management via `uv` (see `pyproject.toml`).
+
+## Code Standards
+
+- Line length: 120 characters
+- Python 3.12 target
+- Use ruff for linting/formatting
+- Use isort for import sorting
+- Agent directories use prefix ordering (a_, b_, c_, etc.)
 
 ## Project Structure
 
@@ -131,17 +115,16 @@ app/
 │   ├── config/            # Configuration
 │   ├── services/          # Business logic
 │   └── main.py            # Application entry
-├── tstation-be/           # Backend service
+├── tstation-be/           # Backend service (Oracle DB)
 │   ├── app/routers/       # API routers
 │   └── main.py            # Application entry
 └── tstation-ui-demo/      # Demo UI
     └── Home.py            # Streamlit app
+
+docs/
+├── system-architecture.md
+├── code-standards.md
+├── project-overview-pdr.md
+├── codebase-summary.md
+└── project-roadmap.md
 ```
-
-## Documentation
-
-- [System Architecture](./docs/system-architecture.md)
-- [Code Standards](./docs/code-standards.md)
-- [Project Overview & PDR](./docs/project-overview-pdr.md)
-- [Codebase Summary](./docs/codebase-summary.md)
-- [Project Roadmap](./docs/project-roadmap.md)
