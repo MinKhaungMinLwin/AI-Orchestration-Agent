@@ -31,6 +31,8 @@ discovery_subagent = DiscoverySubAgent(LLM)
 # Shopping Agent
 
 # Support Agent
+from services.tstation.agents.e_support_agent.agent import SupportSubAgent
+support_subagent = SupportSubAgent(LLM)
 
 ## Router
 class AgentDomain(BaseModel):
@@ -164,31 +166,46 @@ class AgentDomain(BaseModel):
         ----------------------------------------------------
         
         5) support
-        Use when the user asks about policies, service issues, or post-purchase support.
-        
+        Use when the user asks about policies, service issues, post-purchase support,
+        OR when they want to speak with a human agent / customer service.
+        This is also the FALLBACK route for ESCALATION from any domain.
+
         Includes:
         - Warranty
         - Refund policy
         - Installation policy
         - Complaint
         - Account problems
-        - Human agent request
-        
+        - Human agent request / Escalation request
+        - User says "I want to talk to a person"
+        - User says "connect me to customer service"
+        - User says "I need help from a human"
+        - User is frustrated or having difficulties
+        - When any other domain agent cannot resolve the issue
+
         Examples:
         - "What is the warranty policy?"
         - "How long does installation take?"
         - "I need help with my previous purchase"
+        - "I want to talk to a customer service representative"
+        - "Connect me to a human agent"
+        - "This is not helpful, let me speak to someone"
+        - "I need to escalate this issue"
         
         ====================================================
         PRIORITY RULES
         ====================================================
-        
+
+        HIGHEST PRIORITY - Escalation:
+        If user explicitly requests human agent / escalation → support
+        (This overrides all other domains)
+
         If message includes strong purchase intent → transaction
         Else if price/stock/store inquiry → shopping
         Else if recommendation or compatibility → discovery
-        Else if policy or complaint → support
+        Else if policy, complaint, or support request → support
         Else → leading
-        
+
         If multiple intents exist:
         Classify based on the PRIMARY action the user wants to perform.
         """)
