@@ -1,6 +1,10 @@
+import logging
+
 from common.tstation_be_api_client.hkt_api_client.client import Client
 from config.env import settings
 from langchain.tools import tool
+
+logger = logging.getLogger(__name__)
 
 # Store AF
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_nearby_stores_api_store_nearby_post import sync as get_nearby_stores
@@ -75,8 +79,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
         body=body
     )
 
-    print("[TOOL][get_nearby_stores_tool]")
-    print(res)
+    logger.info("[TOOL][get_nearby_stores_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -123,8 +127,8 @@ def get_store_details_tool(shop_id: str, cal_day: str):
         cal_day=cal_day
     )
 
-    print("[TOOL][get_store_details_tool]")
-    print(res)
+    logger.info("[TOOL][get_store_details_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -174,8 +178,8 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
         limit=limit
     )
 
-    print("[TOOL][get_store_list_tool]")
-    print(res)
+    logger.info("[TOOL][get_store_list_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -238,8 +242,8 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
         body=body,
     )
 
-    print("[TOOL][create_order_draft_tool]")
-    print(res)
+    logger.info("[TOOL][create_order_draft_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -289,7 +293,7 @@ def get_order_status_tool(ord_no: str):
         ord_no=ord_no
     )
 
-    print("[TOOL][get_order_status_tool]")
-    print(res)
+    logger.info("[TOOL][get_order_status_tool]")
+    logger.info(f"Response: {res}")
 
     return res

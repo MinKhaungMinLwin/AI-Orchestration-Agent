@@ -1,9 +1,13 @@
+import logging
+
 from common.tstation_be_api_client.hkt_api_client.client import Client
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync as post_escalate
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
 from config.env import settings
 from langchain.tools import tool
+
+logger = logging.getLogger(__name__)
 
 
 client = Client(base_url=settings.TSTATION_BE_API)
@@ -50,8 +54,8 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         mdcl_cd=mdcl_cd,
         limit=limit,
     )
-    print("[TOOL][get_faq_tool]")
-    print(res)
+    logger.info("[TOOL][get_faq_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -101,7 +105,7 @@ def escalate_tool(
         client=client,
         body=body,
     )
-    print("[TOOL][escalate_tool]")
-    print(res)
+    logger.info("[TOOL][escalate_tool]")
+    logger.info(f"Response: {res}")
 
     return res

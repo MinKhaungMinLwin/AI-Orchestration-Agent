@@ -1,8 +1,11 @@
+import logging
 from typing import Optional, List, Dict, Any
 
 from common.tstation_be_api_client.hkt_api_client.client import Client
 from config.env import settings
 from langchain.tools import tool
+
+logger = logging.getLogger(__name__)
 
 # STORE AF
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_nearby_stores_api_store_nearby_post import sync as get_nearby_stores
@@ -53,8 +56,8 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         PriceResponse | HTTPValidationError
     """
     res = get_price(client=client, goods_no=goods_no, member_type=member_type)
-    print("[TOOL][get_final_price_tool]")
-    print(res)
+    logger.info("[TOOL][get_final_price_tool]")
+    logger.info(f"Response: {res}")
     return res
 
 
@@ -82,8 +85,8 @@ def get_logistics_inventory_tool(goods_no: str):
     """
     body = LogisticsRequest(goods_no=goods_no)
     res = get_logistics_inventory(client=client, body=body)
-    print("[TOOL][get_logistics_inventory_tool]")
-    print(res)
+    logger.info("[TOOL][get_logistics_inventory_tool]")
+    logger.info(f"Response: {res}")
     return res
 
 
@@ -112,8 +115,8 @@ def get_md_inventory_tool(goods_no: str, shop_id: str):
     """
     body = MdInventoryRequest(goods_no=goods_no, shop_id=shop_id)
     res = get_md_inventory(client=client, body=body)
-    print("[TOOL][get_md_inventory_tool]")
-    print(res)
+    logger.info("[TOOL][get_md_inventory_tool]")
+    logger.info(f"Response: {res}")
     return res
 
 
@@ -147,8 +150,8 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
     body = StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items)
     res = get_store_inventory(client=client, body=body)
-    print("[TOOL][get_store_inventory_tool]")
-    print(res)
+    logger.info("[TOOL][get_store_inventory_tool]")
+    logger.info(f"Response: {res}")
     return res
 
 
@@ -180,8 +183,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[s
     """
     body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, svc_codes=svc_codes)
     res = get_nearby_stores(client=client, body=body)
-    print("[TOOL][get_nearby_stores_tool]")
-    print(res)
+    logger.info("[TOOL][get_nearby_stores_tool]")
+    logger.info(f"Response: {res}")
     return res
 
 
@@ -210,8 +213,8 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
         StoreListResponse | HTTPValidationError
     """
     res = get_store_list(client=client, region_code=region_code, limit=limit)
-    print("[TOOL][get_store_list_tool]")
-    print(res)
+    logger.info("[TOOL][get_store_list_tool]")
+    logger.info(f"Response: {res}")
     return res
 
 
@@ -239,6 +242,6 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
         StoreDetailResponse | HTTPValidationError
     """
     res = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
-    print("[TOOL][get_store_detail_tool]")
-    print(res)
+    logger.info("[TOOL][get_store_detail_tool]")
+    logger.info(f"Response: {res}")
     return res

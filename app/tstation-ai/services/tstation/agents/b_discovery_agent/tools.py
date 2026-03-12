@@ -1,6 +1,10 @@
+import logging
+
 from common.tstation_be_api_client.hkt_api_client.client import Client
 from config.env import settings
 from langchain.tools import tool
+
+logger = logging.getLogger(__name__)
 
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_compatiblity_get import sync as get_compatibility
@@ -96,8 +100,8 @@ def get_compatibility_tool(car_no: str, goods_no: str):
         car_no=car_no,
         goods_no=goods_no
     )
-    print("[TOOL][get_compatibility_tool]")
-    print(res)
+    logger.info("[TOOL][get_compatibility_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -129,8 +133,8 @@ def post_vehicle_verify_owner_tool(car_no: str):
             client=client,
             body=body,
         )
-    print("[TOOL][post_vehicle_verify_owner_tool]")
-    print(res)
+    logger.info("[TOOL][post_vehicle_verify_owner_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -161,8 +165,8 @@ def get_compatible_product_tool(goods_no: str):
         client=client,
         goods_no=goods_no,
     )
-    print("[TOOL][get_compatible_product_tool]")
-    print(res)
+    logger.info("[TOOL][get_compatible_product_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -192,8 +196,8 @@ def get_user_vehicles_tool(car_no: str):
         client=client,
         car_no=car_no,
     )
-    print("[TOOL][get_user_vehicles_tool]")
-    print(res)
+    logger.info("[TOOL][get_user_vehicles_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -232,8 +236,8 @@ def get_product_description_tool(goods_no: str):
         client=client,
         goods_no=goods_no
     )
-    print("[TOOL][get_product_description_tool]")
-    print(res)
+    logger.info("[TOOL][get_product_description_tool]")
+    logger.info(f"Response: {res}")
 
     return res
 
@@ -277,7 +281,7 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
         rcmd_type=rcmd_type,
         limit=limit,
     )
-    print("[TOOL][get_products_recommendations_tool]")
-    print(res)
+    logger.info("[TOOL][get_products_recommendations_tool]")
+    logger.info(f"Response: {res}")
 
     return res
