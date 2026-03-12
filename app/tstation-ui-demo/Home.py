@@ -9,8 +9,11 @@ st.title("T-Station AI Demo")
 
 # Note
 st.sidebar.markdown("## Domain Support")
-st.sidebar.markdown("- Discovery: Product Description AF")
-st.sidebar.markdown("- Support: FAQ AF")
+st.sidebar.markdown("- **Leading**: Greeting & routing")
+st.sidebar.markdown("- **Discovery**: ProductRecommendation, Compatibility, ProductDescription AF")
+st.sidebar.markdown("- **Transaction**: Price, Inventory, Store APIs")
+st.sidebar.markdown("- **Shopping**: QuickOrder, Order tracking")
+st.sidebar.markdown("- **Support**: FAQ, Escalation AF")
 
 
 # Sidebar
