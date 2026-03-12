@@ -31,9 +31,10 @@ discovery_subagent = DiscoverySubAgent(LLM)
 from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
 transaction_subagent = TransactionSubAgent(LLM)
 
-# Shopping Agent
-from services.tstation.agents.d_shopping_agent.agent import ShoppingSubAgent
-shopping_subagent = ShoppingSubAgent(LLM)
+# Order Agent
+from services.tstation.agents.d_order_agent.agent import OrderSubAgent
+
+order_subagent = OrderSubAgent(LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
@@ -45,7 +46,7 @@ class AgentDomain(BaseModel):
         LEADING = "leading"
         DISCOVERY = "discovery"
         TRANSACTION = "transaction"
-        SHOPPING = "shopping"
+        ORDER = "order"
         SUPPORT = "support"
 
     reason: str = Field(default="", description="Reason for the classification")
@@ -61,8 +62,8 @@ class AgentDomain(BaseModel):
         elif self.domain == self.Domain.TRANSACTION:
             return transaction_subagent
 
-        elif self.domain == self.Domain.SHOPPING:
-            return shopping_subagent
+        elif self.domain == self.Domain.ORDER:
+            return order_subagent
 
         elif self.domain == self.Domain.SUPPORT:
             return support_subagent
@@ -78,7 +79,7 @@ class AgentDomain(BaseModel):
         Your task is to classify the user's latest message into ONE of the following domains:
         - leading
         - discovery
-        - shopping
+        - order
         - transaction
         - support
         
@@ -103,71 +104,71 @@ class AgentDomain(BaseModel):
         
         2) discovery
         Use when the user is exploring, researching, or validating products.
-        
+        This is about PRODUCT INFORMATION - not about buying or stores.
+
         This includes:
-        - Tire recommendations
-        - Asking which tire is best
-        - Asking about tire features or specifications
+        - Tire recommendations based on vehicle or driving needs
+        - Asking which tire is best for their car
+        - Asking about tire features, specifications, or descriptions
         - Comparing products
-        - Asking if a product fits their car
+        - Checking if a tire fits their vehicle (vehicle number like 33가3333, 12가3456)
         - Compatibility check between vehicle and tire
-        - Recommendation + compatibility in same sentence
-        
+
         Examples:
+        - "Recommend a tire for my car 33가3333"
         - "Recommend a tire for my Hyundai Sonata"
         - "Which tire is best for quiet driving?"
         - "Tell me more about HKKR001"
         - "Does HKKR001 fit my car 12가3456?"
-        - "Recommend a tire and check if it fits my vehicle"
-        
+        - "Does G000000309855 fit my car 56모2162?"
+        - "What are the features of tire G000000310121?"
+
         IMPORTANT:
-        Compatibility validation (product ↔ vehicle fitment) belongs to DISCOVERY,
-        NOT transaction.
-        
+        - Keywords like "car", "vehicle", "recommend", "fit", "best" → DISCOVERY
+        - This is NOT about price, stock, stores, or orders
+
         ----------------------------------------------------
-        
-        3) shopping
-        Use when the user is preparing to buy but has not confirmed the purchase.
-        
-        Includes:
+
+        3) transaction
+        Use when the user asks about pricing, stock, or inventory.
+
+        This includes:
         - Asking for price
         - Asking for stock
-        - Checking promotion or coupon
-        - Checking store availability
-        - Asking about installation schedule
-        - Confirming availability before buying
-        
+        - Checking inventory
+        - Checking store inventory availability
+        - T-NA delivery availability
+
         Examples:
-        - "How much is HKIN001?"
-        - "Is this tire in stock?"
-        - "Do you have it in Gangnam store?"
-        - "Can I install it tomorrow?"
-        
+        - "What is the price of tire G000000314254?"
+        - "How much is G000000314254?"
+        - "Is tire G000000314254 in stock?"
+        - "Check stock for product G000000314254"
+        - "Find stores that have G000000314254 in stock"
+        - "What stores can install G000000314254 today?"
+        - "Check T-NA delivery availability"
+
         ----------------------------------------------------
-        
-        4) transaction
-        Use when the user expresses clear purchase intent or manages an order.
-        
-        Includes:
-        - "I want to buy HKIN001"
-        - "Proceed with this tire"
-        - "Place the order"
-        - "Order if compatible"
-        - Confirming purchase
-        - Checking order status
-        - Cancelling order
+
+        4) order
+        Use when the user wants to create orders, track orders, or find stores.
+
+        This includes:
+        - Finding nearby stores
+        - Store details and reservation
+        - Quick order creation
+        - Order status tracking
         - Delivery tracking
-        
-        IMPORTANT:
-        If the user clearly wants to proceed with buying → transaction,
-        even if compatibility is mentioned.
-        
+
         Examples:
-        - "I want to buy HKIN001"
-        - "Order this if it fits"
-        - "Where is my order?"
-        - "Cancel my order"
-        
+        - "Show the closest T'Station stores near 37.5665, 126.9780"
+        - "Find stores near 37.4979, 127.0276"
+        - "List T'Station stores in Seoul"
+        - "Show details of store B03788"
+        - "Create a quick order with product G000000309855"
+        - "Check the status of my order"
+        - "Show my order and delivery status"
+
         ----------------------------------------------------
         
         5) support
@@ -205,10 +206,18 @@ class AgentDomain(BaseModel):
         If user explicitly requests human agent / escalation → support
         (This overrides all other domains)
 
-        If message includes strong purchase intent → transaction
-        Else if price/stock/store inquiry → shopping
-        Else if recommendation or compatibility → discovery
-        Else if policy, complaint, or support request → support
+        KEYWORD-BASED CLASSIFICATION:
+
+        If message contains vehicle number (e.g., 33가3333, 12가3456)
+        OR contains "recommend", "best", "fit", "compatible", "vehicle", "car"
+        OR asks about product features → discovery
+
+        Else if message asks about "price", "cost", "how much", "stock", "inventory" → transaction
+
+        Else if message asks about "store", "nearby", "order", "delivery", "track" → order
+
+        Else if message asks about "warranty", "return", "refund", "policy", "FAQ" → support
+
         Else → leading
 
         If multiple intents exist:

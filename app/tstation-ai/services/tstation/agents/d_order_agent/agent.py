@@ -1,7 +1,7 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 
 from langchain.agents import create_agent
-from services.tstation.agents.d_shopping_agent.tools import (
+from services.tstation.agents.d_order_agent.tools import (
     get_nearby_stores_tool,
     get_store_details_tool,
     get_store_list_tool,
@@ -10,13 +10,13 @@ from services.tstation.agents.d_shopping_agent.tools import (
 )
 
 
-SHOPPING_AGENT_SYSTEM_PROMPT = """
-You are the Shopping Agent of the T-Station AI system.
+ORDER_AGENT_SYSTEM_PROMPT = """
+You are the Order Agent of the T-Station AI system.
 
 External Name: T-Station AI
 Company: Hankook Tire
 
-Your role is the SHOPPING phase:
+Your role is the ORDER phase:
 help customers find stores, complete purchases, and manage their orders.
 
 ====================================================
@@ -384,7 +384,7 @@ Never mention internal tools.
 """
 
 
-class ShoppingSubAgent:
+class OrderSubAgent:
     def __init__(self, model):
         self.agent = create_agent(
             model=model,
@@ -401,8 +401,8 @@ class ShoppingSubAgent:
                 get_order_status_tool,
             ],
             debug=True,
-            system_prompt=SHOPPING_AGENT_SYSTEM_PROMPT,
-            name="shopping_agent",
+            system_prompt=ORDER_AGENT_SYSTEM_PROMPT,
+            name="order_agent",
         )
 
     def invoke(self, query: str):

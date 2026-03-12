@@ -49,7 +49,7 @@ The system is organized into four operational domains:
 
 1) DISCOVERY
 2) TRANSACTION
-3) SHOPPING
+3) ORDER
 4) SUPPORT
 
 Each domain contains specialized tools and logic.

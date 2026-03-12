@@ -36,8 +36,8 @@
             "Check T-NA delivery availability for G000000314254"
         ]
     },
-    "shopping": {
-        "name": "Shopping Services",
+    "order": {
+        "name": "Order Services",
         "explanation": "Handle store discovery, store details with reservation availability, quick order draft creation, and order or delivery tracking.",
         "questions": [
             "Show the closest T'Station stores near 37.5665, 126.9780.",
