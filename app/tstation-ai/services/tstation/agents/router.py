@@ -29,6 +29,8 @@ discovery_subagent = DiscoverySubAgent(LLM)
 # Transaction Agent
 
 # Shopping Agent
+from services.tstation.agents.d_shopping_agent.agent import ShoppingSubAgent
+shopping_subagent = ShoppingSubAgent(LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
@@ -56,11 +58,11 @@ class AgentDomain(BaseModel):
         # elif self.domain == self.Domain.TRANSACTION:
         #     return transaction_agent
         #
-        # elif self.domain == self.Domain.SHOPPING:
-        #     return shopping_agent
-        #
-        # elif self.domain == self.Domain.SUPPORT:
-        #     return support_agent
+        elif self.domain == self.Domain.SHOPPING:
+            return shopping_subagent
+
+        elif self.domain == self.Domain.SUPPORT:
+            return support_subagent
 
         else:
             return leading_agent

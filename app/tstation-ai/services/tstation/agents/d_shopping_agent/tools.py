@@ -4,11 +4,13 @@ from langchain.tools import tool
 
 # Store AF
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_nearby_stores_api_store_nearby_post import sync as get_nearby_stores
+from common.tstation_be_api_client.hkt_api_client.models import NearbyStoreRequest
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync as get_store_details   
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync as get_store_list  
 
 # Quick Shopping AF
-from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵쇼핑.create_quick_order_api_quick_order_post import sync as create_quick_order
+from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.create_quick_order_api_quick_order_draft_post import sync as create_quick_order
+from common.tstation_be_api_client.hkt_api_client.models import QuickOrderRequest
 
 # Order & Delivery AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync as get_order_delivery
@@ -62,13 +64,15 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
     Returns:
         NearbyStoreResponse | HTTPValidationError
     """
+    body = NearbyStoreRequest(
+        user_xpos=user_xpos,
+        user_ypos=user_ypos,
+        svc_codes=None
+    )
 
     res = get_nearby_stores(
         client=client,
-        body={
-        "user_xpos": user_xpos,
-        "user_ypos": user_ypos
-        }
+        body=body
     )
 
     print("[TOOL][get_nearby_stores_tool]")

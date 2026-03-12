@@ -93,11 +93,11 @@ class TStationChatService(object):
 
         try:
             result: AgentDomain = structured_model.invoke(request.messages)
-            logger.debug(f"Domain classification result: {result}")
+            logger.info(f"[DOMAIN] Domain classification result: {result}")
             return result.domain
 
         except Exception as e:
-            logger.exception(f"Domain classification failed: {e}")
+            logger.exception(f"[DOMAIN] Domain classification failed: {e}")
             return AgentDomain.Domain.LEADING
 
 

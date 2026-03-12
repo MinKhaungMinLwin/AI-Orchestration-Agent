@@ -3,28 +3,40 @@
         "name": "Discovery & Recommendation",
         "explanation": "Explore and recommend suitable tires using ProductRecommendation, Compatibility, and ProductDescription APIs.",
         "questions": [
-            "Recommend a tire for my car 12가3456",
-            "I drive vehicle 12가3456, which tire is best?",
+            "Recommend a tire for my car 33가3333",
+            "I drive vehicle 99구9999, which tire is best?",
             "Show me the best discount tire available",
             "Recommend a value tire for everyday driving",
             "Which tire is best for quiet driving?",
             "Tell me more about tire G000000310120",
             "Explain the features of tire G000000310121",
-            "Does G000000310122 fit my car 12가3456?"
+            "Does G000000309855 fit my car 56모2162?"
         ]
     },
-    "support": {
-        "name": "Support & Policies",
-        "explanation": "Handle warranty claims, returns, policies, FAQs, and escalate to human agents when needed.",
+    "shopping": {
+        "name": "Shopping Services",
+        "explanation": "Handle store discovery, store details with reservation availability, quick order draft creation, and order or delivery tracking.",
         "questions": [
-            "What is covered under the Hankook tire warranty?",
-            "How do I file a warranty claim for a defective tire?",
-            "What is your return and refund policy?",
-            "Can I exchange tires if I bought the wrong size?",
-            "How long does it take to process a warranty claim?",
-            "I need to speak with a customer service representative",
-            "My tire has a defect, what should I do?",
-            "What is the process for filing a complaint?"
+            "Show the closest T'Station stores near 37.5665, 126.9780.",
+            "Find stores near 37.4979, 127.0276 that offer tire installation.",
+            "List T'Station stores in Seoul (서울).",
+            "Show the list of stores in GangStatnam (강남).",
+            "Show the details of store have name is B03788.",
+            "Give me details of C02571 store.",
+            "Create a quick order with product G000000309855 and my name is M200012890",
+            "My name is M200012890, I want to order G000000318224 product",
+            "Check the status of my order with name is [Your_Order_ID]",
+            "Show my order [Your_Order_ID] and delivery status."
+        ]
+    },
+    "service": {
+        "name": "Customer Support & FAQ",
+        "explanation": "Handle reservation changes, returns, warranty inquiries, and store service questions.",
+        "questions": [
+            "How do I cancel or change my tire installation appointment?",
+            "Can I return tires after they have been installed?",
+            "What is the standard warranty on Hankook tires?",
+            "Do you offer free alignment checks?"
         ]
     }
 }
