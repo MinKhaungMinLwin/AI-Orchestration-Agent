@@ -55,9 +55,9 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     Returns:
         PriceResponse | HTTPValidationError
     """
+    logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
     res = get_price(client=client, goods_no=goods_no, member_type=member_type)
-    logger.info("[TOOL][get_final_price_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_final_price_tool] Response: %s", res)
     return res
 
 
@@ -84,9 +84,9 @@ def get_logistics_inventory_tool(goods_no: str):
         LogisticsResponse | HTTPValidationError
     """
     body = LogisticsRequest(goods_no=goods_no)
+    logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
     res = get_logistics_inventory(client=client, body=body)
-    logger.info("[TOOL][get_logistics_inventory_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", res)
     return res
 
 
@@ -114,9 +114,9 @@ def get_md_inventory_tool(goods_no: str, shop_id: str):
         MdInventoryResponse | HTTPValidationError
     """
     body = MdInventoryRequest(goods_no=goods_no, shop_id=shop_id)
+    logger.info("[TOOL][get_md_inventory_tool] Called with: goods_no=%s, shop_id=%s", goods_no, shop_id)
     res = get_md_inventory(client=client, body=body)
-    logger.info("[TOOL][get_md_inventory_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_md_inventory_tool] Response: %s", res)
     return res
 
 
@@ -149,9 +149,9 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     g_items = [GoodsItem(goods_no=g["goodsNo"], qty=g["qty"]) for g in goods_list]
     s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
     body = StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items)
+    logger.info("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)
     res = get_store_inventory(client=client, body=body)
-    logger.info("[TOOL][get_store_inventory_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_store_inventory_tool] Response: %s", res)
     return res
 
 
@@ -182,9 +182,9 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[s
         NearbyStoreResponse | HTTPValidationError
     """
     body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, svc_codes=svc_codes)
+    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, svc_codes=%s", user_xpos, user_ypos, svc_codes)
     res = get_nearby_stores(client=client, body=body)
-    logger.info("[TOOL][get_nearby_stores_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
     return res
 
 
@@ -212,9 +212,9 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
     Returns:
         StoreListResponse | HTTPValidationError
     """
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
     res = get_store_list(client=client, region_code=region_code, limit=limit)
-    logger.info("[TOOL][get_store_list_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_store_list_tool] Response: %s", res)
     return res
 
 
@@ -241,7 +241,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     Returns:
         StoreDetailResponse | HTTPValidationError
     """
+    logger.info("[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
     res = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
-    logger.info("[TOOL][get_store_detail_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_store_detail_tool] Response: %s", res)
     return res

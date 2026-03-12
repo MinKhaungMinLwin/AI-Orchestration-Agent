@@ -48,14 +48,14 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
     Returns:
         FaqListResponse | HTTPValidationError
     """
+    logger.info("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
     res = get_faq(
         client=client,
         lrcl_cd=lrcl_cd,
         mdcl_cd=mdcl_cd,
         limit=limit,
     )
-    logger.info("[TOOL][get_faq_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_faq_tool] Response: %s", res)
 
     return res
 
@@ -101,11 +101,11 @@ def escalate_tool(
         summary=summary,
         messages=messages,
     )
+    logger.info("[TOOL][escalate_tool] Called with: inq_type_cd=%s, mbr_no=%s, summary=%s", inq_type_cd, mbr_no, summary)
     res = post_escalate(
         client=client,
         body=body,
     )
-    logger.info("[TOOL][escalate_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][escalate_tool] Response: %s", res)
 
     return res

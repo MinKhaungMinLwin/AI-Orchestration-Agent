@@ -95,13 +95,13 @@ def get_compatibility_tool(car_no: str, goods_no: str):
     Returns:
         CompatibilityResponse | HTTPValidationError
     """
+    logger.info("[TOOL][get_compatibility_tool] Called with: car_no=%s, goods_no=%s", car_no, goods_no)
     res = get_compatibility(
         client=client,
         car_no=car_no,
         goods_no=goods_no
     )
-    logger.info("[TOOL][get_compatibility_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_compatibility_tool] Response: %s", res)
 
     return res
 
@@ -128,13 +128,13 @@ def post_vehicle_verify_owner_tool(car_no: str):
     Returns:
         Response[HTTPValidationError | VerifyOwnerResponse]
     """
+    logger.info("[TOOL][post_vehicle_verify_owner_tool] Called with: car_no=%s", car_no)
     body = VerifyOwnerRequest(car_no=car_no)
     res = post_vehicle_verify_owner(
             client=client,
             body=body,
         )
-    logger.info("[TOOL][post_vehicle_verify_owner_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", res)
 
     return res
 
@@ -161,12 +161,12 @@ def get_compatible_product_tool(goods_no: str):
     Returns:
         Any | HTTPValidationError
     """
+    logger.info("[TOOL][get_compatible_product_tool] Called with: goods_no=%s", goods_no)
     res = get_compatible_product(
         client=client,
         goods_no=goods_no,
     )
-    logger.info("[TOOL][get_compatible_product_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_compatible_product_tool] Response: %s", res)
 
     return res
 
@@ -192,12 +192,12 @@ def get_user_vehicles_tool(car_no: str):
     Returns:
         Any | HTTPValidationError
     """
+    logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s", car_no)
     res = get_user_vehicles(
         client=client,
         car_no=car_no,
     )
-    logger.info("[TOOL][get_user_vehicles_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_user_vehicles_tool] Response: %s", res)
 
     return res
 
@@ -231,13 +231,12 @@ def get_product_description_tool(goods_no: str):
     Returns:
         HTTPValidationError | ProductDescResponse
     """
-
+    logger.info("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
     res = get_product_description(
         client=client,
         goods_no=goods_no
     )
-    logger.info("[TOOL][get_product_description_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_product_description_tool] Response: %s", res)
 
     return res
 
@@ -275,13 +274,12 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
     Returns:
         HTTPValidationError | RecommendationResponse
     """
-
+    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s", rcmd_type, limit)
     res = get_products_recommendations(
         client=client,
         rcmd_type=rcmd_type,
         limit=limit,
     )
-    logger.info("[TOOL][get_products_recommendations_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_products_recommendations_tool] Response: %s", res)
 
     return res

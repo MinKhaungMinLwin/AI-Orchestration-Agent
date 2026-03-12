@@ -74,13 +74,13 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
         svc_codes=None
     )
 
+    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s", user_xpos, user_ypos)
     res = get_nearby_stores(
         client=client,
         body=body
     )
 
-    logger.info("[TOOL][get_nearby_stores_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
 
     return res
 
@@ -121,14 +121,14 @@ def get_store_details_tool(shop_id: str, cal_day: str):
             Contains store information and available reservation time slots.
     """
 
+    logger.info("[TOOL][get_store_details_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
     res = get_store_details(
         client=client,
         shop_id=shop_id,
         cal_day=cal_day
     )
 
-    logger.info("[TOOL][get_store_details_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_store_details_tool] Response: %s", res)
 
     return res
 
@@ -172,14 +172,14 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
             Contains a list of stores matching the region filter.
     """
 
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
     res = get_store_list(
         client=client,
         region_code=region_code,
         limit=limit
     )
 
-    logger.info("[TOOL][get_store_list_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_store_list_tool] Response: %s", res)
 
     return res
 
@@ -233,17 +233,17 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
         goods_no=goods_no,
         ord_qty=ord_qty,
     )
-    
+
     if mbr_no:
         body.mbr_no = mbr_no
 
+    logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
     res = create_quick_order(
         client=client,
         body=body,
     )
 
-    logger.info("[TOOL][create_order_draft_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][create_order_draft_tool] Response: %s", res)
 
     return res
 
@@ -288,12 +288,12 @@ def get_order_status_tool(ord_no: str):
             - delivery status and tracking information from OP_ORD_DLV_DTL_INFO
     """
 
+    logger.info("[TOOL][get_order_status_tool] Called with: ord_no=%s", ord_no)
     res = get_order_delivery(
         client=client,
         ord_no=ord_no
     )
 
-    logger.info("[TOOL][get_order_status_tool]")
-    logger.info(f"Response: {res}")
+    logger.info("[TOOL][get_order_status_tool] Response: %s", res)
 
     return res
