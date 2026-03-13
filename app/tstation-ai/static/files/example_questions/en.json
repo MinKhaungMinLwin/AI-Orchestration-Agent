@@ -12,11 +12,10 @@
         "name": "Discovery & Recommendation",
         "explanation": "Explore and recommend suitable tires using ProductRecommendation, Compatibility, and ProductDescription APIs.",
         "questions": [
-            "Recommend a tire for my car 33가3333",
-            "I drive vehicle 99구9999, which tire is best?",
-            "Show me the best discount tire available",
-            "Recommend a value tire for everyday driving",
-            "Which tire is best for quiet driving?",
+            "Show the best tires for daily driving.",
+            "List quiet tires and choose the best option.",
+            "List tires for car 33가3333.",
+            "Show tires for vehicle 99구9999 and choose the best.",
             "Tell me more about tire G000000310120",
             "Explain the features of tire G000000310121",
             "Does G000000309855 fit my car 56모2162?"
@@ -32,7 +31,7 @@
             "Check stock for product G000000314254",
             "Check if G000000314254 is available at store F07780",
             "Find stores that have G000000314254 in stock",
-            "What stores can install G000000314254 today?",
+            "What stores can install G000000314254 today? I'm in Busan.",
             "Check T-NA delivery availability for G000000314254"
         ]
     },

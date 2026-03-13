@@ -81,11 +81,10 @@ class TStationChatService(object):
         from langchain_core.messages import SystemMessage
 
         llm = ChatLiteLLM(
-            openai_api_key=settings.OPENAI_API_KEY,
-            model="gpt-5.2",
-            # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            # temperature=0.3,
-            streaming=True,
+            model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-sonnet-4-6",
+            temperature=0.3,
+            # streaming=True,
         )
 
         structured_model = llm.with_structured_output(
