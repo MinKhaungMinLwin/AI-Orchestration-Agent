@@ -199,27 +199,33 @@ class AgentDomain(BaseModel):
         - "I need to escalate this issue"
         
         ====================================================
-        PRIORITY RULES
+        STRICT CLASSIFICATION RULES (MUST FOLLOW EXACTLY)
         ====================================================
 
-        HIGHEST PRIORITY - Escalation:
-        If user explicitly requests human agent / escalation → support
-        (This overrides all other domains)
+        Step 1: Check for PRICE/STOCK first - if ANY of these keywords appear → TRANSACTION
+        - price, cost, how much, amount, fee
+        - stock, inventory, availability, in stock
+        - Example: "What is the price of X?" → TRANSACTION
 
-        KEYWORD-BASED CLASSIFICATION:
+        Step 2: If not Step 1, check for ORDER keywords
+        - store, nearby, location, address
+        - order, buy, purchase, delivery, track, shipping
+        → ORDER
 
-        If message contains vehicle number (e.g., 33가3333, 12가3456)
-        OR contains "recommend", "best", "fit", "compatible", "vehicle", "car"
-        OR asks about product features → discovery
+        Step 3: If not Step 1 or 2, check for DISCOVERY keywords
+        - vehicle number (33가3333, 12가3456, etc.)
+        - recommend, suggestion, best, which tire, what tire
+        - fit, compatible, vehicle, car for, car number
+        - product features, specifications
+        → DISCOVERY
 
-        Else if message asks about "price", "cost", "how much", "stock", "inventory" → transaction
+        Step 4: If not Step 1-3, check for SUPPORT
+        - warranty, return, refund, policy, FAQ
+        - human agent, talk to person, customer service
+        → SUPPORT
 
-        Else if message asks about "store", "nearby", "order", "delivery", "track" → order
+        Step 5: Otherwise → LEADING
 
-        Else if message asks about "warranty", "return", "refund", "policy", "FAQ" → support
-
-        Else → leading
-
-        If multiple intents exist:
-        Classify based on the PRIMARY action the user wants to perform.
+        IMPORTANT: When "price" or "stock" appears, ALWAYS choose TRANSACTION
+        regardless of other keywords (even "tire", "product", "recommend")
         """)
