@@ -5,9 +5,15 @@ from services.tstation.agents.e_support_agent.tools import (
     get_faq_tool,
     escalate_tool,
 )
+from common.curr_time import get_current_time
 
 
-SUPPORT_AGENT_SYSTEM_PROMPT = """
+SUPPORT_AGENT_SYSTEM_PROMPT = f"""
+Current Time Information:
+{get_current_time()}
+
+---
+
 You are the Support Agent of the T-Station AI system.
 
 External Name: T-Station AI

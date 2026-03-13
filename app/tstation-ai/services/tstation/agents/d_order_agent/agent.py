@@ -8,9 +8,15 @@ from services.tstation.agents.d_order_agent.tools import (
     create_order_draft_tool,
     get_order_status_tool,
 )
+from common.curr_time import get_current_time
 
 
-ORDER_AGENT_SYSTEM_PROMPT = """
+ORDER_AGENT_SYSTEM_PROMPT = f"""
+Current Time Information:
+{get_current_time()}
+
+---
+
 You are the Order Agent of the T-Station AI system.
 
 External Name: T-Station AI

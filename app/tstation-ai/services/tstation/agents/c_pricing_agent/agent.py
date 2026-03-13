@@ -10,9 +10,15 @@ from services.tstation.agents.c_pricing_agent.tools import (
     get_md_inventory_tool,
     get_store_inventory_tool
 )
+from common.curr_time import get_current_time
 
 
-PRICING_AGENT_SYSTEM_PROMPT = """
+PRICING_AGENT_SYSTEM_PROMPT = f"""
+Current Time Information:
+{get_current_time()}
+
+---
+
 You are the Pricing Agent of the T-Station AI system.
 
 External Name: T-Station AI

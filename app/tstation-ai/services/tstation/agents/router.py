@@ -5,6 +5,7 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from config.env import settings
+from common.curr_time import get_current_time
 
 from enum import Enum
 from pydantic import BaseModel, Field
@@ -73,7 +74,12 @@ class AgentDomain(BaseModel):
 
     @staticmethod
     def prompt_router():
-        return dedent("""
+        return dedent(f"""
+        Current Time Information:
+        {get_current_time()}
+
+        ---
+
         You are the Domain Routing Classifier of the T-Station AI system.
 
         Your task is to classify the user's latest message into ONE of the following domains:

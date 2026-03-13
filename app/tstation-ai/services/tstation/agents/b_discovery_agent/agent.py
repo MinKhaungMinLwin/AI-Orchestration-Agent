@@ -9,9 +9,15 @@ from services.tstation.agents.b_discovery_agent.tools import (
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
+from common.curr_time import get_current_time
 
 
-DISCOVERY_AGENT_SYSTEM_PROMPT = """
+DISCOVERY_AGENT_SYSTEM_PROMPT = f"""
+Current Time Information:
+{get_current_time()}
+
+---
+
 You are the Discovery Agent of the T-Station AI system.
 
 External Name: T-Station AI

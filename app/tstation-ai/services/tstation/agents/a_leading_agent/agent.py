@@ -1,8 +1,14 @@
 from langchain.agents import create_agent
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
+from common.curr_time import get_current_time
 
 
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT = f"""
+Current Time Information:
+{get_current_time()}
+
+---
+
 You are the Leading Agent of the T-Station AI system.
 
 Internal Name: Leading Agent
