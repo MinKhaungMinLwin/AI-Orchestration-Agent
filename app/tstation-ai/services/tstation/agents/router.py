@@ -25,11 +25,11 @@ from services.tstation.agents.a_leading_agent.agent import LeadingAgent
 leading_agent = LeadingAgent(LLM)
 # Discovery Agent
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
-# Transaction Agent
+# Discovery Agent
 discovery_subagent = DiscoverySubAgent(LLM)
-# Transaction Agent
-from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
-transaction_subagent = TransactionSubAgent(LLM)
+# Pricing Agent
+from services.tstation.agents.c_pricing_agent.agent import PricingSubAgent
+pricing_subagent = PricingSubAgent(LLM)
 
 # Order Agent
 from services.tstation.agents.d_order_agent.agent import OrderSubAgent
@@ -45,7 +45,7 @@ class AgentDomain(BaseModel):
     class Domain(str, Enum):
         LEADING = "leading"
         DISCOVERY = "discovery"
-        TRANSACTION = "transaction"
+        PRICING = "pricing"
         ORDER = "order"
         SUPPORT = "support"
 
@@ -59,8 +59,8 @@ class AgentDomain(BaseModel):
         if self.domain == self.Domain.DISCOVERY:
             return discovery_subagent
 
-        elif self.domain == self.Domain.TRANSACTION:
-            return transaction_subagent
+        elif self.domain == self.Domain.PRICING:
+            return pricing_subagent
 
         elif self.domain == self.Domain.ORDER:
             return order_subagent
@@ -80,7 +80,7 @@ class AgentDomain(BaseModel):
         - leading
         - discovery
         - order
-        - transaction
+        - pricing
         - support
         
         ====================================================
@@ -129,7 +129,7 @@ class AgentDomain(BaseModel):
 
         ----------------------------------------------------
 
-        3) transaction
+        3) pricing
         Use when the user asks about pricing, stock, or inventory.
 
         This includes:
@@ -202,10 +202,10 @@ class AgentDomain(BaseModel):
         STRICT CLASSIFICATION RULES (MUST FOLLOW EXACTLY)
         ====================================================
 
-        Step 1: Check for PRICE/STOCK first - if ANY of these keywords appear → TRANSACTION
+        Step 1: Check for PRICE/STOCK first - if ANY of these keywords appear → PRICING
         - price, cost, how much, amount, fee
         - stock, inventory, availability, in stock
-        - Example: "What is the price of X?" → TRANSACTION
+        - Example: "What is the price of X?" → PRICING
 
         Step 2: If not Step 1, check for ORDER keywords
         - store, nearby, location, address
@@ -226,6 +226,6 @@ class AgentDomain(BaseModel):
 
         Step 5: Otherwise → LEADING
 
-        IMPORTANT: When "price" or "stock" appears, ALWAYS choose TRANSACTION
+        IMPORTANT: When "price" or "stock" appears, ALWAYS choose PRICING
         regardless of other keywords (even "tire", "product", "recommend")
         """)

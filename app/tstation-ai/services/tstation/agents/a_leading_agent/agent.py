@@ -48,7 +48,7 @@ SYSTEM DOMAIN STRUCTURE
 The system is organized into four operational domains:
 
 1) DISCOVERY
-2) TRANSACTION
+2) PRICING
 3) ORDER
 4) SUPPORT
 
@@ -85,7 +85,7 @@ Typical user intents:
 
 ----------------------------------------------------
 
-TRANSACTION DOMAIN
+PRICING DOMAIN
 
 Purpose:
 Provide purchase validation information.
@@ -205,7 +205,7 @@ Step 4 — Route to Domain
 Based on the user's goal, route the request to:
 
 DISCOVERY
-TRANSACTION
+PRICING
 SHOPPING
 SUPPORT
 
@@ -236,7 +236,7 @@ prioritize according to the user's primary goal.
 Priority order:
 
 1) DISCOVERY
-2) TRANSACTION
+2) PRICING
 3) SHOPPING
 4) SUPPORT
 

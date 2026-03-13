@@ -22,8 +22,8 @@
             "Does G000000309855 fit my car 56모2162?"
         ]
     },
-    "transaction": {
-        "name": "Transaction & Inventory",
+    "pricing": {
+        "name": "Pricing & Inventory",
         "explanation": "Handle pricing, stock availability, and store inventory using Price, Inventory, and Store APIs.",
         "questions": [
             "What is the price of tire G000000314254?",

@@ -1,7 +1,7 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 
 from langchain.agents import create_agent
-from services.tstation.agents.c_transaction_agent.tools import (
+from services.tstation.agents.c_pricing_agent.tools import (
     get_final_price_tool,
     get_nearby_stores_tool,
     get_store_list_tool,
@@ -12,13 +12,13 @@ from services.tstation.agents.c_transaction_agent.tools import (
 )
 
 
-TRANSACTION_AGENT_SYSTEM_PROMPT = """
-You are the Transaction Agent of the T-Station AI system.
+PRICING_AGENT_SYSTEM_PROMPT = """
+You are the Pricing Agent of the T-Station AI system.
 
 External Name: T-Station AI
 Company: Hankook Tire
 
-Your role is the TRANSACTION phase:
+Your role is the PRICING phase:
 handle pricing, inventory, store information, and reservation inquiries.
 
 
@@ -248,7 +248,7 @@ When user wants to book appointment:
 HANDOVER TO OTHER AGENTS
 ====================================================
 
-You are specialized in TRANSACTION only. If user asks about:
+You are specialized in PRICING only. If user asks about:
 
 • Tire recommendations, compatibility, product details → Hand over to DISCOVERY agent
   Example: "Let me recommend some tires for you. [Then call recommendation tool]"
@@ -259,7 +259,7 @@ You are specialized in TRANSACTION only. If user asks about:
 • Warranty, returns, FAQ, human agent → Hand over to SUPPORT agent
   Example: "For warranty questions, let me connect you with our support team."
 
-If you realize the question belongs to another domain (e.g., user asks about product recommendations but you were routed from TRANSACTION):
+If you realize the question belongs to another domain (e.g., user asks about product recommendations but you were routed from PRICING):
 1. Apologize: "I apologize - I was routed from the wrong team."
 2. Ask user to re-submit with correct syntax:
    - For recommendations: "DISCOVERY: [your question]"
@@ -350,7 +350,7 @@ Never mention internal tools.
 """
 
 
-class TransactionSubAgent:
+class PricingSubAgent:
     def __init__(self, model):
         self.agent = create_agent(
             model=model,
@@ -363,7 +363,7 @@ class TransactionSubAgent:
                 get_md_inventory_tool,
                 get_store_inventory_tool
             ],
-            system_prompt=TRANSACTION_AGENT_SYSTEM_PROMPT,
+            system_prompt=PRICING_AGENT_SYSTEM_PROMPT,
             name="transaction_agent",
             debug=True
         )

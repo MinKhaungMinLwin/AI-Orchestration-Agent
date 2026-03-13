@@ -22,8 +22,8 @@
             "타이어 G000000309855가 내 차량 56모2162에 맞나요?"
         ]
     },
-    "transaction": {
-        "name": "거래 및 재고",
+    "pricing": {
+        "name": "가격 및 재고",
         "explanation": "Price, Inventory, Store API를 사용하여 가격, 재고 가용성, 매장 재고를 처리합니다.",
         "questions": [
             "타이어 G000000314254의 가격은 얼마인가요?",
