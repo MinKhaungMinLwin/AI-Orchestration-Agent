@@ -124,8 +124,8 @@ When to use
 
 Inputs
 
-goods_list - list of products [{"goodsNo": "...", "qty": ...}]
-shop_id_list - list of stores [{"shopId": "..."}]
+goods_list - list of products [{{"goodsNo": "...", "qty": ...}}]
+shop_id_list - list of stores [{{"shopId": "..."}}]
 
 
 ###############################

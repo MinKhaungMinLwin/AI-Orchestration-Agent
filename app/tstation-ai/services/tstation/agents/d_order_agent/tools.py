@@ -210,8 +210,8 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
 
     Args:
         goods_no (str): Product number (e.g., G000000314254).
-        ord_qty (int): Quantity the user wants to purchase.
-        mbr_no (str | None): Member number. If provided, the order draft
+        ord_qty (int): Quantity the user wants to purchase, min is 1.
+        mbr_no (None | str | Unset): Member number. If provided, the order draft
             will be created for that member. If not provided, the checkout
             page will ask the user to enter member information.
 
@@ -232,10 +232,8 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
     body = QuickOrderRequest(
         goods_no=goods_no,
         ord_qty=ord_qty,
+        mbr_no=mbr_no,
     )
-
-    if mbr_no:
-        body.mbr_no = mbr_no
 
     logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
     res = create_quick_order(

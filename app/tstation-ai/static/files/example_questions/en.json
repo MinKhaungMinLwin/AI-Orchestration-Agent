@@ -45,8 +45,8 @@
             "Show the list of stores in GangStatnam (강남).",
             "Show the details of store have name is B03788.",
             "Give me details of C02571 store.",
-            "Create a quick order with product G000000309855 and my name is M200012890",
-            "My name is M200012890, I want to order G000000318224 product",
+            "Create a quick order with product G000000309855 with quantity is 1 and my name is M200012890",
+            "My name is M200012890, I want to order 2 G000000318224 product",
             "Check the status of my order with name is [Your_Order_ID]",
             "Show my order [Your_Order_ID] and delivery status."
         ]
