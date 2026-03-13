@@ -78,6 +78,7 @@ class TStationChatService(object):
     def classify_domain_request(request: TStationChatRequest) -> AgentDomain.Domain:
 
         from langchain_litellm import ChatLiteLLM
+        from langchain_core.messages import SystemMessage
 
         llm = ChatLiteLLM(
             openai_api_key=settings.OPENAI_API_KEY,
@@ -93,7 +94,11 @@ class TStationChatService(object):
         )
 
         try:
-            result: AgentDomain = structured_model.invoke(request.messages)
+            # Inject classification prompt as system message
+            system_msg = SystemMessage(content=AgentDomain.prompt_router())
+            all_messages = [system_msg] + list(request.messages)
+
+            result: AgentDomain = structured_model.invoke(all_messages)
             logger.info(f"[DOMAIN] Domain classification result: {result}")
             return result.domain
 
