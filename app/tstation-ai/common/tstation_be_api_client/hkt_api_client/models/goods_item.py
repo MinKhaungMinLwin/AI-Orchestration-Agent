@@ -14,11 +14,11 @@ class GoodsItem:
     """
     Attributes:
         goods_no (str): 상품 번호
-        qty (int): 수량
+        qty (str): 수량
     """
 
     goods_no: str
-    qty: int
+    qty: str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

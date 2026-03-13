@@ -633,7 +633,7 @@
           "Product Recommendation AF - 상품 추천"
         ],
         "summary": "상품 추천",
-        "description": "추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n- **tstation**: 티스테이션 추천 (`FST_DISP_YN='Y'`, `TOT_SCR*10` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)",
+        "description": "추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n- **tstation**: 티스테이션 추천 (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)",
         "operationId": "get_recommendations_api_product_recommend_get",
         "parameters": [
           {
@@ -659,6 +659,46 @@
               "title": "Limit"
             },
             "description": "반환할 상품 수 (기본 10, 최대 100)"
+          },
+          {
+            "name": "brand_cd",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "각 브랜드(HK / LF / MC / PI / BS / CT / GY",
+              "title": "Brand Cd"
+            },
+            "description": "각 브랜드(HK / LF / MC / PI / BS / CT / GY"
+          },
+          {
+            "name": "entr_yn",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "제휴 사이트 (y/n)",
+              "title": "Entr Yn"
+            },
+            "description": "제휴 사이트 (y/n)"
+          },
+          {
+            "name": "entr_no",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "제휴사 번호 (entr_yn=y 일 때 필수)",
+              "title": "Entr No"
+            },
+            "description": "제휴사 번호 (entr_yn=y 일 때 필수)"
           }
         ],
         "responses": {
@@ -1088,7 +1128,7 @@
             "description": "상품 번호"
           },
           "qty": {
-            "type": "integer",
+            "type": "string",
             "title": "Qty",
             "description": "수량"
           }

@@ -146,7 +146,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     Returns:
         StoreInventoryResponse | HTTPValidationError
     """
-    g_items = [GoodsItem(goods_no=g["goodsNo"], qty=g["qty"]) for g in goods_list]
+    g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
     s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
     body = StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items)
     logger.info("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)

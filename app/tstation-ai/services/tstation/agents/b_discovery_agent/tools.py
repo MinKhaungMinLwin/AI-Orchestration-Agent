@@ -242,7 +242,7 @@ def get_product_description_tool(goods_no: str):
 
 
 @tool
-def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
+def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None):
     """
     Product Recommendation
 
@@ -250,7 +250,8 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
 
     Recommendation types:
     - tstation: T-Station recommended products
-      (FST_DISP_YN='Y', sorted by highest TOT_SCR*10, from PR_GOODS_RCMD_SUM)
+      (TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10) sorted by highest,
+      from PR_GOODS_RCMD_SUM)
 
     - discount: Highest discount rate
       (sorted by highest EXTRA_FVR_SALE_PER, from PR_GOODS_DSCNT_PRC_INFO)
@@ -262,6 +263,9 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
     Args:
         rcmd_type (RcmdType): Recommendation type.
         limit (int, optional): Number of products to return. Default is 10, maximum is 100.
+        brand_cd (str, optional): Brand code (HK / LF / MC / PI / BS / CT / GY). Default is HK.
+        entr_yn (str, optional): Affiliate site (y/n). Default is n.
+        entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
 
     Raises:
         errors.UnexpectedStatus:
@@ -274,11 +278,14 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 10):
     Returns:
         HTTPValidationError | RecommendationResponse
     """
-    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s", rcmd_type, limit)
+    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, entr_yn=%s, entr_no=%s", rcmd_type, limit, brand_cd, entr_yn, entr_no)
     res = get_products_recommendations(
         client=client,
         rcmd_type=rcmd_type,
         limit=limit,
+        brand_cd=brand_cd,
+        entr_yn=entr_yn,
+        entr_no=entr_no,
     )
     logger.info("[TOOL][get_products_recommendations_tool] Response: %s", res)
 

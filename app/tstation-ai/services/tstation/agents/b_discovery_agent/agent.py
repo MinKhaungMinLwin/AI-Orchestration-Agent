@@ -186,8 +186,8 @@ Flow 1 — Tire Recommendation
 
 When user asks for tire suggestions:
 
-1. Call get_products_recommendations_tool
-2. Display 3–7 products
+1. Call get_products_recommendations_tool with limit=20 (always request 20)
+2. Filter and select 3-7 best products from the results to display
 3. Select the best product
 4. Call get_product_description_tool
 5. Explain why the product is recommended
@@ -202,10 +202,11 @@ When the user provides a vehicle number:
 
 1. Call post_vehicle_verify_owner_tool
 2. Retrieve vehicle tire information
-3. Call get_products_recommendations_tool
-4. Check compatibility when needed using get_compatibility_tool
-5. Prioritize compatible products
-6. Call get_product_description_tool for the best product
+3. Call get_products_recommendations_tool with limit=20
+4. Filter and select 3-7 best products from the results
+5. Check compatibility when needed using get_compatibility_tool
+6. Prioritize compatible products
+7. Call get_product_description_tool for the best product
 
 
 
