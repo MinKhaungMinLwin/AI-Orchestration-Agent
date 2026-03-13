@@ -84,26 +84,29 @@ def get_compatibility_tool(car_no: str, goods_no: str):
         car_no (str): Vehicle number.
         goods_no (str): Product number.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        CompatibilityResponse | HTTPValidationError
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_compatibility_tool] Called with: car_no=%s, goods_no=%s", car_no, goods_no)
-    res = get_compatibility(
-        client=client,
-        car_no=car_no,
-        goods_no=goods_no
-    )
-    logger.info("[TOOL][get_compatibility_tool] Response: %s", res)
 
-    return res
+    try:
+        res = get_compatibility(
+            client=client,
+            car_no=car_no,
+            goods_no=goods_no
+        )
+        logger.info("[TOOL][get_compatibility_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_compatibility_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to check compatibility"
+        }
 
 @tool
 def post_vehicle_verify_owner_tool(car_no: str):
@@ -117,26 +120,29 @@ def post_vehicle_verify_owner_tool(car_no: str):
         car_no (str): Request payload containing the information
             required to verify vehicle ownership.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        Response[HTTPValidationError | VerifyOwnerResponse]
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][post_vehicle_verify_owner_tool] Called with: car_no=%s", car_no)
-    body = VerifyOwnerRequest(car_no=car_no)
-    res = post_vehicle_verify_owner(
+
+    try:
+        body = VerifyOwnerRequest(car_no=car_no)
+        res = post_vehicle_verify_owner(
             client=client,
             body=body,
         )
-    logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", res)
-
-    return res
+        logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][post_vehicle_verify_owner_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to verify vehicle ownership"
+        }
 
 @tool
 def get_compatible_product_tool(goods_no: str):
@@ -150,25 +156,28 @@ def get_compatible_product_tool(goods_no: str):
     Args:
         goods_no (str): Product number.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        Any | HTTPValidationError
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_compatible_product_tool] Called with: goods_no=%s", goods_no)
-    res = get_compatible_product(
-        client=client,
-        goods_no=goods_no,
-    )
-    logger.info("[TOOL][get_compatible_product_tool] Response: %s", res)
 
-    return res
+    try:
+        res = get_compatible_product(
+            client=client,
+            goods_no=goods_no,
+        )
+        logger.info("[TOOL][get_compatible_product_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_compatible_product_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to get compatible products"
+        }
 
 @tool
 def get_user_vehicles_tool(car_no: str):
@@ -181,25 +190,28 @@ def get_user_vehicles_tool(car_no: str):
     Args:
         car_no (str): Vehicle registration number.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        Any | HTTPValidationError
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s", car_no)
-    res = get_user_vehicles(
-        client=client,
-        car_no=car_no,
-    )
-    logger.info("[TOOL][get_user_vehicles_tool] Response: %s", res)
 
-    return res
+    try:
+        res = get_user_vehicles(
+            client=client,
+            car_no=car_no,
+        )
+        logger.info("[TOOL][get_user_vehicles_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_user_vehicles_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to get user vehicles"
+        }
 
 
 @tool
@@ -220,25 +232,28 @@ def get_product_description_tool(goods_no: str):
     Args:
         goods_no (str): Product number.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        HTTPValidationError | ProductDescResponse
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
-    res = get_product_description(
-        client=client,
-        goods_no=goods_no
-    )
-    logger.info("[TOOL][get_product_description_tool] Response: %s", res)
 
-    return res
+    try:
+        res = get_product_description(
+            client=client,
+            goods_no=goods_no
+        )
+        logger.info("[TOOL][get_product_description_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_product_description_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to get product description"
+        }
 
 
 @tool
@@ -267,26 +282,29 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
         entr_yn (str, optional): Affiliate site (y/n). Default is n.
         entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        HTTPValidationError | RecommendationResponse
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, entr_yn=%s, entr_no=%s", rcmd_type, limit, brand_cd, entr_yn, entr_no)
-    res = get_products_recommendations(
-        client=client,
-        rcmd_type=rcmd_type,
-        limit=limit,
-        brand_cd=brand_cd,
-        entr_yn=entr_yn,
-        entr_no=entr_no,
-    )
-    logger.info("[TOOL][get_products_recommendations_tool] Response: %s", res)
 
-    return res
+    try:
+        res = get_products_recommendations(
+            client=client,
+            rcmd_type=rcmd_type,
+            limit=limit,
+            brand_cd=brand_cd,
+            entr_yn=entr_yn,
+            entr_no=entr_no,
+        )
+        logger.info("[TOOL][get_products_recommendations_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_products_recommendations_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to get product recommendations"
+        }

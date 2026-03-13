@@ -37,27 +37,30 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         mdcl_cd (str | None): Medium category code filter (MDCL_CD).
         limit (int): Number of FAQs to return (default 50, max 200).
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        FaqListResponse | HTTPValidationError
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
-    res = get_faq(
-        client=client,
-        lrcl_cd=lrcl_cd,
-        mdcl_cd=mdcl_cd,
-        limit=limit,
-    )
-    logger.info("[TOOL][get_faq_tool] Response: %s", res)
 
-    return res
+    try:
+        res = get_faq(
+            client=client,
+            lrcl_cd=lrcl_cd,
+            mdcl_cd=mdcl_cd,
+            limit=limit,
+        )
+        logger.info("[TOOL][get_faq_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_faq_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to get FAQ"
+        }
 
 
 @tool
@@ -84,16 +87,8 @@ def escalate_tool(
         summary (str | None): Conversation summary (URL encoded).
         messages (list[dict] | None): List of conversation messages for context.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        EscalationResponse | HTTPValidationError
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     body = EscalationRequest(
         inq_type_cd=inq_type_cd,
@@ -102,10 +97,21 @@ def escalate_tool(
         messages=messages,
     )
     logger.info("[TOOL][escalate_tool] Called with: inq_type_cd=%s, mbr_no=%s, summary=%s", inq_type_cd, mbr_no, summary)
-    res = post_escalate(
-        client=client,
-        body=body,
-    )
-    logger.info("[TOOL][escalate_tool] Response: %s", res)
 
-    return res
+    try:
+        res = post_escalate(
+            client=client,
+            body=body,
+        )
+        logger.info("[TOOL][escalate_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][escalate_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to escalate to human agent"
+        }

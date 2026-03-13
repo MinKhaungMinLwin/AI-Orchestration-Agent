@@ -57,16 +57,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
         user_xpos (float): User longitude coordinate.
         user_ypos (float): User latitude coordinate.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        NearbyStoreResponse | HTTPValidationError
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
     body = NearbyStoreRequest(
         user_xpos=user_xpos,
@@ -75,14 +67,24 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
     )
 
     logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s", user_xpos, user_ypos)
-    res = get_nearby_stores(
-        client=client,
-        body=body
-    )
 
-    logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
-
-    return res
+    try:
+        res = get_nearby_stores(
+            client=client,
+            body=body
+        )
+        logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_nearby_stores_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to retrieve nearby stores"
+        }
 
 
 @tool
@@ -108,29 +110,30 @@ def get_store_details_tool(shop_id: str, cal_day: str):
         shop_id (str): Store ID.
         cal_day (str): Date to check reservation availability (format: YYYYMMDD).
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        StoreDetailResponse | HTTPValidationError:
-            Contains store information and available reservation time slots.
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
 
     logger.info("[TOOL][get_store_details_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
-    res = get_store_details(
-        client=client,
-        shop_id=shop_id,
-        cal_day=cal_day
-    )
 
-    logger.info("[TOOL][get_store_details_tool] Response: %s", res)
-
-    return res
+    try:
+        res = get_store_details(
+            client=client,
+            shop_id=shop_id,
+            cal_day=cal_day
+        )
+        logger.info("[TOOL][get_store_details_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_store_details_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to retrieve store details"
+        }
 
 
 @tool
@@ -159,29 +162,30 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
             (e.g., "서울", "강남"). Optional.
         limit (int): Maximum number of stores to return. Default is 20.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        StoreListResponse | HTTPValidationError:
-            Contains a list of stores matching the region filter.
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
 
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
-    res = get_store_list(
-        client=client,
-        region_code=region_code,
-        limit=limit
-    )
 
-    logger.info("[TOOL][get_store_list_tool] Response: %s", res)
-
-    return res
+    try:
+        res = get_store_list(
+            client=client,
+            region_code=region_code,
+            limit=limit
+        )
+        logger.info("[TOOL][get_store_list_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_store_list_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to retrieve store list"
+        }
 
 # =====================================================
 # QUICK SHOPPING AF
@@ -215,18 +219,8 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
             will be created for that member. If not provided, the checkout
             page will ask the user to enter member information.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        QuickOrderResponse | HTTPValidationError
-            - redirect_url: URL to the order checkout page
-            - validation error if the product or quantity is invalid
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
 
     body = QuickOrderRequest(
@@ -236,14 +230,24 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
     )
 
     logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
-    res = create_quick_order(
-        client=client,
-        body=body,
-    )
 
-    logger.info("[TOOL][create_order_draft_tool] Response: %s", res)
-
-    return res
+    try:
+        res = create_quick_order(
+            client=client,
+            body=body,
+        )
+        logger.info("[TOOL][create_order_draft_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][create_order_draft_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to create quick order draft"
+        }
 
 
 
@@ -272,26 +276,26 @@ def get_order_status_tool(ord_no: str):
     Args:
         ord_no (str): Order number.
 
-    Raises:
-        errors.UnexpectedStatus:
-            If the server returns an undocumented status code and
-            Client.raise_on_unexpected_status is True.
-
-        httpx.TimeoutException:
-            If the request takes longer than Client.timeout.
-
     Returns:
-        OrderDeliveryResponse | HTTPValidationError:
-            - order status from OP_ORD_DTL_INFO
-            - delivery status and tracking information from OP_ORD_DLV_DTL_INFO
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
 
     logger.info("[TOOL][get_order_status_tool] Called with: ord_no=%s", ord_no)
-    res = get_order_delivery(
-        client=client,
-        ord_no=ord_no
-    )
 
-    logger.info("[TOOL][get_order_status_tool] Response: %s", res)
-
-    return res
+    try:
+        res = get_order_delivery(
+            client=client,
+            ord_no=ord_no
+        )
+        logger.info("[TOOL][get_order_status_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res,
+        }
+    except Exception as e:
+        logger.exception("[TOOL][get_order_status_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to retrieve order status"
+        }
