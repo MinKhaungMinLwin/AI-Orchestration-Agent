@@ -202,30 +202,36 @@ class AgentDomain(BaseModel):
         STRICT CLASSIFICATION RULES (MUST FOLLOW EXACTLY)
         ====================================================
 
-        Step 1: Check for PRICE/STOCK first - if ANY of these keywords appear → PRICING
-        - price, cost, how much, amount, fee
-        - stock, inventory, availability, in stock
-        - Example: "What is the price of X?" → PRICING
+        CRITICAL RULE: Check these keywords FIRST, in this exact order:
 
-        Step 2: If not Step 1, check for ORDER keywords
-        - store, nearby, location, address
-        - order, buy, purchase, delivery, track, shipping
-        → ORDER
+        1. If message contains "price", "cost", "how much", "amount", "fee"
+           OR "stock", "inventory", "availability", "in stock"
+           → ALWAYS choose PRICING
+           (This overrides ALL other keywords including "tire", "product", "recommend")
 
-        Step 3: If not Step 1 or 2, check for DISCOVERY keywords
-        - vehicle number (33가3333, 12가3456, etc.)
-        - recommend, suggestion, best, which tire, what tire
-        - fit, compatible, vehicle, car for, car number
-        - product features, specifications
-        → DISCOVERY
+        2. If message contains "store", "nearby", "location", "address"
+           OR "order", "buy", "purchase", "delivery", "track", "shipping"
+           → ORDER
 
-        Step 4: If not Step 1-3, check for SUPPORT
-        - warranty, return, refund, policy, FAQ
-        - human agent, talk to person, customer service
-        → SUPPORT
+        3. If message contains vehicle number (33가3333, 12가3456, etc.)
+           OR "recommend", "suggestion", "best", "which tire", "what tire"
+           OR "fit", "compatible", "vehicle", "car for"
+           OR asking about product features, specifications
+           → DISCOVERY
+           (Only if Step 1 and 2 don't match)
 
-        Step 5: Otherwise → LEADING
+        4. If message contains "warranty", "return", "refund", "policy", "FAQ"
+           OR "human agent", "talk to person", "customer service"
+           → SUPPORT
 
-        IMPORTANT: When "price" or "stock" appears, ALWAYS choose PRICING
-        regardless of other keywords (even "tire", "product", "recommend")
+        5. Otherwise → LEADING
+
+        EXAMPLES - Follow these EXACTLY:
+        - "What is the price of tire G000000314254?" → PRICING (contains "price")
+        - "How much is G000000314254?" → PRICING (contains "how much")
+        - "Is tire G000000314254 in stock?" → PRICING (contains "stock")
+        - "Recommend a tire for my car 33가3333" → DISCOVERY (no price/stock, has vehicle)
+        - "Which tire is best for my car?" → DISCOVERY (no price/stock, has recommend)
+
+        NEVER classify to DISCOVERY if price/stock keywords are present!
         """)
