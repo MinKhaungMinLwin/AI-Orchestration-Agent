@@ -322,5 +322,5 @@ class LeadingAgent(BaseAgent):
             model=llm,
             tools=None,
             system_prompt=SYSTEM_PROMPT,
-            name="LeadingAgent",
+            name="Leading Agent",
         )

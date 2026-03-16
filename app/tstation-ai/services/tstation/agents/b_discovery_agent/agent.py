@@ -410,5 +410,5 @@ class DiscoverySubAgent(BaseAgent):
                 get_products_recommendations_tool
             ],
             system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
-            name="DiscoveryAgent",
+            name="Discovery Agent",
         )

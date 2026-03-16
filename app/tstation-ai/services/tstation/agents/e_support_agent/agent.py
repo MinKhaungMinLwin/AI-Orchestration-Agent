@@ -254,5 +254,5 @@ class SupportSubAgent(BaseAgent):
                 escalate_tool,
             ],
             system_prompt=SUPPORT_AGENT_SYSTEM_PROMPT,
-            name="SupportAgent",
+            name="Support Agent",
         )

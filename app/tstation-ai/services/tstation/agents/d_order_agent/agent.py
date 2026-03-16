@@ -417,5 +417,5 @@ class OrderSubAgent(BaseAgent):
                 get_order_status_tool,
             ],
             system_prompt=ORDER_AGENT_SYSTEM_PROMPT,
-            name="OrderAgent",
+            name="Order Agent",
         )

@@ -384,5 +384,5 @@ class PricingSubAgent(BaseAgent):
                 get_store_inventory_tool
             ],
             system_prompt=PRICING_AGENT_SYSTEM_PROMPT,
-            name="TransactionAgent",
+            name="Pricing Agent",
         )
