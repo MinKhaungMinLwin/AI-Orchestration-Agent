@@ -1,6 +1,7 @@
 from langchain.agents import create_agent
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from common.curr_time import get_current_time
+from services.tstation.agents.base_agent import BaseAgent
 
 
 SYSTEM_PROMPT = f"""
@@ -315,58 +316,11 @@ discover, validate, and purchase tires.
 """
 
 
-class LeadingAgent:
+class LeadingAgent(BaseAgent):
     def __init__(self, llm):
-        self.agent = create_agent(
+        super().__init__(
             model=llm,
-            system_prompt=SYSTEM_PROMPT
+            tools=None,
+            system_prompt=SYSTEM_PROMPT,
+            name="LeadingAgent",
         )
-
-
-    def invoke(self, messages: list[dict]) -> str:
-        result = self.agent.invoke({
-            "messages": messages
-        })
-        return result["messages"][-1].content
-
-
-    def stream(self, messages: list[dict]):
-        """
-        Supported Stream modes:
-        - tokens
-        - agent updates
-        - tool calls
-        """
-
-        for mode, chunk in self.agent.stream(
-                {"messages": messages},
-                stream_mode=["messages", "updates"],
-        ):
-            # TOKEN STREAM
-            if mode == "messages":
-                token, metadata = chunk
-                if isinstance(token, AIMessageChunk):
-                    text = token.text
-                    if text:
-                        yield {
-                            "type": "token",
-                            "content": text,
-                        }
-
-            # AGENT UPDATES
-            elif mode == "updates":
-                for node, update in chunk.items():
-                    message = update["messages"][-1]
-                    if isinstance(message, AIMessage):
-                        yield {
-                            "type": "message",
-                            "content": message.content,
-                            "node": node,
-                        }
-
-                    elif isinstance(message, ToolMessage):
-                        yield {
-                            "type": "tool",
-                            "content": message.content,
-                            "node": node,
-                        }

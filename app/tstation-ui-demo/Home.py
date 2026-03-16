@@ -114,28 +114,44 @@ if prompt:
     with chat_container:
         with st.chat_message("assistant"):
             if stream_mode:
-                    message_placeholder = st.empty()
-                    full_response = ""
+                # Agent flow display at top
+                agent_flow_placeholder = st.empty()
+                agent_flow = ""
 
-                    try:
-                        response_generator = send_chat_message(
-                            messages=st.session_state['messages'],
-                            session_id=session_id,
-                            user_id=user_id,
-                            stream=True
-                        )
+                message_placeholder = st.empty()
+                full_response = ""
 
-                        for chunk in response_generator:
-                            full_response += chunk
+                try:
+                    response_generator = send_chat_message(
+                        messages=st.session_state['messages'],
+                        session_id=session_id,
+                        user_id=user_id,
+                        stream=True
+                    )
+
+                    for chunk in response_generator:
+                        if chunk.get("type") == "agent_flow":
+                            agent_flow += chunk.get("agent", "") + " → "
+                            agent_flow_placeholder.markdown(
+                                f"<div style='padding: 8px 12px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); "
+                                f"border-radius: 20px; color: white; font-weight: bold; display: inline-block; "
+                                f"margin-bottom: 10px;'>{agent_flow[:-3]}</div>",
+                                unsafe_allow_html=True
+                            )
+                        elif chunk.get("type") == "token":
+                            full_response += chunk.get("content", "")
                             message_placeholder.markdown(full_response + "▌")
+                        elif chunk.get("type") == "error":
+                            full_response += f"\nError: {chunk.get('content', '')}"
+                            message_placeholder.markdown(full_response)
 
-                        message_placeholder.markdown(full_response)
-                        bot_reply = full_response
+                    message_placeholder.markdown(full_response)
+                    bot_reply = full_response
 
-                    except Exception as e:
-                        error_msg = f"Error when streaming: {e}"
-                        message_placeholder.markdown(error_msg)
-                        bot_reply = error_msg
+                except Exception as e:
+                    error_msg = f"Error when streaming: {e}"
+                    message_placeholder.markdown(error_msg)
+                    bot_reply = error_msg
 
             else:
                 with st.spinner("Thinking..."):

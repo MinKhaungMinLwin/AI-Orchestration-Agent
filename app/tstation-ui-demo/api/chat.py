@@ -76,7 +76,7 @@ def _handle_regular_response(payload: dict) -> str:
         return f"Error when call to API: {e}"
 
 
-def _handle_stream_response(payload: dict) -> Generator[str, None, None]:
+def _handle_stream_response(payload: dict) -> Generator[dict, None, None]:
     try:
         response = requests.post(
             f"{BASE_URL}/tstation/chat",
@@ -116,12 +116,10 @@ def _handle_stream_response(payload: dict) -> Generator[str, None, None]:
 
                     try:
                         data = json.loads(data_content)
-
-                        if data.get("type") == "token":
-                            yield data["content"]
+                        yield data
 
                     except json.JSONDecodeError:
                         pass
 
     except Exception as e:
-        yield f"\nError: {e}"
+        yield {"type": "error", "content": str(e)}

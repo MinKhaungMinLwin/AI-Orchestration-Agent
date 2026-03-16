@@ -1,6 +1,7 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 
 from langchain.agents import create_agent
+from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.c_pricing_agent.tools import (
     get_final_price_tool,
     get_nearby_stores_tool,
@@ -356,9 +357,22 @@ Never mention internal tools.
 """
 
 
-class PricingSubAgent:
+class PricingSubAgent(BaseAgent):
+    TOOL_TO_AF_MAP = {
+        # Price
+        "get_final_price_tool": "Price",
+        # Inventory
+        "get_logistics_inventory_tool": "Inventory",
+        "get_md_inventory_tool": "Inventory",
+        "get_store_inventory_tool": "Inventory",
+        # Store
+        "get_nearby_stores_tool": "Store",
+        "get_store_list_tool": "Store",
+        "get_store_detail_tool": "Store",
+    }
+
     def __init__(self, model):
-        self.agent = create_agent(
+        super().__init__(
             model=model,
             tools=[
                 get_final_price_tool,
@@ -370,55 +384,5 @@ class PricingSubAgent:
                 get_store_inventory_tool
             ],
             system_prompt=PRICING_AGENT_SYSTEM_PROMPT,
-            name="transaction_agent",
-            debug=True
+            name="TransactionAgent",
         )
-
-    def invoke(self, query: str):
-        result = self.agent.invoke({
-            "messages": [
-                {"role": "user", "content": query}
-            ]
-        })
-        return result["messages"][-1].content
-
-    def stream(self, messages: list[dict]):
-        """
-        Supported Stream modes:
-        - tokens
-        - agent updates
-        - tool calls
-        """
-
-        for mode, chunk in self.agent.stream(
-                {"messages": messages},
-                stream_mode=["messages", "updates"],
-        ):
-            # TOKEN STREAM
-            if mode == "messages":
-                token, metadata = chunk
-                if isinstance(token, AIMessageChunk):
-                    text = token.text
-                    if text:
-                        yield {
-                            "type": "token",
-                            "content": text,
-                        }
-
-            # AGENT UPDATES
-            elif mode == "updates":
-                for node, update in chunk.items():
-                    message = update["messages"][-1]
-                    if isinstance(message, AIMessage):
-                        yield {
-                            "type": "message",
-                            "content": message.content,
-                            "node": node,
-                        }
-
-                    elif isinstance(message, ToolMessage):
-                        yield {
-                            "type": "tool",
-                            "content": message.content,
-                            "node": node,
-                        }

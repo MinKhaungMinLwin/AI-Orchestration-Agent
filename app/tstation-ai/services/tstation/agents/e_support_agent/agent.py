@@ -1,6 +1,7 @@
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 
 from langchain.agents import create_agent
+from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
     get_faq_tool,
     escalate_tool,
@@ -237,64 +238,21 @@ Never mention internal tools.
 """
 
 
-class SupportSubAgent:
+class SupportSubAgent(BaseAgent):
+    TOOL_TO_AF_MAP = {
+        # FAQ
+        "get_faq_tool": "FAQ",
+        # Escalation
+        "escalate_tool": "Escalation",
+    }
+
     def __init__(self, model):
-        self.agent = create_agent(
+        super().__init__(
             model=model,
             tools=[
                 get_faq_tool,
                 escalate_tool,
             ],
-            debug=True,
             system_prompt=SUPPORT_AGENT_SYSTEM_PROMPT,
-            name="support_agent",
+            name="SupportAgent",
         )
-
-    def invoke(self, query: str):
-        result = self.agent.invoke({
-            "messages": [
-                {"role": "user", "content": query}
-            ]
-        })
-        return result["messages"][-1].content
-
-    def stream(self, messages: list[dict]):
-        """
-        Supported Stream modes:
-        - tokens
-        - agent updates
-        - tool calls
-        """
-
-        for mode, chunk in self.agent.stream(
-                {"messages": messages},
-                stream_mode=["messages", "updates"],
-        ):
-            # TOKEN STREAM
-            if mode == "messages":
-                token, metadata = chunk
-                if isinstance(token, AIMessageChunk):
-                    text = token.text
-                    if text:
-                        yield {
-                            "type": "token",
-                            "content": text,
-                        }
-
-            # AGENT UPDATES
-            elif mode == "updates":
-                for node, update in chunk.items():
-                    message = update["messages"][-1]
-                    if isinstance(message, AIMessage):
-                        yield {
-                            "type": "message",
-                            "content": message.content,
-                            "node": node,
-                        }
-
-                    elif isinstance(message, ToolMessage):
-                        yield {
-                            "type": "tool",
-                            "content": message.content,
-                            "node": node,
-                        }
