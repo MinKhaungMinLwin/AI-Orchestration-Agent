@@ -114,9 +114,9 @@ if prompt:
     with chat_container:
         with st.chat_message("assistant"):
             if stream_mode:
-                # Agent flow display at top
+                # Agent flow display at top - list of steps
+                agent_flow_steps = []
                 agent_flow_placeholder = st.empty()
-                agent_flow = ""
 
                 message_placeholder = st.empty()
                 full_response = ""
@@ -131,11 +131,21 @@ if prompt:
 
                     for chunk in response_generator:
                         if chunk.get("type") == "agent_flow":
-                            agent_flow += chunk.get("agent", "") + " → "
+                            agent = chunk.get("agent", "")
+                            status = chunk.get("status", "success")
+                            agent_flow_steps.append({"agent": agent, "status": status})
+                            # Render each step with arrow between
+                            steps_html = ""
+                            for i, step in enumerate(agent_flow_steps):
+                                if step["status"] == "error":
+                                    bg_color = "#dc2626"  # Red
+                                else:
+                                    bg_color = "#16a34a"  # Green
+                                steps_html += f"<span style='background: {bg_color}; padding: 4px 12px; border-radius: 15px; color: white; font-weight: bold; display: inline-block; vertical-align: middle;'>{step['agent']}</span>"
+                                if i < len(agent_flow_steps) - 1:
+                                    steps_html += f"<span style='margin: 0 8px; color: #6b7280; font-size: 14px; vertical-align: middle;'>→</span>"
                             agent_flow_placeholder.markdown(
-                                f"<div style='padding: 8px 12px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); "
-                                f"border-radius: 20px; color: white; font-weight: bold; display: inline-block; "
-                                f"margin-bottom: 10px;'>{agent_flow[:-3]}</div>",
+                                f"<div style='display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 4px; padding: 8px; margin-bottom: 10px;'>{steps_html}</div>",
                                 unsafe_allow_html=True
                             )
                         elif chunk.get("type") == "token":

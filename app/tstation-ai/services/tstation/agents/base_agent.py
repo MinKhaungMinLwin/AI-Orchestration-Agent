@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import TypeVar, Generic
+import json
 
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
@@ -36,7 +37,7 @@ class BaseAgent(ABC):
         - tool: Tool execution results with tool name and AF
         """
         # Yield agent start event
-        yield {"type": "agent_flow", "agent": f"[{self.name}]"}
+        yield {"type": "agent_flow", "agent": f"[{self.name}]", "status": "success"}
 
         for mode, chunk in self.agent.stream(
             {"messages": messages},
@@ -59,8 +60,16 @@ class BaseAgent(ABC):
                         }
                     elif isinstance(message, ToolMessage):
                         af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
-                        # Yield AF when tool is called
-                        yield {"type": "agent_flow", "agent": f"[{af} AF]"}
+                        # Extract status from tool result
+                        tool_status = "success"
+                        try:
+                            tool_result = json.loads(message.content) if isinstance(message.content, str) else message.content
+                            if isinstance(tool_result, dict):
+                                tool_status = tool_result.get("status", "success")
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        # Yield AF with tool status
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
                         yield {
                             "type": "tool",
                             "content": message.content,
