@@ -15,8 +15,8 @@ from langchain_litellm import ChatLiteLLM
 
 LLM = ChatLiteLLM(
     openai_api_key=settings.OPENAI_API_KEY,
-    # model="gpt-5.2",
-    model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    model="gpt-5.4",
+    # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
     streaming=True,
 )
 
@@ -50,9 +50,9 @@ class AgentDomain(BaseModel):
         ORDER = "order"
         SUPPORT = "support"
 
-    reason: str = Field(default="", description="Reason for the classification")
-    confidence: float = Field(default=0.0, description="Confidence of the classification")
-    domain: Domain = Field(default=Domain.LEADING, description="Domain of the conversation")
+    reason: str = Field(description="Reason for the classification")
+    confidence: float = Field(description="Confidence of the classification")
+    domain: Domain = Field(description="Domain of the conversation")
 
     _registry: dict[Domain, object] = {}
 

@@ -41,7 +41,7 @@ class TStationChatService(object):
 
         # 1. Classify the request
         domain = TStationChatService.classify_domain_request(request)
-        agent = AgentDomain(domain=domain).get_agent()
+        agent = AgentDomain(domain=domain, reason="", confidence=0.0).get_agent()
 
         # 2. Delegate to the appropriate agent
         # STREAM MODE
@@ -82,9 +82,12 @@ class TStationChatService(object):
 
         llm = ChatLiteLLM(
             model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-sonnet-4-6",
             temperature=0.3,
             # streaming=True,
+        )
+        llm = ChatOpenAI(
+            openai_api_key=settings.OPENAI_API_KEY,
+            model="gpt-5.4",
         )
 
         structured_model = llm.with_structured_output(
