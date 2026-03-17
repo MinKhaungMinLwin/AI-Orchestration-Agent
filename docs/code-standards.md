@@ -49,10 +49,11 @@ app/
 │   ├── services/
 │   │   └── tstation/
 │   │       ├── agents/      # AI Agents
+│   │       │   ├── base_agent.py      # Base class
 │   │       │   ├── a_leading_agent/
 │   │       │   ├── b_discovery_agent/
 │   │       │   ├── c_transaction_agent/
-│   │       │   ├── d_shopping_agent/
+│   │       │   ├── d_order_agent/
 │   │       │   ├── e_support_agent/
 │   │       │   └── router.py
 │   │       └── chat.py
@@ -70,13 +71,60 @@ Use prefix ordering (a_, b_, c_, ...) to control import order:
 
 ```
 agents/
-├── a_leading_agent/      # Orchestrator
-├── b_discovery_agent/   # Recommendations
-├── c_transaction_agent/ # Orders
-├── d_shopping_agent/    # Price/stock
-├── e_support_agent/    # Policies
-└── router.py            # Domain router
+├── base_agent.py            # Base class with streaming + TOOL_TO_AF_MAP
+├── a_leading_agent/        # Orchestrator
+├── b_discovery_agent/      # Recommendations
+├── c_transaction_agent/    # Orders
+├── d_order_agent/         # Order management
+├── e_support_agent/       # Policies
+└── router.py               # Domain router
 ```
+
+### BaseAgent Implementation
+
+All agents must inherit from `BaseAgent`:
+
+```python
+from services.tstation.agents.base_agent import BaseAgent
+
+class MyAgent(BaseAgent):
+    TOOL_TO_AF_MAP = {
+        "tool_name_1": "Agent Function Name",
+        "tool_name_2": "Another Function",
+    }
+
+    def __init__(self, model):
+        super().__init__(
+            model=model,
+            tools=[tool1, tool2],
+            system_prompt=MY_PROMPT,
+            name="Agent Display Name",
+        )
+```
+
+### TOOL_TO_AF_MAP
+
+Define a mapping from tool names to Agent Functions:
+
+```python
+TOOL_TO_AF_MAP = {
+    "get_compatibility_tool": "Product Compatibility",
+    "post_vehicle_verify_owner_tool": "Product Compatibility",
+    "get_products_recommendations_tool": "Product Recommendation",
+    "get_product_description_tool": "Product Description",
+}
+```
+
+### Streaming Events
+
+Agents yield events via the `stream()` method:
+
+| Event Type | Fields | Description |
+|------------|--------|-------------|
+| agent_flow | agent, status | Agent/AF name with success/error |
+| token | content | AI response token |
+| message | content, node, agent | Full agent message |
+| tool | content, node, tool | Tool execution result |
 
 ---
 

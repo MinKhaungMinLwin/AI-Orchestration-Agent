@@ -64,21 +64,33 @@ just stop-runway         # Stop all services in Runway
 ## Architecture
 
 ### AI Agents (`app/tstation-ai/services/tstation/agents/`)
+- **base_agent.py**: Base class with streaming support, TOOL_TO_AF_MAP for agent function mapping
 - **a_leading_agent**: Primary orchestrator, domain routing
 - **b_discovery_agent**: Product recommendations, compatibility checks
-- **c_transaction_agent**: Purchase intent handling
-- **d_shopping_agent**: Price, stock, store inquiries
+- **c_pricing_agent**: Price, stock, store inquiries
+- **d_order_agent**: Purchase intent, quick order, order tracking
 - **e_support_agent**: Warranty, returns, policies, FAQ
 - **router.py**: Domain router that classifies and dispatches to appropriate agent
 
+All agents inherit from `BaseAgent` which provides:
+- `stream()` method yielding `agent_flow` events with agent name and tool status
+- `TOOL_TO_AF_MAP` dict mapping tool names to AF (Agent Function) labels
+- Status extracted from tool result (`success` or `error`)
+
 ### Domain Classification
-| Domain | Description |
-|--------|-------------|
-| LEADING | General/unclear queries |
-| DISCOVERY | Product research, recommendations, compatibility |
-| SHOPPING | Price, stock, store inquiries |
-| TRANSACTION | Purchase intent |
-| SUPPORT | Warranty, returns, policies |
+| Domain | Agent | Description |
+|--------|-------|-------------|
+| LEADING | LeadingAgent | General/unclear queries |
+| DISCOVERY | DiscoveryAgent | Product research, recommendations, compatibility |
+| PRICING | TransactionAgent | Price, stock, store inquiries |
+| ORDER | OrderAgent | Purchase intent, quick order |
+| SUPPORT | SupportAgent | Warranty, returns, policies |
+
+### Streaming Response
+Stream yields events for UI display:
+- `agent_flow`: `{"type": "agent_flow", "agent": "[Discovery Agent]", "status": "success/error"}`
+- `token`: AI response tokens
+- `tool`: Tool execution results
 
 ### Key Dependencies
 - **FastAPI** + Uvicorn for API

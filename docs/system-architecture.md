@@ -38,20 +38,22 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 │                              │                                │
 │                              ▼                                │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │              Agent Layer (Multi-Agent)                 │  │
-│  │  ┌─────────────────────────────────────────────────┐  │  │
-│  │  │              Domain Router (router.py)           │  │  │
-│  │  └─────────────────────────────────────────────────┘  │  │
-│  │        │    │    │    │                                │  │
-│  │        ▼    ▼    ▼    ▼                                │  │
+│  │              Agent Layer (Multi-Agent)                  │  │
+│  │  ┌─────────────────────────────────────────────────┐   │  │
+│  │  │         BaseAgent (Base Class)                   │   │  │
+│  │  │  - Streaming support                              │   │  │
+│  │  │  - TOOL_TO_AF_MAP                                │   │  │
+│  │  └─────────────────────────────────────────────────┘   │  │
+│  │        │    │    │    │                                 │  │
+│  │        ▼    ▼    ▼    ▼                                 │  │
 │  │  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐                   │  │
 │  │  │ L │  │ D │  │ T │  │ S │  │ P │                   │  │
 │  │  │ e │  │ i │  │ r │  │ h │  │ u │                   │  │
 │  │  │ a │  │ s │  │ a │  │ o │  │ p │                   │  │
 │  │  │ d │  │ c │  │ n │  │ p │  │ p │                   │  │
-│  │  │ i │  │ o │  │ s │  │ p │  │ o │                   │  │
-│  │  │ n │  │ v │  │ a │  │ i │  │ r │                   │  │
-│  │  │ g │  │ e │  │ c │  │ n │  │ t │                   │  │
+│  │  │ i │  │ o │  │ s │  │ i │  │ o │                   │  │
+│  │  │ n │  │ v │  │ a │  │ n │  │ r │                   │  │
+│  │  │ g │  │ e │  │ c │  │ t │  │ t │                   │  │
 │  │  └───┘  └───┘  └───┘  └───┘  └───┘                   │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                              │                                │
@@ -79,6 +81,32 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 
 ## Agent Architecture
 
+### BaseAgent (base_agent.py)
+
+All agents inherit from the `BaseAgent` class which provides:
+
+- **Streaming Support**: Yields agent flow events and tokens during execution
+- **TOOL_TO_AF_MAP**: Dictionary mapping tool names to Agent Functions (AF)
+- **Stream Event Types**:
+  - `agent_flow`: Agent name or AF when active
+  - `tokens`: AI response tokens
+  - `message`: Agent messages with agent name
+  - `tool`: Tool execution results
+
+### Agent Flow Streaming Format
+
+Agents emit `agent_flow` events in the following format:
+
+```python
+# Agent start event
+{"type": "agent_flow", "agent": "[Discovery Agent]", "status": "success"}
+
+# AF (Agent Function) execution event
+{"type": "agent_flow", "agent": "[Product Compatibility AF]", "status": "success/error"}
+```
+
+Status is extracted from tool result: `"status": "success"` or `"status": "error"`
+
 ### Domain Classification
 
 Routes queries to appropriate agents:
@@ -93,13 +121,13 @@ Routes queries to appropriate agents:
 
 ### Agent Details
 
-| Agent | Directory | Status |
-|-------|-----------|--------|
-| Leading | a_leading_agent/ | Complete |
-| Discovery | b_discovery_agent/ | Complete |
-| Transaction | c_transaction_agent/ | Partial |
-| Shopping | d_shopping_agent/ | Partial |
-| Support | e_support_agent/ | Partial |
+| Agent | Directory | BaseAgent | TOOL_TO_AF_MAP |
+|-------|-----------|-----------|----------------|
+| Leading | a_leading_agent/ | Yes | Yes |
+| Discovery | b_discovery_agent/ | Yes | Yes |
+| Transaction | c_transaction_agent/ | Yes | Yes |
+| Shopping | d_shopping_agent/ | Yes | Yes |
+| Support | e_support_agent/ | Yes | Yes |
 
 ## Backend Routers
 
