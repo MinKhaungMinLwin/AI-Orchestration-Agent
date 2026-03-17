@@ -9,14 +9,18 @@ from common.curr_time import get_current_time
 
 from enum import Enum
 from pydantic import BaseModel, Field
+from config.env import settings
 
 
 from langchain_litellm import ChatLiteLLM
 
 LLM = ChatLiteLLM(
-    openai_api_key=settings.OPENAI_API_KEY,
-    model="gpt-5.4",
+    # openai_api_key=settings.OPENAI_API_KEY,
+    # model="gpt-5.4",
     # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model="gpt-5.4",
     streaming=True,
 )
 

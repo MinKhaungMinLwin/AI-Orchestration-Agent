@@ -81,12 +81,8 @@ class TStationChatService(object):
         from langchain_core.messages import SystemMessage
 
         llm = ChatLiteLLM(
-            model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            temperature=0.3,
-            # streaming=True,
-        )
-        llm = ChatOpenAI(
-            openai_api_key=settings.OPENAI_API_KEY,
+            api_base=settings.AI_GATEWAY_BASE_URL,
+            api_key=settings.AI_GATEWAY_API_KEY,
             model="gpt-5.4",
         )
 

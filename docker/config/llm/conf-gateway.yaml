@@ -1,44 +1,41 @@
 model_list:
   ## API Model
   # LLM
-  - model_name: solar-pro3
+  - model_name: gpt-5.4
     litellm_params:
-      model: openai/solar-pro3
-      temperature: 0.7
-      top_p: 0.95
-      api_base: https://api.upstage.ai/v1
-      api_key: "os.environ/UPSTAGE_API_KEY"
+      model: openai/gpt-5.4
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
 
-  - model_name: solar-pro2
+  - model_name: gpt-5.3
     litellm_params:
-      model: openai/solar-pro2
-      temperature: 0.7
-      top_p: 0.95
-      api_base: https://api.upstage.ai/v1
-      api_key: "os.environ/UPSTAGE_API_KEY"
+      model: openai/gpt-5.3
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
 
-  - model_name: solar-mini
+  - model_name: gpt-5.2
     litellm_params:
-      model: openai/solar-mini
-      temperature: 0.7
-      top_p: 0.95
-      api_base: https://api.upstage.ai/v1
-      api_key: "os.environ/UPSTAGE_API_KEY"
+      model: openai/gpt-5.2
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
 
-  # Embedding Passage
-  - model_name: embedding-passage
+  - model_name: gpt-5.1
     litellm_params:
-      model: openai/solar-embedding-1-large-passage
-      api_base: https://api.upstage.ai/v1
-      api_key: "os.environ/UPSTAGE_API_KEY"
+      model: openai/gpt-5.1
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
 
-  # Embedding Query
-  - model_name: embedding-query
+  - model_name: gpt-5.0
     litellm_params:
-      model: openai/solar-embedding-1-large-query
-      api_base: https://api.upstage.ai/v1
-      api_key: "os.environ/UPSTAGE_API_KEY"
+      model: openai/gpt-5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
 
+  # AWS Bedrock
+  - model_name: bedrock-claude-haiku-4-5
+    litellm_params:
+      model: bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_key: "os.environ/AWS_BEARER_TOKEN_BEDROCK"
 
 #### Settings
 general_settings:
@@ -53,4 +50,7 @@ litellm_settings:
 
 # Fallbacks when error
 fallbacks:
-  - solar-pro3: ["solar-pro2", "solar-mini"]
+  - gpt-5.4: ["gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5.0"]
+  - gpt-5.3: ["gpt-5.2", "gpt-5.1", "gpt-5.0"]
+  - gpt-5.2: ["gpt-5.1", "gpt-5.0"]
+  - gpt-5.1: ["gpt-5.0"]
