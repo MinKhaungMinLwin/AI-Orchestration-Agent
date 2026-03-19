@@ -9,6 +9,7 @@ from api import monitoring
 # T-station
 from api.tstation import chat as tstation_chat
 from api.tstation import example_question as tstation_example_question
+from api.tstation import validate_token as tstation_validate_token
 
 router = APIRouter()
 
@@ -26,6 +27,7 @@ elif settings.ENV == Environment.DEV:
     # T-Station Chat
     router.include_router(tstation_chat.router, tags=["T-Station Chat"], prefix="/tstation")
     router.include_router(tstation_example_question.router, tags=["T-Station Chat"], prefix="/tstation")
+    router.include_router(tstation_validate_token.router, tags=["T-Station Chat"], prefix="/tstation")
 
 
 # Queue System

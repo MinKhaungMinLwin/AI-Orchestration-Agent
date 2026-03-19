@@ -2,6 +2,7 @@ import os
 
 import streamlit as st
 from api.chat import get_examples, send_chat_message
+from api.validate_token import validate_token
 
 st.set_page_config(page_title="T-Station", layout="wide")
 st.title("T-Station AI Demo")
@@ -46,10 +47,15 @@ else:
         )
         if st.button("Save Token", key="save_manual_token"):
             if manual_token:
-                st.session_state["access_token"] = manual_token
-                st.session_state["tstation_logged_in"] = True
-                st.success("Token saved!")
-                st.rerun()
+                with st.spinner("Validating token..."):
+                    result = validate_token(manual_token)
+                if result.get("valid"):
+                    st.session_state["access_token"] = manual_token
+                    st.session_state["tstation_logged_in"] = True
+                    st.success("Token saved!")
+                    st.rerun()
+                else:
+                    st.error(f"Invalid token: {result.get('reason', 'Unknown error')}")
             else:
                 st.error("Please enter a token")
 
