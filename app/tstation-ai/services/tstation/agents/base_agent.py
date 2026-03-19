@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
-from typing import TypeVar, Generic
+from abc import ABC
+from typing import TypeVar
 import json
 
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage

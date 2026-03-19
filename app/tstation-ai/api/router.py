@@ -1,7 +1,6 @@
 # isort: skip_file
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from config.env import settings, Environment
-from config.sec import get_api_key
 
 ## Routers
 # Monitoring

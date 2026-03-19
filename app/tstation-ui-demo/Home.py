@@ -2,7 +2,6 @@ import os
 
 import streamlit as st
 from api.chat import get_examples, send_chat_message
-from api.login import get_tstation_login_service
 
 st.set_page_config(page_title="T-Station", layout="wide")
 st.title("T-Station AI Demo")
@@ -135,7 +134,7 @@ with chat_container:
 input_container = st.container()
 
 with input_container:
-    if selected_question:
+    if selected_question and access_token:
         st.info(f"**📝 {selected_question}**")
         col1, col2 = st.columns([1, 6])
         with col1:
@@ -150,10 +149,19 @@ with input_container:
                     del st.session_state.random_example_index
                 st.rerun()
     else:
+        if selected_question and not access_token:
+            st.warning("Please enter access token to chat")
         prompt = None
 
+    # Block chat if not logged in
+    chat_disabled = not access_token
+
     if not prompt:
-        prompt = st.chat_input(placeholder="Your question....")
+        if chat_disabled:
+            st.chat_input(placeholder="Please enter access token to chat...", disabled=True)
+            prompt = None
+        else:
+            prompt = st.chat_input(placeholder="Your question....")
 
 if prompt:
     with chat_container:
@@ -195,7 +203,7 @@ if prompt:
                                     bg_color = "#16a34a"  # Green
                                 steps_html += f"<span style='background: {bg_color}; padding: 4px 12px; border-radius: 15px; color: white; font-weight: bold; display: inline-block; vertical-align: middle;'>{step['agent']}</span>"
                                 if i < len(agent_flow_steps) - 1:
-                                    steps_html += f"<span style='margin: 0 8px; color: #6b7280; font-size: 14px; vertical-align: middle;'>→</span>"
+                                    steps_html += "<span style='margin: 0 8px; color: #6b7280; font-size: 14px; vertical-align: middle;'>→</span>"
                             agent_flow_placeholder.markdown(
                                 f"<div style='display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 4px; padding: 8px; margin-bottom: 10px;'>{steps_html}</div>",
                                 unsafe_allow_html=True

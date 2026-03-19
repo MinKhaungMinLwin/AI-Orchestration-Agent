@@ -14,7 +14,7 @@ dependencies = [
     "ruff>=0.9.5",
     "isort>=5.13.2",
     "pandas-stubs~=2.2.3",
-    "openapi-python-client0.28.3",
+    "openapi-python-client==0.28.3",
 ]
 
 [dependency-groups]
@@ -86,14 +86,4 @@ tstation-ui-demo = [
     "streamlit>=1.14.1",
     "streamlit-nested-layout>=0.1.4",
     "streamlit-mermaid>=0.3.0",
-]
-
-## BE
-tstation-be = [
-    "fastapi>=0.131.0",
-    "oracledb>=2.5.0",
-    "sqlalchemy[asyncio]>=2.0.0",
-    "uvicorn[standard]>=0.34.0",
-    "python-dotenv>=1.0.0",
-    "httpx>=0.28.1",
 ]

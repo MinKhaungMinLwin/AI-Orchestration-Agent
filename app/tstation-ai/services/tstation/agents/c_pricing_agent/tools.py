@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
