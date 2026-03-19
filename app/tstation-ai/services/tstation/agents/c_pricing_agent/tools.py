@@ -56,7 +56,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         logger.info("[TOOL][get_final_price_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
@@ -89,7 +89,7 @@ def get_logistics_inventory_tool(goods_no: str):
         logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_logistics_inventory_tool] Failed")
@@ -123,7 +123,7 @@ def get_md_inventory_tool(goods_no: str, shop_id: str):
         logger.info("[TOOL][get_md_inventory_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_md_inventory_tool] Failed")
@@ -162,7 +162,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
         logger.info("[TOOL][get_store_inventory_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_store_inventory_tool] Failed")
@@ -199,7 +199,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[s
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_nearby_stores_tool] Failed")
@@ -233,7 +233,7 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
         logger.info("[TOOL][get_store_list_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_store_list_tool] Failed")
@@ -266,7 +266,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
         logger.info("[TOOL][get_store_detail_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_store_detail_tool] Failed")

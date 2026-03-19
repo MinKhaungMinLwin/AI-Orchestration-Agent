@@ -298,10 +298,11 @@ Discount shown as percentage.
 
 Recommendation Reason
 
-• max 15 words  
-• based only on API data  
-• no exaggeration  
+• max 15 words
+• based only on API data
+• no exaggeration
 
+**Important:** If a column has no value for all rows, do not include that column in the table. Only show columns with actual data.
 
 ----------------------------------------------------
 

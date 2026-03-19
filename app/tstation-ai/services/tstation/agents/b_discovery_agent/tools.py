@@ -94,7 +94,7 @@ def post_vehicle_verify_owner_tool(car_no: str):
         logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][post_vehicle_verify_owner_tool] Failed")
@@ -129,7 +129,7 @@ def get_compatible_product_tool(goods_no: str):
         logger.info("[TOOL][get_compatible_product_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_compatible_product_tool] Failed")
@@ -163,7 +163,7 @@ def get_user_vehicles_tool(car_no: str):
         logger.info("[TOOL][get_user_vehicles_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
@@ -205,7 +205,7 @@ def get_product_description_tool(goods_no: str):
         logger.info("[TOOL][get_product_description_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
@@ -259,7 +259,7 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
         logger.info("[TOOL][get_products_recommendations_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")

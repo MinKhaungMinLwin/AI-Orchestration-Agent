@@ -34,10 +34,10 @@ class BaseAgent(ABC):
         - agent_flow: Agent name or AF when active (for UI display)
         - tokens: AI response tokens
         - message: Agent messages with agent name
-        - tool: Tool execution results with tool name and AF
+        - tool: Tool execution results with tool name, input, and output
         """
-        # Yield agent start event
-        yield {"type": "agent_flow", "agent": f"[{self.name}]", "status": "success"}
+        # Track tool calls to capture input args
+        tool_calls_map: dict[str, dict] = {}
 
         for mode, chunk in self.agent.stream(
             {"messages": messages},
@@ -52,6 +52,10 @@ class BaseAgent(ABC):
                 for node, update in chunk.items():
                     message = update["messages"][-1]
                     if isinstance(message, AIMessage):
+                        # Capture tool calls for input tracking
+                        if hasattr(message, "tool_calls") and message.tool_calls:
+                            for tc in message.tool_calls:
+                                tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
                         yield {
                             "type": "message",
                             "content": message.content,
@@ -70,9 +74,12 @@ class BaseAgent(ABC):
                             pass
                         # Yield AF with tool status
                         yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
+                        # Get tool input from captured tool_calls
+                        tool_input = tool_calls_map.get(message.tool_call_id, {})
                         yield {
                             "type": "tool",
-                            "content": message.content,
+                            "input": tool_input.get("args", {}),
+                            "output": message.content,
                             "node": node,
                             "tool": message.name,
                         }

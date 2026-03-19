@@ -79,7 +79,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_nearby_stores_tool] Failed")
@@ -128,7 +128,7 @@ def get_store_details_tool(shop_id: str, cal_day: str):
         logger.info("[TOOL][get_store_details_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_store_details_tool] Failed")
@@ -180,7 +180,7 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
         logger.info("[TOOL][get_store_list_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_store_list_tool] Failed")
@@ -242,7 +242,7 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
         logger.info("[TOOL][create_order_draft_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][create_order_draft_tool] Failed")
@@ -293,7 +293,7 @@ def get_order_status_tool(ord_no: str):
         logger.info("[TOOL][get_order_status_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_order_status_tool] Failed")

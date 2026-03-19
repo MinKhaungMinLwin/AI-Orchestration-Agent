@@ -1,6 +1,8 @@
+import json
 import os
 
 import streamlit as st
+import streamlit_nested_layout
 from api.chat import get_examples, send_chat_message
 from api.validate_token import validate_token
 
@@ -71,17 +73,20 @@ else:
 # Get access token for API calls
 access_token = st.session_state.get("access_token")
 
+# # Sidebar
+# st.sidebar.header("User Information")
+# user_options = ["Test-User", "Other"]
+# selected = st.sidebar.selectbox("User ID", user_options, index=0)
+# if selected == "Other":
+#     user_id = st.sidebar.text_input("Add your User ID", value="Test-User-Streamlit")
+#     session_id = st.sidebar.text_input("Session ID", value="test_session_id_123")
+# else:
+#     user_id = selected
+#     session_id = "01/01/2026"
 
-# Sidebar
-st.sidebar.header("User Information")
-user_options = ["Test-User", "Other"]
-selected = st.sidebar.selectbox("User ID", user_options, index=0)
-if selected == "Other":
-    user_id = st.sidebar.text_input("Add your User ID", value="Test-User-Streamlit")
-    session_id = st.sidebar.text_input("Session ID", value="test_session_id_123")
-else:
-    user_id = selected
-    session_id = "01/01/2026"
+user_id = "Test-User-Streamlit"
+session_id = "01/01/2026"
+
 stream_mode = True
 
 # Examples
@@ -98,7 +103,7 @@ if examples and "categories" in examples:
     selected_category_name = st.sidebar.selectbox(
         "Choose category",
         category_options,
-        index=0
+        index=1
     )
     selected_category_key = category_keys[category_options.index(selected_category_name)]
     selected_explanation = categories[selected_category_key]["explanation"]
@@ -179,6 +184,9 @@ if prompt:
     with chat_container:
         with st.chat_message("assistant"):
             if stream_mode:
+                # Tool calls display - list of expanders
+                tool_calls = []
+
                 # Agent flow display at top - list of steps
                 agent_flow_steps = []
                 agent_flow_placeholder = st.empty()
@@ -196,7 +204,12 @@ if prompt:
                     )
 
                     for chunk in response_generator:
-                        if chunk.get("type") == "agent_flow":
+                        if chunk.get("type") == "tool":
+                            tool_name = chunk.get("tool", "")
+                            tool_input = chunk.get("input", {})
+                            tool_output = chunk.get("output", "")
+                            tool_calls.append({"tool": tool_name, "input": tool_input, "output": tool_output})
+                        elif chunk.get("type") == "agent_flow":
                             agent = chunk.get("agent", "")
                             status = chunk.get("status", "success")
                             agent_flow_steps.append({"agent": agent, "status": status})
@@ -222,6 +235,30 @@ if prompt:
                             message_placeholder.markdown(full_response)
 
                     message_placeholder.markdown(full_response)
+
+                    # Render tool calls in Streamlit expanders above AF
+                    if tool_calls:
+                        with st.expander("🔧 Tools Called", expanded=True):
+                            for i, tc in enumerate(tool_calls):
+                                with st.expander(f"{tc['tool']}", expanded=False):
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.markdown("**INPUT:**")
+                                        st.code(json.dumps(tc["input"], indent=2, ensure_ascii=False) if tc["input"] else "None", language="json")
+                                    with col2:
+                                        st.markdown("**OUTPUT:**")
+                                        output_data = tc["output"]
+                                        # Try to parse as JSON, fallback to text
+                                        if isinstance(output_data, str):
+                                            try:
+                                                parsed = json.loads(output_data)
+                                                output_text = json.dumps(parsed, indent=2, ensure_ascii=False)
+                                            except (json.JSONDecodeError, TypeError):
+                                                output_text = output_data
+                                        else:
+                                            output_text = json.dumps(output_data, indent=2, ensure_ascii=False)
+                                        st.code(output_text, language="json")
+
                     bot_reply = full_response
 
                 except Exception as e:

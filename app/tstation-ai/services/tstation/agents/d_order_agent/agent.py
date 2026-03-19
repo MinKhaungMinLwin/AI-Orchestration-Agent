@@ -326,10 +326,10 @@ Weekend
 
 Installation
 
-✅ Available  
-❌ Not Available  
+✅ Available
+❌ Not Available
 
-
+**Important:** If a column has no value for all rows, do not include that column in the table. Only show columns with actual data.
 
 ----------------------------------------------------
 When displaying store details

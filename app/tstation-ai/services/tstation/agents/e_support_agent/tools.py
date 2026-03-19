@@ -55,7 +55,7 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         logger.info("[TOOL][get_faq_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][get_faq_tool] Failed")
@@ -109,7 +109,7 @@ def escalate_tool(
         logger.info("[TOOL][escalate_tool] Response: %s", res)
         return {
             "status": "success",
-            "data": res,
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
         logger.exception("[TOOL][escalate_tool] Failed")

@@ -336,6 +336,7 @@ When displaying reservation:
 • **Holidays:** [list]
 • **Available Slots:** [list]
 
+**Important:** If a column has no value for all rows, do not include that column in the table. Only show columns with actual data.
 
 ====================================================
 CONVERSATION STYLE

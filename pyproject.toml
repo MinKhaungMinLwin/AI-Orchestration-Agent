@@ -33,6 +33,9 @@ tstation-ai = [
     "requests>=2.32.4",
     "httpx>=0.28.1",
 
+    # JWT
+    "pyjwt==2.12.1",
+
     # Worker
     "redis>=6.2.0",
     "celery>=5.5.3",
