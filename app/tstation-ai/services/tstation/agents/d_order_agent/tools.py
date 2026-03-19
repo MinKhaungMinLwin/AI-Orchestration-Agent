@@ -161,8 +161,7 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
     - the user asks for reservation availability or store details for a specific store
 
     Args:
-        region_code (str | None): Region keyword used to filter stores
-            (e.g., "서울", "강남"). Optional.
+        region_code (str | None): Region keyword used to filter stores, using Korean address, Examples: '서울', '강남'강남"). Optional.
         limit (int): Maximum number of stores to return. Default is 20.
 
     Returns:

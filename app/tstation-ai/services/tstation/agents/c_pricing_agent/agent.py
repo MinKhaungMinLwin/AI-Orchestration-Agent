@@ -159,7 +159,7 @@ When to use
 
 Inputs
 
-region_code - region/address search (optional)
+region_code - region/address search (optional), using Korean address, Examples: '서울', '강남'
 limit - number of stores (default 20)
 
 

@@ -219,8 +219,7 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
     Returns all stores if region_code is not provided.
 
     Args:
-        region_code (str | None): Region search term (road address LIKE search).
-            Examples: '서울', '강남'
+        region_code (str | None): Region search term (road address LIKE search), Using Korean address, Examples: '서울', '강남'
         limit (int): Maximum number of stores to return (default 20).
 
     Returns:

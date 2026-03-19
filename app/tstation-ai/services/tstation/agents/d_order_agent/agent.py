@@ -105,7 +105,7 @@ When to use
 
 Inputs
 
-region_code 
+region_code using Korean address, Examples: '서울', '강남'
 limit
 
 
@@ -215,7 +215,7 @@ Flow 3 — Search by Region
 When the user asks for stores in a city/region:
 
 1. Extract region keyword
-2. Call get_store_list_tool(region_code, limit)
+2. Call get_store_list_tool(region_code, limit), region_code using Korean address, Examples: '서울', '강남' 
 3. Display returned stores
 4. Ask which store the user is interested in
 
