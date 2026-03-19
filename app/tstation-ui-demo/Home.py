@@ -16,15 +16,6 @@ if "access_token" not in st.session_state:
     st.session_state["access_token"] = None
 
 
-# Note
-st.sidebar.markdown("## Domain Support")
-st.sidebar.markdown("- **Leading**: Greeting & routing")
-st.sidebar.markdown("- **Discovery**: ProductRecommendation, Compatibility, ProductDescription AF")
-st.sidebar.markdown("- **Pricing**: Price, Inventory, Store APIs")
-st.sidebar.markdown("- **Shopping**: QuickOrder, Order tracking")
-st.sidebar.markdown("- **Support**: FAQ, Escalation AF")
-
-
 # Login Section
 st.sidebar.markdown("---")
 st.sidebar.header("🔐 T-Station Login")

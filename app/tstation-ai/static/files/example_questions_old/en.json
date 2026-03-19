@@ -1,0 +1,72 @@
+{
+    "leading": {
+        "name": "Welcome & Greeting",
+        "explanation": "First point of contact - welcomes users, understands needs, and routes to appropriate domain agents.",
+        "questions": [
+            "What can you help me with?",
+            "I need help finding tires",
+            "Hello. Give me domains you can support."
+        ]
+    },
+    "discovery": {
+        "name": "Discovery & Recommendation",
+        "explanation": "Explore and recommend suitable tires using ProductRecommendation, Compatibility, and ProductDescription APIs.",
+        "questions": [
+            "Show the best tires for daily driving.",
+            "List quiet tires and choose the best option.",
+            "List tires for car 33가3333.",
+            "Show tires for vehicle 99구9999 and choose the best.",
+            "Tell me more about tire G000000310120",
+            "Explain the features of tire G000000310121",
+            "Does G000000309855 fit my car 56모2162?"
+        ]
+    },
+    "pricing": {
+        "name": "Pricing & Inventory",
+        "explanation": "Handle pricing, stock availability, and store inventory using Price, Inventory, and Store APIs.",
+        "questions": [
+            "What is the price of tire G000000314254?",
+            "How much is G000000314254?",
+            "Is tire G000000314254 in stock?",
+            "Check stock for product G000000314254",
+            "Check if G000000314254 is available at store F07780",
+            "Find stores that have G000000314254 in stock",
+            "What stores can install G000000314254 today? I'm in Busan.",
+            "Check T-NA delivery availability for G000000314254"
+        ]
+    },
+    "order": {
+        "name": "Order Services",
+        "explanation": "Handle store discovery, store details with reservation availability, quick order draft creation, and order or delivery tracking.",
+        "questions": [
+            "Show the closest T'Station stores near 37.5665, 126.9780.",
+            "Find stores near 37.4979, 127.0276 that offer tire installation.",
+            "List T'Station stores in Seoul (서울).",
+            "Show the list of stores in GangStatnam (강남).",
+            "Show the details of store have name is B03788.",
+            "Give me details of C02571 store.",
+            "Create a quick order with product G000000309855 with quantity is 1 and my name is M200012890",
+            "My name is M200012890, I want to order 2 G000000318224 product",
+            "Check the status of my order with name is [Your_Order_ID]",
+            "Show my order [Your_Order_ID] and delivery status."
+        ]
+    },
+    "support": {
+        "name": "Support & Policies",
+        "explanation": "Handle warranty claims, returns, policies, FAQs using get_faq API, and escalate to human agents using escalate API when needed.",
+        "questions": [
+            "How do I cancel or change my tire installation appointment?",
+            "Can I return tires after they have been installed?",
+            "What is the standard warranty on Hankook tires?",
+            "Do you offer free alignment checks?",
+            "What is covered under the Hankook tire warranty?",
+            "How do I file a warranty claim for a defective tire?",
+            "What is your return and refund policy?",
+            "Can I exchange tires if I bought the wrong size?",
+            "How long does it take to process a warranty claim?",
+            "I need to speak with a customer service representative",
+            "My tire has a defect, what should I do?",
+            "What is the process for filing a complaint?"
+        ]
+    }
+}
