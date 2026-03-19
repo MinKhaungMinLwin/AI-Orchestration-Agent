@@ -52,6 +52,11 @@ DOMAIN_TOOL_MAP = {
         "get_store_detail",
     },
     "order": {
+        # Store
+        "get_nearby_stores",
+        "get_store_list",
+        "get_store_detail",
+
         # Quick Order
         "create_quick_order",
 
