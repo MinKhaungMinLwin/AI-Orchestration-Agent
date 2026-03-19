@@ -13,7 +13,7 @@ T = TypeVar("T", bound="VerifyOwnerRequest")
 class VerifyOwnerRequest:
     """
     Attributes:
-        car_no (str): 차량 번호
+        car_no (str): 차량 번호 Example: 33가3333.
     """
 
     car_no: str

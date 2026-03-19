@@ -62,7 +62,7 @@ def _build_response(
 
 def sync_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: QuickOrderRequest,
 ) -> Response[HTTPValidationError | QuickOrderResponse]:
     """퀵 쇼핑 / 주문서 초안 생성
@@ -94,7 +94,7 @@ def sync_detailed(
 
 def sync(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: QuickOrderRequest,
 ) -> HTTPValidationError | QuickOrderResponse | None:
     """퀵 쇼핑 / 주문서 초안 생성
@@ -121,7 +121,7 @@ def sync(
 
 async def asyncio_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: QuickOrderRequest,
 ) -> Response[HTTPValidationError | QuickOrderResponse]:
     """퀵 쇼핑 / 주문서 초안 생성
@@ -151,7 +151,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: QuickOrderRequest,
 ) -> HTTPValidationError | QuickOrderResponse | None:
     """퀵 쇼핑 / 주문서 초안 생성

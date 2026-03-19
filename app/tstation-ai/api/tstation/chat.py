@@ -32,6 +32,10 @@ async def chat(request: TStationChatRequest):
 
     """
     try:
+        # Set token in thread-local storage before running in thread
+        from services.tstation.common.tstation_be_client import set_tstation_be_token
+        set_tstation_be_token(request.access_token)
+
         return await asyncio.to_thread(TStationChatService.chat, request)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

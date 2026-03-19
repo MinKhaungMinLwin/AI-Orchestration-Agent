@@ -1,16 +1,19 @@
 import logging
 
-from common.tstation_be_api_client.hkt_api_client.client import Client
+from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
+from services.tstation.common.tstation_be_client import get_tstation_be_client
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync as post_escalate
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
-from config.env import settings
 from langchain.tools import tool
 
 logger = logging.getLogger(__name__)
 
 
-client = Client(base_url=settings.TSTATION_BE_API)
+def get_client() -> AuthenticatedClient:
+    """Get authenticated client for tstation-be API."""
+    return get_tstation_be_client()
+
 
 DOMAIN = {
     # FAQ
@@ -44,7 +47,7 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
 
     try:
         res = get_faq(
-            client=client,
+            client=get_client(),
             lrcl_cd=lrcl_cd,
             mdcl_cd=mdcl_cd,
             limit=limit,
@@ -65,10 +68,10 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
 
 @tool
 def escalate_tool(
-    inq_type_cd: str,
-    mbr_no: str | None = None,
-    summary: str | None = None,
-    messages: list[dict] | None = None
+        mbr_no: None | str = None,
+        inq_type_cd: None | str = None,
+        msg_count: int = 0,
+        summary: None | str = None,
 ):
     """
     Escalate to customer service agent.
@@ -82,10 +85,10 @@ def escalate_tool(
     - **policy**: If inq_type_cd is registered in policy table, branch to specified channel (call/email, etc.)
 
     Args:
-        inq_type_cd (str): Inquiry type code (e.g., ORDER, DELIVERY, CLAIM, etc.).
         mbr_no (str | None): Member number.
+        inq_type_cd (str): Inquiry type code (e.g., ORDER, DELIVERY, CLAIM, etc.).
+        msg_count (int): Number of messages in conversation.
         summary (str | None): Conversation summary (URL encoded).
-        messages (list[dict] | None): List of conversation messages for context.
 
     Returns:
         dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
@@ -93,14 +96,14 @@ def escalate_tool(
     body = EscalationRequest(
         inq_type_cd=inq_type_cd,
         mbr_no=mbr_no,
+        msg_count=msg_count,
         summary=summary,
-        messages=messages,
     )
     logger.info("[TOOL][escalate_tool] Called with: inq_type_cd=%s, mbr_no=%s, summary=%s", inq_type_cd, mbr_no, summary)
 
     try:
         res = post_escalate(
-            client=client,
+            client=get_client(),
             body=body,
         )
         logger.info("[TOOL][escalate_tool] Response: %s", res)

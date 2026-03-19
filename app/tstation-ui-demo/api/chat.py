@@ -29,7 +29,8 @@ def get_examples(language: str) -> dict:
 def send_chat_message(messages: List[Dict[str, str]],
                       session_id: str,
                       user_id: str,
-                      stream: bool = False) -> Union[str, Generator[str, None, None]]:
+                      stream: bool = False,
+                      access_token: str | None = None) -> Union[str, Generator[str, None, None]]:
     """
     Send chat message to the API and return response.
 
@@ -38,6 +39,7 @@ def send_chat_message(messages: List[Dict[str, str]],
         session_id: Session identifier
         user_id: User identifier
         stream: If True, returns streaming generator; if False, returns complete response
+        access_token: Access token for tstation-be API calls
 
     Returns:
         str: Complete response when stream=False
@@ -48,6 +50,7 @@ def send_chat_message(messages: List[Dict[str, str]],
         "session_id": session_id,
         "user_id": user_id,
         "stream": stream,
+        "access_token": access_token,
 
         # Tracing
         "metadata": {

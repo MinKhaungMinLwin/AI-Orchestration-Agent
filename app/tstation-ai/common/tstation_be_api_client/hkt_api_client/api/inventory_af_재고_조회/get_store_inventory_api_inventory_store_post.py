@@ -62,7 +62,7 @@ def _build_response(
 
 def sync_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: StoreInventoryRequest,
 ) -> Response[HTTPValidationError | StoreInventoryResponse]:
     """매장 재고 가용 여부 조회
@@ -94,7 +94,7 @@ def sync_detailed(
 
 def sync(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: StoreInventoryRequest,
 ) -> HTTPValidationError | StoreInventoryResponse | None:
     """매장 재고 가용 여부 조회
@@ -121,7 +121,7 @@ def sync(
 
 async def asyncio_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: StoreInventoryRequest,
 ) -> Response[HTTPValidationError | StoreInventoryResponse]:
     """매장 재고 가용 여부 조회
@@ -151,7 +151,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: StoreInventoryRequest,
 ) -> HTTPValidationError | StoreInventoryResponse | None:
     """매장 재고 가용 여부 조회

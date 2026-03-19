@@ -62,7 +62,7 @@ def _build_response(
 
 def sync_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: EscalationRequest,
 ) -> Response[EscalationResponse | HTTPValidationError]:
     """상담 연결 분기 처리
@@ -101,7 +101,7 @@ def sync_detailed(
 
 def sync(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: EscalationRequest,
 ) -> EscalationResponse | HTTPValidationError | None:
     """상담 연결 분기 처리
@@ -135,7 +135,7 @@ def sync(
 
 async def asyncio_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: EscalationRequest,
 ) -> Response[EscalationResponse | HTTPValidationError]:
     """상담 연결 분기 처리
@@ -172,7 +172,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: EscalationRequest,
 ) -> EscalationResponse | HTTPValidationError | None:
     """상담 연결 분기 처리

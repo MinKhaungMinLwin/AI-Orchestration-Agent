@@ -1,13 +1,12 @@
 import logging
 
-from common.tstation_be_api_client.hkt_api_client.client import Client
-from config.env import settings
+from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
+from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
 
 logger = logging.getLogger(__name__)
 
 # Product Compatibility
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_compatiblity_get import sync as get_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.vehicle_verify_owner_api_vehicle_verify_owner_post import sync as post_vehicle_verify_owner
 from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_compatible_product_api_product_compatible_get import sync as get_compatible_product
@@ -20,12 +19,14 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync as get_products_recommendations
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 
-client = Client(base_url=settings.TSTATION_BE_API)
+def get_client() -> AuthenticatedClient:
+    """Get authenticated client for tstation-be API."""
+    return get_tstation_be_client()
+
 
 DOMAIN_TOOL_MAP = {
     "discovery": {
         # Product Compatibility
-        "check_compatibility",
         "vehicle_verify_owner",
         "get_compatible_product",
         "get_user_vehicles",
@@ -68,47 +69,6 @@ DOMAIN_TOOL_MAP = {
 
 
 @tool
-def get_compatibility_tool(car_no: str, goods_no: str):
-    """
-    Check tire compatibility between a vehicle and a product.
-
-    Using the vehicle number (CAR_NO), the API retrieves the front and rear tire sizes
-    from PR_CAR_BASE and PR_CAR_ATTR. Using the product number (GOODS_NO), it retrieves
-    the tire specifications (section width, aspect ratio, and rim inch) from PR_GOODS_BASE.
-    The system then verifies whether the tire product is compatible with the vehicle.
-
-    Until the CarZen API integration is completed, the system prioritizes internal
-    database information for compatibility checks.
-
-    Args:
-        car_no (str): Vehicle number.
-        goods_no (str): Product number.
-
-    Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
-    """
-    logger.info("[TOOL][get_compatibility_tool] Called with: car_no=%s, goods_no=%s", car_no, goods_no)
-
-    try:
-        res = get_compatibility(
-            client=client,
-            car_no=car_no,
-            goods_no=goods_no
-        )
-        logger.info("[TOOL][get_compatibility_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res,
-        }
-    except Exception as e:
-        logger.exception("[TOOL][get_compatibility_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to check compatibility"
-        }
-
-@tool
 def post_vehicle_verify_owner_tool(car_no: str):
     """
     Verify vehicle ownership.
@@ -128,7 +88,7 @@ def post_vehicle_verify_owner_tool(car_no: str):
     try:
         body = VerifyOwnerRequest(car_no=car_no)
         res = post_vehicle_verify_owner(
-            client=client,
+            client=get_client(),
             body=body,
         )
         logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", res)
@@ -163,7 +123,7 @@ def get_compatible_product_tool(goods_no: str):
 
     try:
         res = get_compatible_product(
-            client=client,
+            client=get_client(),
             goods_no=goods_no,
         )
         logger.info("[TOOL][get_compatible_product_tool] Response: %s", res)
@@ -197,7 +157,7 @@ def get_user_vehicles_tool(car_no: str):
 
     try:
         res = get_user_vehicles(
-            client=client,
+            client=get_client(),
             car_no=car_no,
         )
         logger.info("[TOOL][get_user_vehicles_tool] Response: %s", res)
@@ -239,7 +199,7 @@ def get_product_description_tool(goods_no: str):
 
     try:
         res = get_product_description(
-            client=client,
+            client=get_client(),
             goods_no=goods_no
         )
         logger.info("[TOOL][get_product_description_tool] Response: %s", res)
@@ -289,7 +249,7 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
 
     try:
         res = get_products_recommendations(
-            client=client,
+            client=get_client(),
             rcmd_type=rcmd_type,
             limit=limit,
             brand_cd=brand_cd,

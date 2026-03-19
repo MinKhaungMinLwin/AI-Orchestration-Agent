@@ -2,9 +2,16 @@ import os
 
 import streamlit as st
 from api.chat import get_examples, send_chat_message
+from api.login import get_tstation_login_service
 
 st.set_page_config(page_title="T-Station", layout="wide")
 st.title("T-Station AI Demo")
+
+# Initialize session state for login
+if "tstation_logged_in" not in st.session_state:
+    st.session_state["tstation_logged_in"] = False
+if "access_token" not in st.session_state:
+    st.session_state["access_token"] = None
 
 
 # Note
@@ -14,6 +21,50 @@ st.sidebar.markdown("- **Discovery**: ProductRecommendation, Compatibility, Prod
 st.sidebar.markdown("- **Pricing**: Price, Inventory, Store APIs")
 st.sidebar.markdown("- **Shopping**: QuickOrder, Order tracking")
 st.sidebar.markdown("- **Support**: FAQ, Escalation AF")
+
+
+# Login Section
+st.sidebar.markdown("---")
+st.sidebar.header("🔐 T-Station Login")
+
+# Check login status
+if st.session_state.get("tstation_logged_in") and st.session_state.get("access_token"):
+    st.sidebar.success("✅ Logged in")
+    if st.sidebar.button("Logout", key="logout_btn"):
+        st.session_state["tstation_logged_in"] = False
+        st.session_state["access_token"] = None
+        st.rerun()
+else:
+    st.sidebar.info("Only logged-in users can call APIs")
+
+    # Option 1: Manual token input
+    with st.sidebar.expander("Enter Access Token manually", expanded=True):
+        manual_token = st.text_input(
+            "Access Token",
+            type="password",
+            placeholder="eyJ0eXAiOiJKV1Qi...",
+            key="manual_token_input"
+        )
+        if st.button("Save Token", key="save_manual_token"):
+            if manual_token:
+                st.session_state["access_token"] = manual_token
+                st.session_state["tstation_logged_in"] = True
+                st.success("Token saved!")
+                st.rerun()
+            else:
+                st.error("Please enter a token")
+
+    # Option 2: Login via browser (requires manual cookie)
+    st.sidebar.markdown("**Or get token via browser:**")
+    st.sidebar.markdown("""
+    1. Login at https://wwwqa.tstation.com
+    2. Visit: https://wwwqa.tstation.com/member/chatbotTokenJson.do
+    3. Copy `accessToken` from the JSON response
+    4. Paste into the field above
+    """)
+
+# Get access token for API calls
+access_token = st.session_state.get("access_token")
 
 
 # Sidebar
@@ -126,7 +177,8 @@ if prompt:
                         messages=st.session_state['messages'],
                         session_id=session_id,
                         user_id=user_id,
-                        stream=True
+                        stream=True,
+                        access_token=access_token
                     )
 
                     for chunk in response_generator:
@@ -169,7 +221,8 @@ if prompt:
                         messages=st.session_state['messages'],
                         session_id=session_id,
                         user_id=user_id,
-                        stream=stream_mode
+                        stream=stream_mode,
+                        access_token=access_token
                     )
                 st.markdown(bot_reply)
 

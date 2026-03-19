@@ -70,7 +70,7 @@ def _build_response(
 
 def sync_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     goods_no: str,
     member_type: None | str | Unset = UNSET,
 ) -> Response[HTTPValidationError | PriceResponse]:
@@ -105,7 +105,7 @@ def sync_detailed(
 
 def sync(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     goods_no: str,
     member_type: None | str | Unset = UNSET,
 ) -> HTTPValidationError | PriceResponse | None:
@@ -135,7 +135,7 @@ def sync(
 
 async def asyncio_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     goods_no: str,
     member_type: None | str | Unset = UNSET,
 ) -> Response[HTTPValidationError | PriceResponse]:
@@ -168,7 +168,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     goods_no: str,
     member_type: None | str | Unset = UNSET,
 ) -> HTTPValidationError | PriceResponse | None:

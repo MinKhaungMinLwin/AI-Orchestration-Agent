@@ -62,7 +62,7 @@ def _build_response(
 
 def sync_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: MdInventoryRequest,
 ) -> Response[HTTPValidationError | MdInventoryResponse]:
     """MD 재고 조회 (참고용)
@@ -93,7 +93,7 @@ def sync_detailed(
 
 def sync(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: MdInventoryRequest,
 ) -> HTTPValidationError | MdInventoryResponse | None:
     """MD 재고 조회 (참고용)
@@ -119,7 +119,7 @@ def sync(
 
 async def asyncio_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: MdInventoryRequest,
 ) -> Response[HTTPValidationError | MdInventoryResponse]:
     """MD 재고 조회 (참고용)
@@ -148,7 +148,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     body: MdInventoryRequest,
 ) -> HTTPValidationError | MdInventoryResponse | None:
     """MD 재고 조회 (참고용)

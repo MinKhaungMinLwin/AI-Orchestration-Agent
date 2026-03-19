@@ -58,7 +58,7 @@ def _build_response(
 def sync_detailed(
     goods_no: str,
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
 ) -> Response[HTTPValidationError | ProductDescResponse]:
     """상품 설명 조회
 
@@ -90,7 +90,7 @@ def sync_detailed(
 def sync(
     goods_no: str,
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
 ) -> HTTPValidationError | ProductDescResponse | None:
     """상품 설명 조회
 
@@ -117,7 +117,7 @@ def sync(
 async def asyncio_detailed(
     goods_no: str,
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
 ) -> Response[HTTPValidationError | ProductDescResponse]:
     """상품 설명 조회
 
@@ -147,7 +147,7 @@ async def asyncio_detailed(
 async def asyncio(
     goods_no: str,
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
 ) -> HTTPValidationError | ProductDescResponse | None:
     """상품 설명 조회
 

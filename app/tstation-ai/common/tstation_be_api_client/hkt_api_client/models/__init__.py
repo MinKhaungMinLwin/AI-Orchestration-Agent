@@ -1,6 +1,5 @@
 """Contains all the data models used in inputs/outputs"""
 
-from .compatibility_response import CompatibilityResponse
 from .escalation_request import EscalationRequest
 from .escalation_response import EscalationResponse
 from .faq_item import FaqItem
@@ -29,14 +28,12 @@ from .store_inventory_request import StoreInventoryRequest
 from .store_inventory_response import StoreInventoryResponse
 from .store_list_item import StoreListItem
 from .store_list_response import StoreListResponse
-from .tire_spec import TireSpec
 from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
 from .verify_owner_request import VerifyOwnerRequest
 from .verify_owner_response import VerifyOwnerResponse
 
 __all__ = (
-    "CompatibilityResponse",
     "EscalationRequest",
     "EscalationResponse",
     "FaqItem",
@@ -65,7 +62,6 @@ __all__ = (
     "StoreInventoryResponse",
     "StoreListItem",
     "StoreListResponse",
-    "TireSpec",
     "ValidationError",
     "ValidationErrorContext",
     "VerifyOwnerRequest",

@@ -62,7 +62,7 @@ def _build_response(
 
 def sync_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     ord_no: str,
 ) -> Response[HTTPValidationError | OrderDeliveryResponse]:
     """주문 및 배송 상태 조회
@@ -93,7 +93,7 @@ def sync_detailed(
 
 def sync(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     ord_no: str,
 ) -> HTTPValidationError | OrderDeliveryResponse | None:
     """주문 및 배송 상태 조회
@@ -119,7 +119,7 @@ def sync(
 
 async def asyncio_detailed(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     ord_no: str,
 ) -> Response[HTTPValidationError | OrderDeliveryResponse]:
     """주문 및 배송 상태 조회
@@ -148,7 +148,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     *,
-    client: AuthenticatedClient | Client,
+    client: AuthenticatedClient,
     ord_no: str,
 ) -> HTTPValidationError | OrderDeliveryResponse | None:
     """주문 및 배송 상태 조회

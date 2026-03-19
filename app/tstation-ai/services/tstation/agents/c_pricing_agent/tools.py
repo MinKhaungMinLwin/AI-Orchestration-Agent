@@ -1,8 +1,8 @@
 import logging
 from typing import Optional, List, Dict, Any
 
-from common.tstation_be_api_client.hkt_api_client.client import Client
-from config.env import settings
+from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
+from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,9 @@ from common.tstation_be_api_client.hkt_api_client.models import (
 )
 
 
-client = Client(base_url=settings.TSTATION_BE_API)
+def get_client() -> AuthenticatedClient:
+    """Get authenticated client for tstation-be API."""
+    return get_tstation_be_client()
 
 
 @tool
@@ -50,7 +52,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
 
     try:
-        res = get_price(client=client, goods_no=goods_no, member_type=member_type)
+        res = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
         logger.info("[TOOL][get_final_price_tool] Response: %s", res)
         return {
             "status": "success",
@@ -83,7 +85,7 @@ def get_logistics_inventory_tool(goods_no: str):
     logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
 
     try:
-        res = get_logistics_inventory(client=client, body=body)
+        res = get_logistics_inventory(client=get_client(), body=body)
         logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", res)
         return {
             "status": "success",
@@ -117,7 +119,7 @@ def get_md_inventory_tool(goods_no: str, shop_id: str):
     logger.info("[TOOL][get_md_inventory_tool] Called with: goods_no=%s, shop_id=%s", goods_no, shop_id)
 
     try:
-        res = get_md_inventory(client=client, body=body)
+        res = get_md_inventory(client=get_client(), body=body)
         logger.info("[TOOL][get_md_inventory_tool] Response: %s", res)
         return {
             "status": "success",
@@ -156,7 +158,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     logger.info("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)
 
     try:
-        res = get_store_inventory(client=client, body=body)
+        res = get_store_inventory(client=get_client(), body=body)
         logger.info("[TOOL][get_store_inventory_tool] Response: %s", res)
         return {
             "status": "success",
@@ -193,7 +195,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[s
     logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, svc_codes=%s", user_xpos, user_ypos, svc_codes)
 
     try:
-        res = get_nearby_stores(client=client, body=body)
+        res = get_nearby_stores(client=get_client(), body=body)
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
         return {
             "status": "success",
@@ -227,7 +229,7 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
 
     try:
-        res = get_store_list(client=client, region_code=region_code, limit=limit)
+        res = get_store_list(client=get_client(), region_code=region_code, limit=limit)
         logger.info("[TOOL][get_store_list_tool] Response: %s", res)
         return {
             "status": "success",
@@ -260,7 +262,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     logger.info("[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
 
     try:
-        res = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
+        res = get_store_detail(client=get_client(), shop_id=shop_id, cal_day=cal_day)
         logger.info("[TOOL][get_store_detail_tool] Response: %s", res)
         return {
             "status": "success",

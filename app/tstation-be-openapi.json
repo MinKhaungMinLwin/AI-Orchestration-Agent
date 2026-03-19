@@ -44,7 +44,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/store/detail": {
@@ -55,6 +60,11 @@
         "summary": "매장 상세 정보 및 예약 가능 시간 조회",
         "description": "매장 ID와 날짜를 기준으로 매장 정보와 예약 가능 시간 슬롯(시 단위)을 반환합니다.",
         "operationId": "get_store_detail_api_store_detail_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "shop_id",
@@ -112,6 +122,11 @@
         "summary": "매장 목록 조회",
         "description": "지역명(도로명주소 LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.",
         "operationId": "get_store_list_api_store_list_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "region_code",
@@ -178,6 +193,11 @@
         "summary": "상품 가격 및 할인 조회",
         "description": "상품 번호로 기본 판매가, 최대 혜택가(프로모션·쿠폰 적용), 공임비 및 오늘의 공임비를 반환합니다.\n(샘플번호: G000000314254)",
         "operationId": "get_price_api_prices_final_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "goods_no",
@@ -272,7 +292,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/inventory/md": {
@@ -314,7 +339,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/inventory/store": {
@@ -356,7 +386,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/orders/summary": {
@@ -367,6 +402,11 @@
         "summary": "주문 및 배송 상태 조회",
         "description": "주문 번호로 주문 진행 상태(OP_ORD_DTL_INFO)와 배송 진행 상태·운송장 정보(OP_ORD_DLV_DTL_INFO)를 함께 반환합니다.",
         "operationId": "get_order_delivery_api_orders_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "ord_no",
@@ -443,63 +483,12 @@
               }
             }
           }
-        }
-      }
-    },
-    "/api/compatiblity": {
-      "get": {
-        "tags": [
-          "Product Compatibility AF - 차량 및 상품 호환 검증"
-        ],
-        "summary": "차량-상품 타이어 호환 검증",
-        "description": "차량번호(CAR_NO)로 PR_CAR_BASE + PR_CAR_ATTR에서 전/후륜 타이어 사이즈를 조회하고, 상품번호(GOODS_NO)로 PR_GOODS_BASE에서 타이어 스펙(단면폭/편평비/인치)을 조회하여 호환 여부를 반환합니다. 카젠 API 연동 전까지 내부 DB 정보를 우선 활용합니다.",
-        "operationId": "check_compatibility_api_compatiblity_get",
-        "parameters": [
+        },
+        "security": [
           {
-            "name": "car_no",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "차량 번호",
-              "title": "Car No"
-            },
-            "description": "차량 번호"
-          },
-          {
-            "name": "goods_no",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "상품 번호",
-              "title": "Goods No"
-            },
-            "description": "상품 번호"
+            "HTTPBearer": []
           }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompatibilityResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
+        ]
       }
     },
     "/api/vehicle/verify-owner": {
@@ -540,7 +529,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/product/compatible": {
@@ -550,6 +544,11 @@
         ],
         "summary": "Get Compatible Product",
         "operationId": "get_compatible_product_api_product_compatible_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "goods_no",
@@ -592,6 +591,11 @@
         ],
         "summary": "Get User Vehicles",
         "operationId": "get_user_vehicles_api_user_vehicles_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "car_no",
@@ -635,6 +639,11 @@
         "summary": "상품 추천",
         "description": "추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n- **tstation**: 티스테이션 추천 (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)",
         "operationId": "get_recommendations_api_product_recommend_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "rcmd_type",
@@ -733,6 +742,11 @@
         "summary": "상품 설명 조회",
         "description": "상품 번호로 PR_GOODS_BASE → PR_PATTERN_BASE를 조인하여 특장점(PC_PROD_REMARK_DESC), 기술력(PC_PROD_TECH_DESC), 슬로건(SLOGAN)을 조회하고, PR_PTRN_IMG_INFO에서 이미지 및 썸네일 경로 목록을 반환합니다.",
         "operationId": "get_description_api_product_detail__goods_no__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "goods_no",
@@ -776,6 +790,11 @@
         "summary": "FAQ 목록 조회",
         "description": "CS_CUST_INQ_MGMT_INFO에서 FAQ 데이터(INQ_TYPE_CD='FAQ')만 조회합니다. 1:1 문의 내역은 개인정보 보호를 위해 제외됩니다. lrcl_cd(대분류), mdcl_cd(중분류)로 필터링할 수 있습니다.",
         "operationId": "get_faq_api_faq_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "lrcl_cd",
@@ -891,78 +910,17 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     }
   },
   "components": {
     "schemas": {
-      "CompatibilityResponse": {
-        "properties": {
-          "car_no": {
-            "type": "string",
-            "title": "Car No",
-            "description": "차량 번호"
-          },
-          "goods_no": {
-            "type": "string",
-            "title": "Goods No",
-            "description": "상품 번호"
-          },
-          "tire_size_fr": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tire Size Fr",
-            "description": "차량 전륜 타이어 사이즈 (예: 205/55R16)"
-          },
-          "tire_size_re": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tire Size Re",
-            "description": "차량 후륜 타이어 사이즈 (예: 225/45R17)"
-          },
-          "goods_spec": {
-            "$ref": "#/components/schemas/TireSpec",
-            "description": "상품 타이어 스펙 (단면폭/편평비/인치)"
-          },
-          "is_compatible_fr": {
-            "type": "boolean",
-            "title": "Is Compatible Fr",
-            "description": "전륜 호환 여부"
-          },
-          "is_compatible_re": {
-            "type": "boolean",
-            "title": "Is Compatible Re",
-            "description": "후륜 호환 여부"
-          },
-          "is_compatible": {
-            "type": "boolean",
-            "title": "Is Compatible",
-            "description": "전체 호환 여부 (전/후 모두 호환 시 true)"
-          }
-        },
-        "type": "object",
-        "required": [
-          "car_no",
-          "goods_no",
-          "is_compatible_fr",
-          "is_compatible_re",
-          "is_compatible"
-        ],
-        "title": "CompatibilityResponse"
-      },
       "EscalationRequest": {
         "properties": {
           "mbr_no": {
@@ -1910,48 +1868,6 @@
         ],
         "title": "StoreListResponse"
       },
-      "TireSpec": {
-        "properties": {
-          "tire_width": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tire Width",
-            "description": "단면폭 (TIRE_WIDTH)"
-          },
-          "tire_series": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tire Series",
-            "description": "편평비 (TIRE_SERIES)"
-          },
-          "inch": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Inch",
-            "description": "인치 (INCH)"
-          }
-        },
-        "type": "object",
-        "title": "TireSpec"
-      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -1997,7 +1913,8 @@
           "car_no": {
             "type": "string",
             "title": "Car No",
-            "description": "차량 번호"
+            "description": "차량 번호",
+            "example": "33가3333"
           }
         },
         "type": "object",
@@ -2021,6 +1938,12 @@
         },
         "type": "object",
         "title": "VerifyOwnerResponse"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   }

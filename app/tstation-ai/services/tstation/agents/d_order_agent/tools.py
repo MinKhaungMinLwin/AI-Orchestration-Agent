@@ -1,7 +1,7 @@
 import logging
 
-from common.tstation_be_api_client.hkt_api_client.client import Client
-from config.env import settings
+from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
+from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,10 @@ from common.tstation_be_api_client.hkt_api_client.models import QuickOrderReques
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync as get_order_delivery
 
 
-client = Client(base_url=settings.TSTATION_BE_API)
+def get_client() -> AuthenticatedClient:
+    """Get authenticated client for tstation-be API."""
+    return get_tstation_be_client()
+
 
 DOMAIN = {
     # Quick Order
@@ -70,7 +73,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
 
     try:
         res = get_nearby_stores(
-            client=client,
+            client=get_client(),
             body=body
         )
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
@@ -118,7 +121,7 @@ def get_store_details_tool(shop_id: str, cal_day: str):
 
     try:
         res = get_store_details(
-            client=client,
+            client=get_client(),
             shop_id=shop_id,
             cal_day=cal_day
         )
@@ -170,7 +173,7 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
 
     try:
         res = get_store_list(
-            client=client,
+            client=get_client(),
             region_code=region_code,
             limit=limit
         )
@@ -233,7 +236,7 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
 
     try:
         res = create_quick_order(
-            client=client,
+            client=get_client(),
             body=body,
         )
         logger.info("[TOOL][create_order_draft_tool] Response: %s", res)
@@ -284,7 +287,7 @@ def get_order_status_tool(ord_no: str):
 
     try:
         res = get_order_delivery(
-            client=client,
+            client=get_client(),
             ord_no=ord_no
         )
         logger.info("[TOOL][get_order_status_tool] Response: %s", res)

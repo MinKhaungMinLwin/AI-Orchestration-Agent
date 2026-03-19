@@ -3,7 +3,6 @@ from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.b_discovery_agent.tools import (
-    get_compatibility_tool,
     post_vehicle_verify_owner_tool,
     get_compatible_product_tool,
     get_user_vehicles_tool
@@ -33,7 +32,7 @@ PRIMARY GOALS
 ====================================================
 
 • Recommend suitable tires
-• Check vehicle compatibility
+• Verify vehicle ownership
 • Explain product features
 • Guide customers toward purchase decisions
 
@@ -122,21 +121,7 @@ car_no
 
 
 
-Tool  
-get_compatibility_tool
-
-When to use
-
-• check if a tire fits a vehicle
-
-Inputs
-
-car_no  
-goods_no
-
-
-
-Tool  
+Tool
 get_compatible_product_tool
 
 When to use
@@ -211,9 +196,7 @@ When the user provides a vehicle number:
 2. Retrieve vehicle tire information
 3. Call get_products_recommendations_tool with limit=20
 4. Filter and select 3-7 best products from the results
-5. Check compatibility when needed using get_compatibility_tool
-6. Prioritize compatible products
-7. Call get_product_description_tool for the best product
+5. Call get_product_description_tool for the best product
 
 
 
@@ -230,24 +213,7 @@ When the user asks about a specific tire:
 
 
 ------------------------------------
-Flow 4 — Compatibility Check
-------------------------------------
-
-When the user asks if a tire fits their vehicle:
-
-1. Ensure both parameters exist
-
-car_no  
-goods_no
-
-2. Call get_compatibility_tool
-3. Explain the result
-4. If not compatible, suggest alternatives using get_compatible_product_tool
-
-
-
-------------------------------------
-Flow 5 — Alternative Products
+Flow 4 — Alternative Products
 ------------------------------------
 
 When the user wants similar tires:
@@ -291,7 +257,6 @@ Never invent any data.
 Do NOT fabricate:
 
 • product IDs
-• compatibility
 • prices
 • discounts
 
@@ -388,7 +353,6 @@ Never mention internal tools.
 class DiscoverySubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Product Compatibility
-        "get_compatibility_tool": "Product Compatibility",
         "post_vehicle_verify_owner_tool": "Product Compatibility",
         "get_compatible_product_tool": "Product Compatibility",
         "get_user_vehicles_tool": "Product Compatibility",
@@ -402,7 +366,6 @@ class DiscoverySubAgent(BaseAgent):
         super().__init__(
             model=model,
             tools=[
-                get_compatibility_tool,
                 post_vehicle_verify_owner_tool,
                 get_compatible_product_tool,
                 get_user_vehicles_tool,

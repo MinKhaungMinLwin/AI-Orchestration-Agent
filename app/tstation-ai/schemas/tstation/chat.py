@@ -13,6 +13,9 @@ class TStationChatRequest(BaseModel):
     user_id: str = Field(..., description="User ID")
     session_id: str = Field(..., description="Session ID")
 
+    # Access token for tstation-be API (per-request, can be different each time)
+    access_token: Optional[str] = Field(default=None, description="Access token for tstation-be API calls")
+
     # Tracing
     tracing_id: str = Field(default_factory=lambda: uuid.uuid4().hex, description="Tracing ID")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Extra metadata")
@@ -36,6 +39,7 @@ class TStationChatRequest(BaseModel):
 
                 "user_id": "Test-User-123",
                 "session_id": "test_session_id_123",
+                "access_token": "your-access-token-here",
 
                 "tracing_id": "f3a8d97b9c274c2e9dd648b711e221e5",
                 "metadata": {
