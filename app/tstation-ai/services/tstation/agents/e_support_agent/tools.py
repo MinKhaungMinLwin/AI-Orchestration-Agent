@@ -1,5 +1,6 @@
 import logging
 
+from common.qna_payload import make_qna_payload_url
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync as get_faq
@@ -118,3 +119,58 @@ def escalate_tool(
             "reason": str(e),
             "message": "Failed to escalate to human agent"
         }
+
+
+@tool
+def transfer_to_qna_tool(
+        cnsl_clss_seq: str | None = None,
+        inq_tit_nm: str | None = None,
+        ai_summary: str | None = None,
+        is_mobile: bool = False,
+):
+    """
+    Create encrypted QnA write URL to transfer user to 1:1 inquiry write page.
+
+    Data is AES-128 ECB encrypted with Base64 URL-safe encoding.
+    Use this when user wants to write a 1:1 inquiry with AI-summarized content.
+
+    Args:
+        cnsl_clss_seq (str | None): Consultation type code.
+            - 10002: 상품문의 (Product inquiry)
+            - 10006: 주문/결제/배송 (Order/Payment/Delivery)
+            - 10010: 반품/교환/환불 (Return/Exchange/Refund)
+            - 10013: 제공서비스/이벤트/혜택 (Service/Event/Benefits)
+            - 10017: 회원 (Member)
+            - 10019: 기타 (Other)
+            - 10025: 가맹점제휴문의 (Franchise inquiry)
+            - 10034: 이력서접수 (Resume submission)
+            If not provided, omit and AI will auto-select.
+        inq_tit_nm (str | None): Inquiry title (max 100 chars).
+        ai_summary (str | None): Inquiry content (max 1000 chars).
+        is_mobile (bool): Use mobile URL if True.
+
+    Returns:
+        dict: {"status": "success", "url": "..."} or {"status": "error", "reason": ...}
+    """
+    logger.info(
+        "[TOOL][transfer_to_qna_tool] Called with: cnsl_clss_seq=%s, inq_tit_nm=%s, ai_summary=%s, is_mobile=%s",
+        cnsl_clss_seq, inq_tit_nm, ai_summary, is_mobile,
+    )
+
+    try:
+        url = make_qna_payload_url(
+            cnsl_clss_seq=cnsl_clss_seq,
+            inq_tit_nm=inq_tit_nm,
+            ai_summary=ai_summary,
+            is_mobile=is_mobile,
+        )
+        logger.info(f"[TOOL][transfer_to_qna_tool] Generated URL: {url}")
+        device = "모바일" if is_mobile else "PC"
+        return (
+            f"✅ **1:1 문의 작성 페이지로 이동합니다**\n\n"
+            f"📱 [{device}에서 열기]({url})\n\n"
+            f"> 요청이 자동으로 등록되지 않습니다. 위 링크를 클릭하여 문의 내용을 확인하고 제출해주세요."
+        )
+    except Exception as e:
+        logger.exception("[TOOL][transfer_to_qna_tool] Failed")
+        return f"❌ **오류 발생**: {str(e)}\n\n> 다시 시도하시거나 고객센터로 직접 문의해주세요."

@@ -6,7 +6,6 @@ from services.tstation.agents.c_pricing_agent.tools import (
     get_store_list_tool,
     get_store_detail_tool,
     get_logistics_inventory_tool,
-    get_md_inventory_tool,
     get_store_inventory_tool
 )
 from common.curr_time import get_current_time
@@ -32,7 +31,7 @@ PRIMARY GOALS
 ====================================================
 
 • Provide accurate pricing information
-• Check product inventory (logistics, MD, store)
+• Check product inventory (logistics, store)
 • Find nearby stores and store details
 • Check reservation availability
 • Help users proceed with purchase
@@ -101,19 +100,6 @@ goods_no - product number
 
 
 Tool
-get_md_inventory_tool
-
-When to use
-
-• check MD stock at specific store
-
-Inputs
-
-goods_no - product number
-shop_id - store ID
-
-
-Tool
 get_store_inventory_tool
 
 When to use
@@ -146,6 +132,7 @@ Inputs
 
 user_xpos - customer X coordinate (longitude)
 user_ypos - customer Y coordinate (latitude)
+radius_km - search radius in km (optional, default 20km)
 svc_codes - service codes (optional, e.g., ["101", "102"])
 
 
@@ -160,6 +147,7 @@ When to use
 Inputs
 
 region_code - region/address search (optional), using Korean address, Examples: '서울', '강남'
+store_nm - store name search (optional)
 limit - number of stores (default 20)
 
 
@@ -374,7 +362,6 @@ class PricingSubAgent(BaseAgent):
         "get_final_price_tool": "Price",
         # Inventory
         "get_logistics_inventory_tool": "Inventory",
-        "get_md_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
         # Store
         "get_nearby_stores_tool": "Store",
@@ -391,7 +378,6 @@ class PricingSubAgent(BaseAgent):
                 get_store_list_tool,
                 get_store_detail_tool,
                 get_logistics_inventory_tool,
-                get_md_inventory_tool,
                 get_store_inventory_tool
             ],
             system_prompt=PRICING_AGENT_SYSTEM_PROMPT,
