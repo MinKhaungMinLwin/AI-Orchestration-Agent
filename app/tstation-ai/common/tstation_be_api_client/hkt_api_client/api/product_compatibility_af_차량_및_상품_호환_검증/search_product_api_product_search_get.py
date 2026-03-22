@@ -6,23 +6,27 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
-from ...types import UNSET, Response
+from ...models.product_search_response import ProductSearchResponse
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     *,
-    goods_no: str,
+    keyword: str,
+    limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["goods_no"] = goods_no
+    params["keyword"] = keyword
+
+    params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/api/product/compatible",
+        "url": "/api/product/search",
         "params": params,
     }
 
@@ -31,9 +35,10 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | HTTPValidationError | None:
+) -> HTTPValidationError | ProductSearchResponse | None:
     if response.status_code == 200:
-        response_200 = response.json()
+        response_200 = ProductSearchResponse.from_dict(response.json())
+
         return response_200
 
     if response.status_code == 422:
@@ -49,7 +54,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | HTTPValidationError]:
+) -> Response[HTTPValidationError | ProductSearchResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,23 +66,28 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> Response[Any | HTTPValidationError]:
-    """Get Compatible Product
+    keyword: str,
+    limit: int | Unset = 20,
+) -> Response[HTTPValidationError | ProductSearchResponse]:
+    """상품 검색
+
+     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
 
     Args:
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | HTTPValidationError]
+        Response[HTTPValidationError | ProductSearchResponse]
     """
 
     kwargs = _get_kwargs(
-        goods_no=goods_no,
+        keyword=keyword,
+        limit=limit,
     )
 
     response = client.get_httpx_client().request(
@@ -90,47 +100,57 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> Any | HTTPValidationError | None:
-    """Get Compatible Product
+    keyword: str,
+    limit: int | Unset = 20,
+) -> HTTPValidationError | ProductSearchResponse | None:
+    """상품 검색
+
+     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
 
     Args:
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | HTTPValidationError
+        HTTPValidationError | ProductSearchResponse
     """
 
     return sync_detailed(
         client=client,
-        goods_no=goods_no,
+        keyword=keyword,
+        limit=limit,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> Response[Any | HTTPValidationError]:
-    """Get Compatible Product
+    keyword: str,
+    limit: int | Unset = 20,
+) -> Response[HTTPValidationError | ProductSearchResponse]:
+    """상품 검색
+
+     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
 
     Args:
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | HTTPValidationError]
+        Response[HTTPValidationError | ProductSearchResponse]
     """
 
     kwargs = _get_kwargs(
-        goods_no=goods_no,
+        keyword=keyword,
+        limit=limit,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -141,24 +161,29 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> Any | HTTPValidationError | None:
-    """Get Compatible Product
+    keyword: str,
+    limit: int | Unset = 20,
+) -> HTTPValidationError | ProductSearchResponse | None:
+    """상품 검색
+
+     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
 
     Args:
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | HTTPValidationError
+        HTTPValidationError | ProductSearchResponse
     """
 
     return (
         await asyncio_detailed(
             client=client,
-            goods_no=goods_no,
+            keyword=keyword,
+            limit=limit,
         )
     ).parsed

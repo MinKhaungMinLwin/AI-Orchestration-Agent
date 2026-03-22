@@ -67,7 +67,7 @@ def sync_detailed(
 ) -> Response[HTTPValidationError | NearbyStoreResponse]:
     """주변 매장 목록 조회
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
 
     Args:
         body (NearbyStoreRequest):
@@ -98,7 +98,7 @@ def sync(
 ) -> HTTPValidationError | NearbyStoreResponse | None:
     """주변 매장 목록 조회
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
 
     Args:
         body (NearbyStoreRequest):
@@ -124,7 +124,7 @@ async def asyncio_detailed(
 ) -> Response[HTTPValidationError | NearbyStoreResponse]:
     """주변 매장 목록 조회
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
 
     Args:
         body (NearbyStoreRequest):
@@ -153,7 +153,7 @@ async def asyncio(
 ) -> HTTPValidationError | NearbyStoreResponse | None:
     """주변 매장 목록 조회
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
 
     Args:
         body (NearbyStoreRequest):

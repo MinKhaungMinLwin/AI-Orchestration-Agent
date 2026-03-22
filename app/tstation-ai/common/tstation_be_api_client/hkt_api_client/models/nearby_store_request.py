@@ -17,12 +17,14 @@ class NearbyStoreRequest:
     Attributes:
         user_xpos (float): 고객 현재 X 좌표
         user_ypos (float): 고객 현재 Y 좌표
+        radius_km (float | Unset): 검색 반경 (km), 기본값 20km Default: 20.0.
         svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록 (ET_SHOP_ITEM_SVC_INFO.SHOP_ITEM_SVC_SCT_CD). 입력된 코드 중 하나라도
             보유한 매장을 반환합니다. 예: ["101", "102"] → 타이어(오프라인) 또는 경정비 서비스 보유 매장
     """
 
     user_xpos: float
     user_ypos: float
+    radius_km: float | Unset = 20.0
     svc_codes: list[str] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -30,6 +32,8 @@ class NearbyStoreRequest:
         user_xpos = self.user_xpos
 
         user_ypos = self.user_ypos
+
+        radius_km = self.radius_km
 
         svc_codes: list[str] | None | Unset
         if isinstance(self.svc_codes, Unset):
@@ -48,6 +52,8 @@ class NearbyStoreRequest:
                 "user_ypos": user_ypos,
             }
         )
+        if radius_km is not UNSET:
+            field_dict["radius_km"] = radius_km
         if svc_codes is not UNSET:
             field_dict["svc_codes"] = svc_codes
 
@@ -59,6 +65,8 @@ class NearbyStoreRequest:
         user_xpos = d.pop("user_xpos")
 
         user_ypos = d.pop("user_ypos")
+
+        radius_km = d.pop("radius_km", UNSET)
 
         def _parse_svc_codes(data: object) -> list[str] | None | Unset:
             if data is None:
@@ -80,6 +88,7 @@ class NearbyStoreRequest:
         nearby_store_request = cls(
             user_xpos=user_xpos,
             user_ypos=user_ypos,
+            radius_km=radius_km,
             svc_codes=svc_codes,
         )
 
