@@ -15,6 +15,10 @@ from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_�
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync as get_user_vehicles
 # from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_compatibility import sync as get_compatibility
 
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync as check_compatibility
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync as search_product
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync as get_user_vehicles
+from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
 
 # Product Description
 from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync as get_product_description
@@ -35,7 +39,8 @@ DOMAIN_TOOL_MAP = {
     "discovery": {
         # Product Compatibility
         "vehicle_verify_owner",
-        "get_compatible_product",
+        "check_compatibility",
+        "search_product",
         "get_user_vehicles",
 
         # Product Recommendation
@@ -117,39 +122,80 @@ def post_vehicle_verify_owner_tool(car_no: str):
         }
 
 @tool
-def get_compatible_product_tool(goods_no: str):
+def check_compatibility_tool(goods_no: str, car_no: str | None = None, car_nm: str | None = None):
     """
-    Get compatible products.
+    차량-상품 타이어 호환 검증
 
-    Retrieve products that are compatible with the given product number.
-    This is typically used to find alternative or similar tire products
-    that match the same specifications or compatibility conditions.
+    차량번호(CAR_NO)로 VW_ET_MBR_CAR_INFO에서 전/후륜 타이어 사이즈를 조회하거나 차량정보(CAR_NM)로 PR_CAR_BASE + PR_CAR_ATTR에서
+    전/후륜 타이어 사이즈를 조회하고, 상품번호(GOODS_NO)로 PR_GOODS_BASE에서 타이어 스펙(단면폭/편평비/인치)을 조회하여 호환 여부를 반환합니다. 카젠 API 연동
+    전까지 내부 DB 정보를 우선 활용합니다.
 
     Args:
-        goods_no (str): Product number.
+        goods_no (str): 상품 번호
+        car_no (str | None): 차량 번호
+        car_nm (str | None): 차량 정보
 
     Returns:
         dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_compatible_product_tool] Called with: goods_no=%s", goods_no)
+    logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, car_nm=%s", goods_no, car_no, car_nm)
 
     try:
-        res = get_compatible_product(
+        res = check_compatibility(
             client=get_client(),
             goods_no=goods_no,
+            car_no=car_no,
+            car_nm=car_nm,
         )
-        logger.info("[TOOL][get_compatible_product_tool] Response: %s", res)
+        logger.info("[TOOL][check_compatibility_tool] Response: %s", res)
         return {
             "status": "success",
             "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
         }
     except Exception as e:
-        logger.exception("[TOOL][get_compatible_product_tool] Failed")
+        logger.exception("[TOOL][check_compatibility_tool] Failed")
         return {
             "status": "error",
             "reason": str(e),
-            "message": "Failed to get compatible products"
+            "message": "Failed to check tire compatibility"
         }
+
+
+@tool
+def search_product_tool(keyword: str, limit: int = 20):
+    """
+    상품 검색
+
+    제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
+
+    Args:
+        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        limit (int): 반환할 최대 상품 수 Default: 20.
+
+    Returns:
+        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][search_product_tool] Called with: keyword=%s, limit=%s", keyword, limit)
+
+    try:
+        res = search_product(
+            client=get_client(),
+            keyword=keyword,
+            limit=limit,
+        )
+        logger.info("[TOOL][search_product_tool] Response: %s", res)
+        return {
+            "status": "success",
+            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
+        }
+    except Exception as e:
+        logger.exception("[TOOL][search_product_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to search products"
+        }
+
 
 @tool
 def get_user_vehicles_tool(car_no: str):
