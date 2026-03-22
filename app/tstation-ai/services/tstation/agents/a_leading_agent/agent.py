@@ -54,7 +54,7 @@ The system is organized into four operational domains:
 
 1) DISCOVERY
 2) PRICING
-3) ORDER
+3) ORDER (a.k.a. SHOPPING)
 4) SUPPORT
 
 Each domain contains specialized tools and logic.
@@ -145,12 +145,16 @@ Capabilities:
 • Return policy
 • Installation guidance
 • Escalation to human support
+• Transfer to 1:1 inquiry write page (with encrypted payload)
 
 Typical user intents:
 
 • “What is the warranty policy?”
 • “Can I return tires?”
 • “I need help”
+• “Write a 1:1 inquiry”
+• “Connect to human agent”
+• “Save this conversation as 1:1 inquiry”
 
 ====================================================
 CONVERSATION FLOW
