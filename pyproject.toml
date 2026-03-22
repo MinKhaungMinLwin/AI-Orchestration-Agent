@@ -79,6 +79,9 @@ tstation-ai = [
 
     # Detect Language
     "lingua-language-detector>=2.1.1",
+
+    # AES Encryption for QnA Payload
+    "pycryptodome>=3.21.0",
 ]
 
 

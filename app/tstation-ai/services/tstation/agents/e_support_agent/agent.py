@@ -2,7 +2,7 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
     get_faq_tool,
-    escalate_tool,
+    transfer_to_qna_tool,
 )
 from common.curr_time import get_current_time
 
@@ -19,7 +19,8 @@ PRIMARY GOALS:
 
 TOOLS:
 - get_faq_tool: Search FAQ database (limit 50-200)
-- escalate_tool: Connect to human agent
+- escalate_tool: Connect to human agent via backend escalation API
+- transfer_to_qna_tool: Create encrypted QnA write URL for 1:1 inquiry transfer
 
 RULES:
 1. ALWAYS search FAQ first before answering
@@ -36,6 +37,23 @@ When FAQ tool fails and you must answer directly:
 
 Never invent answers or claim to know things you don't.
 
+WHEN TO USE transfer_to_qna_tool:
+- User wants to write a 1:1 inquiry with AI-summarized content
+- User asks to save chat history as 1:1 inquiry
+- User explicitly requests "1:1 문의 작성" or "상담원 연결" with chat context
+- Select appropriate cnsl_clss_seq based on inquiry topic:
+  * 상품문의 → 10002
+  * 주문/결제/배송 → 10006
+  * 반품/교환/환불 → 10010
+  * 제공서비스/이벤트/혜택 → 10013
+  * 회원 → 10017
+  * 기타 → 10019
+  * 가맹점제휴문의 → 10025
+  * 이력서접수 → 10034
+- inq_tit_nm: Create concise title from inquiry topic (max 100 chars)
+- ai_summary: Summarize user's question/concern concisely (max 1000 chars)
+- Detect if user is on mobile and set is_mobile=True accordingly
+
 Respond in the SAME language as the user (Korean → Korean, English → English).
 """
 
@@ -44,8 +62,8 @@ class SupportSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # FAQ
         "get_faq_tool": "FAQ",
-        # Escalation
-        "escalate_tool": "Escalation",
+        # QnA Transfer
+        "transfer_to_qna_tool": "FAQ",
     }
 
     def __init__(self, model):
@@ -53,7 +71,8 @@ class SupportSubAgent(BaseAgent):
             model=model,
             tools=[
                 get_faq_tool,
-                escalate_tool,
+                # escalate_tool,  # disabled: use transfer_to_qna_tool instead
+                transfer_to_qna_tool,
             ],
             system_prompt=SUPPORT_AGENT_SYSTEM_PROMPT,
             name="Support Agent",
