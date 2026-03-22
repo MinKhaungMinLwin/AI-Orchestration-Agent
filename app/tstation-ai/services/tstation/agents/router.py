@@ -80,10 +80,10 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - ORDER: Purchase, reservation, store visit/booking, order tracking, store search (nearby district/city/province, xpos,ypos, )
-        - PRICING: Price, stock, inventory, store availability for product
+        - ORDER: Purchase, reservation, store visit/booking, order tracking, store search by location/name
+        - PRICING: Price, stock (logistics/store), inventory, store availability for specific product
         - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
-        - DISCOVERY: Product research, recommendations, compatibility, features
+        - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
         - LEADING: Greeting, unclear intent
 
         DECISION RULES:
@@ -91,30 +91,32 @@ class AgentDomain(BaseModel):
         ORDER if user wants:
         - "Buy", "purchase", "order", "checkout"
         - Track existing order (provide order number)
-        - Find and book store visit/reservation (location-based, no specific product needed)
-        - Find nearby stores 
-        Examples: "I want to buy tires", "Book installation", "Track my order 12345", "Show me stores near Gangnam", "Find nearby stores"
+        - Book store visit/reservation with specific date/time
+        - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
+        - Find stores by NAME (e.g., "find Hankook store")
+        Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345", "Show me stores near Gangnam"
 
         PRICING if user wants:
-        - "How much", "price", "cost", "discount" for specific product
-        - "In stock?", "available?" for specific product
-        - Compare prices between products
-        - Find store with specific product in stock
-        Examples: "How much is Ventus S1 evo3?", "Is it in stock at Gangnam store?"
+        - "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
+        - "In stock?", "available?" for specific product at specific store
+        - Check logistics stock (warehouse availability)
+        Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?"
 
         DISCOVERY if user wants:
-        - "Recommend", "best", "which tire for..." (vehicle or general)
-        - "Does this fit my car?" (vehicle compatibility)
+        - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
+        - Recommend tires (vehicle-specific or general)
+        - Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
         - Product specifications, features, technology
-        - "Compare tires", "difference between..."
-        Examples: "What tires for my car?", "Will these fit my SUV?", "What's the difference between X and Y?"
+        Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?"
 
         SUPPORT if user wants:
         - Tire replacement guidance (when to replace, air pressure, maintenance)
         - Policy questions (warranty terms, return conditions, refund process)
         - General guidance without purchase intent
-        - Request for human agent
-        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?"
+        - Request for human agent / 1:1 inquiry
+        - Write/save 1:1 inquiry with AI-summarized content
+        - "1:1 문의 작성", "상담원 연결", "이 문제를 1:1로 저장하고 싶어요"
+        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요"
 
         LEADING if:
         - Just greeting ("hello", "hi", "xin chào", "안녕하세요")
@@ -123,10 +125,12 @@ class AgentDomain(BaseModel):
         Examples: "Hi", "What can you help me with?", "Hello"
 
         KEY PRINCIPLES:
-        - "stores near X" (location-based) → ORDER
-        - "price/stock of product X" → PRICING
-        - "recommend tires" → DISCOVERY
+        - "stores near [location]" → ORDER
+        - "price of [specific product]" → PRICING
+        - "search tires named [X]" → DISCOVERY
+        - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
         - "buy tires" → ORDER
+        - "recommend tires" → DISCOVERY
         - "warranty, return, maintenance" → SUPPORT
 
         Korean vehicle numbers follow patterns: 12가3456, 123가1234

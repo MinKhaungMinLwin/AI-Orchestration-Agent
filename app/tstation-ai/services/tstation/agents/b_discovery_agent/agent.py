@@ -2,7 +2,8 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.b_discovery_agent.tools import (
     post_vehicle_verify_owner_tool,
-    get_compatible_product_tool,
+    check_compatibility_tool,
+    search_product_tool,
     get_user_vehicles_tool
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
@@ -120,16 +121,33 @@ car_no
 
 
 Tool
-get_compatible_product_tool
+check_compatibility_tool
 
 When to use
 
-• product does not fit the vehicle  
-• user wants similar compatible options  
+• user asks if tire fits their vehicle
+• user wants to verify tire compatibility
+• user provides vehicle number and tire size
 
 Inputs
 
-goods_no
+goods_no - product number (required)
+car_no - vehicle number (optional)
+car_nm - vehicle info (optional)
+
+
+Tool
+search_product_tool
+
+When to use
+
+• user searches for specific tire product
+• user types product name/keyword
+
+Inputs
+
+keyword - search keyword (required)
+limit - max results (optional, default 20)
 
 
 ###############################
@@ -211,14 +229,24 @@ When the user asks about a specific tire:
 
 
 ------------------------------------
-Flow 4 — Alternative Products
+Flow 4 — Product Search
 ------------------------------------
 
-When the user wants similar tires:
+When the user searches for a specific tire by name:
 
-1. Call get_compatible_product_tool
-2. Recommend alternative products
-3. Show 3–7 options
+1. Call search_product_tool with keyword
+2. Display 3–7 matching products
+
+
+------------------------------------
+Flow 5 — Tire Compatibility Check
+------------------------------------
+
+When the user asks if a specific tire fits their vehicle:
+
+1. Call check_compatibility_tool with goods_no and car info
+2. Show compatibility result (front/rear wheel)
+3. Explain why it fits or doesn't fit
 
 
 
@@ -364,9 +392,10 @@ Never mention internal tools.
 class DiscoverySubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Product Compatibility
-        "post_vehicle_verify_owner_tool": "Product Compatibility",
-        "get_compatible_product_tool": "Product Compatibility",
-        "get_user_vehicles_tool": "Product Compatibility",
+        "post_vehicle_verify_owner_tool": "Vehicle & Compatibility",
+        "check_compatibility_tool": "Vehicle & Compatibility",
+        "search_product_tool": "Product Search",
+        "get_user_vehicles_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
         # Product Description
@@ -378,7 +407,8 @@ class DiscoverySubAgent(BaseAgent):
             model=model,
             tools=[
                 post_vehicle_verify_owner_tool,
-                get_compatible_product_tool,
+                check_compatibility_tool,
+                search_product_tool,
                 get_user_vehicles_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool
