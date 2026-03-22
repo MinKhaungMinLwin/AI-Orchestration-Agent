@@ -18,11 +18,9 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 
 # INVENTORY AF
 from common.tstation_be_api_client.hkt_api_client.api.inventory_af_재고_조회.get_logistics_inventory_api_inventory_logistics_post import sync as get_logistics_inventory
-from common.tstation_be_api_client.hkt_api_client.api.inventory_af_재고_조회.get_md_inventory_api_inventory_md_post import sync as get_md_inventory
 from common.tstation_be_api_client.hkt_api_client.api.inventory_af_재고_조회.get_store_inventory_api_inventory_store_post import sync as get_store_inventory
 from common.tstation_be_api_client.hkt_api_client.models import (
     LogisticsRequest,
-    MdInventoryRequest,
     StoreInventoryRequest,
     GoodsItem,
     ShopIdItem
@@ -101,40 +99,6 @@ def get_logistics_inventory_tool(goods_no: str):
 
 
 @tool
-def get_md_inventory_tool(goods_no: str, shop_id: str):
-    """
-    Get MD stock at specific store.
-
-    Retrieve MD stock information from PR_INV_MD_STOCK_INFO (backup DB).
-    Returns INV_QTY (inventory quantity).
-
-    Args:
-        goods_no (str): Product number.
-        shop_id (str): Store ID.
-
-    Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
-    """
-    body = MdInventoryRequest(goods_no=goods_no, shop_id=shop_id)
-    logger.info("[TOOL][get_md_inventory_tool] Called with: goods_no=%s, shop_id=%s", goods_no, shop_id)
-
-    try:
-        res = get_md_inventory(client=get_client(), body=body)
-        logger.info("[TOOL][get_md_inventory_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
-    except Exception as e:
-        logger.exception("[TOOL][get_md_inventory_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to get MD inventory"
-        }
-
-
-@tool
 def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: List[Dict[str, Any]]):
     """
     Check store inventory availability.
@@ -174,16 +138,17 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
 
 
 @tool
-def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[str] | None = None):
+def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 20.0, svc_codes: List[str] | None = None):
     """
     Get nearby stores.
 
-    Retrieve up to 20 nearest stores based on customer coordinates,
+    Retrieve stores within specified radius (default 20km) based on customer coordinates,
     including distance (km) from customer location.
 
     Args:
         user_xpos (float): Customer current X coordinate (longitude).
         user_ypos (float): Customer current Y coordinate (latitude).
+        radius_km (float): Search radius in km (default 20km).
         svc_codes (List[str] | None): Service category codes.
             Returns stores that have ANY of the specified services.
             Example: ["101", "102"]
@@ -191,8 +156,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[s
     Returns:
         dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
-    body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, svc_codes=svc_codes)
-    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, svc_codes=%s", user_xpos, user_ypos, svc_codes)
+    body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, radius_km=radius_km, svc_codes=svc_codes)
+    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s", user_xpos, user_ypos, radius_km, svc_codes)
 
     try:
         res = get_nearby_stores(client=get_client(), body=body)
@@ -211,24 +176,25 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, svc_codes: List[s
 
 
 @tool
-def get_store_list_tool(region_code: str | None = None, limit: int = 20):
+def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20):
     """
     Get store list by region.
 
-    Retrieve store list based on region name (road address LIKE search).
+    Retrieve store list based on region name (ADDR_BASE, ADDR_DTL LIKE search).
     Returns all stores if region_code is not provided.
 
     Args:
-        region_code (str | None): Region search term (road address LIKE search), Using Korean address, Examples: '서울', '강남'
+        region_code (str | None): Region search term (ADDR_BASE, ADDR_DTL LIKE search), Using Korean address, Examples: '서울', '강남'
+        store_nm (str | None): Store name search term.
         limit (int): Maximum number of stores to return (default 20).
 
     Returns:
         dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s, limit=%s", region_code, store_nm, limit)
 
     try:
-        res = get_store_list(client=get_client(), region_code=region_code, limit=limit)
+        res = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit)
         logger.info("[TOOL][get_store_list_tool] Response: %s", res)
         return {
             "status": "success",
