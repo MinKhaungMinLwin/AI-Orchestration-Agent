@@ -1,45 +1,45 @@
-# T-Station AI Chat Documentation
+# T-Station AI Chat - Tài Liệu
 
-## Overview
+## Tổng Quan
 
-T-Station AI is an intelligent tire shopping assistant for Hankook Tire Korea. This service provides multi-domain chat capabilities with FastAPI to handle customer inquiries about tires, including product recommendations, compatibility checks, pricing, store information, FAQ support, and order management.
+T-Station AI là trợ lý mua lốp xe thông minh cho Hankook Tire Korea. Dịch vụ này cung cấp khả năng chat đa miền với FastAPI để xử lý các câu hỏi của khách hàng về lốp xe, bao gồm: khuyến nghị sản phẩm, kiểm tra tương thích, tra giá, thông tin cửa hàng, hỗ trợ FAQ và quản lý đơn hàng.
 
-**Main file**: `app/tstation-ai/services/tstation/chat.py`
+**File chính**: `app/tstation-ai/services/tstation/chat_2.py`
 
-## Features
+## Tính Năng
 
-- ✅ V2 multi-agent streaming with multi-intent detection
-- ✅ Automatic multi-domain classification (leading, discovery, pricing, order, support)
-- ✅ Support for streaming and non-streaming modes
-- ✅ LangChain agents integration with LiteLLM
-- ✅ GPT-5.4 as LLM (via AI Gateway)
-- ✅ Langfuse tracing integration
-- ✅ Backend API integration (Oracle DB)
-- ✅ BaseAgent with TOOL_TO_AF_MAP for agent function tracking
-- ✅ Streaming with sub-agent events showing agent start/done status
-- ✅ Context passing between chained agents
+- ✅ V2 multi-agent streaming và phát hiện đa ý định
+- ✅ Phân loại đa miền tự động (leading, discovery, pricing, order, support)
+- ✅ Hỗ trợ chế độ streaming và non-streaming
+- ✅ Tích hợp LiteLLM với LangChain agents
+- ✅ Sử dụng GPT-5.4 làm LLM (qua AI Gateway)
+- ✅ Tích hợp Langfuse tracing
+- ✅ Tích hợp Backend API (Oracle DB)
+- ✅ BaseAgent với TOOL_TO_AF_MAP để theo dõi chức năng agent
+- ✅ Streaming với sự kiện sub-agent start/done
+- ✅ Truyền context giữa các agent được chain
 
-## Architecture
+## Kiến Trúc
 
 ```mermaid
 graph TB
-    A[User Request] --> B[Chat Endpoint]
+    A[Yêu cầu người dùng] --> B[Chat Endpoint]
     B --> C[chat_2.py: TStationChatServiceV2]
-    C --> D{Multi-Intent Classification}
-    D --> E[MultiAgentDomain: list of domains]
+    C --> D{Phân loại đa ý định}
+    D --> E[MultiAgentDomain: danh sách miền]
 
-    E --> F{Stream Mode?}
-    F -->|Stream| G[StreamingMultiAgentCoordinator]
+    E --> F{Chế độ Streaming?}
+    F -->|Streaming| G[StreamingMultiAgentCoordinator]
     F -->|Non-Stream| H[leading_agent.invoke]
 
-    G --> I{Chain each domain agent}
+    G --> I{Chain từng miền agent}
     I --> J[Discovery Agent]
     I --> K[Pricing Agent]
     I --> L[Order Agent]
     I --> M[Support Agent]
     I --> N[Leading Agent]
 
-    J --> O[Context passed to next agent]
+    J --> O[Truuyền context cho agent tiếp theo]
     K --> O
     L --> O
     M --> O
@@ -48,9 +48,9 @@ graph TB
     H --> Q[TStationChatResponse]
 ```
 
-**Two service versions**:
-- `chat.py`: Original single-domain routing (V1)
-- `chat_2.py`: V2 multi-agent streaming with multi-intent detection
+**Hai phiên bản dịch vụ**:
+- `chat.py`: Định tuyến đơn miền gốc (V1)
+- `chat_2.py`: V2 multi-agent streaming với phát hiện đa ý định
 
 ## Workflow Sequence
 
@@ -58,35 +58,35 @@ graph TB
 
 ```mermaid
 sequenceDiagram
-    participant User
+    participant User as Người dùng
     participant API as Chat Endpoint
     participant ChatServiceV2 as TStationChatServiceV2
     participant Coordinator as StreamingMultiAgentCoordinator
     participant MultiDomainClassifier as Multi-Agent Domain Classifier
-    participant Agent1 as Agent (First Domain)
-    participant Agent2 as Agent (Second Domain)
+    participant Agent1 as Agent (Miền đầu tiên)
+    participant Agent2 as Agent (Miền thứ hai)
     participant LLM as GPT-5.4
     participant Backend as T-Station Backend
 
     User->>API: POST /tstation/chat
     API->>ChatServiceV2: TStationChatRequest
 
-    alt Non-Stream Mode
+    alt Chế độ Non-Stream
         ChatServiceV2->>Agent1: leading_agent.invoke(messages)
         Agent1->>LLM: Chat request
         LLM-->>Agent1: Response
         Agent1-->>User: TStationChatResponse
-    else Stream Mode
+    else Chế độ Stream
         ChatServiceV2->>Coordinator: stream(messages)
         Coordinator->>MultiDomainClassifier: classify_multi_intent(messages)
         MultiDomainClassifier-->>Coordinator: [Domain1, Domain2, ...]
 
-        loop For each domain in order
+        loop Với mỗi miền theo thứ tự
             Coordinator->>Agent1: agent.stream(enriched_messages)
             Agent1->>LLM: Stream request
 
-            loop Chunks
-                alt Tool Call
+            loop Các chunk
+                alt Gọi Tool
                     Agent1->>Backend: Execute tool
                     Backend-->>Agent1: Result
                     Agent1-->>User: SSE event (type: tool)
@@ -95,7 +95,7 @@ sequenceDiagram
                 end
             end
 
-            alt More domains
+            alt Còn miền khác
                 Coordinator->>Agent2: agent.stream(messages + context)
             end
         end
@@ -104,11 +104,11 @@ sequenceDiagram
     end
 ```
 
-## Core Components
+## Các Thành Phần Cốt Lõi
 
 ### 1. BaseAgent (`base_agent.py`)
 
-Base class for all agents with streaming support and AF mapping.
+Lớp cơ sở cho tất cả agents với hỗ trợ streaming và AF mapping.
 
 ```python
 class BaseAgent(ABC):
@@ -152,53 +152,47 @@ class BaseAgent(ABC):
 ```
 
 **Streaming Events**:
-- `token`: AI response token chunks
-- `message`: Agent messages with node and agent name
-- `agent_flow`: AF label with status from tool result
-- `tool`: Tool execution results with tool name, input, output
+- `token`: Các token phản hồi AI
+- `message`: Tin nhắn agent với node và agent name
+- `agent_flow`: AF label với status từ tool result
+- `tool`: Kết quả thực thi tool với tool name, input, output
 
-### 2. TStationChatService (V1 - Single Domain)
+### 2. TStationChatServiceV2 (`chat_2.py`)
 
-Original service with single-domain routing. **V2 is now default.**
+Dịch vụ chat V2 với multi-agent streaming và phát hiện đa ý định.
 
-### 3. TStationChatServiceV2 (`chat_2.py`)
-
-V2 multi-agent streaming service with multi-intent detection.
-
-**Key differences from V1**:
-- Detects multiple intents (e.g., "price and warranty" → PRICING + SUPPORT)
-- Chains agents sequentially, passing context between them
-- Each agent's output becomes context for the next agent
+**Khác biệt từ V1**:
+- Phát hiện nhiều ý định (ví dụ: "giá và bảo hành" → PRICING + SUPPORT)
+- Chain các agent tuần tự, truyền context giữa chúng
+- Output của mỗi agent trở thành context cho agent tiếp theo
 
 ```python
 class TStationChatServiceV2:
     @staticmethod
     def chat(request: TStationChatRequest):
-        # V2 uses StreamingMultiAgentCoordinator for multi-agent streaming
         if request.stream:
             return StreamingResponse(
                 TStationChatServiceV2._stream_response_multi(messages),
                 media_type="text/event-stream",
             )
-        # Non-stream: uses leading_agent.invoke (V1 behavior)
         content = leading_agent.invoke(messages)
         return TStationChatResponse(content=content)
 ```
 
-### 4. StreamingMultiAgentCoordinator
+### 3. StreamingMultiAgentCoordinator
 
-Orchestrates multiple agents with context passing.
+Điều phối nhiều agents với việc truyền context.
 
 ```python
 class StreamingMultiAgentCoordinator:
     def stream(self, messages: list[dict], domains: list | None = None):
-        # 1. Classify multi-intent if domains not provided
-        # 2. For each domain agent:
+        # 1. Phân loại đa ý định nếu domains không được cung cấp
+        # 2. Với mỗi miền agent:
         #    - Yield sub-agent start event
-        #    - Stream from agent
-        #    - Capture content for context passing
+        #    - Stream từ agent
+        #    - Capture content để truyền context
         #    - Yield sub-agent done event
-        # 3. Yield final [DONE]
+        # 3. Yield [DONE] cuối cùng
 ```
 
 **Streaming Events (V2)**:
@@ -213,9 +207,9 @@ class StreamingMultiAgentCoordinator:
 {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
 ```
 
-### 5. MultiAgentDomain
+### 4. MultiAgentDomain
 
-Domain classification model supporting multiple domains.
+Model phân loại miền hỗ trợ nhiều miền.
 
 ```python
 class MultiAgentDomain(BaseModel):
@@ -226,50 +220,36 @@ class MultiAgentDomain(BaseModel):
         ORDER = "order"
         SUPPORT = "support"
 
-    reason: str = Field(description="Reason for the classification")
+    reason: str = Field(description="Lý do phân loại")
     domains: list[Domain] = Field(
-        description="List of domains detected, ordered by priority"
+        description="Danh sách các miền được phát hiện, theo thứ tự ưu tiên"
     )
 
     def get_agents(self):
-        """Return list of agents based on detected domains."""
+        """Trả về danh sách agents dựa trên các miền được phát hiện."""
         return [agent_map[d] for d in self.domains if d in agent_map]
 ```
 
-### 6. AgentDomain (V1)
+### 5. AgentDomain (V1)
 
-Routes agent based on domain.
+Model phân loại miền gốc cho định tuyến đơn miền.
 
-```python
-def get_agent(self):
-    if self.domain == self.Domain.DISCOVERY:
-        return discovery_subagent
-    elif self.domain == self.Domain.PRICING:
-        return pricing_subagent
-    elif self.domain == self.Domain.ORDER:
-        return order_subagent
-    elif self.domain == self.Domain.SUPPORT:
-        return support_subagent
-    else:
-        return leading_agent
-```
+## Các Agent
 
-## Agents
-
-All agents inherit from `BaseAgent` and define `TOOL_TO_AF_MAP`.
+Tất cả agents kế thừa từ `BaseAgent` và định nghĩa `TOOL_TO_AF_MAP`.
 
 ### Leading Agent (`a_leading_agent/`)
 
-- Central orchestrator for all chat requests
-- Handles greeting, general questions, unclear intent
-- Fallback when no domain matches
-- No tools, direct LLM response
+- Điều phối trung tâm cho tất cả yêu cầu chat
+- Xử lý lời chào, câu hỏi chung, ý định không rõ
+- Fallback khi không có miền nào khớp
+- Không có tools, phản hồi trực tiếp từ LLM
 
 ### Discovery Agent (`b_discovery_agent/`)
 
-- Product recommendations based on vehicle, driving conditions
-- Tire-vehicle compatibility checks
-- Detailed product descriptions
+- Khuyến nghị sản phẩm dựa trên xe, điều kiện lái
+- Kiểm tra tương thích lốp-xe
+- Mô tả chi tiết sản phẩm
 
 **TOOL_TO_AF_MAP**:
 ```python
@@ -285,9 +265,9 @@ TOOL_TO_AF_MAP = {
 
 ### Pricing Agent (`c_pricing_agent/`)
 
-- Price lookup
-- Stock checking (logistics, MD, store)
-- Store information
+- Tra giá
+- Kiểm tra tồn kho (logistics, MD, cửa hàng)
+- Thông tin cửa hàng
 
 **TOOL_TO_AF_MAP**:
 ```python
@@ -304,9 +284,9 @@ TOOL_TO_AF_MAP = {
 
 ### Order Agent (`d_order_agent/`)
 
-- Quick order creation
-- Order tracking
-- Delivery status
+- Tạo đơn hàng nhanh
+- Theo dõi đơn hàng
+- Trạng thái giao hàng
 
 **TOOL_TO_AF_MAP**:
 ```python
@@ -321,8 +301,8 @@ TOOL_TO_AF_MAP = {
 
 ### Support Agent (`e_support_agent/`)
 
-- FAQ lookup
-- Escalation to human agent
+- Tra cứu FAQ
+- Kết nối với tư vấn viên
 
 **TOOL_TO_AF_MAP**:
 ```python
@@ -334,58 +314,50 @@ TOOL_TO_AF_MAP = {
 
 ## Agent Flow Streaming
 
-When streaming, the service yields agent_flow events showing current active agent/AF:
+Khi streaming, service yield các sự kiện agent_flow cho thấy agent/AF đang hoạt động:
 
 ```python
-# Agent starts
+# Agent bắt đầu
 {"type": "agent_flow", "agent": "[Discovery Agent]", "status": "success"}
 
-# Tool called - AF status from tool result
+# Tool được gọi - AF status từ tool result
 {"type": "agent_flow", "agent": "[Product Compatibility AF]", "status": "success"}
 {"type": "tool", "tool": "get_compatibility_tool", "content": "..."}
 
-# Another tool
+# Tool khác
 {"type": "agent_flow", "agent": "[Product Recommendation AF]", "status": "success"}
 {"type": "tool", "tool": "get_products_recommendations_tool", "content": "..."}
 
-# Final response
-{"type": "token", "content": "Here are the recommended tires..."}
+# Phản hồi cuối cùng
+{"type": "token", "content": "Dưới đây là các lốp được khuyến nghị..."}
 ```
 
-**Status Colors (UI)**:
-- Success: Green (#16a34a)
-- Error: Red (#dc2626)
+**Màu trạng thái (UI)**:
+- Thành công: Green (#16a34a)
+- Lỗi: Red (#dc2626)
 
 ## System Prompts
 
-### V1 Domain Classification Prompt (Single Intent)
+### V1 Domain Classification Prompt (Đơn Ý Định)
 
-Classifies messages into 5 domains with clear priority rules.
+Phân loại tin nhắn thành 5 miền với quy tắc ưu tiên rõ ràng.
 
-**Priority Rules**:
-1. Escalation request → support (highest)
-2. Clear purchase intent → order
-3. Price/Stock/Store → pricing
-4. Recommendation/Compatibility → discovery
-5. General/Unclear → leading
+**Quy tắc ưu tiên**:
+1. Yêu cầu escalation → support (cao nhất)
+2. Ý định mua rõ ràng → order
+3. Giá/Tồn kho/Cửa hàng → pricing
+4. Khuyến nghị/Tương thích → discovery
+5. Chung/Không rõ → leading
 
 ### V2 Multi-Intent Classification Prompt
 
-Detects ALL relevant domains in a single request.
+Phát hiện TẤT CẢ các miền liên quan trong một yêu cầu.
 
-**Multi-Intent Detection Examples**:
-- "Explain Ventus S1 evo3 and tell me the price" → DISCOVERY + PRICING
-- "Find tires for my BMW and check if in stock" → DISCOVERY + PRICING
-- "Recommend tires and their warranty" → DISCOVERY + SUPPORT
-- "How much is this tire? Also, what's the warranty?" → PRICING + SUPPORT
-
-### Agent Prompts
-
-Each agent has its own system prompt defining:
-- Role and function
-- Capabilities and limitations
-- Available tools
-- Safety rules
+**Ví dụ phát hiện đa ý định**:
+- "Giải thích Ventus S1 evo3 và cho biết giá" → DISCOVERY + PRICING
+- "Tìm lốp cho BMW của tôi và kiểm tra còn hàng không" → DISCOVERY + PRICING
+- "Khuyến nghị lốp và bảo hành của chúng" → DISCOVERY + SUPPORT
+- "Giá của lốp này bao nhiêu? Bảo hành thế nào?" → PRICING + SUPPORT
 
 ## Request/Response Models
 
@@ -393,56 +365,56 @@ Each agent has its own system prompt defining:
 
 ```python
 class TStationChatRequest(BaseModel):
-    messages: list[dict]  # List of message dicts with role/content
-    stream: bool = False  # Stream mode flag
+    messages: list[dict]  # Danh sách tin nhắn với role/content
+    stream: bool = False  # Cờ chế độ streaming
     user_id: str  # User ID
     session_id: str  # Session ID
-    access_token: Optional[str] = None  # Access token for tstation-be API
+    access_token: Optional[str] = None  # Access token cho tstation-be API
     tracing_id: str = uuid.uuid4().hex  # Tracing ID
-    metadata: Optional[Dict[str, Any]] = {}  # Extra metadata
+    metadata: Optional[Dict[str, Any]] = {}  # Metadata bổ sung
 ```
 
 ### TStationChatResponse
 
 ```python
 class TStationChatResponse(BaseModel):
-    content: str  # Chat response content
+    content: str  # Nội dung phản hồi chat
 ```
 
-## Configuration
+## Cấu Hình
 
-| Environment Variable | Description |
-|---------------------|-------------|
-| ENV | Environment mode (local, dev, staging, prod) |
+| Biến Môi Trường | Mô Tả |
+|-----------------|-------|
+| ENV | Chế độ môi trường (local, dev, staging, prod) |
 | AI_GATEWAY_BASE_URL | AI Gateway API base URL |
 | AI_GATEWAY_API_KEY | AI Gateway API key |
-| REDIS_URL | Redis connection for queue |
+| REDIS_URL | Kết nối Redis cho queue |
 | AWS_BEARER_TOKEN_BEDROCK | AWS Bedrock authentication (legacy) |
 
-## External Integrations
+## Tích Hợp Bên Ngoài
 
-| Service | Purpose | Provider |
-|---------|---------|----------|
-| GPT-5.4 | LLM for AI responses | OpenAI (via AI Gateway) |
-| LiteLLM | Unified LLM interface | LiteLLM |
-| Langfuse | Tracing and observability | Langfuse |
-| Redis | Queue system | Redis |
-| Oracle | Product/customer data | Oracle |
+| Dịch Vụ | Mục Đích | Nhà Cung Cấp |
+|---------|---------|--------------|
+| GPT-5.4 | LLM cho phản hồi AI | OpenAI (qua AI Gateway) |
+| LiteLLM | Giao diện LLM thống nhất | LiteLLM |
+| Langfuse | Tracing và quan sát | Langfuse |
+| Redis | Hệ thống queue | Redis |
+| Oracle | Dữ liệu sản phẩm/khách hàng | Oracle |
 
 ## Monitoring
 
-- Health checks: `/health` endpoint
-- Metrics: Prometheus format at `/metrics`
-- Tracing: Langfuse integration
-- Logging: Structured logging with log levels
+- Health checks: endpoint `/health`
+- Metrics: định dạng Prometheus tại `/metrics`
+- Tracing: tích hợp Langfuse
+- Logging: structured logging với các log levels
 
-## Recent Changes
+## Thay Đổi Gần Đây
 
-### Current Version (V2 Multi-Agent Streaming)
-- Added `chat_2.py` with TStationChatServiceV2
-- Added StreamingMultiAgentCoordinator for multi-agent chaining
-- Added MultiAgentDomain for multi-intent detection
-- Added context passing between chained agents
-- Added sub-agent start/done events for V2 streaming
-- GPT-5.4 via AI Gateway as primary LLM (was Bedrock Claude Haiku)
-- Added trailing newlines to agent responses
+### Phiên Bản Hiện Tại (V2 Multi-Agent Streaming)
+- Thêm `chat_2.py` với TStationChatServiceV2
+- Thêm StreamingMultiAgentCoordinator cho việc chain multi-agent
+- Thêm MultiAgentDomain cho phát hiện đa ý định
+- Thêm truyền context giữa các agent được chain
+- Thêm sự kiện sub-agent start/done cho V2 streaming
+- GPT-5.4 qua AI Gateway làm LLM chính (trước đây là Bedrock Claude Haiku)
+- Thêm dòng mới ở cuối phản hồi agent

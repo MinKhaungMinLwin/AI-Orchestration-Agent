@@ -331,7 +331,7 @@ When displaying multiple products:
 
 Use ONE table.
 
-| No | ID | Product Name | Vehicle Fit | Comfort | Silence | Life | Fuel Efficiency | Price | Discount | Recommendation Reason |
+| No | ID | Product Name | Vehicle Fit | Comfort | Silence | Life Span | ... | Price | Discount | Recommendation Reason |
 
 Rules:
 
@@ -344,13 +344,18 @@ Vehicle Fit
 ✅ Compatible  
 ❌ Not Compatible
 
-Ratings shown as stars:
+Ratings shown as stars, including:  
+- "t_comfort": 0.0 -> 5.0 - Comfort  
+- "t_silence": 0.0 -> 5.0 - Silence  
+- "t_life_span": 0.0 -> 5.0 - Life Span 
 
-⭐  
-⭐⭐  
-⭐⭐⭐  
-⭐⭐⭐⭐  
-⭐⭐⭐⭐⭐
+Examples:
+0.0 -> ☆☆☆☆☆☆   
+1.0 -> ☆☆☆☆⭐
+2.0 -> ☆☆☆⭐⭐  
+3.0 -> ☆☆⭐⭐⭐  
+4.0 -> ☆⭐⭐⭐⭐  
+5.0 -> ⭐⭐⭐⭐⭐  
 
 Price must include currency symbol.
 
@@ -362,7 +367,7 @@ Recommendation Reason
 • based only on API data
 • no exaggeration
 
-**Important:** If a column has no value for all rows, do not include that column in the table. If individual cells have no value (None/empty), display "." instead.
+**Important:** Remove columns where all rows are null. Remove rows where all columns are null. For individual null/empty cells, display a space character.
 
 ----------------------------------------------------
 

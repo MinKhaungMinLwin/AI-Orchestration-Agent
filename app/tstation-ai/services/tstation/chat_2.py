@@ -288,13 +288,19 @@ class TStationChatServiceV2:
             user_info = get_user_info_from_token(request.access_token)
 
         if user_info:
-            user_info_str = ", ".join([f"{k}: {v}" for k, v in user_info.items()])
-            user_context_msg = {
-                "role": "system",
-                "content": f"[User Context] {user_info_str}"
-            }
-            messages = [user_context_msg] + messages
-            logger.info(f"[CHAT_V2] User info injected: {user_info_str}")
+            user_info_str = "\n".join([f"# {k}: {v}" for k, v in user_info.items()])
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    original_content = messages[i].get("content", "")
+                    messages[i]["content"] = (
+                        f"# Response user in Korean language\n"
+                        f"# User information:\n"
+                        f"{user_info_str}\n"
+                        f"# User question:\n"
+                        f"{original_content}"
+                    )
+                    break
+            logger.info(f"[CHAT_V2] User info prepended to last user message")
 
         return messages
 

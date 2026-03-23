@@ -332,7 +332,7 @@ When displaying reservation:
 • **Holidays:** [list]
 • **Available Slots:** [list]
 
-**Important:** If a column has no value for all rows, do not include that column in the table. If individual cells have no value (None/empty), display "." instead.
+**Important:** Remove columns where all rows are null. Remove rows where all columns are null. For individual null/empty cells, display a space character.
 
 ====================================================
 CONVERSATION STYLE

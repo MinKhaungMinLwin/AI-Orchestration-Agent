@@ -8,43 +8,49 @@ T-Station AI는 Hankook Tire Korea를 위한 지능형 타이어 쇼핑 어시�
 
 ## 기능
 
-- ✅ 지능형 라우팅을 통한 다중 에이전트 아키텍처
-- ✅ 자동 도메인 분류 (leading, discovery, pricing, order, support)
+- ✅ V2 멀티 에이전트 스트리밍 및 다중 의도 감지
+- ✅ 자동 다중 도메인 분류 (leading, discovery, pricing, order, support)
 - ✅ 스트리밍 및 논-스트리밍 모드 지원
 - ✅ LiteLLM과 LangChain 에이전트 통합
-- ✅ Bedrock Claude Haiku 4.5를 LLM으로 사용
+- ✅ GPT-5.4를 LLM으로 사용 (AI Gateway経由)
 - ✅ Langfuse 추적 통합
 - ✅ 백엔드 API 통합 (Oracle DB)
 - ✅ BaseAgent와 TOOL_TO_AF_MAP을 통한 에이전트 기능 추적
-- ✅ agent_flow 이벤트로 현재 에이전트/AF 및 상태 표시
+- ✅ sub-agent start/done 이벤트가 포함된 스트리밍
+- ✅ 체이닝된 에이전트 간 컨텍스트 전달
 
 ## 아키텍처
 
 ```mermaid
 graph TB
     A[사용자 요청] --> B[채팅 엔드포인트]
-    B --> C{메시지 빈 상태?}
-    C -->|예| D[400 오류 반환]
-    C -->|아니오| E[도메인 분류]
+    B --> C[chat_2.py: TStationChatServiceV2]
+    C --> D{멀티 인텐트 분류}
+    D --> E[MultiAgentDomain: 도메인 목록]
 
-    E --> F[Leading 에이전트]
-    E --> G[Discovery 에이전트]
-    E --> H[Transaction 에이전트]
-    E --> I[Order 에이전트]
-    E --> J[Support 에이전트]
+    E --> F{스트리밍 모드?}
+    F -->|스트리밍| G[StreamingMultiAgentCoordinator]
+    F -->|논-스트리밍| H[leading_agent.invoke]
 
-    F --> K{스트리밍 모드?}
-    G --> K
-    H --> K
-    I --> K
-    J --> K
+    G --> I{각 도메인 에이전트 체이닝}
+    I --> J[Discovery 에이전트]
+    I --> K[Pricing 에이전트]
+    I --> L[Order 에이전트]
+    I --> M[Support 에이전트]
+    I --> N[Leading 에이전트]
 
-    K -->|스트리밍| L[StreamingResponse SSE]
-    K -->|논-스트리밍| M[TStationChatResponse]
+    J --> O[다음 에이전트에 컨텍스트 전달]
+    K --> O
+    L --> O
+    M --> O
+    N --> P[StreamingResponse SSE]
 
-    L --> N[백엔드 API]
-    M --> N
+    H --> Q[TStationChatResponse]
 ```
+
+**두 가지 서비스 버전**:
+- `chat.py`: 원본 단일 도메인 라우팅 (V1)
+- `chat_2.py`: 다중 인텐트 감지가 있는 V2 멀티 에이전트 스트리밍
 
 ## 워크플로 시퀀스
 
@@ -106,21 +112,46 @@ class BaseAgent(ABC):
 
     def __init__(self, model, tools: list | None = None, system_prompt: str = "", name: str = ""):
         self.name = name
-        self.agent = create_agent(model=model, tools=tools, system_prompt=system_prompt, name=name)
+        self.agent = create_agent(
+            model=model,
+            tools=tools,
+            debug=True,
+            system_prompt=system_prompt,
+            name=name,
+        )
+
+    def invoke(self, messages: list[dict]) -> str:
+        result = self.agent.invoke({"messages": messages})
+        return result["messages"][-1].content
 
     def stream(self, messages: list[dict]):
-        yield {"type": "agent_flow", "agent": f"[{self.name}]", "status": "active"}
-        for mode, chunk in self.agent.stream(...):
-            # agent_flow와 도구 상태Yield
-            yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
-            yield {"type": "token", "content": ...}
+        tool_calls_map: dict[str, dict] = {}
+        for mode, chunk in self.agent.stream(
+            {"messages": messages},
+            stream_mode=["messages", "updates"],
+        ):
+            if mode == "messages":
+                token, _ = chunk
+                if isinstance(token, AIMessageChunk) and token.text:
+                    yield {"type": "token", "content": token.text}
+            elif mode == "updates":
+                for node, update in chunk.items():
+                    message = update["messages"][-1]
+                    if isinstance(message, AIMessage):
+                        yield {"type": "message", "content": message.content, "node": node, "agent": self.name}
+                    elif isinstance(message, ToolMessage):
+                        af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
+                        tool_status = "success"
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
+                        yield {"type": "tool", "input": {...}, "output": message.content, "node": node, "tool": message.name}
+        yield {"type": "token", "content": "\n\n"}
 ```
 
 **스트리밍 이벤트**:
-- `agent_flow`: `{"type": "agent_flow", "agent": "[Discovery Agent]", "status": "success/error"}`
-- `token`: AI 응답 토큰
-- `message`: 에이전트 이름이 포함된 에이전트 메시지
-- `tool`: 도구 이름과 AF가 포함된 도구 실행 결과
+- `token`: AI 응답 토큰 청크
+- `message`: 노드와 에이전트 이름이 포함된 에이전트 메시지
+- `agent_flow`: 도구 결과의 상태가 포함된 AF 레이블
+- `tool`: 도구 이름, 입력, 출력이 포함된 도구 실행 결과
 
 ### 2. TStationChatService
 
@@ -391,9 +422,11 @@ class TStationChatResponse(BaseModel):
 
 ## 최근 변경 사항
 
-### 현재 버전
-- 모든 에이전트의 기본 클래스로 BaseAgent 추가
-- 에이전트 기능 추적을 위한 TOOL_TO_AF_MAP 추가
-- 상태가 포함된 agent_flow 스트리밍 이벤트 추가
-- 색상 배지로 에이전트 흐름을 표시하도록 UI 업데이트
-- 도구 결과에서 상태 추출 (success/error)
+### 현재 버전 (V2 멀티 에이전트 스트리밍)
+- TStationChatServiceV2가 포함된 `chat_2.py` 추가
+- 멀티 에이전트 체이닝을 위한 StreamingMultiAgentCoordinator 추가
+- 다중 인텐트 감지를 위한 MultiAgentDomain 추가
+- 체이닝된 에이전트 간 컨텍스트 전달 추가
+- V2 스트리밍을 위한 sub-agent start/done 이벤트 추가
+- 주 LLM으로 AI Gateway를 통한 GPT-5.4 (기존 Bedrock Claude Haiku 대체)
+- 에이전트 응답에 줄 끝 문자 추가
