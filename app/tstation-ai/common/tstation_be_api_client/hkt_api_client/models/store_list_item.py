@@ -17,20 +17,14 @@ class StoreListItem:
     Attributes:
         shop_id (str): 매장 ID
         shop_nm (None | str | Unset): 매장명
-        addr_base (None | str | Unset): 일반주소
-        addr_dtl (None | str | Unset): 일반주소
         road_addr_base (None | str | Unset): 도로명주소
-        road_addr_dtl (None | str | Unset): 도로명주소 상세
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
     """
 
     shop_id: str
     shop_nm: None | str | Unset = UNSET
-    addr_base: None | str | Unset = UNSET
-    addr_dtl: None | str | Unset = UNSET
     road_addr_base: None | str | Unset = UNSET
-    road_addr_dtl: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -44,29 +38,11 @@ class StoreListItem:
         else:
             shop_nm = self.shop_nm
 
-        addr_base: None | str | Unset
-        if isinstance(self.addr_base, Unset):
-            addr_base = UNSET
-        else:
-            addr_base = self.addr_base
-
-        addr_dtl: None | str | Unset
-        if isinstance(self.addr_dtl, Unset):
-            addr_dtl = UNSET
-        else:
-            addr_dtl = self.addr_dtl
-
         road_addr_base: None | str | Unset
         if isinstance(self.road_addr_base, Unset):
             road_addr_base = UNSET
         else:
             road_addr_base = self.road_addr_base
-
-        road_addr_dtl: None | str | Unset
-        if isinstance(self.road_addr_dtl, Unset):
-            road_addr_dtl = UNSET
-        else:
-            road_addr_dtl = self.road_addr_dtl
 
         shop_biz_strt_time: None | str | Unset
         if isinstance(self.shop_biz_strt_time, Unset):
@@ -89,14 +65,8 @@ class StoreListItem:
         )
         if shop_nm is not UNSET:
             field_dict["shop_nm"] = shop_nm
-        if addr_base is not UNSET:
-            field_dict["addr_base"] = addr_base
-        if addr_dtl is not UNSET:
-            field_dict["addr_dtl"] = addr_dtl
         if road_addr_base is not UNSET:
             field_dict["road_addr_base"] = road_addr_base
-        if road_addr_dtl is not UNSET:
-            field_dict["road_addr_dtl"] = road_addr_dtl
         if shop_biz_strt_time is not UNSET:
             field_dict["shop_biz_strt_time"] = shop_biz_strt_time
         if shop_biz_end_time is not UNSET:
@@ -118,24 +88,6 @@ class StoreListItem:
 
         shop_nm = _parse_shop_nm(d.pop("shop_nm", UNSET))
 
-        def _parse_addr_base(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        addr_base = _parse_addr_base(d.pop("addr_base", UNSET))
-
-        def _parse_addr_dtl(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        addr_dtl = _parse_addr_dtl(d.pop("addr_dtl", UNSET))
-
         def _parse_road_addr_base(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -144,15 +96,6 @@ class StoreListItem:
             return cast(None | str | Unset, data)
 
         road_addr_base = _parse_road_addr_base(d.pop("road_addr_base", UNSET))
-
-        def _parse_road_addr_dtl(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        road_addr_dtl = _parse_road_addr_dtl(d.pop("road_addr_dtl", UNSET))
 
         def _parse_shop_biz_strt_time(data: object) -> None | str | Unset:
             if data is None:
@@ -175,10 +118,7 @@ class StoreListItem:
         store_list_item = cls(
             shop_id=shop_id,
             shop_nm=shop_nm,
-            addr_base=addr_base,
-            addr_dtl=addr_dtl,
             road_addr_base=road_addr_base,
-            road_addr_dtl=road_addr_dtl,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,
         )

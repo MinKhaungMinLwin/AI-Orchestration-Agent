@@ -1,56 +1,60 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="NearbyStoreItem")
+from ..types import UNSET, Unset
+
+T = TypeVar("T", bound="MdInventoryResponse")
 
 
 @_attrs_define
-class NearbyStoreItem:
+class MdInventoryResponse:
     """
     Attributes:
-        shop_id (str): 매장 ID
-        distance_km (float): 거리 (km)
+        md_inv_qty (int | None | Unset): MD 재고 수량 (참고용)
     """
 
-    shop_id: str
-    distance_km: float
+    md_inv_qty: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        shop_id = self.shop_id
-
-        distance_km = self.distance_km
+        md_inv_qty: int | None | Unset
+        if isinstance(self.md_inv_qty, Unset):
+            md_inv_qty = UNSET
+        else:
+            md_inv_qty = self.md_inv_qty
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "shop_id": shop_id,
-                "distance_km": distance_km,
-            }
-        )
+        field_dict.update({})
+        if md_inv_qty is not UNSET:
+            field_dict["md_inv_qty"] = md_inv_qty
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        shop_id = d.pop("shop_id")
 
-        distance_km = d.pop("distance_km")
+        def _parse_md_inv_qty(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
 
-        nearby_store_item = cls(
-            shop_id=shop_id,
-            distance_km=distance_km,
+        md_inv_qty = _parse_md_inv_qty(d.pop("md_inv_qty", UNSET))
+
+        md_inventory_response = cls(
+            md_inv_qty=md_inv_qty,
         )
 
-        nearby_store_item.additional_properties = d
-        return nearby_store_item
+        md_inventory_response.additional_properties = d
+        return md_inventory_response
 
     @property
     def additional_keys(self) -> list[str]:

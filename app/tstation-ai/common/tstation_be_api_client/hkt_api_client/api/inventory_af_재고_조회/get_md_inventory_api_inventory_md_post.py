@@ -6,20 +6,20 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
-from ...models.nearby_store_request import NearbyStoreRequest
-from ...models.nearby_store_response import NearbyStoreResponse
+from ...models.md_inventory_request import MdInventoryRequest
+from ...models.md_inventory_response import MdInventoryResponse
 from ...types import Response
 
 
 def _get_kwargs(
     *,
-    body: NearbyStoreRequest,
+    body: MdInventoryRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/api/store/nearby",
+        "url": "/api/inventory/md",
     }
 
     _kwargs["json"] = body.to_dict()
@@ -32,9 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> HTTPValidationError | NearbyStoreResponse | None:
+) -> HTTPValidationError | MdInventoryResponse | None:
     if response.status_code == 200:
-        response_200 = NearbyStoreResponse.from_dict(response.json())
+        response_200 = MdInventoryResponse.from_dict(response.json())
 
         return response_200
 
@@ -51,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[HTTPValidationError | NearbyStoreResponse]:
+) -> Response[HTTPValidationError | MdInventoryResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,21 +63,21 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> Response[HTTPValidationError | NearbyStoreResponse]:
-    """주변 매장 목록 조회
+    body: MdInventoryRequest,
+) -> Response[HTTPValidationError | MdInventoryResponse]:
+    """MD 재고 조회 (참고용)
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     PR_INV_MD_STOCK_INFO (백업용 DB) - INV_QTY (재고 수량)
 
     Args:
-        body (NearbyStoreRequest):
+        body (MdInventoryRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | NearbyStoreResponse]
+        Response[HTTPValidationError | MdInventoryResponse]
     """
 
     kwargs = _get_kwargs(
@@ -94,21 +94,21 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> HTTPValidationError | NearbyStoreResponse | None:
-    """주변 매장 목록 조회
+    body: MdInventoryRequest,
+) -> HTTPValidationError | MdInventoryResponse | None:
+    """MD 재고 조회 (참고용)
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     PR_INV_MD_STOCK_INFO (백업용 DB) - INV_QTY (재고 수량)
 
     Args:
-        body (NearbyStoreRequest):
+        body (MdInventoryRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | NearbyStoreResponse
+        HTTPValidationError | MdInventoryResponse
     """
 
     return sync_detailed(
@@ -120,21 +120,21 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> Response[HTTPValidationError | NearbyStoreResponse]:
-    """주변 매장 목록 조회
+    body: MdInventoryRequest,
+) -> Response[HTTPValidationError | MdInventoryResponse]:
+    """MD 재고 조회 (참고용)
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     PR_INV_MD_STOCK_INFO (백업용 DB) - INV_QTY (재고 수량)
 
     Args:
-        body (NearbyStoreRequest):
+        body (MdInventoryRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | NearbyStoreResponse]
+        Response[HTTPValidationError | MdInventoryResponse]
     """
 
     kwargs = _get_kwargs(
@@ -149,21 +149,21 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> HTTPValidationError | NearbyStoreResponse | None:
-    """주변 매장 목록 조회
+    body: MdInventoryRequest,
+) -> HTTPValidationError | MdInventoryResponse | None:
+    """MD 재고 조회 (참고용)
 
-     고객 좌표 기준으로 가까운 매장 최대 20개와 거리(km)를 반환합니다.
+     PR_INV_MD_STOCK_INFO (백업용 DB) - INV_QTY (재고 수량)
 
     Args:
-        body (NearbyStoreRequest):
+        body (MdInventoryRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | NearbyStoreResponse
+        HTTPValidationError | MdInventoryResponse
     """
 
     return (

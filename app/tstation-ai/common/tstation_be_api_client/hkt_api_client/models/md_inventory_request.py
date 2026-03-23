@@ -1,39 +1,37 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-if TYPE_CHECKING:
-    from ..models.product_search_item import ProductSearchItem
-
-
-T = TypeVar("T", bound="ProductSearchResponse")
+T = TypeVar("T", bound="MdInventoryRequest")
 
 
 @_attrs_define
-class ProductSearchResponse:
+class MdInventoryRequest:
     """
     Attributes:
-        items (list[ProductSearchItem]):
+        goods_no (str): 상품 번호
+        shop_id (str): 매장 ID
     """
 
-    items: list[ProductSearchItem]
+    goods_no: str
+    shop_id: str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        items = []
-        for items_item_data in self.items:
-            items_item = items_item_data.to_dict()
-            items.append(items_item)
+        goods_no = self.goods_no
+
+        shop_id = self.shop_id
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "items": items,
+                "goods_no": goods_no,
+                "shop_id": shop_id,
             }
         )
 
@@ -41,22 +39,18 @@ class ProductSearchResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.product_search_item import ProductSearchItem
-
         d = dict(src_dict)
-        items = []
-        _items = d.pop("items")
-        for items_item_data in _items:
-            items_item = ProductSearchItem.from_dict(items_item_data)
+        goods_no = d.pop("goods_no")
 
-            items.append(items_item)
+        shop_id = d.pop("shop_id")
 
-        product_search_response = cls(
-            items=items,
+        md_inventory_request = cls(
+            goods_no=goods_no,
+            shop_id=shop_id,
         )
 
-        product_search_response.additional_properties = d
-        return product_search_response
+        md_inventory_request.additional_properties = d
+        return md_inventory_request
 
     @property
     def additional_keys(self) -> list[str]:

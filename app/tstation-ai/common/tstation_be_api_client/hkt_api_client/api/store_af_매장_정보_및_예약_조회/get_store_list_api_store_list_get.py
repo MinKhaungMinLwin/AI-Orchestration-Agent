@@ -13,7 +13,6 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     region_code: None | str | Unset = UNSET,
-    store_nm: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -25,13 +24,6 @@ def _get_kwargs(
     else:
         json_region_code = region_code
     params["region_code"] = json_region_code
-
-    json_store_nm: None | str | Unset
-    if isinstance(store_nm, Unset):
-        json_store_nm = UNSET
-    else:
-        json_store_nm = store_nm
-    params["store_nm"] = json_store_nm
 
     params["limit"] = limit
 
@@ -80,16 +72,14 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
-    store_nm: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명(도로명주소 LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
-        store_nm (None | str | Unset): 매장명 명칭 검색
+        region_code (None | str | Unset): 지역 검색어 (ROAD_ADDR_BASE LIKE 검색, 예: '서울', '강남')
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -102,7 +92,6 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         region_code=region_code,
-        store_nm=store_nm,
         limit=limit,
     )
 
@@ -117,16 +106,14 @@ def sync(
     *,
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
-    store_nm: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명(도로명주소 LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
-        store_nm (None | str | Unset): 매장명 명칭 검색
+        region_code (None | str | Unset): 지역 검색어 (ROAD_ADDR_BASE LIKE 검색, 예: '서울', '강남')
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -140,7 +127,6 @@ def sync(
     return sync_detailed(
         client=client,
         region_code=region_code,
-        store_nm=store_nm,
         limit=limit,
     ).parsed
 
@@ -149,16 +135,14 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
-    store_nm: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명(도로명주소 LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
-        store_nm (None | str | Unset): 매장명 명칭 검색
+        region_code (None | str | Unset): 지역 검색어 (ROAD_ADDR_BASE LIKE 검색, 예: '서울', '강남')
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -171,7 +155,6 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         region_code=region_code,
-        store_nm=store_nm,
         limit=limit,
     )
 
@@ -184,16 +167,14 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
-    store_nm: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명(도로명주소 LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
-        store_nm (None | str | Unset): 매장명 명칭 검색
+        region_code (None | str | Unset): 지역 검색어 (ROAD_ADDR_BASE LIKE 검색, 예: '서울', '강남')
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -208,7 +189,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             region_code=region_code,
-            store_nm=store_nm,
             limit=limit,
         )
     ).parsed
