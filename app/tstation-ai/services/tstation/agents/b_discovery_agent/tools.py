@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
@@ -11,13 +10,8 @@ logger = logging.getLogger(__name__)
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.vehicle_verify_owner_api_vehicle_verify_owner_post import sync as post_vehicle_verify_owner
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync as check_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync as search_product
-from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
-# from common.tstation_be_api_client.hkt_api_client.models import CompatibilityRequest
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_compatible_product_api_product_compatible_get import sync as get_compatible_product
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync as get_user_vehicles
 from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
-# from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_compatibility import sync as get_compatibility
-
 
 # Product Description
 from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync as get_product_description
@@ -25,9 +19,6 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 # Product Recommendation
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync as get_products_recommendations
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
-
-# Product Search (NEW - not yet implemented in tools)
-# from common.tstation_be_api_client.hkt_api_client.api.product_search_af_상품_검색.search_products_api_product_search_get import sync as search_products
 
 def get_client() -> AuthenticatedClient:
     """Get authenticated client for tstation-be API."""
@@ -324,76 +315,4 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
             "status": "error",
             "reason": str(e),
             "message": "Failed to get product recommendations"
-        }
-
-# --- New. COMPATIBILITY TOOL ---
-@tool
-def get_compatibility_tool(goods_no: str, car_no: Optional[str] = None, car_nm: Optional[str] = None):
-    """
-    Check if a specific tire fits a vehicle.
-    Must provide either the vehicle plate number (car_no) OR the vehicle model name (car_nm).
-
-    Args:
-        goods_no (str): The product ID to check.
-        car_no (Optional[str]): The vehicle license plate number (e.g., '12가3456').
-        car_nm (Optional[str]): The vehicle model name (e.g., '쏘나타', '아반떼').
-    """
-    logger.info(f"[TOOL][get_compatibility_tool] Called with: goods_no={goods_no}, car_no={car_no}, car_nm={car_nm}")
-
-    try:
-        # Note: Your auto-generated CompatibilityRequest model must be updated 
-        # by regenerating the client to accept car_nm!
-        body = CompatibilityRequest(
-            car_no=car_no,
-            car_nm=car_nm, 
-            goods_no=goods_no
-        )
-        res = get_compatibility(
-            client=get_client(),
-            body=body
-        )
-        logger.info(f"[TOOL][get_compatibility_tool] Response: {res}")
-        return {
-            "status": "success",
-            "data": res,
-        }
-    except Exception as e:
-        logger.exception("[TOOL][get_compatibility_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to check compatibility."
-        }
-
-# --- NEW PRODUCT SEARCH TOOL ---
-@tool
-def search_product_tool(keyword: str):
-    """
-    Search for a tire product by its name or keyword.
-    
-    Returns the goods_no, goods_nm (product name), tire_size_1 (front), and tire_size_2 (rear).
-    Use this tool when the user asks for a specific tire model (e.g., '벤투스', '키너지') 
-    so you can find its goods_no to use in other tools.
-
-    Args:
-        keyword (str): The name of the tire to search for.
-    """
-    logger.info(f"[TOOL][search_product_tool] Called with: keyword={keyword}")
-
-    try:
-        
-        res = search_products(client=get_client(), keyword=keyword)
-        logger.info(f"[TOOL][search_product_tool] Response: {res}")
-        return {"status": "success", "data": res}
-        
-        return {
-            "status": "pending",
-            "message": "Waiting for backend client regeneration to execute API call."
-        }
-    except Exception as e:
-        logger.exception("[TOOL][search_product_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to search for product."
         }

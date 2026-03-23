@@ -19,10 +19,10 @@ T = TypeVar("T", bound="HTTPValidationError")
 class HTTPValidationError:
     """
     Attributes:
-        detail (list[ValidationError] | str | Unset):
+        detail (list[ValidationError] | Unset):
     """
 
-    detail: list[ValidationError] | str | Unset = UNSET
+    detail: list[ValidationError] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,14 +49,11 @@ class HTTPValidationError:
         _detail = d.pop("detail", UNSET)
         detail: list[ValidationError] | Unset = UNSET
         if _detail is not UNSET:
-            # Handle string detail (e.g., "-selling message")
-            if isinstance(_detail, str):
-                detail = _detail  # type: ignore
-            else:
-                detail = []
-                for detail_item_data in _detail:
-                    detail_item = ValidationError.from_dict(detail_item_data)
-                    detail.append(detail_item)
+            detail = []
+            for detail_item_data in _detail:
+                detail_item = ValidationError.from_dict(detail_item_data)
+
+                detail.append(detail_item)
 
         http_validation_error = cls(
             detail=detail,
