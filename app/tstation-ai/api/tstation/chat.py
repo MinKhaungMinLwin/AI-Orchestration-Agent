@@ -36,6 +36,9 @@ async def chat(request: TStationChatRequest):
         from services.tstation.common.tstation_be_client import set_tstation_be_token
         set_tstation_be_token(request.access_token)
 
+        from services.tstation.chat_2 import TStationChatServiceV2
+        return await asyncio.to_thread(TStationChatServiceV2.chat, request)
+
         return await asyncio.to_thread(TStationChatService.chat, request)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
