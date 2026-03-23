@@ -83,3 +83,5 @@ class BaseAgent(ABC):
                             "node": node,
                             "tool": message.name,
                         }
+
+        yield {"type": "token", "content": "\n\n"}
