@@ -80,48 +80,9 @@ session_id = "01/01/2026"
 
 stream_mode = True
 
-# Examples
-st.sidebar.header("Example Questions")
-language = st.sidebar.selectbox("Choose your language", ["ko", "en"], index=0 if os.getenv("ENV") == "local" else 0)
-
-examples = get_examples(language)
-if examples and "categories" in examples:
-    categories = examples["categories"]
-
-    category_options = [categories[key]["name"] for key in categories.keys()]
-    category_keys = list(categories.keys())
-
-    selected_category_name = st.sidebar.selectbox(
-        "Choose category",
-        category_options,
-        index=1
-    )
-    selected_category_key = category_keys[category_options.index(selected_category_name)]
-    selected_explanation = categories[selected_category_key]["explanation"]
-    st.sidebar.markdown(f"**Explanation:** _{selected_explanation}_")
-
-    selected_category_key = None
-    if selected_category_name:
-        category_index = category_options.index(selected_category_name)
-        selected_category_key = category_keys[category_index]
-
-    if selected_category_key:
-        questions = categories[selected_category_key]["questions"]
-        question_options = questions
-
-        selected_question = st.sidebar.selectbox(
-            "Choose your example question",
-            question_options,
-            index=0
-        )
-    else:
-        selected_question = None
-
-else:
-    selected_category_name = st.sidebar.selectbox("Choose category", ["No categories available"])
-    selected_question = st.sidebar.selectbox("Choose your example question", ["No examples available"])
-    selected_category_name = None if selected_category_name == "No categories available" else selected_category_name
-    selected_question = None if selected_question == "No examples available" else selected_question
+# Examples (disabled)
+# language = st.sidebar.selectbox("Choose your language", ["ko", "en"], index=0 if os.getenv("ENV") == "local" else 0)
+language = "ko"  # Default Korean
 
 if 'messages' not in st.session_state:
     st.session_state['messages'] = []
@@ -136,34 +97,13 @@ with chat_container:
 input_container = st.container()
 
 with input_container:
-    if selected_question and access_token:
-        st.info(f"**📝 {selected_question}**")
-        col1, col2 = st.columns([1, 6])
-        with col1:
-            if st.button("🚀 Ask it.", type="primary", key="ask_button"):
-                prompt = selected_question
-            else:
-                prompt = None
-        with col2:
-            if st.button("❌ Cancel", key="cancel_button"):
-                # Clear selection
-                if 'random_example_index' in st.session_state:
-                    del st.session_state.random_example_index
-                st.rerun()
-    else:
-        if selected_question and not access_token:
-            st.warning("Please enter access token to chat")
-        prompt = None
-
-    # Block chat if not logged in
     chat_disabled = not access_token
 
-    if not prompt:
-        if chat_disabled:
-            st.chat_input(placeholder="Please enter access token to chat...", disabled=True)
-            prompt = None
-        else:
-            prompt = st.chat_input(placeholder="Your question....")
+    if chat_disabled:
+        st.chat_input(placeholder="Please enter access token to chat...", disabled=True)
+        prompt = None
+    else:
+        prompt = st.chat_input(placeholder="Your question....")
 
 if prompt:
     with chat_container:

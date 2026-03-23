@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
@@ -7,18 +8,19 @@ from langchain.tools import tool
 logger = logging.getLogger(__name__)
 
 # Product Compatibility
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.vehicle_verify_owner_api_vehicle_verify_owner_post import sync as post_vehicle_verify_owner
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync as check_compatibility
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync as search_product
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync as get_user_vehicles
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.vehicle_verify_owner_api_vehicle_verify_owner_post import sync_detailed as post_vehicle_verify_owner
 from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
 
 # Product Description
-from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync as get_product_description
+from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync_detailed as get_product_description
 
 # Product Recommendation
-from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync as get_products_recommendations
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync_detailed as get_products_recommendations
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
+
 
 def get_client() -> AuthenticatedClient:
     """Get authenticated client for tstation-be API."""
@@ -75,6 +77,18 @@ DOMAIN_TOOL_MAP = {
 }
 
 
+def _to_dict(res: Any) -> Any:
+    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
+
+
+def _error_response(http_status: int | None, reason: str, message: str) -> dict:
+    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
+
+
+def _success_response(http_status: int, data: Any) -> dict:
+    return {"status": "success", "http_status": http_status, "data": data}
+
+
 @tool
 def post_vehicle_verify_owner_tool(car_no: str):
     """
@@ -88,28 +102,25 @@ def post_vehicle_verify_owner_tool(car_no: str):
             required to verify vehicle ownership.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info("[TOOL][post_vehicle_verify_owner_tool] Called with: car_no=%s", car_no)
 
     try:
         body = VerifyOwnerRequest(car_no=car_no)
-        res = post_vehicle_verify_owner(
-            client=get_client(),
-            body=body,
-        )
-        logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = post_vehicle_verify_owner(client=get_client(), body=body)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to verify vehicle ownership"
+            )
+        logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][post_vehicle_verify_owner_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to verify vehicle ownership"
-        }
+        return _error_response(None, str(e), "Failed to verify vehicle ownership")
+
 
 @tool
 def check_compatibility_tool(goods_no: str, car_no: str | None = None, car_nm: str | None = None):
@@ -126,29 +137,23 @@ def check_compatibility_tool(goods_no: str, car_no: str | None = None, car_nm: s
         car_nm (str | None): 차량 정보
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, car_nm=%s", goods_no, car_no, car_nm)
 
     try:
-        res = check_compatibility(
-            client=get_client(),
-            goods_no=goods_no,
-            car_no=car_no,
-            car_nm=car_nm,
-        )
-        logger.info("[TOOL][check_compatibility_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = check_compatibility(client=get_client(), goods_no=goods_no, car_no=car_no, car_nm=car_nm)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to check tire compatibility"
+            )
+        logger.info("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][check_compatibility_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to check tire compatibility"
-        }
+        return _error_response(None, str(e), "Failed to check tire compatibility")
 
 
 @tool
@@ -163,28 +168,23 @@ def search_product_tool(keyword: str, limit: int = 20):
         limit (int): 반환할 최대 상품 수 Default: 20.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info("[TOOL][search_product_tool] Called with: keyword=%s, limit=%s", keyword, limit)
 
     try:
-        res = search_product(
-            client=get_client(),
-            keyword=keyword,
-            limit=limit,
-        )
-        logger.info("[TOOL][search_product_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = search_product(client=get_client(), keyword=keyword, limit=limit)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search products"
+            )
+        logger.info("[TOOL][search_product_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to search products"
-        }
+        return _error_response(None, str(e), "Failed to search products")
 
 
 @tool
@@ -199,27 +199,23 @@ def get_user_vehicles_tool(car_no: str):
         car_no (str): Vehicle registration number.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s", car_no)
 
     try:
-        res = get_user_vehicles(
-            client=get_client(),
-            car_no=car_no,
-        )
-        logger.info("[TOOL][get_user_vehicles_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = get_user_vehicles(client=get_client(), car_no=car_no)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get user vehicles"
+            )
+        logger.info("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to get user vehicles"
-        }
+        return _error_response(None, str(e), "Failed to get user vehicles")
 
 
 @tool
@@ -241,27 +237,23 @@ def get_product_description_tool(goods_no: str):
         goods_no (str): Product number.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
 
     try:
-        res = get_product_description(
-            client=get_client(),
-            goods_no=goods_no
-        )
-        logger.info("[TOOL][get_product_description_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = get_product_description(client=get_client(), goods_no=goods_no)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get product description"
+            )
+        logger.info("[TOOL][get_product_description_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to get product description"
-        }
+        return _error_response(None, str(e), "Failed to get product description")
 
 
 @tool
@@ -291,12 +283,12 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
         entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, entr_yn=%s, entr_no=%s", rcmd_type, limit, brand_cd, entr_yn, entr_no)
 
     try:
-        res = get_products_recommendations(
+        response = get_products_recommendations(
             client=get_client(),
             rcmd_type=rcmd_type,
             limit=limit,
@@ -304,15 +296,14 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
             entr_yn=entr_yn,
             entr_no=entr_no,
         )
-        logger.info("[TOOL][get_products_recommendations_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get product recommendations"
+            )
+        logger.info("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to get product recommendations"
-        }
+        return _error_response(None, str(e), "Failed to get product recommendations")

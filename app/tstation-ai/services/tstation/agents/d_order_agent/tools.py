@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
@@ -7,17 +8,17 @@ from langchain.tools import tool
 logger = logging.getLogger(__name__)
 
 # Store AF
-from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_nearby_stores_api_store_nearby_post import sync as get_nearby_stores
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_nearby_stores_api_store_nearby_post import sync_detailed as get_nearby_stores
 from common.tstation_be_api_client.hkt_api_client.models import NearbyStoreRequest
-from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync as get_store_details   
-from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync as get_store_list  
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync_detailed as get_store_details
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
 
 # Quick Shopping AF
-from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.create_quick_order_api_quick_order_draft_post import sync as create_quick_order
+from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.create_quick_order_api_quick_order_draft_post import sync_detailed as create_quick_order
 from common.tstation_be_api_client.hkt_api_client.models import QuickOrderRequest
 
 # Order & Delivery AF
-from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync as get_order_delivery
+from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
 
 
 def get_client() -> AuthenticatedClient:
@@ -32,6 +33,19 @@ DOMAIN = {
         # Order / Delivery
         "get_order_delivery",
 }
+
+
+def _to_dict(res: Any) -> Any:
+    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
+
+
+def _error_response(http_status: int | None, reason: str, message: str) -> dict:
+    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
+
+
+def _success_response(http_status: int, data: Any) -> dict:
+    return {"status": "success", "http_status": http_status, "data": data}
+
 
 # =====================================================
 # STORE AF
@@ -61,7 +75,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
         user_ypos (float): User latitude coordinate.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     body = NearbyStoreRequest(
         user_xpos=user_xpos,
@@ -72,22 +86,18 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
     logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s", user_xpos, user_ypos)
 
     try:
-        res = get_nearby_stores(
-            client=get_client(),
-            body=body
-        )
-        logger.info("[TOOL][get_nearby_stores_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = get_nearby_stores(client=get_client(), body=body)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve nearby stores"
+            )
+        logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_nearby_stores_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to retrieve nearby stores"
-        }
+        return _error_response(None, str(e), "Failed to retrieve nearby stores")
 
 
 @tool
@@ -114,29 +124,24 @@ def get_store_details_tool(shop_id: str, cal_day: str):
         cal_day (str): Date to check reservation availability (format: YYYYMMDD).
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
 
     logger.info("[TOOL][get_store_details_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
 
     try:
-        res = get_store_details(
-            client=get_client(),
-            shop_id=shop_id,
-            cal_day=cal_day
-        )
-        logger.info("[TOOL][get_store_details_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = get_store_details(client=get_client(), shop_id=shop_id, cal_day=cal_day)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve store details"
+            )
+        logger.info("[TOOL][get_store_details_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_details_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to retrieve store details"
-        }
+        return _error_response(None, str(e), "Failed to retrieve store details")
 
 
 @tool
@@ -161,33 +166,29 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
     - the user asks for reservation availability or store details for a specific store
 
     Args:
-        region_code (str | None): Region keyword used to filter stores, using Korean address, Examples: '서울', '강남'강남"). Optional.
+        region_code (str | None): Region keyword used to filter stores, using Korean address, Examples: '서울', '강nam"'). Optional.
         limit (int): Maximum number of stores to return. Default is 20.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
 
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
 
     try:
-        res = get_store_list(
-            client=get_client(),
-            region_code=region_code,
-            limit=limit
-        )
-        logger.info("[TOOL][get_store_list_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = get_store_list(client=get_client(), region_code=region_code, limit=limit)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve store list"
+            )
+        logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_list_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to retrieve store list"
-        }
+        return _error_response(None, str(e), "Failed to retrieve store list")
+
 
 # =====================================================
 # QUICK SHOPPING AF
@@ -222,7 +223,7 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
             page will ask the user to enter member information.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
 
     body = QuickOrderRequest(
@@ -234,22 +235,18 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
     logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
 
     try:
-        res = create_quick_order(
-            client=get_client(),
-            body=body,
-        )
-        logger.info("[TOOL][create_order_draft_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = create_quick_order(client=get_client(), body=body)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to create quick order draft"
+            )
+        logger.info("[TOOL][create_order_draft_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][create_order_draft_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to create quick order draft"
-        }
+        return _error_response(None, str(e), "Failed to create quick order draft")
 
 
 
@@ -279,25 +276,21 @@ def get_order_status_tool(ord_no: str):
         ord_no (str): Order number.
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
 
     logger.info("[TOOL][get_order_status_tool] Called with: ord_no=%s", ord_no)
 
     try:
-        res = get_order_delivery(
-            client=get_client(),
-            ord_no=ord_no
-        )
-        logger.info("[TOOL][get_order_status_tool] Response: %s", res)
-        return {
-            "status": "success",
-            "data": res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res),
-        }
+        response = get_order_delivery(client=get_client(), ord_no=ord_no)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve order status"
+            )
+        logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_order_status_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to retrieve order status"
-        }
+        return _error_response(None, str(e), "Failed to retrieve order status")
