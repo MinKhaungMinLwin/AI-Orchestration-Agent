@@ -307,3 +307,58 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
         return _error_response(None, str(e), "Failed to get product recommendations")
+
+
+# Add this new tool for YouTube video search related to tires and brands. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.
+
+@tool
+def search_youtube_video_tool(query: str, max_results: int = 3):
+    """유튜브 영상 검색 (YouTube Video Search)
+    
+    Searches YouTube for videos related to a specific tire or brand.
+    Use this tool when the user asks for "reviews," "videos," "tests," or wants to see the tire in action.
+    
+    Args:
+        query (str): The search query (e.g., '한국타이어 벤투스 S1 evo3 리뷰', 'Hankook iON evo test').
+        max_results (int): The maximum number of videos to return. Default is 3.
+        
+    Returns:
+        dict: A dictionary containing the video titles, channel names, and direct URLs.
+    """
+    logger.info("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
+
+    try:
+        from youtube_search import YoutubeSearch
+        
+        # Perform the search
+        results = YoutubeSearch(query, max_results=max_results).to_dict()
+        
+        # Format the output cleanly for the LLM
+        formatted_results = []
+        for res in results:
+            formatted_results.append({
+                "title": res.get("title"),
+                "channel": res.get("channel"),
+                "views": res.get("views"),
+                "duration": res.get("duration"),
+                "url": f"https://www.youtube.com{res.get('url_suffix')}"
+            })
+            
+        logger.info("[TOOL][search_youtube_video_tool] Found %d videos", len(formatted_results))
+        return {
+            "status": "success",
+            "data": formatted_results
+        }
+    except ImportError:
+        logger.error("youtube-search library is not installed.")
+        return {
+            "status": "error",
+            "message": "The youtube-search library is missing. Please run `pip install youtube-search`."
+        }
+    except Exception as e:
+        logger.exception("[TOOL][search_youtube_video_tool] Failed")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "message": "Failed to search YouTube videos."
+        }

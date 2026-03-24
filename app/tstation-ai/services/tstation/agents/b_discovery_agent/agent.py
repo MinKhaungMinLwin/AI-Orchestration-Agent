@@ -4,7 +4,8 @@ from services.tstation.agents.b_discovery_agent.tools import (
     post_vehicle_verify_owner_tool,
     check_compatibility_tool,
     search_product_tool,
-    get_user_vehicles_tool
+    get_user_vehicles_tool,
+    search_youtube_video_tool  # <-- Add this!
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
@@ -249,6 +250,44 @@ When the user asks if a specific tire fits their vehicle:
 3. Explain why it fits or doesn't fit
 
 
+###############################
+4️⃣ PRODUCT REVIEWS & VIDEOS (NEW)
+###############################
+
+Purpose
+Find YouTube videos, reviews, and tests for specific tires.
+
+Tool
+search_youtube_video_tool
+
+When to use
+• user asks for video reviews (e.g., "벤투스 리뷰 영상 있어?")
+• user wants to see noise tests, driving tests, or visual explanations
+• you want to enrich a tire recommendation with a real-world video
+
+Inputs
+query (e.g., "한국타이어 벤투스 에보3 리뷰")
+max_results (default 3)
+
+...
+
+====================================================
+RESPONSE FORMAT
+====================================================
+
+[Add this to the bottom of your response format section]
+
+----------------------------------------------------
+When displaying YouTube Videos
+----------------------------------------------------
+Provide a clean, bulleted list using Markdown links. Do not embed iframes.
+
+• [🎬 Video Title](URL) - by *Channel Name* (Views: 1.2M, Duration: 5:30)
+• [🎬 Video Title](URL) - by *Channel Name* (Views: 50K, Duration: 10:15)
+
+Briefly explain why you are recommending these videos (e.g., "Here are some great noise test and review videos for the Kinergy EX!").
+
+
 
 ====================================================
 HANDOVER TO OTHER AGENTS
@@ -451,6 +490,8 @@ class DiscoverySubAgent(BaseAgent):
         "get_products_recommendations_tool": "Product Recommendation",
         # Product Description
         "get_product_description_tool": "Product Description",
+        # Product Reviews
+        "search_youtube_video_tool": "Product Reviews", # <-- Added this!
     }
 
     def __init__(self, model):
@@ -462,7 +503,8 @@ class DiscoverySubAgent(BaseAgent):
                 search_product_tool,
                 get_user_vehicles_tool,
                 get_product_description_tool,
-                get_products_recommendations_tool
+                get_products_recommendations_tool,
+                search_youtube_video_tool # <-- Added this!
             ],
             system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
             name="Discovery Agent",
