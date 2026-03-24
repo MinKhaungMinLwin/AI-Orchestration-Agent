@@ -575,13 +575,16 @@ greenlet==3.3.2 \
     --hash=sha256:e3cb43ce200f59483eb82949bf1835a99cf43d7571e900d7c8d5c62cdf25d2f9
     # via sqlalchemy
 griffe==2.0.0 \
-    --hash=sha256:5418081135a391c3e6e757a7f3f156f1a1a746cc7b4023868ff7d5e2f9a980aa
+    --hash=sha256:5418081135a391c3e6e757a7f3f156f1a1a746cc7b4023868ff7d5e2f9a980aa \
+    --hash=sha256:c68979cd8395422083a51ea7cf02f9c119d889646d99b7b656ee43725de1b80f
     # via banks
 griffecli==2.0.0 \
+    --hash=sha256:312fa5ebb4ce6afc786356e2d0ce85b06c1c20d45abc42d74f0cda65e159f6ef \
     --hash=sha256:9f7cd9ee9b21d55e91689358978d2385ae65c22f307a63fb3269acf3f21e643d
     # via griffe
 griffelib==2.0.0 \
-    --hash=sha256:01284878c966508b6d6f1dbff9b6fa607bc062d8261c5c7253cb285b06422a7f
+    --hash=sha256:01284878c966508b6d6f1dbff9b6fa607bc062d8261c5c7253cb285b06422a7f \
+    --hash=sha256:e504d637a089f5cab9b5daf18f7645970509bf4f53eda8d79ed71cce8bd97934
     # via
     #   griffe
     #   griffecli
@@ -1817,6 +1820,7 @@ requests==2.32.5 \
     #   opentelemetry-exporter-otlp-proto-http
     #   requests-toolbelt
     #   tiktoken
+    #   youtube-search
 requests-toolbelt==1.0.0 \
     --hash=sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6 \
     --hash=sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06
@@ -2370,6 +2374,9 @@ yarl==1.22.0 \
     --hash=sha256:f87ac53513d22240c7d59203f25cc3beac1e574c6cd681bbfd321987b69f95fd \
     --hash=sha256:ff86011bd159a9d2dfc89c34cfd8aff12875980e3bd6a39ff097887520e60249
     # via aiohttp
+youtube-search==2.2.0 \
+    --hash=sha256:5398a7cd65d9b75a8bac27ef689ec044abab3cbfa1f20d19db0277659ac70d98 \
+    --hash=sha256:bdffbb5b22d7a7c85a88e6eeb6b00c5b5dbd29ea7b95139d21b8b8dab2ca5871
 zipp==3.23.0 \
     --hash=sha256:071652d6115ed432f5ce1d34c336c0adfd6a884660d1e9712a256d3d3bd4b14e \
     --hash=sha256:a07157588a12518c9d4034df3fbbee09c814741a33ff63c05fa29d26a2404166
