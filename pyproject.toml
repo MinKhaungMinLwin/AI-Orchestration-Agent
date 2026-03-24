@@ -82,6 +82,9 @@ tstation-ai = [
 
     # AES Encryption for QnA Payload
     "pycryptodome>=3.21.0",
+
+    # Youtube search
+    "youtube-search==2.2.0",
 ]
 
 
