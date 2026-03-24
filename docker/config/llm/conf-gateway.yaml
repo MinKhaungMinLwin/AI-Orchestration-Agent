@@ -50,6 +50,7 @@ litellm_settings:
 
 # Fallbacks when error
 fallbacks:
+  - bedrock-claude-haiku-4-5: []
   - gpt-5.4: ["gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5.0"]
   - gpt-5.3: ["gpt-5.2", "gpt-5.1", "gpt-5.0"]
   - gpt-5.2: ["gpt-5.1", "gpt-5.0"]

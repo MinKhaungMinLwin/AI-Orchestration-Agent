@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     AI_DEFAULT_PROVIDER: str
     AI_GATEWAY_BASE_URL: str
     AI_GATEWAY_API_KEY: str
+    AI_MODEL: str
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str

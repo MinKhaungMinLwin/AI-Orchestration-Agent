@@ -15,7 +15,7 @@ LLM = ChatLiteLLM(
     # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
     api_base=settings.AI_GATEWAY_BASE_URL,
     api_key=settings.AI_GATEWAY_API_KEY,
-    model="gpt-5.4",
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
     streaming=True,
 )
 

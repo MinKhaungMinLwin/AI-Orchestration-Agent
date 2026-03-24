@@ -261,7 +261,7 @@ class StreamingMultiAgentCoordinator:
         llm = ChatLiteLLM(
             api_base=settings.AI_GATEWAY_BASE_URL,
             api_key=settings.AI_GATEWAY_API_KEY,
-            model="gpt-5.4",
+            model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
         )
 
         structured_model = llm.with_structured_output(
