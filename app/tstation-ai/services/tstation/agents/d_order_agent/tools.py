@@ -120,7 +120,7 @@ def get_store_details_tool(shop_id: str, cal_day: str):
     - service appointment slots at a store
 
     Args:
-        shop_id (str): Store ID.
+        shop_id (str): Store ID in the correct format (e.g., "C01294", "B01260", "A00123").
         cal_day (str): Date to check reservation availability (format: YYYYMMDD).
 
     Returns:
@@ -145,30 +145,39 @@ def get_store_details_tool(shop_id: str, cal_day: str):
 
 
 @tool
-def get_store_list_tool(region_code: str | None = None, limit: int = 20):
+def get_store_list_tool(
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    limit: int = 20
+):    
     """
-    Retrieve a list of stores filtered by a region keyword.
+    Retrieve a list of stores filtered by region keyword and/or store name.
 
-    Using the region keyword (REGION_CODE), the system searches store
-    road addresses (ROAD_ADDR_BASE) using a partial match (LIKE search)
-    and returns stores located in the specified region.
+    The system searches store addresses using partial match (LIKE search) on region,
+    and/or searches store names using partial match on store_nm.
 
-    If REGION_CODE is not provided, the API returns stores from all regions
+    If neither REGION_CODE nor STORE_NM is provided, the API returns all stores
     up to the specified limit.
 
     This tool should be used when the user asks for:
-    - stores located in a specific city or district
-    - stores in a region (e.g., "stores in Seoul", "stores in Gangnam")
+    - User mentions a store by name (e.g. "삼송타이어", "극동상사") 
+    - User searches for stores in a specific city or district (e.g. "서울", "강남")
     - a list of stores within a particular area
+    - User need to look up shop_id before calling get_store_details_tool
+
 
     Do NOT use this tool when:
     - the user asks for stores near their current location (use the nearby store tool)
     - the user asks for reservation availability or store details for a specific store
 
     Args:
-        region_code (str | None): Region keyword used to filter stores, using Korean address, Examples: '서울', '강nam"'). Optional.
+        region_code (str | None): Region keyword for address search (Korean address).
+            Examples: '서울', '강남', '부산', '송파구'. Optional.
+        store_nm (str | None): Store name keyword for partial match search.
+            Use this when the user mentions a store by name.
+            Examples: '삼송타이어', '극동상사', '한국타이어'. Optional.
         limit (int): Maximum number of stores to return. Default is 20.
-
+        
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -176,7 +185,12 @@ def get_store_list_tool(region_code: str | None = None, limit: int = 20):
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, limit=%s", region_code, limit)
 
     try:
-        response = get_store_list(client=get_client(), region_code=region_code, limit=limit)
+        response = get_store_list(
+            client=get_client(), 
+            region_code=region_code, 
+            store_nm=store_nm,
+            limit=limit
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,

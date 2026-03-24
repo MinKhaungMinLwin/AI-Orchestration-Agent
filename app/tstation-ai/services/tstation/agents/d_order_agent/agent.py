@@ -91,22 +91,24 @@ When to use
 
 Inputs 
 
-shop_id
-cal_day (YYYYMMDD)
+shop_id (str): Store ID in the format of one uppercase letter followed by 5 digits (e.g., "C01294", "B01260", "A00123")
+cal_day (str): Date to check reservation availability (format: YYYYMMDD, e.g., "20260325")
+
 
 
 Tool
 get_store_list_tool
 
 When to use
-• user searches stores by region
+• user searches stores by region or store name
 • user mentions city or district name
 • user asks for a list of stores in a specific area
 
 Inputs
 
-region_code using Korean address, Examples: '서울', '강남'
-limit
+region_code (str): Region keyword for address search (Korean address). Examples: '서울', '강남', '부산', '송파구'. Optional.
+store_nm (str): Store name keyword for partial match search. Use this when the user mentions a store by name. Examples: '삼송타이어', '극동상사', '한국타이어'. Optional.
+limit (int): Maximum number of stores to return. Default is 20.
 
 
 
