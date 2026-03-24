@@ -1,5 +1,7 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .car_model_search_item import CarModelSearchItem
+from .car_model_search_response import CarModelSearchResponse
 from .compatibility_response import CompatibilityResponse
 from .escalation_request import EscalationRequest
 from .escalation_response import EscalationResponse
@@ -36,6 +38,8 @@ from .verify_owner_request import VerifyOwnerRequest
 from .verify_owner_response import VerifyOwnerResponse
 
 __all__ = (
+    "CarModelSearchItem",
+    "CarModelSearchResponse",
     "CompatibilityResponse",
     "EscalationRequest",
     "EscalationResponse",

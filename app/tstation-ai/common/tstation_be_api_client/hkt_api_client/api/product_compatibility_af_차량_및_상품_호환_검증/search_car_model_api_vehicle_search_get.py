@@ -5,31 +5,28 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.compatibility_response import CompatibilityResponse
+from ...models.car_model_search_response import CarModelSearchResponse
 from ...models.http_validation_error import HTTPValidationError
-from ...types import UNSET, Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     *,
-    car_no: str,
-    owner_nm: str,
-    goods_no: str,
+    keyword: str,
+    limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["car_no"] = car_no
+    params["keyword"] = keyword
 
-    params["owner_nm"] = owner_nm
-
-    params["goods_no"] = goods_no
+    params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/api/product/compatible",
+        "url": "/api/vehicle/search",
         "params": params,
     }
 
@@ -38,9 +35,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> CompatibilityResponse | HTTPValidationError | None:
+) -> CarModelSearchResponse | HTTPValidationError | None:
     if response.status_code == 200:
-        response_200 = CompatibilityResponse.from_dict(response.json())
+        response_200 = CarModelSearchResponse.from_dict(response.json())
 
         return response_200
 
@@ -57,7 +54,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[CompatibilityResponse | HTTPValidationError]:
+) -> Response[CarModelSearchResponse | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -69,29 +66,28 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    car_no: str,
-    owner_nm: str,
-    goods_no: str,
-) -> Response[CompatibilityResponse | HTTPValidationError]:
-    """차량-상품 타이어 호환 검증
+    keyword: str,
+    limit: int | Unset = 20,
+) -> Response[CarModelSearchResponse | HTTPValidationError]:
+    """차량 모델 검색
+
+     차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.
 
     Args:
-        car_no (str): 차량 번호
-        owner_nm (str): 차량 소유주
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
+        limit (int | Unset): 반환할 최대 차량 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[CompatibilityResponse | HTTPValidationError]
+        Response[CarModelSearchResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        car_no=car_no,
-        owner_nm=owner_nm,
-        goods_no=goods_no,
+        keyword=keyword,
+        limit=limit,
     )
 
     response = client.get_httpx_client().request(
@@ -104,59 +100,57 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    car_no: str,
-    owner_nm: str,
-    goods_no: str,
-) -> CompatibilityResponse | HTTPValidationError | None:
-    """차량-상품 타이어 호환 검증
+    keyword: str,
+    limit: int | Unset = 20,
+) -> CarModelSearchResponse | HTTPValidationError | None:
+    """차량 모델 검색
+
+     차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.
 
     Args:
-        car_no (str): 차량 번호
-        owner_nm (str): 차량 소유주
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
+        limit (int | Unset): 반환할 최대 차량 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        CompatibilityResponse | HTTPValidationError
+        CarModelSearchResponse | HTTPValidationError
     """
 
     return sync_detailed(
         client=client,
-        car_no=car_no,
-        owner_nm=owner_nm,
-        goods_no=goods_no,
+        keyword=keyword,
+        limit=limit,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    car_no: str,
-    owner_nm: str,
-    goods_no: str,
-) -> Response[CompatibilityResponse | HTTPValidationError]:
-    """차량-상품 타이어 호환 검증
+    keyword: str,
+    limit: int | Unset = 20,
+) -> Response[CarModelSearchResponse | HTTPValidationError]:
+    """차량 모델 검색
+
+     차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.
 
     Args:
-        car_no (str): 차량 번호
-        owner_nm (str): 차량 소유주
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
+        limit (int | Unset): 반환할 최대 차량 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[CompatibilityResponse | HTTPValidationError]
+        Response[CarModelSearchResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        car_no=car_no,
-        owner_nm=owner_nm,
-        goods_no=goods_no,
+        keyword=keyword,
+        limit=limit,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -167,30 +161,29 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    car_no: str,
-    owner_nm: str,
-    goods_no: str,
-) -> CompatibilityResponse | HTTPValidationError | None:
-    """차량-상품 타이어 호환 검증
+    keyword: str,
+    limit: int | Unset = 20,
+) -> CarModelSearchResponse | HTTPValidationError | None:
+    """차량 모델 검색
+
+     차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.
 
     Args:
-        car_no (str): 차량 번호
-        owner_nm (str): 차량 소유주
-        goods_no (str): 상품 번호
+        keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
+        limit (int | Unset): 반환할 최대 차량 수 Default: 20.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        CompatibilityResponse | HTTPValidationError
+        CarModelSearchResponse | HTTPValidationError
     """
 
     return (
         await asyncio_detailed(
             client=client,
-            car_no=car_no,
-            owner_nm=owner_nm,
-            goods_no=goods_no,
+            keyword=keyword,
+            limit=limit,
         )
     ).parsed

@@ -71,10 +71,10 @@ def sync_detailed(
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
 
-     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
+     제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -105,10 +105,10 @@ def sync(
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
 
-     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
+     제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -134,10 +134,10 @@ async def asyncio_detailed(
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
 
-     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
+     제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -166,10 +166,10 @@ async def asyncio(
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
 
-     제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
+     제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:

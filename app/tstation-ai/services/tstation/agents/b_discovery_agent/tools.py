@@ -13,6 +13,7 @@ from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerReque
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_api_vehicle_search_get import sync_detailed as search_car_model
 
 # Product Description
 from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync_detailed as get_product_description
@@ -34,6 +35,7 @@ DOMAIN_TOOL_MAP = {
         "check_compatibility",
         "search_product",
         "get_user_vehicles",
+        "search_car_model",
 
         # Product Recommendation
         "get_recommendations",
@@ -123,26 +125,25 @@ def post_vehicle_verify_owner_tool(car_no: str):
 
 
 @tool
-def check_compatibility_tool(goods_no: str, car_no: str | None = None, car_nm: str | None = None):
+def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
     """
     차량-상품 타이어 호환 검증
 
-    차량번호(CAR_NO)로 VW_ET_MBR_CAR_INFO에서 전/후륜 타이어 사이즈를 조회하거나 차량정보(CAR_NM)로 PR_CAR_BASE + PR_CAR_ATTR에서
-    전/후륜 타이어 사이즈를 조회하고, 상품번호(GOODS_NO)로 PR_GOODS_BASE에서 타이어 스펙(단면폭/편평비/인치)을 조회하여 호환 여부를 반환합니다. 카젠 API 연동
-    전까지 내부 DB 정보를 우선 활용합니다.
+    차량번호(CAR_NO)와 소유주명(OWNER_NM)으로 차량 타이어 사이즈를 조회하고,
+    상품번호(GOODS_NO)로 타이어 스펙(단면폭/편평비/인치)을 조회하여 호환 여부를 반환합니다.
 
     Args:
         goods_no (str): 상품 번호
-        car_no (str | None): 차량 번호
-        car_nm (str | None): 차량 정보
+        car_no (str): 차량 번호
+        owner_nm (str): 차량 소유주
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, car_nm=%s", goods_no, car_no, car_nm)
+    logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, owner_nm=%s", goods_no, car_no, owner_nm)
 
     try:
-        response = check_compatibility(client=get_client(), goods_no=goods_no, car_no=car_no, car_nm=car_nm)
+        response = check_compatibility(client=get_client(), goods_no=goods_no, car_no=car_no, owner_nm=owner_nm)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -161,10 +162,11 @@ def search_product_tool(keyword: str, limit: int = 20):
     """
     상품 검색
 
-    제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')
+    제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원.
+    (예: '벤투스', 's1 evo', '아이온 suv')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: 'Ventus S2')
+        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int): 반환할 최대 상품 수 Default: 20.
 
     Returns:
@@ -188,23 +190,24 @@ def search_product_tool(keyword: str, limit: int = 20):
 
 
 @tool
-def get_user_vehicles_tool(car_no: str):
+def get_user_vehicles_tool(car_no: str, owner_nm: str):
     """
     Get user vehicles.
 
     Retrieve vehicle information associated with the given vehicle
-    registration number.
+    registration number and owner name.
 
     Args:
         car_no (str): Vehicle registration number.
+        owner_nm (str): Owner name.
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s", car_no)
+    logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s, owner_nm=%s", car_no, owner_nm)
 
     try:
-        response = get_user_vehicles(client=get_client(), car_no=car_no)
+        response = get_user_vehicles(client=get_client(), car_no=car_no, owner_nm=owner_nm)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -216,6 +219,37 @@ def get_user_vehicles_tool(car_no: str):
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
         return _error_response(None, str(e), "Failed to get user vehicles")
+
+
+@tool
+def search_car_model_tool(keyword: str, limit: int = 20):
+    """
+    차량 모델 검색
+
+    차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.
+
+    Args:
+        keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
+        limit (int): 반환할 최대 차량 수 Default: 20.
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][search_car_model_tool] Called with: keyword=%s, limit=%s", keyword, limit)
+
+    try:
+        response = search_car_model(client=get_client(), keyword=keyword, limit=limit)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search car models"
+            )
+        logger.info("[TOOL][search_car_model_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][search_car_model_tool] Failed")
+        return _error_response(None, str(e), "Failed to search car models")
 
 
 @tool

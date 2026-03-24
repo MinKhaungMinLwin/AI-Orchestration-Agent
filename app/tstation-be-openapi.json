@@ -468,7 +468,6 @@
           "Product Compatibility AF - 차량 및 상품 호환 검증"
         ],
         "summary": "차량-상품 타이어 호환 검증",
-        "description": "차량번호(CAR_NO)로 VW_ET_MBR_CAR_INFO에서 전/후륜 타이어 사이즈를 조회하거나 차량정보(CAR_NM)로 PR_CAR_BASE + PR_CAR_ATTR에서 전/후륜 타이어 사이즈를 조회하고, 상품번호(GOODS_NO)로 PR_GOODS_BASE에서 타이어 스펙(단면폭/편평비/인치)을 조회하여 호환 여부를 반환합니다. 카젠 API 연동 전까지 내부 DB 정보를 우선 활용합니다.",
         "operationId": "check_compatibility_api_product_compatible_get",
         "security": [
           {
@@ -479,38 +478,24 @@
           {
             "name": "car_no",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
+              "type": "string",
               "description": "차량 번호",
               "title": "Car No"
             },
             "description": "차량 번호"
           },
           {
-            "name": "car_nm",
+            "name": "owner_nm",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "차량 정보",
-              "title": "Car Nm"
+              "type": "string",
+              "description": "차량 소유주",
+              "title": "Owner Nm"
             },
-            "description": "차량 정보"
+            "description": "차량 소유주"
           },
           {
             "name": "goods_no",
@@ -613,10 +598,21 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "자동차 등록번호?",
+              "description": "자동차 등록번호",
               "title": "Car No"
             },
-            "description": "자동차 등록번호?"
+            "description": "자동차 등록번호"
+          },
+          {
+            "name": "owner_nm",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "소유자 이름",
+              "title": "Owner Nm"
+            },
+            "description": "소유자 이름"
           }
         ],
         "responses": {
@@ -647,7 +643,7 @@
           "Product Compatibility AF - 차량 및 상품 호환 검증"
         ],
         "summary": "상품 검색",
-        "description": "제품명 키워드로 상품을 검색하여 GOODS_NO, GOODS_NM, TIRE_SIZE(1,2)를 반환합니다. (예: '벤투스 S2')",
+        "description": "제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')",
         "operationId": "search_product_api_product_search_get",
         "security": [
           {
@@ -661,10 +657,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "검색할 제품명 키워드 (예: 'Ventus S2')",
+              "description": "검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')",
               "title": "Keyword"
             },
-            "description": "검색할 제품명 키워드 (예: 'Ventus S2')"
+            "description": "검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')"
           },
           {
             "name": "limit",
@@ -688,6 +684,70 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProductSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vehicle/search": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "차량 모델 검색",
+        "description": "차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.",
+        "operationId": "search_car_model_api_vehicle_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "검색할 차량 모델명 키워드 (예: '소나타', '그랜저')",
+              "title": "Keyword"
+            },
+            "description": "검색할 차량 모델명 키워드 (예: '소나타', '그랜저')"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "반환할 최대 차량 수",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "반환할 최대 차량 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarModelSearchResponse"
                 }
               }
             }
@@ -995,6 +1055,42 @@
   },
   "components": {
     "schemas": {
+      "CarModelSearchItem": {
+        "properties": {
+          "car_lnc_cd": {
+            "type": "string",
+            "title": "Car Lnc Cd",
+            "description": "차량 출시 코드"
+          },
+          "car_nm": {
+            "type": "string",
+            "title": "Car Nm",
+            "description": "차량명"
+          }
+        },
+        "type": "object",
+        "required": [
+          "car_lnc_cd",
+          "car_nm"
+        ],
+        "title": "CarModelSearchItem"
+      },
+      "CarModelSearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CarModelSearchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "CarModelSearchResponse"
+      },
       "CompatibilityResponse": {
         "properties": {
           "tire_size_fr": {
@@ -1675,6 +1771,18 @@
             ],
             "title": "Tire Size 2",
             "description": "타이어 사이즈 (TIRE_SIZE_2)"
+          },
+          "score": {
+            "type": "integer",
+            "title": "Score",
+            "description": "검색 관련도 점수",
+            "default": 0
+          },
+          "match_type": {
+            "type": "string",
+            "title": "Match Type",
+            "description": "매칭 유형 (exact/prefix/partial/alias)",
+            "default": "none"
           }
         },
         "type": "object",

@@ -5,6 +5,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
     get_user_vehicles_tool,
+    search_car_model_tool,  # <-- Add this!
     search_youtube_video_tool  # <-- Add this!
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
@@ -94,13 +95,13 @@ Purpose
 Retrieve vehicle data and verify tire compatibility.
 
 
-Tool  
+Tool
 post_vehicle_verify_owner_tool
 
 When to use
 
-• user provides vehicle number  
-• need vehicle tire information  
+• user provides vehicle number
+• need vehicle tire information
 
 Inputs
 
@@ -108,7 +109,7 @@ car_no
 
 
 
-Tool  
+Tool
 get_user_vehicles_tool
 
 When to use
@@ -117,7 +118,28 @@ When to use
 
 Inputs
 
-car_no
+car_no - vehicle registration number (required)
+owner_nm - owner name (required)
+
+
+
+Tool
+search_car_model_tool
+
+When to use
+
+• user searches for vehicle model by name (e.g., '소나타', '그랜저')
+• user doesn't know the exact vehicle number
+
+Inputs
+
+keyword - vehicle model name keyword (required)
+limit - max results (optional, default 20)
+
+Returns
+
+car_lnc_cd - vehicle launch code
+car_nm - vehicle name
 
 
 
@@ -133,8 +155,8 @@ When to use
 Inputs
 
 goods_no - product number (required)
-car_no - vehicle number (optional)
-car_nm - vehicle info (optional)
+car_no - vehicle number (required)
+owner_nm - owner name (required)
 
 
 Tool
@@ -248,6 +270,18 @@ When the user asks if a specific tire fits their vehicle:
 1. Call check_compatibility_tool with goods_no and car info
 2. Show compatibility result (front/rear wheel)
 3. Explain why it fits or doesn't fit
+
+
+
+------------------------------------
+Flow 6 — Car Model Search
+------------------------------------
+
+When the user searches for a vehicle by model name (without vehicle number):
+
+1. Call search_car_model_tool with keyword (e.g., '소나타', '그랜저')
+2. Display matching car models with car_lnc_cd and car_nm
+3. User can then use car_lnc_cd or car_nm with check_compatibility_tool
 
 
 ###############################
@@ -486,6 +520,7 @@ class DiscoverySubAgent(BaseAgent):
         "check_compatibility_tool": "Vehicle & Compatibility",
         "search_product_tool": "Product Search",
         "get_user_vehicles_tool": "Vehicle & Compatibility",
+        "search_car_model_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
         # Product Description
@@ -502,6 +537,7 @@ class DiscoverySubAgent(BaseAgent):
                 check_compatibility_tool,
                 search_product_tool,
                 get_user_vehicles_tool,
+                search_car_model_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool,
                 search_youtube_video_tool # <-- Added this!

@@ -12,11 +12,14 @@ from ...types import UNSET, Response
 def _get_kwargs(
     *,
     car_no: str,
+    owner_nm: str,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["car_no"] = car_no
+
+    params["owner_nm"] = owner_nm
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -62,11 +65,13 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
     car_no: str,
+    owner_nm: str,
 ) -> Response[Any | HTTPValidationError]:
     """Get User Vehicles
 
     Args:
-        car_no (str): 자동차 등록번호?
+        car_no (str): 자동차 등록번호
+        owner_nm (str): 소유자 이름
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -78,6 +83,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         car_no=car_no,
+        owner_nm=owner_nm,
     )
 
     response = client.get_httpx_client().request(
@@ -91,11 +97,13 @@ def sync(
     *,
     client: AuthenticatedClient,
     car_no: str,
+    owner_nm: str,
 ) -> Any | HTTPValidationError | None:
     """Get User Vehicles
 
     Args:
-        car_no (str): 자동차 등록번호?
+        car_no (str): 자동차 등록번호
+        owner_nm (str): 소유자 이름
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -108,6 +116,7 @@ def sync(
     return sync_detailed(
         client=client,
         car_no=car_no,
+        owner_nm=owner_nm,
     ).parsed
 
 
@@ -115,11 +124,13 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
     car_no: str,
+    owner_nm: str,
 ) -> Response[Any | HTTPValidationError]:
     """Get User Vehicles
 
     Args:
-        car_no (str): 자동차 등록번호?
+        car_no (str): 자동차 등록번호
+        owner_nm (str): 소유자 이름
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -131,6 +142,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         car_no=car_no,
+        owner_nm=owner_nm,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -142,11 +154,13 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
     car_no: str,
+    owner_nm: str,
 ) -> Any | HTTPValidationError | None:
     """Get User Vehicles
 
     Args:
-        car_no (str): 자동차 등록번호?
+        car_no (str): 자동차 등록번호
+        owner_nm (str): 소유자 이름
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -160,5 +174,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             car_no=car_no,
+            owner_nm=owner_nm,
         )
     ).parsed
