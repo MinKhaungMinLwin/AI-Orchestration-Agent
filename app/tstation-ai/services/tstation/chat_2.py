@@ -51,12 +51,13 @@ class MultiAgentDomain(BaseModel):
 
 
 def prompt_router_multi() -> str:
-    """Classification prompt that detects multi-intent."""
+    """Classification prompt that detects multi-intent with flow sequences."""
     return f"""
 Current Time: {get_current_time()}
 
 You are a domain classifier for T-Station AI (Hankook Tire).
 Classify user message into ONE OR MORE domains based on detected intents.
+Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
 DOMAINS:
 - ORDER: Purchase, reservation, store visit/booking, order tracking, store search by location/name
@@ -65,7 +66,117 @@ DOMAINS:
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
 - LEADING: Greeting, unclear intent
 
-DECISION RULES:
+====================================================
+FLOW SEQUENCES (Tool/Agent Chains)
+====================================================
+
+Map user queries to the correct flow sequence:
+
+EXAMPLE QUERIES → FLOW:
+
+1. "쏘나타에 맞는 타이어 추천하고 가격 알려줘"
+   "Recommend tires for Sonata and tell me the price"
+   → DISCOVERY → PRICING
+   (Compatibility → Recommendation → Price)
+
+2. "추천 타이어 중 재고 있는 매장 알려줘"
+   "Show stores that have recommended tires in stock"
+   → DISCOVERY → PRICING → ORDER
+   (Recommendation → Inventory → Store)
+
+3. "벤투스 S1 evo3 가격이랑 강남점 재고 알려줘"
+   "Tell me Ventus S1 evo3 price and Gangnam stock"
+   → PRICING → ORDER
+   (Price → Inventory)
+
+4. "내 차에 맞는 타이어 추천하고 바로 주문할게"
+   "Recommend tires for my car and I'll order immediately"
+   → DISCOVERY → ORDER
+   (Compatibility → Recommendation → Quick Shopping)
+
+5. "타이어 추천하고 할인 가격 알려줘"
+   "Recommend tires and tell me discounted price"
+   → DISCOVERY → PRICING
+   (Recommendation → Price)
+
+6. "추천 타이어 중 재고 있는 것만 보여줘"
+   "Show only recommended tires that are in stock"
+   → DISCOVERY → PRICING
+   (Recommendation → Inventory)
+
+7. "추천 타이어 가격 비교해줘"
+   "Compare the prices of recommended tires"
+   → DISCOVERY → PRICING
+   (Recommendation → Price → Description)
+
+8. "벤투스 S1 evo3 설명하고 가격 알려줘"
+   "Explain Ventus S1 evo3 and tell me the price"
+   → DISCOVERY → PRICING
+   (Description → Price)
+
+9. "추천 타이어 중 강남점 재고 알려줘"
+   "Show Gangnam store stock for recommended tires"
+   → DISCOVERY → PRICING → ORDER
+   (Recommendation → Inventory → Store)
+
+10. "쏘나타 타이어 추천하고 장착 예약할게"
+    "Recommend tires for Sonata and make installation reservation"
+    → DISCOVERY → ORDER
+    (Compatibility → Recommendation → Quick Shopping)
+
+11. "강남점 재고 있는 타이어 가격 알려줘"
+    "Tell me the price of tires in stock at Gangnam store"
+    → PRICING → ORDER
+    (Inventory → Price → Store)
+
+12. "추천 타이어 리뷰랑 가격 알려줘"
+    "Show reviews and prices of recommended tires"
+    → DISCOVERY → PRICING
+    (Recommendation → Description → Price)
+
+13. "인기 타이어 가격이랑 재고 알려줘"
+    "Tell me the price and stock of popular tires"
+    → DISCOVERY → PRICING
+    (Recommendation → Price → Inventory)
+
+14. "내 차 타이어 추천하고 장착 예약하고 싶어요"
+    "Recommend tires for my car and make installation reservation"
+    → DISCOVERY → ORDER
+    (Compatibility → Recommendation → Quick Shopping)
+
+15. "재고 있는 타이어 추천해주세요"
+    "Recommend tires that are in stock"
+    → DISCOVERY → PRICING
+    (Inventory → Recommendation)
+
+16. "타이어 추천하고 가까운 매장 알려줘"
+    "Recommend tires and show nearby stores"
+    → DISCOVERY → ORDER
+    (Recommendation → Store)
+
+17. "재고 있는 매장 알려주고 예약할게"
+    "Show stores with stock and make a reservation"
+    → ORDER → PRICING → ORDER
+    (Store → Inventory → Quick Shopping)
+
+18. "벤투스 타이어 가격이랑 장착 예약"
+    "Ventus tire price and installation reservation"
+    → PRICING → ORDER
+    (Price → Quick Shopping)
+
+19. "추천 타이어 중 할인 상품 알려줘"
+    "Show discounted products among recommended tires"
+    → DISCOVERY → PRICING
+    (Recommendation → Price)
+
+20. "타이어 추천하고 비교해줘"
+    "Recommend tires and compare them"
+    → DISCOVERY
+    (Recommendation → Description)
+
+====================================================
+DECISION RULES
+====================================================
 
 ORDER if user wants:
 - "Buy", "purchase", "order", "checkout"
@@ -103,13 +214,18 @@ LEADING if:
 - General capability questions ("what can you do")
 Examples: "Hi", "What can you help me with?", "Hello"
 
-MULTI-INTENT DETECTION:
+====================================================
+MULTI-INTENT DETECTION
+====================================================
+
 If user request contains multiple intents, detect ALL relevant domains.
+The "domains" list should be ordered by the FLOW SEQUENCE.
+
 Examples:
-- "Explain Ventus S1 evo3 and tell me the price" → DISCOVERY + PRICING
-- "Find tires for my BMW and check if in stock at nearby store" → DISCOVERY + PRICING + ORDER
-- "Recommend tires and their warranty" → DISCOVERY + SUPPORT
-- "How much is this tire? Also, what's the warranty?" → PRICING + SUPPORT
+- "Explain Ventus S1 evo3 and tell me the price" → DISCOVERY, PRICING
+- "Find tires for my BMW and check if in stock at nearby store" → DISCOVERY, PRICING, ORDER
+- "Recommend tires and their warranty" → DISCOVERY, SUPPORT
+- "How much is this tire? Also, what's the warranty?" → PRICING, SUPPORT
 
 KEY PRINCIPLES:
 - "stores near [location]" → ORDER
@@ -119,7 +235,7 @@ KEY PRINCIPLES:
 - "buy tires" → ORDER
 - "recommend tires" → DISCOVERY
 - "warranty, return, maintenance" → SUPPORT
-- When multiple intents present, return ALL relevant domains
+- When multiple intents present, return ALL relevant domains in flow order
 
 Korean vehicle numbers follow patterns: 12가3456, 123가1234
 """
