@@ -362,8 +362,10 @@ When to use
 **MANDATORY: When user asks for YouTube videos, ALWAYS call this tool immediately without asking for clarification. Do NOT ask follow-up questions - just search and show results.**
 
 Inputs
-query (e.g., "한국타이어 벤투스 에보3 리뷰", "BMW 5시리즈 타이어")
+query (e.g., "벤투스 에보3 리뷰", "BMW 타이어")
 max_results (default 3)
+
+IMPORTANT: Only return videos from these 2 channels: 한국타이어 (Hankook Tire) and 티스테이션 TV (Tstation TV). Videos from other channels must be excluded.
 
 ---
 Flow 7 — YouTube Video Search
