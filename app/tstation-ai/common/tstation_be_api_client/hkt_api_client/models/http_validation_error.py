@@ -19,19 +19,22 @@ T = TypeVar("T", bound="HTTPValidationError")
 class HTTPValidationError:
     """
     Attributes:
-        detail (list[ValidationError] | Unset):
+        detail (list[ValidationError] | str | Unset):
     """
 
-    detail: list[ValidationError] | Unset = UNSET
+    detail: list[ValidationError] | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        detail: list[dict[str, Any]] | Unset = UNSET
+        detail: list[dict[str, Any]] | str | Unset = UNSET
         if not isinstance(self.detail, Unset):
-            detail = []
-            for detail_item_data in self.detail:
-                detail_item = detail_item_data.to_dict()
-                detail.append(detail_item)
+            if isinstance(self.detail, str):
+                detail = self.detail
+            else:
+                detail = []
+                for detail_item_data in self.detail:
+                    detail_item = detail_item_data.to_dict()
+                    detail.append(detail_item)
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -47,13 +50,16 @@ class HTTPValidationError:
 
         d = dict(src_dict)
         _detail = d.pop("detail", UNSET)
-        detail: list[ValidationError] | Unset = UNSET
+        detail: list[ValidationError] | str | Unset = UNSET
         if _detail is not UNSET:
-            detail = []
-            for detail_item_data in _detail:
-                detail_item = ValidationError.from_dict(detail_item_data)
+            if isinstance(_detail, str):
+                detail = _detail
+            else:
+                detail = []
+                for detail_item_data in _detail:
+                    detail_item = ValidationError.from_dict(detail_item_data)
 
-                detail.append(detail_item)
+                    detail.append(detail_item)
 
         http_validation_error = cls(
             detail=detail,

@@ -240,27 +240,31 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
 
-    body = QuickOrderRequest(
-        goods_no=goods_no,
-        ord_qty=ord_qty,
-        mbr_no=mbr_no,
-    )
+    # TODO: [MOCK] Remove mock and use real API
+    logger.info("[TOOL][create_order_draft_tool] [MOCK] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
+    return _success_response(200, {"redirect_url": "https://example.com/quick-order/draft"})
 
-    logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
-
-    try:
-        response = create_quick_order(client=get_client(), body=body)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to create quick order draft"
-            )
-        logger.info("[TOOL][create_order_draft_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][create_order_draft_tool] Failed")
-        return _error_response(None, str(e), "Failed to create quick order draft")
+    # body = QuickOrderRequest(
+    #     goods_no=goods_no,
+    #     ord_qty=ord_qty,
+    #     mbr_no=mbr_no,
+    # )
+    #
+    # logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
+    #
+    # try:
+    #     response = create_quick_order(client=get_client(), body=body)
+    #     if response.parsed is None:
+    #         return _error_response(
+    #             response.status_code,
+    #             f"HTTP {response.status_code}",
+    #             response.content.decode(errors="ignore") or "Failed to create quick order draft"
+    #         )
+    #     logger.info("[TOOL][create_order_draft_tool] Response: %s", response.parsed)
+    #     return _success_response(response.status_code, _to_dict(response.parsed))
+    # except Exception as e:
+    #     logger.exception("[TOOL][create_order_draft_tool] Failed")
+    #     return _error_response(None, str(e), "Failed to create quick order draft")
 
 
 
@@ -293,18 +297,36 @@ def get_order_status_tool(ord_no: str):
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
 
-    logger.info("[TOOL][get_order_status_tool] Called with: ord_no=%s", ord_no)
+    # TODO: [MOCK] Remove mock and use real API
+    logger.info("[TOOL][get_order_status_tool] [MOCK] Called with: ord_no=%s", ord_no)
+    mock_data = {
+        "ord_no": ord_no,
+        "ord_status": "ORDER_RECEIVED",
+        "ord_status_nm": "Order Received",
+        "dlv_status": "PREPARING",
+        "dlv_status_nm": "Preparing for Shipment",
+        "tracking_no": "MOCK-TRACK-123456",
+        "dlv_company_nm": "CJ Korea Express",
+        "ord_qty": 4,
+        "goods_nm": "Hankook Tire Ventus V12 evo2 K120",
+        "store_nm": "Mock Store Name",
+        "ord_dt": "2026-03-24 10:30:00",
+        "dlv_est_dt": "2026-03-27",
+    }
+    return _success_response(200, mock_data)
 
-    try:
-        response = get_order_delivery(client=get_client(), ord_no=ord_no)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to retrieve order status"
-            )
-        logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][get_order_status_tool] Failed")
-        return _error_response(None, str(e), "Failed to retrieve order status")
+    # logger.info("[TOOL][get_order_status_tool] Called with: ord_no=%s", ord_no)
+    #
+    # try:
+    #     response = get_order_delivery(client=get_client(), ord_no=ord_no)
+    #     if response.parsed is None:
+    #         return _error_response(
+    #             response.status_code,
+    #             f"HTTP {response.status_code}",
+    #             response.content.decode(errors="ignore") or "Failed to retrieve order status"
+    #         )
+    #     logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
+    #     return _success_response(response.status_code, _to_dict(response.parsed))
+    # except Exception as e:
+    #     logger.exception("[TOOL][get_order_status_tool] Failed")
+    #     return _error_response(None, str(e), "Failed to retrieve order status")
