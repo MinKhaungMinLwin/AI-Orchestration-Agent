@@ -1,12 +1,11 @@
 
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.b_discovery_agent.tools import (
-    post_vehicle_verify_owner_tool,
     check_compatibility_tool,
     search_product_tool,
     get_user_vehicles_tool,
-    search_car_model_tool,  # <-- Add this!
-    search_youtube_video_tool  # <-- Add this!
+    search_car_model_tool,
+    search_youtube_video_tool,
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
@@ -107,23 +106,6 @@ When vehicle information is available, send car_lnc_cd or tire_size:
 ###############################
 2️⃣ VEHICLE & COMPATIBILITY
 ###############################
-
-Purpose  
-Retrieve vehicle data and verify tire compatibility.
-
-
-Tool
-post_vehicle_verify_owner_tool
-
-When to use
-
-• user provides vehicle number
-• need vehicle tire information
-
-Inputs
-
-car_no
-
 
 
 Tool
@@ -251,47 +233,63 @@ Tools should be combined into logical flows.
 
 
 ------------------------------------
-Flow 1 — General Tire Recommendation
+START — Entry Point (ALL tire requests)
 ------------------------------------
 
-When user asks for tire suggestions WITHOUT a specific vehicle:
+When user requests tire recommendation:
 
-1. Call get_products_recommendations_tool with limit=20, car_lnc_cd=None, tire_size=None
-2. Filter and select 3-7 best products from the results to display
-3. Select the best product
-4. Call get_product_description_tool
-5. Explain why the product is recommended
+**STEP 1: Check Vehicle Information**
+1. CHECK: Does user provide vehicle_number (차량번호)?
+   - YES → Go to STEP 2 (Vehicle Verification Path)
+   - NO → Go to STEP 3 (No Vehicle Path)
 
-**NOTE:** If user mentions a vehicle during conversation, switch to Flow 2 instead.
+**STEP 2: Vehicle Verification Path**
+1. CHECK: Is owner_name provided?
+   - NO → Ask user for owner_name, wait for input
+   - YES → Continue
+2. Call get_user_vehicles_tool with car_no and owner_nm
+3. Result: Vehicle info + Tire size + car_lnc_cd
+4. Go to RECOMMENDATION ENGINE
 
+**STEP 3: No Vehicle Path**
+Offer TWO options to user:
+
+**Option A: Tire Size Input**
+1. Ask user to input tire size
+2. Normalize format (e.g., "245/45R18")
+3. Go to RECOMMENDATION ENGINE (using tire_size)
+
+**Option B: Vehicle Model Search**
+1. Ask user to search vehicle model
+2. Call search_car_model_tool with keyword
+3. Display vehicle candidates in numbered list
+4. User selects vehicle from list
+5. Call get_user_vehicles_tool to get tire size
+6. Go to RECOMMENDATION ENGINE
 
 
 ------------------------------------
-Flow 2 — Vehicle-Based Recommendation
+RECOMMENDATION ENGINE (Shared)
 ------------------------------------
 
-When the user provides a vehicle number OR wants recommendations for their specific car:
+**STEP 1: Get Recommendations**
+1. Call get_products_recommendations_tool with limit=20
+   - If car_lnc_cd available → use car_lnc_cd (priority)
+   - If tire_size available → use tire_size
+   - If neither → use general recommendation
 
-**STEP 1: Verify & Confirm Vehicle**
-1. Call post_vehicle_verify_owner_tool OR get_user_vehicles_tool
-2. Confirm vehicle model with user (show vehicle name)
-3. Get recommended tire size for the vehicle
-
-**STEP 2: Get Compatible Tires**
-4. Call get_products_recommendations_tool with limit=20, car_lnc_cd=<vehicle_lnc_cd>, tire_size=None
-   - Priority: car_lnc_cd > tire_size (if car_lnc_cd available, use it; otherwise use tire_size)
-5. Filter to show ONLY compatible tires (vehicle fit = ✅)
+**STEP 2: Filter & Select**
+2. Filter to show ONLY compatible tires (vehicle fit = ✅)
+3. Select 3-7 best products
 
 **STEP 3: Display Recommendations**
-6. Filter and select 3-7 best products compatible with the vehicle
-7. Call get_product_description_tool for the best product
-8. Highlight WHY these tires fit the user's vehicle
+4. Show product table
+5. Call get_product_description_tool for best product
+6. Highlight WHY these tires fit the user's vehicle
 
 **IMPORTANT:**
-- Always confirm the vehicle with user before showing recommendations
-- Prioritize vehicle-specific compatible products
+- Always prioritize compatible products when vehicle is identified
 - If not compatible, explain why and suggest alternatives
-
 
 
 ------------------------------------
@@ -303,7 +301,6 @@ When the user asks about a specific tire:
 1. Identify goods_no
 2. Call get_product_description_tool
 3. Explain the product clearly
-
 
 
 ------------------------------------
@@ -327,36 +324,16 @@ When the user asks if a specific tire fits their vehicle:
 3. Explain why it fits or doesn't fit
 
 
-
 ------------------------------------
-Flow 6 — Car Model Search & Tire Recommendation (PRIORITY WORKFLOW)
+Flow 6 — Car Model Search Only
 ------------------------------------
 
-When the user searches for a vehicle by model name OR wants tire recommendations for their car:
+When user ONLY wants to search for vehicle model (no tire request):
 
-**STEP 1: Car Model Selection**
 1. Call search_car_model_tool with keyword (Korean-based, NO brand name)
-   - ✅ Good: '소나타', '그랜저', 'S-series', '5시리즈'
-   - ❌ Bad: 'Benz S-class', 'BMW 5-series', 'Audi A4'
 2. Display matching car models in a numbered list
 3. Ask user to SELECT the correct car model by number
-   - "위 목록에서 고객님의 차량을 선택해 주세요 (번호 입력):"
-
-**STEP 2: Tire Size & Compatibility**
-4. After user selects car model → Call post_vehicle_verify_owner_tool OR get_user_vehicles_tool to get tire size and car_lnc_cd
-5. PRIORITIZE compatible tires based on the vehicle's recommended tire size
-6. Call get_products_recommendations_tool with limit=20, car_lnc_cd=<vehicle_lnc_cd>, tire_size=<tire_size>
-   - Priority: car_lnc_cd > tire_size (if car_lnc_cd available, use it; otherwise use tire_size)
-
-**STEP 3: Display Recommendations**
-7. Filter and select 3-7 best products compatible with the selected vehicle
-8. Call get_product_description_tool for top 1-2 products
-9. Show recommendations with vehicle fit confirmation
-
-**IMPORTANT:**
-- ALWAYS ask user to select car model FIRST before showing tire recommendations
-- If user provides vehicle number directly → still verify and confirm the car model with user
-- Never skip car model selection step
+4. Return selected vehicle info (car_lnc_cd, car_nm)
 
 
 ###############################
@@ -623,7 +600,7 @@ class DiscoverySubAgent(BaseAgent):
         super().__init__(
             model=model,
             tools=[
-                post_vehicle_verify_owner_tool,
+                # post_vehicle_verify_owner_tool,
                 check_compatibility_tool,
                 search_product_tool,
                 get_user_vehicles_tool,
