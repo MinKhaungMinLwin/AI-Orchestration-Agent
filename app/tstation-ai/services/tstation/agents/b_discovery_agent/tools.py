@@ -381,8 +381,9 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
     try:
         from youtube_search import YoutubeSearch
 
-        # Perform the search with larger batch to filter by channel
-        search_results = YoutubeSearch(query, max_results=max_results * 3).to_dict()
+        # Enhance query with channel names to improve match
+        enhanced_query = f"{query} Hankook Tire T-Station"
+        search_results = YoutubeSearch(enhanced_query, max_results=max_results * 5).to_dict()
 
         # Format and filter output - only include videos from allowed channels
         formatted_results = []
