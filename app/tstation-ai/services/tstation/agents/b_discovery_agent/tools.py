@@ -355,36 +355,55 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
 @tool
 def search_youtube_video_tool(query: str, max_results: int = 3):
     """유튜브 영상 검색 (YouTube Video Search)
-    
+
     Searches YouTube for videos related to a specific tire or brand.
     Use this tool when the user asks for "reviews," "videos," "tests," or wants to see the tire in action.
-    
+
+    **IMPORTANT: Search is limited to ONLY these 2 channels:**
+    1. Hankook Tire: https://www.youtube.com/@hankooktire_korea
+    2. T-Station TV: https://www.youtube.com/channel/UCydkm3xXUbFzpHGoeGmJiNA
+
     Args:
         query (str): The search query (e.g., '한국타이어 벤투스 S1 evo3 리뷰', 'Hankook iON evo test').
         max_results (int): The maximum number of videos to return. Default is 3.
-        
+
     Returns:
         dict: A dictionary containing the video titles, channel names, and direct URLs.
     """
     logger.info("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
 
+    # Allowed channels for search
+    ALLOWED_CHANNELS = [
+        "@hankooktire_korea",
+        "UCydkm3xXUbFzpHGoeGmJiNA",
+    ]
+
     try:
         from youtube_search import YoutubeSearch
-        
-        # Perform the search
-        results = YoutubeSearch(query, max_results=max_results).to_dict()
-        
-        # Format the output cleanly for the LLM
+
+        # Perform the search with larger batch to filter by channel
+        search_results = YoutubeSearch(query, max_results=max_results * 3).to_dict()
+
+        # Format and filter output - only include videos from allowed channels
         formatted_results = []
-        for res in results:
-            formatted_results.append({
-                "title": res.get("title"),
-                "channel": res.get("channel"),
-                "views": res.get("views"),
-                "duration": res.get("duration"),
-                "url": f"https://www.youtube.com{res.get('url_suffix')}"
-            })
-            
+        for res in search_results:
+            channel = res.get("channel", "")
+            # Check if video is from allowed channels
+            if any(allowed in channel for allowed in ALLOWED_CHANNELS):
+                formatted_results.append({
+                    "title": res.get("title"),
+                    "channel": channel,
+                    "views": res.get("views"),
+                    "duration": res.get("duration"),
+                    "url": f"https://www.youtube.com{res.get('url_suffix')}"
+                })
+            if len(formatted_results) >= max_results:
+                break
+
+        # If no results from allowed channels, return empty
+        if not formatted_results:
+            logger.info("[TOOL][search_youtube_video_tool] No videos found in allowed channels")
+
         logger.info("[TOOL][search_youtube_video_tool] Found %d videos", len(formatted_results))
         return {
             "status": "success",
