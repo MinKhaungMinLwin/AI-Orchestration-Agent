@@ -74,6 +74,11 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float):
         user_xpos (float): User longitude coordinate.
         user_ypos (float): User latitude coordinate.
 
+    Example Inputs:
+        - {"user_xpos": 127.0276, "user_ypos": 37.4979}
+        - {"user_xpos": 126.9780, "user_ypos": 37.5665}
+        - {"user_xpos": 103.8198, "user_ypos": 1.3521}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -123,6 +128,13 @@ def get_store_details_tool(shop_id: str, cal_day: str):
         shop_id (str): Store ID in the correct format (e.g., "C01294", "B01260", "A00123").
         cal_day (str): Date to check reservation availability (format: YYYYMMDD).
 
+    Example Inputs:
+        - {"shop_id": "B00712", "cal_day": "20260401"}
+        - {"shop_id": "B01018", "cal_day": "20250225"}
+        - {"shop_id": "F00015", "cal_day": "20260320"}
+        - {"shop_id": "F00098", "cal_day": "20260401"}
+        - {"shop_id": "C07941", "cal_day": "20250225"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -149,7 +161,7 @@ def get_store_list_tool(
     region_code: str | None = None,
     store_nm: str | None = None,
     limit: int = 20
-):    
+):
     """
     Retrieve a list of stores filtered by region keyword and/or store name.
 
@@ -160,7 +172,7 @@ def get_store_list_tool(
     up to the specified limit.
 
     This tool should be used when the user asks for:
-    - User mentions a store by name (e.g. "삼송타이어", "극동상사") 
+    - User mentions a store by name (e.g. "삼송타이어", "극동상사")
     - User searches for stores in a specific city or district (e.g. "서울", "강남")
     - a list of stores within a particular area
     - User need to look up shop_id before calling get_store_details_tool
@@ -177,7 +189,13 @@ def get_store_list_tool(
             Use this when the user mentions a store by name.
             Examples: '삼송타이어', '극동상사', '한국타이어'. Optional.
         limit (int): Maximum number of stores to return. Default is 20.
-        
+
+    Example Inputs:
+        - {"region_code": "서울", "store_nm": "삼송타이어", "limit": 20}
+        - {"region_code": "강남", "store_nm": "극동상사", "limit": 20}
+        - {"region_code": "부산", "store_nm": "한국타이어", "limit": 20}
+        - {"region_code": "송파구", "store_nm": "삼송타이어", "limit": 20}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -236,6 +254,11 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
             will be created for that member. If not provided, the checkout
             page will ask the user to enter member information.
 
+    Example Inputs:
+        - {"goods_no": "G000000313165", "ord_qty": 2, "mbr_no": "M200012931"}
+        - {"goods_no": "G000000309860", "ord_qty": 1, "mbr_no": "M200012932"}
+        - {"goods_no": "G000000313073", "ord_qty": 3, "mbr_no": "M200012933"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -292,6 +315,11 @@ def get_order_status_tool(ord_no: str):
 
     Args:
         ord_no (str): Order number.
+
+    Example Inputs:
+        - {"ord_no": "ORD20260325001"}
+        - {"ord_no": "ORD20260325002"}
+        - {"ord_no": "ORD20260325003"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}

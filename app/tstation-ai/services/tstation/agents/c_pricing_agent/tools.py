@@ -56,6 +56,11 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         goods_no (str): Product number (e.g., G000000314254).
         member_type (str | None): Member type (e.g., 'general', 'PARTNER').
 
+    Example Inputs:
+        - {"goods_no": "G000000314254", "member_type": "general"}
+        - {"goods_no": "G000000312692", "member_type": "PARTNER"}
+        - {"goods_no": "G000000310122", "member_type": "general"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -86,6 +91,11 @@ def get_logistics_inventory_tool(goods_no: str):
 
     Args:
         goods_no (str): Product number.
+
+    Example Inputs:
+        - {"goods_no": "G000000313165"}
+        - {"goods_no": "G000000309860"}
+        - {"goods_no": "G000000313073"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -122,6 +132,9 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
             Input format: [{"goodsNo": "G123", "qty": 4}]
         shop_id_list (List[Dict[str, Any]]): Store list for stock check.
             Input format: [{"shopId": "F0001"}]
+
+    Example Inputs:
+        - {"goods_list": [{"goodsNo": "G000000309860", "qty": "4"}], "shop_id_list": [{"shopId": "B01018"}]}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -162,6 +175,11 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             Returns stores that have ANY of the specified services.
             Example: ["101", "102"]
 
+    Example Inputs:
+        - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "svc_codes": ["101", "102"]}
+        - {"user_xpos": 126.9780, "user_ypos": 37.5665, "radius_km": 20, "svc_codes": ["101"]}
+        - {"user_xpos": 103.8198, "user_ypos": 1.3521, "radius_km": 20, "svc_codes": []}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -196,6 +214,11 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         store_nm (str | None): Store name search term.
         limit (int): Maximum number of stores to return (default 20).
 
+    Example Inputs:
+        - {"region_code": "서울", "store_nm": "삼송타이어", "limit": 20}
+        - {"region_code": "강남", "store_nm": "극동상사", "limit": 20}
+        - {"region_code": "부산", "store_nm": "한국타이어", "limit": 20}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -227,6 +250,13 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     Args:
         shop_id (str): Store ID.
         cal_day (str): Query date in YYYYMMDD format.
+
+    Example Inputs:
+        - {"shop_id": "B00712", "cal_day": "20260401"}
+        - {"shop_id": "B01018", "cal_day": "20250225"}
+        - {"shop_id": "F00015", "cal_day": "20260320"}
+        - {"shop_id": "F00098", "cal_day": "20260401"}
+        - {"shop_id": "C07941", "cal_day": "20250225"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}

@@ -54,6 +54,12 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         mdcl_cd (str | None): Medium category code filter (MDCL_CD).
         limit (int): Number of FAQs to return (default 50, max 200).
 
+    Example Inputs:
+        - {"lrcl_cd": "C01", "mdcl_cd": "C0103", "limit": 50}
+        - {"lrcl_cd": "C02", "mdcl_cd": "C0201", "limit": 50}
+        - {"lrcl_cd": "C03", "mdcl_cd": "C0303", "limit": 50}
+        - {"lrcl_cd": None, "mdcl_cd": None, "limit": 50}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -97,6 +103,13 @@ def escalate_tool(
         inq_type_cd (str): Inquiry type code (e.g., ORDER, DELIVERY, CLAIM, etc.).
         msg_count (int): Number of messages in conversation.
         summary (str | None): Conversation summary (URL encoded).
+
+    Example Inputs:
+        - {"mbr_no": "M200012931", "inq_type_cd": "ORDER", "msg_count": 3, "summary": "Customer wants to cancel order"}
+        - {"mbr_no": "M200012932", "inq_type_cd": "DELIVERY", "msg_count": 2, "summary": "Package delayed"}
+        - {"mbr_no": "M200012933", "inq_type_cd": "CLAIM", "msg_count": 5, "summary": "Product damaged on delivery"}
+        - {"mbr_no": "M200012934", "inq_type_cd": "MEMBERSHIP", "msg_count": 1, "summary": "Membership upgrade request"}
+        - {"mbr_no": "M200012935", "inq_type_cd": "OTHER", "msg_count": 4, "summary": "General inquiry about products"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}

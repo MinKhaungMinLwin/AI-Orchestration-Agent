@@ -103,6 +103,11 @@ def post_vehicle_verify_owner_tool(car_no: str):
         car_no (str): Request payload containing the information
             required to verify vehicle ownership.
 
+    Example Inputs:
+        - {"car_no": "33가3333"}
+        - {"car_no": "11가0000"}
+        - {"car_no": "29조3344"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -137,6 +142,11 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
         car_no (str): 차량 번호
         owner_nm (str): 차량 소유주
 
+    Example Inputs:
+        - {"goods_no": "G000000313165", "car_no": "33가3333", "owner_nm": "공태웅"}
+        - {"goods_no": "G000000309860", "car_no": "11가0000", "owner_nm": "공태웅"}
+        - {"goods_no": "G000000313073", "car_no": "29조3344", "owner_nm": "공태웅"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -168,6 +178,11 @@ def search_product_tool(keyword: str, limit: int = 20):
     Args:
         keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int): 반환할 최대 상품 수 Default: 20.
+
+    Example Inputs:
+        - {"keyword": "벤투스 S2", "limit": 20}
+        - {"keyword": "Ventus S2", "limit": 20}
+        - {"keyword": "s1-evo", "limit": 20}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -201,6 +216,11 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
         car_no (str): Vehicle registration number.
         owner_nm (str): Owner name.
 
+    Example Inputs:
+        - {"car_no": "33가3333", "owner_nm": "공태웅"}
+        - {"car_no": "11가0000", "owner_nm": "공태웅"}
+        - {"car_no": "29조3344", "owner_nm": "공태웅"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
@@ -231,6 +251,10 @@ def search_car_model_tool(keyword: str, limit: int = 20):
     Args:
         keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
         limit (int): 반환할 최대 차량 수 Default: 20.
+
+    Example Inputs:
+        - {"keyword": "소나타", "limit": 20}
+        - {"keyword": "그랜저", "limit": 20}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -269,6 +293,11 @@ def get_product_description_tool(goods_no: str):
 
     Args:
         goods_no (str): Product number.
+
+    Example Inputs:
+        - {"goods_no": "G000000312692"}
+        - {"goods_no": "G000000313186"}
+        - {"goods_no": "G000000310122"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -322,6 +351,9 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
             - GY: Goodyear 굿이어
         entr_yn (str, optional): Affiliate site (y/n). Default is n.
         entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
+
+    Example Inputs:
+        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "entr_yn": "n", "entr_no": None}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
