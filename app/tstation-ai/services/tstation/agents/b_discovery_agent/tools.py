@@ -320,11 +320,15 @@ def get_product_description_tool(goods_no: str):
 
 
 @tool
-def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None):
+def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None, car_lnc_cd: str | None = None, tire_size: str | None = None):
     """
     Product Recommendation
 
     Returns the top N products based on the selected recommendation type (rcmd_type).
+
+    **API UPDATE: 차량 정보로 추천 가능합니다**
+    - car_lnc_cd: 차량 런칭 코드 (car_lnc_cd 입력 시 tire_size보다 우선 적용)
+    - tire_size: 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
 
     Recommendation types:
     - tstation: T-Station recommended products
@@ -351,14 +355,18 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
             - GY: Goodyear 굿이어
         entr_yn (str, optional): Affiliate site (y/n). Default is n.
         entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
+        car_lnc_cd (str | None, optional): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
+        tire_size (str | None, optional): 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
 
     Example Inputs:
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "entr_yn": "n", "entr_no": None}
+        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "entr_yn": "n", "entr_no": None, "car_lnc_cd": None, "tire_size": None}
+        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": "LNC12345", "tire_size": None}
+        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": None, "tire_size": "245/45R18"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, entr_yn=%s, entr_no=%s", rcmd_type, limit, brand_cd, entr_yn, entr_no)
+    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, entr_yn=%s, entr_no=%s, car_lnc_cd=%s, tire_size=%s", rcmd_type, limit, brand_cd, entr_yn, entr_no, car_lnc_cd, tire_size)
 
     try:
         response = get_products_recommendations(
@@ -368,6 +376,8 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
             brand_cd=brand_cd,
             entr_yn=entr_yn,
             entr_no=entr_no,
+            car_lnc_cd=car_lnc_cd,
+            tire_size=tire_size,
         )
         if response.parsed is None:
             return _error_response(

@@ -18,6 +18,8 @@ def _get_kwargs(
     brand_cd: str,
     entr_yn: str,
     entr_no: None | str | Unset = UNSET,
+    car_lnc_cd: None | str | Unset = UNSET,
+    tire_size: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -37,6 +39,20 @@ def _get_kwargs(
     else:
         json_entr_no = entr_no
     params["entr_no"] = json_entr_no
+
+    json_car_lnc_cd: None | str | Unset
+    if isinstance(car_lnc_cd, Unset):
+        json_car_lnc_cd = UNSET
+    else:
+        json_car_lnc_cd = car_lnc_cd
+    params["car_lnc_cd"] = json_car_lnc_cd
+
+    json_tire_size: None | str | Unset
+    if isinstance(tire_size, Unset):
+        json_tire_size = UNSET
+    else:
+        json_tire_size = tire_size
+    params["tire_size"] = json_tire_size
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -87,6 +103,8 @@ def sync_detailed(
     brand_cd: str,
     entr_yn: str,
     entr_no: None | str | Unset = UNSET,
+    car_lnc_cd: None | str | Unset = UNSET,
+    tire_size: None | str | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -103,6 +121,8 @@ def sync_detailed(
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         entr_yn (str): 제휴 사이트 (y/n)
         entr_no (None | str | Unset): 제휴사 번호 (entr_yn=y 일 때 필수)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -118,6 +138,8 @@ def sync_detailed(
         brand_cd=brand_cd,
         entr_yn=entr_yn,
         entr_no=entr_no,
+        car_lnc_cd=car_lnc_cd,
+        tire_size=tire_size,
     )
 
     response = client.get_httpx_client().request(
@@ -135,6 +157,8 @@ def sync(
     brand_cd: str,
     entr_yn: str,
     entr_no: None | str | Unset = UNSET,
+    car_lnc_cd: None | str | Unset = UNSET,
+    tire_size: None | str | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -151,6 +175,8 @@ def sync(
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         entr_yn (str): 제휴 사이트 (y/n)
         entr_no (None | str | Unset): 제휴사 번호 (entr_yn=y 일 때 필수)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -167,6 +193,8 @@ def sync(
         brand_cd=brand_cd,
         entr_yn=entr_yn,
         entr_no=entr_no,
+        car_lnc_cd=car_lnc_cd,
+        tire_size=tire_size,
     ).parsed
 
 
@@ -178,6 +206,8 @@ async def asyncio_detailed(
     brand_cd: str,
     entr_yn: str,
     entr_no: None | str | Unset = UNSET,
+    car_lnc_cd: None | str | Unset = UNSET,
+    tire_size: None | str | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -194,6 +224,8 @@ async def asyncio_detailed(
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         entr_yn (str): 제휴 사이트 (y/n)
         entr_no (None | str | Unset): 제휴사 번호 (entr_yn=y 일 때 필수)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -209,6 +241,8 @@ async def asyncio_detailed(
         brand_cd=brand_cd,
         entr_yn=entr_yn,
         entr_no=entr_no,
+        car_lnc_cd=car_lnc_cd,
+        tire_size=tire_size,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -224,6 +258,8 @@ async def asyncio(
     brand_cd: str,
     entr_yn: str,
     entr_no: None | str | Unset = UNSET,
+    car_lnc_cd: None | str | Unset = UNSET,
+    tire_size: None | str | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -240,6 +276,8 @@ async def asyncio(
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         entr_yn (str): 제휴 사이트 (y/n)
         entr_no (None | str | Unset): 제휴사 번호 (entr_yn=y 일 때 필수)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -257,5 +295,7 @@ async def asyncio(
             brand_cd=brand_cd,
             entr_yn=entr_yn,
             entr_no=entr_no,
+            car_lnc_cd=car_lnc_cd,
+            tire_size=tire_size,
         )
     ).parsed

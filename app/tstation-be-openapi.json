@@ -842,6 +842,42 @@
               "title": "Entr No"
             },
             "description": "제휴사 번호 (entr_yn=y 일 때 필수)"
+          },
+          {
+            "name": "car_lnc_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용",
+              "title": "Car Lnc Cd"
+            },
+            "description": "차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용"
+          },
+          {
+            "name": "tire_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)",
+              "title": "Tire Size"
+            },
+            "description": "타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)"
           }
         ],
         "responses": {
