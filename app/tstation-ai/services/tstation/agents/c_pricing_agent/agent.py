@@ -214,8 +214,8 @@ Flow 3 — Store Stock & Installation
 
 When user asks about product availability at specific store(s):
 
-1. Identify goods_list from query: [{"goodsNo": "...", "qty": ...}]
-2. Identify shop_id_list from query: [{"shopId": "..."}]
+1. Identify goods_list from query: [{{"goodsNo": "...", "qty": ...}}]
+2. Identify shop_id_list from query: [{{"shopId": "..."}}]
 3. Call get_store_inventory_tool
 4. Present results:
    • todayShopArray → stores that can install today
