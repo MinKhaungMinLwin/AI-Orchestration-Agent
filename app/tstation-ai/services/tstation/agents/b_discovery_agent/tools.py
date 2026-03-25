@@ -392,19 +392,20 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
         return _error_response(None, str(e), "Failed to get product recommendations")
 
 
-# Add this new tool for YouTube video search related to tires and brands. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.
+# Add this new tool for YouTube video search related to hankook tire and tstation tv. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.
 
 @tool
 def search_youtube_video_tool(query: str, max_results: int = 3):
     """유튜브 영상 검색 (YouTube Video Search)
-
-    Searches YouTube/Video for videos related to a specific tire or brand.
-    Use this tool when the user asks for "see", "reviews," "videos," "tests," or wants to see the tire in action.
-
+    
+    Searches YouTube for official videos related to a specific tire or brand.
+    This tool is strictly filtered to ONLY return videos from the official 
+    'Hankook Tire' and 'Tstation TV' channels.
+    
     Args:
-        query (str): The search query (e.g., '한국타이어 벤투스 S1 evo3 리뷰', 'Hankook iON evo test').
+        query (str): The search query (e.g., '벤투스 S1 evo3 리뷰', 'iON evo').
         max_results (int): The maximum number of videos to return. Default is 3.
-
+        
     Returns:
         dict: A dictionary containing the video titles, channel names, and direct URLs.
     """
@@ -412,37 +413,52 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
 
     try:
         from youtube_search import YoutubeSearch
-
-        # Enhance query with channel names to improve match
-        enhanced_query = f"{query} 티스테이션 TV - 한국타이어"
-        search_results = YoutubeSearch(enhanced_query, max_results=max_results * 5).to_dict()
-
-        # Format output
+        
+        # 1. Define the allowed official channel names (lowercase for easy matching)
+        allowed_channels = ["한국타이어", "hankook tire", "티스테이션", "tstation tv"]
+        
+        # 2. Secretly bias the query so YouTube ranks official videos at the top
+        biased_query = f"{query} 한국타이어 티스테이션"
+        
+        # 3. Fetch a larger pool of results (20) so we have enough left after filtering
+        raw_results = YoutubeSearch(biased_query, max_results=20).to_dict()
+        
         formatted_results = []
-        for res in search_results[:max_results]:
-            formatted_results.append({
-                "title": res.get("title"),
-                "channel": res.get("channel"),
-                "views": res.get("views"),
-                "duration": res.get("duration"),
-                "url": f"https://www.youtube.com{res.get('url_suffix')}"
-            })
-
-        logger.info("[TOOL][search_youtube_video_tool] Found %d videos", len(formatted_results))
+        for res in raw_results:
+            channel_name = res.get("channel", "").lower()
+            
+            # 4. Strictly filter: Check if the video's channel matches our allowed list
+            is_official_channel = any(allowed in channel_name for allowed in allowed_channels)
+            
+            if is_official_channel:
+                formatted_results.append({
+                    "title": res.get("title"),
+                    "channel": res.get("channel"),  # Keep original casing for display
+                    "views": res.get("views"),
+                    "duration": res.get("duration"),
+                    "url": f"https://www.youtube.com{res.get('url_suffix')}"
+                })
+                
+            # 5. Stop once we have gathered enough official videos
+            if len(formatted_results) >= max_results:
+                break
+                
+        logger.info("[TOOL][search_youtube_video_tool] Found %d official videos", len(formatted_results))
+        
+        if not formatted_results:
+             return {
+                 "status": "success", 
+                 "message": "No official videos found on Hankook Tire or Tstation TV for that query."
+             }
+             
         return {
             "status": "success",
             "data": formatted_results
         }
+        
     except ImportError:
         logger.error("youtube-search library is not installed.")
-        return {
-            "status": "error",
-            "message": "The youtube-search library is missing. Please run `pip install youtube-search`."
-        }
+        return {"status": "error", "message": "The youtube-search library is missing."}
     except Exception as e:
         logger.exception("[TOOL][search_youtube_video_tool] Failed")
-        return {
-            "status": "error",
-            "reason": str(e),
-            "message": "Failed to search YouTube videos."
-        }
+        return {"status": "error", "reason": str(e), "message": "Failed to search YouTube videos."}
