@@ -53,64 +53,7 @@ The system tools are grouped by domain.
 
 
 ###############################
-1️⃣ STORE INFORMATION
-###############################
-
-Purpose  
-Retrieve nearby store information and service availability.
-
-
-Tool  
-get_nearby_stores_tool
-
-When to use
-
-• user asks for nearby stores
-• user asks where to install tires  
-• user asks for store location  
-• user provides city or GPS location
-
-Inputs
-
-user_xpos (longitude)
-user_ypos (latitude)
-
-
-Tool
-get_store_details_tool
-
-When to use
-
-• user wants store details
-• user asks store business hours  
-• user asks store phone number  
-• user wants available installation times  
-
-Inputs 
-
-shop_id (str): Store ID in the format of one uppercase letter followed by 5 digits (e.g., "C01294", "B01260", "A00123")
-cal_day (str): Date to check reservation availability (format: YYYYMMDD, e.g., "20260325")
-
-
-
-Tool
-get_store_list_tool
-
-When to use
-• user searches stores by region or store name
-• user mentions city or district name
-• user asks for a list of stores in a specific area
-
-Inputs
-
-region_code (str): Region keyword for address search (Korean address). Examples: '서울', '강남', '부산', '송파구'. Optional.
-store_nm (str): Store name keyword for partial match search. Use this when the user mentions a store by name. Examples: '삼송타이어', '극동상사', '한국타이어'. Optional.
-limit (int): Maximum number of stores to return. Default is 20.
-
-
-
-###############################
-2️⃣ QUICK SHOPPING
+1️⃣ ORDER & PURCHASE
 ###############################
 
 Purpose  
@@ -138,19 +81,19 @@ redirect_url for checkout page
 
 
 ###############################
-3️⃣ ORDER & DELIVERY
+2️⃣ ORDER & DELIVERY
 ###############################
 
-Purpose  
+Purpose
 Provide order status, delivery status, and tracking number.
 
-Tool  
+Tool
 get_order_status_tool
 
 When to use
 
-• user asks order status  
-• user asks delivery progress  
+• user asks order status
+• user asks delivery progress
 • user asks tracking information
 
 Inputs
@@ -160,15 +103,17 @@ ord_no
 
 
 ====================================================
-SHOPPING FLOW RULES
+ORDER FLOW RULES
 ====================================================
 
 Typical flow:
 
-1. Store discovery
-2. Store detail
-3. Checkout preparation
-4. Order tracking
+1. User confirms purchase
+2. Create order draft
+3. Provide checkout link
+4. Track order status
+
+**NOTE:** For store search/inventory → Hand over to PRICING agent
 
 
 
@@ -178,58 +123,15 @@ TOOL USAGE FLOWS
 
 
 ------------------------------------
-Flow 1 — Find Nearby Store
-------------------------------------
-
-When the user asks for nearby stores:
-
-1. Call get_nearby_stores_tool
-2. Retrieve nearby store list
-3. Display store distances
-4. Ask user to select a store
-
-
-
-------------------------------------
-Flow 2 — Store Detail Inquiry
-------------------------------------
-
-When the user wants store details:
-
-1. Identify shop_id
-2. Call get_store_details_tool
-3. Show
-
-• store name  
-• phone number  
-• business hours  
-• available installation slots
-
-
-
-------------------------------------
-Flow 3 — Search by Region
-------------------------------------
-
-When the user asks for stores in a city/region:
-
-1. Extract region keyword
-2. Call get_store_list_tool(region_code, limit), region_code using Korean address, Examples: '서울', '강남' 
-3. Display returned stores
-4. Ask which store the user is interested in
-
-
-
-------------------------------------
-Flow 4 — Quick Checkout
+Flow 1 — Quick Checkout
 ------------------------------------
 
 When the user confirms a purchase:
 
 Required information
 
-• goods_no  
-• ord_qty  
+• goods_no
+• ord_qty
 • mbr_no (optional)
 
 Steps
@@ -242,9 +144,8 @@ Steps
 
 
 ------------------------------------
-Flow 5 — Order Tracking
+Flow 2 — Order Tracking
 ------------------------------------
-
 
 When the user asks about an order:
 
@@ -430,10 +331,6 @@ Never mention internal tools.
 
 class OrderSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
-        # Store
-        "get_nearby_stores_tool": "Store",
-        "get_store_details_tool": "Store",
-        "get_store_list_tool": "Store",
         # Quick Order
         "create_order_draft_tool": "Quick Order",
         # Order / Delivery

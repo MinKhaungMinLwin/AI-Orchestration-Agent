@@ -593,7 +593,6 @@ Never mention internal tools.
 class DiscoverySubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Product Compatibility
-        "post_vehicle_verify_owner_tool": "Vehicle & Compatibility",
         "check_compatibility_tool": "Vehicle & Compatibility",
         "search_product_tool": "Product Search",
         "get_user_vehicles_tool": "Vehicle & Compatibility",
@@ -603,7 +602,7 @@ class DiscoverySubAgent(BaseAgent):
         # Product Description
         "get_product_description_tool": "Product Description",
         # Product Reviews
-        "search_youtube_video_tool": "Product Reviews", # <-- Added this!
+        "search_youtube_video_tool": "Product Reviews",
     }
 
     def __init__(self, model):
