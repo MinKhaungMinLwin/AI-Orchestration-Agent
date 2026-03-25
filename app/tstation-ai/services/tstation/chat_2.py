@@ -60,8 +60,8 @@ Classify user message into ONE OR MORE domains based on detected intents.
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
 DOMAINS:
-- ORDER: Purchase, reservation, store visit/booking, order tracking, store search by location/name
-- PRICING: Price, stock (logistics/store), inventory, store availability for specific product
+- ORDER: Purchase, reservation, store visit/booking, order tracking, create order draft
+- PRICING: Price, stock (logistics/store), inventory, store availability, store search by location/name
 - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
 - LEADING: Greeting, unclear intent
@@ -116,8 +116,8 @@ EXAMPLE QUERIES → FLOW:
 
 9. "추천 타이어 중 강남점 재고 알려줘"
    "Show Gangnam store stock for recommended tires"
-   → DISCOVERY → PRICING → ORDER
-   (Recommendation → Inventory → Store)
+   → DISCOVERY → PRICING
+   (Recommendation → Store Inventory)
 
 10. "쏘나타 타이어 추천하고 장착 예약할게"
     "Recommend tires for Sonata and make installation reservation"
@@ -126,8 +126,8 @@ EXAMPLE QUERIES → FLOW:
 
 11. "강남점 재고 있는 타이어 가격 알려줘"
     "Tell me the price of tires in stock at Gangnam store"
-    → PRICING → ORDER
-    (Inventory → Price → Store)
+    → PRICING
+    (Store Inventory → Price)
 
 12. "추천 타이어 리뷰랑 가격 알려줘"
     "Show reviews and prices of recommended tires"
@@ -147,17 +147,17 @@ EXAMPLE QUERIES → FLOW:
 15. "재고 있는 타이어 추천해주세요"
     "Recommend tires that are in stock"
     → DISCOVERY → PRICING
-    (Inventory → Recommendation)
+    (Recommendation → Filter by Inventory)
 
 16. "타이어 추천하고 가까운 매장 알려줘"
     "Recommend tires and show nearby stores"
-    → DISCOVERY → ORDER
+    → DISCOVERY → PRICING
     (Recommendation → Store)
 
 17. "재고 있는 매장 알려주고 예약할게"
     "Show stores with stock and make a reservation"
-    → ORDER → PRICING → ORDER
-    (Store → Inventory → Quick Shopping)
+    → PRICING → ORDER
+    (Store Search → Inventory → Quick Shopping)
 
 18. "벤투스 타이어 가격이랑 장착 예약"
     "Ventus tire price and installation reservation"
@@ -181,16 +181,18 @@ DECISION RULES
 ORDER if user wants:
 - "Buy", "purchase", "order", "checkout"
 - Track existing order (provide order number)
+- Create order draft
 - Book store visit/reservation with specific date/time
-- Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
-- Find stores by NAME (e.g., "find Hankook store")
-Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345", "Show me stores near Gangnam"
+Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345"
 
 PRICING if user wants:
 - "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
 - "In stock?", "available?" for specific product at specific store
 - Check logistics stock (warehouse availability)
-Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?"
+- Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
+- Find stores by NAME (e.g., "find Hankook store")
+- Check store inventory (which stores have this tire)
+Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
@@ -228,7 +230,8 @@ Examples:
 - "How much is this tire? Also, what's the warranty?" → PRICING, SUPPORT
 
 KEY PRINCIPLES:
-- "stores near [location]" → ORDER
+- "stores near [location]" → PRICING
+- "find stores" → PRICING
 - "price of [specific product]" → PRICING
 - "search tires named [X]" → DISCOVERY
 - "does [tire] fit [car]?" → DISCOVERY (compatibility check)

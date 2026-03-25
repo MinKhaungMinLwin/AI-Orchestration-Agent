@@ -80,8 +80,8 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - ORDER: Purchase, reservation, store visit/booking, order tracking, store search by location/name
-        - PRICING: Price, stock (logistics/store), inventory, store availability for specific product
+        - ORDER: Purchase, reservation, store visit/booking, order tracking, create order draft
+        - PRICING: Price, stock (logistics/store), inventory, store search by location/name, store availability
         - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
         - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
         - LEADING: Greeting, unclear intent
@@ -91,16 +91,18 @@ class AgentDomain(BaseModel):
         ORDER if user wants:
         - "Buy", "purchase", "order", "checkout"
         - Track existing order (provide order number)
+        - Create order draft
         - Book store visit/reservation with specific date/time
-        - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
-        - Find stores by NAME (e.g., "find Hankook store")
-        Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345", "Show me stores near Gangnam"
+        Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345"
 
         PRICING if user wants:
         - "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
         - "In stock?", "available?" for specific product at specific store
         - Check logistics stock (warehouse availability)
-        Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?"
+        - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
+        - Find stores by NAME (e.g., "find Hankook store")
+        - Check store inventory (which stores have this tire)
+        Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
@@ -125,13 +127,14 @@ class AgentDomain(BaseModel):
         Examples: "Hi", "What can you help me with?", "Hello"
 
         KEY PRINCIPLES:
-        - "stores near [location]" → ORDER
+        - "stores near [location]" → PRICING
         - "price of [specific product]" → PRICING
         - "search tires named [X]" → DISCOVERY
         - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
         - "buy tires" → ORDER
         - "recommend tires" → DISCOVERY
         - "warranty, return, maintenance" → SUPPORT
+        - "find stores" → PRICING
 
         Korean vehicle numbers follow patterns: 12가3456, 123가1234
         """)

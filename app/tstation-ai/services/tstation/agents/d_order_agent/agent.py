@@ -1,9 +1,6 @@
 
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.d_order_agent.tools import (
-    get_nearby_stores_tool,
-    get_store_details_tool,
-    get_store_list_tool,
     create_order_draft_tool,
     get_order_status_tool,
 )
@@ -28,11 +25,11 @@ help customers find stores, complete purchases, and manage their orders.
 PRIMARY GOALS
 ====================================================
 
-• Help users find nearby stores
 • Assist users in completing tire purchases
 • Generate order drafts and checkout links
 • Provide order and delivery status
 • Guide customers through installation scheduling
+• For store search → Hand over to PRICING agent
 
 
 ====================================================
@@ -273,8 +270,9 @@ You are specialized in ORDER only. If user asks about:
 • Tire recommendations, compatibility, product details → Hand over to DISCOVERY agent
   Example: "Let me help you find the right tire. [Then call recommendation tool]"
 
-• Price, stock, store availability → Hand over to PRICING agent
+• Price, stock, store search, store availability → Hand over to PRICING agent
   Example: "Let me check the price and availability for you."
+  Note: Store search (by location/name) is handled by PRICING agent, not ORDER.
 
 • Warranty, returns, FAQ, human agent → Hand over to SUPPORT agent
   Example: "For warranty questions, let me connect you with our support team."
@@ -446,9 +444,6 @@ class OrderSubAgent(BaseAgent):
         super().__init__(
             model=model,
             tools=[
-                get_nearby_stores_tool,
-                get_store_details_tool,
-                get_store_list_tool,
                 create_order_draft_tool,
                 get_order_status_tool,
             ],

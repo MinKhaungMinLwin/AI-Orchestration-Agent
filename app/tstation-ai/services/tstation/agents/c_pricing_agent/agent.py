@@ -104,13 +104,20 @@ get_store_inventory_tool
 
 When to use
 
-• check if store can install today
+• check if product(s) is available at specific store(s)
+• check which stores can install product today
 • check T-NA delivery availability
+• check multiple products across multiple stores
 
 Inputs
 
 goods_list - list of products [{{"goodsNo": "...", "qty": ...}}]
 shop_id_list - list of stores [{{"shopId": "..."}}]
+
+Output
+
+• todayShopArray: stores that can install today
+• tnaShopArray: stores eligible for T-NA delivery
 
 
 ###############################
@@ -205,12 +212,28 @@ When user asks if product is in stock:
 Flow 3 — Store Stock & Installation
 ------------------------------------
 
-When user asks about specific store:
+When user asks about product availability at specific store(s):
 
-1. Call get_store_inventory_tool with goods_list and shop_id_list
-2. Check todayShopArray (can install today)
-3. Check tnaShopArray (T-NA delivery available)
-4. Present results clearly
+1. Identify goods_list from query: [{"goodsNo": "...", "qty": ...}]
+2. Identify shop_id_list from query: [{"shopId": "..."}]
+3. Call get_store_inventory_tool
+4. Present results:
+   • todayShopArray → stores that can install today
+   • tnaShopArray → stores eligible for T-NA delivery
+5. If both arrays empty → product not available at requested stores
+
+
+------------------------------------
+Flow 3b — Multi-Product Multi-Store Check
+------------------------------------
+
+When user provides list of products and asks which stores can fulfill all:
+
+1. Build goods_list with all products and quantities
+2. Get candidate stores (from nearby_stores or store_list if not provided)
+3. Call get_store_inventory_tool
+4. Filter stores where ALL products are available
+5. Present matching stores with availability type (todayShopArray / tnaShopArray)
 
 
 ------------------------------------
