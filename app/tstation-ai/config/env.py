@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Environment(str, Enum):
@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     ### -------------------------------
     # Application
     ### -------------------------------
+    
     PROJECT_NAME: str
     ENV: Environment = Field(
         default=Environment.DEV,
