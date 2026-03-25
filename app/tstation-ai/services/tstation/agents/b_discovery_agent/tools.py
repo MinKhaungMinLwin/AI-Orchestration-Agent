@@ -312,7 +312,14 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
     Args:
         rcmd_type (RcmdType): Recommendation type.
         limit (int, optional): Number of products to return. Default is 10, maximum is 100.
-        brand_cd (str, optional): Brand code (HK / LF / MC / PI / BS / CT / GY). Default is HK.
+        brand_cd (str, optional): Brand code. Default is HK.
+            - HK: Hankook 한국타이어 (Hankook Tire)
+            - LF: Laufenn 라우펜
+            - MC: Michelin 미쉐린
+            - PI: Pirelli 피렐리
+            - BS: Bridgestone 브리지스톤
+            - CT: Continental 콘티넨탈
+            - GY: Goodyear 굿이어
         entr_yn (str, optional): Affiliate site (y/n). Default is n.
         entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
 
