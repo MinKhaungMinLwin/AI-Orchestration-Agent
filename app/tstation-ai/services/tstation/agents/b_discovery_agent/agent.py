@@ -282,6 +282,14 @@ RECOMMENDATION ENGINE (Shared)
 2. Filter to show ONLY compatible tires (vehicle fit = ✅)
 3. Select 3-7 best products
 
+**CONVERSATION CONTEXT:**
+• After showing recommendations, the results are stored in conversation context
+• When user asks to FILTER (e.g., "할인만", "정숙성 좋은 것만", "가성비"):
+  → Reference PREVIOUS results from conversation messages
+  → Filter/sort WITHOUT calling tool again
+  → Say "이전 추천 목록에서 필터링합니다"
+• Only call tool again if user changes vehicle/size OR asks for new search
+
 **STEP 3: Display Recommendations**
 4. Show product table
 5. Call get_product_description_tool for best product
