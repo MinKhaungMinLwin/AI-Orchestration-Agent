@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Iterator
+from textwrap import dedent
 
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -13,8 +14,7 @@ from services.tstation.agents.router import (
     AgentDomain,
     leading_agent,
     discovery_subagent,
-    pricing_subagent,
-    order_subagent,
+    transaction_subagent,
     support_subagent,
 )
 from common.jwt_utils import get_user_info_from_token
@@ -23,17 +23,105 @@ from common.curr_time import get_current_time
 logger = logging.getLogger(__name__)
 
 
+class NextAction(str, Enum):
+    STOP = "stop"
+    CONTINUE = "continue"
+
+
+class AgentDecision(BaseModel):
+    next_action: NextAction = Field(description="STOP or CONTINUE")
+    next_domain: str = Field(description="Next domain if CONTINUE ('null' if STOP)")
+    reason: str = Field(description="Reason for decision, using english")
+
+
+def prompt_router() -> str:
+    return dedent(f"""
+    Current Time: {get_current_time()}
+
+    You are a domain classifier and decision engine for T-Station AI.
+
+    MODE 1 - Initial Classification: Classify user message into ONE domain.
+    MODE 2 - Next Action Decision: After agent completes, decide STOP or CONTINUE.
+
+    DOMAINS:
+    - LEADING: Greeting, unclear intent
+    - DISCOVERY: Product search, recommendations, vehicle compatibility
+    - TRANSACTION: Price, stock, store inventory, store search, purchase, checkout, order tracking, reservation
+    - SUPPORT: Warranty, returns, FAQ, human agent
+
+    DECISION RULES:
+
+    STOP when:
+    - Single-domain request completed
+    - Agent asks user for more information
+    - Response is greeting, farewell, or acknowledgment
+
+    CONTINUE (next_domain: "X") when:
+    - User asked multi-domain question (e.g., "recommend AND tell price")
+    - Example flows:
+      * DISCOVERY → TRANSACTION: recommendation + price
+      * DISCOVERY → TRANSACTION: recommendation + purchase
+      * TRANSACTION: price + buy/reserve (single agent handles all)
+    """)
+
+
+def decide_next_action(
+    original_messages: list[dict],
+    previous_agent_response: str,
+    previous_domain: str,
+) -> AgentDecision:
+    from langchain_litellm import ChatLiteLLM
+    from langchain_core.messages import SystemMessage, HumanMessage
+
+    llm = ChatLiteLLM(
+        api_base=settings.AI_GATEWAY_BASE_URL,
+        api_key=settings.AI_GATEWAY_API_KEY,
+        model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
+    )
+
+    structured_model = llm.with_structured_output(AgentDecision)
+
+    user_message = ""
+    for msg in reversed(original_messages):
+        if msg.get("role") == "user":
+            user_message = msg.get("content", "")
+            break
+
+    system_msg = SystemMessage(content=prompt_router())
+    human_msg = HumanMessage(content=dedent(f"""
+        Original User Request: {user_message}
+
+        Previous Agent Domain: {previous_domain}
+
+        Previous Agent Response:
+        {previous_agent_response}
+
+        Please decide the next action.
+    """))
+
+    try:
+        result: AgentDecision = structured_model.invoke([system_msg, human_msg])
+        return result
+    except Exception as e:
+        logger.warning(f"[DECISION] LLM decision failed: {e}")
+        # Fallback: stop if cannot decide
+        return AgentDecision(
+            next_action=NextAction.STOP,
+            next_domain=None,
+            reason=f"Decision failed: {str(e)[:100]}",
+        )
+
+
 class MultiAgentDomain(BaseModel):
     """Router result that supports multiple domains (multi-intent)."""
 
     class Domain(str, Enum):
         LEADING = "leading"
         DISCOVERY = "discovery"
-        PRICING = "pricing"
-        ORDER = "order"
+        TRANSACTION = "transaction"
         SUPPORT = "support"
 
-    reason: str = Field(description="Reason for the classification")
+    reason: str = Field(description="Reason for the classification, using english")
     domains: list[Domain] = Field(
         description="List of domains detected in the request, ordered by priority"
     )
@@ -42,8 +130,7 @@ class MultiAgentDomain(BaseModel):
         """Return list of agents based on detected domains."""
         agent_map = {
             self.Domain.DISCOVERY: discovery_subagent,
-            self.Domain.PRICING: pricing_subagent,
-            self.Domain.ORDER: order_subagent,
+            self.Domain.TRANSACTION: transaction_subagent,
             self.Domain.SUPPORT: support_subagent,
             self.Domain.LEADING: leading_agent,
         }
@@ -60,8 +147,7 @@ Classify user message into ONE OR MORE domains based on detected intents.
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
 DOMAINS:
-- ORDER: Purchase, reservation, store visit/booking, order tracking, create order draft
-- PRICING: Price, stock (logistics/store), inventory, store availability, store search by location/name
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation
 - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
 - LEADING: Greeting, unclear intent
@@ -76,97 +162,97 @@ EXAMPLE QUERIES → FLOW:
 
 1. "쏘나타에 맞는 타이어 추천하고 가격 알려줘"
    "Recommend tires for Sonata and tell me the price"
-   → DISCOVERY → PRICING
+   → DISCOVERY → TRANSACTION
    (Compatibility → Recommendation → Price)
 
 2. "추천 타이어 중 재고 있는 매장 알려줘"
    "Show stores that have recommended tires in stock"
-   → DISCOVERY → PRICING → ORDER
-   (Recommendation → Inventory → Store)
+   → DISCOVERY → TRANSACTION
+   (Recommendation → Store Inventory)
 
 3. "벤투스 S1 evo3 가격이랑 강남점 재고 알려줘"
    "Tell me Ventus S1 evo3 price and Gangnam stock"
-   → PRICING → ORDER
-   (Price → Inventory)
+   → TRANSACTION
+   (Price + Inventory - single agent handles all)
 
 4. "내 차에 맞는 타이어 추천하고 바로 주문할게"
    "Recommend tires for my car and I'll order immediately"
-   → DISCOVERY → ORDER
-   (Compatibility → Recommendation → Quick Shopping)
+   → DISCOVERY → TRANSACTION
+   (Compatibility → Recommendation → Purchase)
 
 5. "타이어 추천하고 할인 가격 알려줘"
    "Recommend tires and tell me discounted price"
-   → DISCOVERY → PRICING
+   → DISCOVERY → TRANSACTION
    (Recommendation → Price)
 
 6. "추천 타이어 중 재고 있는 것만 보여줘"
    "Show only recommended tires that are in stock"
-   → DISCOVERY → PRICING
+   → DISCOVERY → TRANSACTION
    (Recommendation → Inventory)
 
 7. "추천 타이어 가격 비교해줘"
    "Compare the prices of recommended tires"
-   → DISCOVERY → PRICING
-   (Recommendation → Price → Description)
+   → DISCOVERY → TRANSACTION
+   (Recommendation → Price)
 
 8. "벤투스 S1 evo3 설명하고 가격 알려줘"
    "Explain Ventus S1 evo3 and tell me the price"
-   → DISCOVERY → PRICING
+   → DISCOVERY → TRANSACTION
    (Description → Price)
 
 9. "추천 타이어 중 강남점 재고 알려줘"
    "Show Gangnam store stock for recommended tires"
-   → DISCOVERY → PRICING
+   → DISCOVERY → TRANSACTION
    (Recommendation → Store Inventory)
 
 10. "쏘나타 타이어 추천하고 장착 예약할게"
     "Recommend tires for Sonata and make installation reservation"
-    → DISCOVERY → ORDER
-    (Compatibility → Recommendation → Quick Shopping)
+    → DISCOVERY → TRANSACTION
+    (Compatibility → Recommendation → Reservation)
 
 11. "강남점 재고 있는 타이어 가격 알려줘"
     "Tell me the price of tires in stock at Gangnam store"
-    → PRICING
-    (Store Inventory → Price)
+    → TRANSACTION
+    (Store Inventory + Price - single agent)
 
 12. "추천 타이어 리뷰랑 가격 알려줘"
     "Show reviews and prices of recommended tires"
-    → DISCOVERY → PRICING
+    → DISCOVERY → TRANSACTION
     (Recommendation → Description → Price)
 
 13. "인기 타이어 가격이랑 재고 알려줘"
     "Tell me the price and stock of popular tires"
-    → DISCOVERY → PRICING
-    (Recommendation → Price → Inventory)
+    → DISCOVERY → TRANSACTION
+    (Recommendation → Price + Inventory)
 
 14. "내 차 타이어 추천하고 장착 예약하고 싶어요"
     "Recommend tires for my car and make installation reservation"
-    → DISCOVERY → ORDER
-    (Compatibility → Recommendation → Quick Shopping)
+    → DISCOVERY → TRANSACTION
+    (Compatibility → Recommendation → Reservation)
 
 15. "재고 있는 타이어 추천해주세요"
     "Recommend tires that are in stock"
-    → DISCOVERY → PRICING
+    → DISCOVERY → TRANSACTION
     (Recommendation → Filter by Inventory)
 
 16. "타이어 추천하고 가까운 매장 알려줘"
     "Recommend tires and show nearby stores"
-    → DISCOVERY → PRICING
+    → DISCOVERY → TRANSACTION
     (Recommendation → Store)
 
 17. "재고 있는 매장 알려주고 예약할게"
     "Show stores with stock and make a reservation"
-    → PRICING → ORDER
-    (Store Search → Inventory → Quick Shopping)
+    → TRANSACTION
+    (Store Search → Inventory → Reservation - single agent)
 
 18. "벤투스 타이어 가격이랑 장착 예약"
     "Ventus tire price and installation reservation"
-    → PRICING → ORDER
-    (Price → Quick Shopping)
+    → TRANSACTION
+    (Price + Reservation - single agent)
 
 19. "추천 타이어 중 할인 상품 알려줘"
     "Show discounted products among recommended tires"
-    → DISCOVERY → PRICING
+    → DISCOVERY → TRANSACTION
     (Recommendation → Price)
 
 20. "타이어 추천하고 비교해줘"
@@ -178,21 +264,18 @@ EXAMPLE QUERIES → FLOW:
 DECISION RULES
 ====================================================
 
-ORDER if user wants:
-- "Buy", "purchase", "order", "checkout"
-- Track existing order (provide order number)
-- Create order draft
-- Book store visit/reservation with specific date/time
-Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345"
-
-PRICING if user wants:
+TRANSACTION if user wants:
 - "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
 - "In stock?", "available?" for specific product at specific store
 - Check logistics stock (warehouse availability)
 - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
 - Find stores by NAME (e.g., "find Hankook store")
 - Check store inventory (which stores have this tire)
-Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam"
+- "Buy", "purchase", "order", "checkout"
+- Track existing order (provide order number)
+- Create order draft
+- Book store visit/reservation with specific date/time
+Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "I want to buy tires", "Book installation at 2pm", "Track my order 12345"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
@@ -224,18 +307,18 @@ If user request contains multiple intents, detect ALL relevant domains.
 The "domains" list should be ordered by the FLOW SEQUENCE.
 
 Examples:
-- "Explain Ventus S1 evo3 and tell me the price" → DISCOVERY, PRICING
-- "Find tires for my BMW and check if in stock at nearby store" → DISCOVERY, PRICING, ORDER
+- "Explain Ventus S1 evo3 and tell me the price" → DISCOVERY, TRANSACTION
+- "Find tires for my BMW and check if in stock at nearby store" → DISCOVERY, TRANSACTION
 - "Recommend tires and their warranty" → DISCOVERY, SUPPORT
-- "How much is this tire? Also, what's the warranty?" → PRICING, SUPPORT
+- "How much is this tire? Also, what's the warranty?" → TRANSACTION, SUPPORT
 
 KEY PRINCIPLES:
-- "stores near [location]" → PRICING
-- "find stores" → PRICING
-- "price of [specific product]" → PRICING
+- "stores near [location]" → TRANSACTION
+- "find stores" → TRANSACTION
+- "price of [specific product]" → TRANSACTION
 - "search tires named [X]" → DISCOVERY
 - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
-- "buy tires" → ORDER
+- "buy tires" → TRANSACTION
 - "recommend tires" → DISCOVERY
 - "warranty, return, maintenance" → SUPPORT
 - When multiple intents present, return ALL relevant domains in flow order
@@ -250,8 +333,7 @@ class StreamingMultiAgentCoordinator:
     def __init__(self):
         self.agent_map = {
             MultiAgentDomain.Domain.DISCOVERY: discovery_subagent,
-            MultiAgentDomain.Domain.PRICING: pricing_subagent,
-            MultiAgentDomain.Domain.ORDER: order_subagent,
+            MultiAgentDomain.Domain.TRANSACTION: transaction_subagent,
             MultiAgentDomain.Domain.SUPPORT: support_subagent,
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
@@ -332,6 +414,8 @@ class StreamingMultiAgentCoordinator:
 
         accumulated_context = {}
 
+        is_first_agent = True
+
         for domain in domains:
             agent = self.agent_map.get(domain)
             if not agent:
@@ -367,6 +451,7 @@ class StreamingMultiAgentCoordinator:
             }
 
             # Stream from agent and yield events immediately
+            full_response = ""
             for event in agent.stream(enriched_messages):
                 # Tag with source domain for UI
                 event["source_domain"] = domain_key
@@ -377,6 +462,7 @@ class StreamingMultiAgentCoordinator:
                     content = event.get("content", "")
                     if content:
                         accumulated_context[domain_key] = content
+                        full_response = content
                         logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
             # Yield agent completion event
@@ -385,6 +471,30 @@ class StreamingMultiAgentCoordinator:
                 "agent": f"[{domain_key.upper()} AGENT]",
                 "status": "done",
             }
+
+            # LLM Decision: After first agent, use LLM to decide next action
+            if is_first_agent:
+                is_first_agent = False
+                decision = decide_next_action(
+                    original_messages=messages,
+                    previous_agent_response=full_response,
+                    previous_domain=domain_key,
+                )
+                logger.info(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
+
+                if decision.next_action == NextAction.STOP or not decision.next_domain:
+                    logger.info("[COORDINATOR] Stopping multi-agent chain")
+                    break
+
+                # Map next_domain string to enum
+                next_domain_map = {
+                    "discovery": MultiAgentDomain.Domain.DISCOVERY,
+                    "transaction": MultiAgentDomain.Domain.TRANSACTION,
+                    "support": MultiAgentDomain.Domain.SUPPORT,
+                }
+                next_domain = next_domain_map.get(decision.next_domain.lower())
+                if next_domain:
+                    domains = [next_domain] + [d for d in domains if d != next_domain]
 
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}

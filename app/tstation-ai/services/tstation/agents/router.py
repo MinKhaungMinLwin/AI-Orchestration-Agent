@@ -27,14 +27,9 @@ leading_agent = LeadingAgent(LLM)
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
 # Discovery Agent
 discovery_subagent = DiscoverySubAgent(LLM)
-# Pricing Agent
-from services.tstation.agents.c_pricing_agent.agent import PricingSubAgent
-pricing_subagent = PricingSubAgent(LLM)
-
-# Order Agent
-from services.tstation.agents.d_order_agent.agent import OrderSubAgent
-
-order_subagent = OrderSubAgent(LLM)
+# Transaction Agent (merged PRICING + ORDER)
+from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
+transaction_subagent = TransactionSubAgent(LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
@@ -45,8 +40,7 @@ class AgentDomain(BaseModel):
     class Domain(str, Enum):
         LEADING = "leading"
         DISCOVERY = "discovery"
-        PRICING = "pricing"
-        ORDER = "order"
+        TRANSACTION = "transaction"
         SUPPORT = "support"
 
     reason: str = Field(description="Reason for the classification")
@@ -59,11 +53,8 @@ class AgentDomain(BaseModel):
         if self.domain == self.Domain.DISCOVERY:
             return discovery_subagent
 
-        elif self.domain == self.Domain.PRICING:
-            return pricing_subagent
-
-        elif self.domain == self.Domain.ORDER:
-            return order_subagent
+        elif self.domain == self.Domain.TRANSACTION:
+            return transaction_subagent
 
         elif self.domain == self.Domain.SUPPORT:
             return support_subagent
@@ -80,29 +71,31 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - ORDER: Purchase, reservation, store visit/booking, order tracking, create order draft
-        - PRICING: Price, stock (logistics/store), inventory, store search by location/name, store availability
+        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, reservation, store visit/booking, order tracking, create order draft
         - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
         - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
         - LEADING: Greeting, unclear intent
 
         DECISION RULES:
 
-        ORDER if user wants:
-        - "Buy", "purchase", "order", "checkout"
-        - Track existing order (provide order number)
-        - Create order draft
-        - Book store visit/reservation with specific date/time
-        Examples: "I want to buy tires", "Book installation at 2pm", "Track my order 12345"
-
-        PRICING if user wants:
+        TRANSACTION if user wants:
         - "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
         - "In stock?", "available?" for specific product at specific store
         - Check logistics stock (warehouse availability)
         - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
         - Find stores by NAME (e.g., "find Hankook store")
         - Check store inventory (which stores have this tire)
-        Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam"
+        - "Buy", "purchase", "order", "checkout"
+        - Track existing order (provide order number)
+        - Create order draft
+        - Book store visit/reservation with specific date/time
+        Examples:
+        - "How much is Ventus S1 evo3?"
+        - "Is G000000314254 in stock?"
+        - "Show me stores near Gangnam"
+        - "I want to buy tires"
+        - "Book installation at 2pm"
+        - "Track my order 12345"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
@@ -127,14 +120,14 @@ class AgentDomain(BaseModel):
         Examples: "Hi", "What can you help me with?", "Hello"
 
         KEY PRINCIPLES:
-        - "stores near [location]" → PRICING
-        - "price of [specific product]" → PRICING
+        - "stores near [location]" → TRANSACTION
+        - "price of [specific product]" → TRANSACTION
         - "search tires named [X]" → DISCOVERY
         - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
-        - "buy tires" → ORDER
+        - "buy tires" → TRANSACTION
         - "recommend tires" → DISCOVERY
         - "warranty, return, maintenance" → SUPPORT
-        - "find stores" → PRICING
+        - "find stores" → TRANSACTION
 
         Korean vehicle numbers follow patterns: 12가3456, 123가1234
         """)
