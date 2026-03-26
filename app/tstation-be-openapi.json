@@ -371,7 +371,7 @@
           "Order/Delivery AF - 주문 및 배송 추적"
         ],
         "summary": "주문 및 배송 상태 조회",
-        "description": "주문 번호로 주문 진행 상태(OP_ORD_DTL_INFO)와 배송 진행 상태·운송장 정보(OP_ORD_DLV_DTL_INFO)를 함께 반환합니다.",
+        "description": "조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.",
         "operationId": "get_order_delivery_api_orders_summary_get",
         "security": [
           {
@@ -380,15 +380,15 @@
         ],
         "parameters": [
           {
-            "name": "ord_no",
+            "name": "query_no",
             "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "description": "주문 번호",
-              "title": "Ord No"
+              "description": "조회번호 (주문번호: O..., 배송번호: D...)",
+              "title": "Query No"
             },
-            "description": "주문 번호"
+            "description": "조회번호 (주문번호: O..., 배송번호: D...)"
           }
         ],
         "responses": {
@@ -1542,6 +1542,35 @@
       },
       "OrderDeliveryResponse": {
         "properties": {
+          "query_no": {
+            "type": "string",
+            "title": "Query No",
+            "description": "입력 조회 번호 (주문번호 O..., 배송번호 D...)"
+          },
+          "ord_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord No",
+            "description": "주문 번호"
+          },
+          "dlv_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dlv No",
+            "description": "배송 번호"
+          },
           "ord_prgs_stat_cd": {
             "anyOf": [
               {
@@ -1554,6 +1583,18 @@
             "title": "Ord Prgs Stat Cd",
             "description": "주문 진행 상태 코드"
           },
+          "ord_prgs_stat_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord Prgs Stat Nm",
+            "description": "주문 진행 상태명"
+          },
           "dlv_prgs_stat_cd": {
             "anyOf": [
               {
@@ -1565,6 +1606,18 @@
             ],
             "title": "Dlv Prgs Stat Cd",
             "description": "배송 진행 상태 코드"
+          },
+          "dlv_prgs_stat_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dlv Prgs Stat Nm",
+            "description": "배송 진행 상태명"
           },
           "inv_no": {
             "anyOf": [
@@ -1604,6 +1657,9 @@
           }
         },
         "type": "object",
+        "required": [
+          "query_no"
+        ],
         "title": "OrderDeliveryResponse"
       },
       "PriceResponse": {

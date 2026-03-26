@@ -223,7 +223,7 @@ When to use
 
 Inputs
 
-ord_no
+query_no
 
 
 ====================================================
@@ -326,7 +326,7 @@ Flow 7 — Order Tracking
 
 When the user asks about an order:
 
-1. Identify ord_no
+1. Identify query_no
 2. Call get_order_status_tool
 3. Retrieve order progress and delivery status
 4. Explain clearly to the user:

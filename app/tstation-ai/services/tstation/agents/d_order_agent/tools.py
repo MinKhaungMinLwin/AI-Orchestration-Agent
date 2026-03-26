@@ -296,11 +296,14 @@ def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = No
 # =====================================================
 
 @tool
-def get_order_status_tool(ord_no: str):
+def get_order_status_tool(query_no: str):
     """
     Retrieve order processing status and delivery tracking information.
 
-    This tool queries the Order & Delivery API using the order number (ORD_NO).
+    This tool queries the Order & Delivery API using a query number.
+    If query_no starts with 'O', it queries by order number.
+    If query_no starts with 'D', it queries by delivery number.
+
     The system retrieves order progress data from OP_ORD_DTL_INFO and delivery
     tracking information from OP_ORD_DLV_DTL_INFO.
 
@@ -314,47 +317,28 @@ def get_order_status_tool(ord_no: str):
     - view shipping or tracking information for an order
 
     Args:
-        ord_no (str): Order number.
+        query_no (str): Query number. Order number starts with 'O' (e.g., 'O...'),
+            delivery number starts with 'D' (e.g., 'D...').
 
     Example Inputs:
-        - {"ord_no": "ORD20260325001"}
-        - {"ord_no": "ORD20260325002"}
-        - {"ord_no": "ORD20260325003"}
+        - {"query_no": "O100017122"}
+        - {"query_no": "D201805160015211"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
+    logger.info("[TOOL][get_order_status_tool] Called with: query_no=%s", query_no)
 
-    # TODO: [MOCK] Remove mock and use real API
-    logger.info("[TOOL][get_order_status_tool] [MOCK] Called with: ord_no=%s", ord_no)
-    mock_data = {
-        "ord_no": ord_no,
-        "ord_status": "ORDER_RECEIVED",
-        "ord_status_nm": "Order Received",
-        "dlv_status": "PREPARING",
-        "dlv_status_nm": "Preparing for Shipment",
-        "tracking_no": "MOCK-TRACK-123456",
-        "dlv_company_nm": "CJ Korea Express",
-        "ord_qty": 4,
-        "goods_nm": "Hankook Tire Ventus V12 evo2 K120",
-        "store_nm": "Mock Store Name",
-        "ord_dt": "2026-03-24 10:30:00",
-        "dlv_est_dt": "2026-03-27",
-    }
-    return _success_response(200, mock_data)
-
-    # logger.info("[TOOL][get_order_status_tool] Called with: ord_no=%s", ord_no)
-    #
-    # try:
-    #     response = get_order_delivery(client=get_client(), ord_no=ord_no)
-    #     if response.parsed is None:
-    #         return _error_response(
-    #             response.status_code,
-    #             f"HTTP {response.status_code}",
-    #             response.content.decode(errors="ignore") or "Failed to retrieve order status"
-    #         )
-    #     logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
-    #     return _success_response(response.status_code, _to_dict(response.parsed))
-    # except Exception as e:
-    #     logger.exception("[TOOL][get_order_status_tool] Failed")
-    #     return _error_response(None, str(e), "Failed to retrieve order status")
+    try:
+        response = get_order_delivery(client=get_client(), query_no=query_no)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve order status"
+            )
+        logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_order_status_tool] Failed")
+        return _error_response(None, str(e), "Failed to retrieve order status")

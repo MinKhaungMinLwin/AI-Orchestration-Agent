@@ -12,12 +12,12 @@ from ...types import UNSET, Response
 
 def _get_kwargs(
     *,
-    ord_no: str,
+    query_no: str,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["ord_no"] = ord_no
+    params["query_no"] = query_no
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -63,14 +63,14 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    ord_no: str,
+    query_no: str,
 ) -> Response[HTTPValidationError | OrderDeliveryResponse]:
     """주문 및 배송 상태 조회
 
-     주문 번호로 주문 진행 상태(OP_ORD_DTL_INFO)와 배송 진행 상태·운송장 정보(OP_ORD_DLV_DTL_INFO)를 함께 반환합니다.
+     조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.
 
     Args:
-        ord_no (str): 주문 번호
+        query_no (str): 조회번호 (주문번호: O..., 배송번호: D...)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -81,7 +81,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        ord_no=ord_no,
+        query_no=query_no,
     )
 
     response = client.get_httpx_client().request(
@@ -94,14 +94,14 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    ord_no: str,
+    query_no: str,
 ) -> HTTPValidationError | OrderDeliveryResponse | None:
     """주문 및 배송 상태 조회
 
-     주문 번호로 주문 진행 상태(OP_ORD_DTL_INFO)와 배송 진행 상태·운송장 정보(OP_ORD_DLV_DTL_INFO)를 함께 반환합니다.
+     조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.
 
     Args:
-        ord_no (str): 주문 번호
+        query_no (str): 조회번호 (주문번호: O..., 배송번호: D...)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -113,21 +113,21 @@ def sync(
 
     return sync_detailed(
         client=client,
-        ord_no=ord_no,
+        query_no=query_no,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    ord_no: str,
+    query_no: str,
 ) -> Response[HTTPValidationError | OrderDeliveryResponse]:
     """주문 및 배송 상태 조회
 
-     주문 번호로 주문 진행 상태(OP_ORD_DTL_INFO)와 배송 진행 상태·운송장 정보(OP_ORD_DLV_DTL_INFO)를 함께 반환합니다.
+     조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.
 
     Args:
-        ord_no (str): 주문 번호
+        query_no (str): 조회번호 (주문번호: O..., 배송번호: D...)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -138,7 +138,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        ord_no=ord_no,
+        query_no=query_no,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -149,14 +149,14 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    ord_no: str,
+    query_no: str,
 ) -> HTTPValidationError | OrderDeliveryResponse | None:
     """주문 및 배송 상태 조회
 
-     주문 번호로 주문 진행 상태(OP_ORD_DTL_INFO)와 배송 진행 상태·운송장 정보(OP_ORD_DLV_DTL_INFO)를 함께 반환합니다.
+     조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.
 
     Args:
-        ord_no (str): 주문 번호
+        query_no (str): 조회번호 (주문번호: O..., 배송번호: D...)
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -169,6 +169,6 @@ async def asyncio(
     return (
         await asyncio_detailed(
             client=client,
-            ord_no=ord_no,
+            query_no=query_no,
         )
     ).parsed
