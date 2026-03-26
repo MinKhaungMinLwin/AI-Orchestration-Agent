@@ -509,27 +509,39 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _build_messages_with_user_info(request: TStationChatRequest) -> list[dict]:
-        """Build messages with user info injected from JWT token."""
+        """Build messages with user info injected conditionally when user references personal context."""
         messages = list(request.messages)
 
         user_info = None
         if request.access_token:
             user_info = get_user_info_from_token(request.access_token)
 
-        if user_info:
-            user_info_str = "\n".join([f"# {k}: {v}" for k, v in user_info.items()])
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i].get("role") == "user":
-                    original_content = messages[i].get("content", "")
-                    messages[i]["content"] = (
+        if not user_info:
+            messages[-1]["content"] = (
+                f"# Response user in Korean language\n"
+                f"{messages[-1]["content"]}"
+            )
+            return messages
+
+        user_info_str = "\n".join([f"# {k}: {v}" for k, v in user_info.items()])
+
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                original_content = messages[i].get("content", "")
+
+                messages[i]["content"] = (
+                    f"# My information:\n{user_info_str}\n"
+                    f"# Only use this info when user asks about personal context "
+                    f"(my car, my order, my profile, etc.)"
+                )
+                messages.insert(i, {
+                    "role": "user",
+                    "content": (
                         f"# Response user in Korean language\n"
-                        f"# User information:\n"
-                        f"{user_info_str}\n"
-                        f"# User question:\n"
                         f"{original_content}"
-                    )
-                    break
-            logger.info(f"[CHAT_V2] User info prepended to last user message")
+                    ),
+                })
+                break
 
         return messages
 
