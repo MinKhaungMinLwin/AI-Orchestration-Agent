@@ -529,18 +529,18 @@ class TStationChatServiceV2:
             if messages[i].get("role") == "user":
                 original_content = messages[i].get("content", "")
 
-                messages[i]["content"] = (
-                    f"# My information:\n{user_info_str}\n"
-                    f"# Only use this info when user asks about personal context "
-                    f"(my car, my order, my profile, etc.)"
-                )
                 messages.insert(i, {
                     "role": "user",
                     "content": (
-                        f"# Response user in Korean language\n"
-                        f"{original_content}"
+                        f"# My information:\n{user_info_str}\n"
+                        f"# Only use this info when user asks about personal context "
+                        f"(my car, my order, my profile, etc.)"
                     ),
                 })
+                messages[i + 1]["content"] = (
+                    f"# Response user in Korean language\n"
+                    f"User question: {original_content}"
+                )
                 break
 
         return messages
