@@ -32,6 +32,7 @@ from common.tstation_be_api_client.hkt_api_client.models import QuickOrderReques
 
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
+from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_orders_api_orders_get import sync_detailed as get_orders
 
 
 def get_client() -> AuthenticatedClient:
@@ -412,3 +413,46 @@ def get_order_status_tool(query_no: str):
     except Exception as e:
         logger.exception("[TOOL][get_order_status_tool] Failed")
         return _error_response(None, str(e), "Failed to retrieve order status")
+
+
+@tool
+def get_orders_of_user_tool():
+    """
+    Retrieve the list of orders for the authenticated user.
+
+    This tool queries the Order & Delivery API to get all orders associated
+    with the current user. It returns order summaries including:
+    - Order number (ord_no)
+    - Product name (goods_nm)
+    - Order quantity (ord_qty)
+    - Registration date (sys_reg_dtime)
+
+    Use this tool when the user wants to:
+    - check their orders
+    - see their order history
+    - list all their orders
+    - find a specific order number
+
+    This tool should be called FIRST when user asks about their orders.
+    After receiving the order list:
+    - If only 1 order: you can automatically call get_order_status_tool with that order number
+    - If multiple orders: show the list to user and ask which one they want details for
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": {"orders": [...]}} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][get_orders_of_user_tool] Called")
+
+    try:
+        response = get_orders(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve order list"
+            )
+        logger.info("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_orders_of_user_tool] Failed")
+        return _error_response(None, str(e), "Failed to retrieve order list")

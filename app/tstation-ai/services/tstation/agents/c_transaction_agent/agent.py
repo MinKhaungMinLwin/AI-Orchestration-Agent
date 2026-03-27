@@ -9,6 +9,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_store_detail_tool,
     create_order_draft_tool,
     get_order_status_tool,
+    get_orders_of_user_tool,
 )
 from common.curr_time import get_current_time
 
@@ -212,18 +213,21 @@ redirect_url for checkout page
 Purpose
 Provide order status, delivery status, and tracking number.
 
-Tool
-get_order_status_tool
+Tools
+get_orders_of_user_tool - Get list of user's orders
+get_order_status_tool - Get order/delivery detail by order number
 
 When to use
 
 • user asks order status
 • user asks delivery progress
 • user asks tracking information
+• user wants to see their orders
+• user asks "my orders", "check my order"
 
 Inputs
 
-query_no
+query_no (for get_order_status_tool)
 
 
 ====================================================
@@ -321,24 +325,41 @@ Steps
 
 
 ------------------------------------
-Flow 7 — Order Tracking
+Flow 7 — Order List & Tracking
 ------------------------------------
 
-When the user asks about an order:
+When the user asks about their orders ("Check my order", "My orders", etc.):
 
-1. Identify query_no
-2. Call get_order_status_tool
-3. Retrieve order progress and delivery status
-4. Explain clearly to the user:
+1. Call get_orders_of_user_tool FIRST to get user's order list
+2. Receive order list with order numbers
+3. Based on the result:
 
-• order progress
-• delivery status
-• tracking number
-• estimated delivery time
+   **If 1 order:**
+   - Automatically call get_order_status_tool with that order number
+   - Display order details and delivery status
 
-If tracking number exists:
+   **If multiple orders:**
+   - Show the order list in a table format
+   - Ask user which order they want to check (by number or product name)
+   - When user specifies, call get_order_status_tool with that order number
 
-Provide tracking link.
+Order list table format:
+
+| No | Product | Quantity | Date |
+|----|---------|----------|------|
+| 1 | Product A | 2 | 2024-01-15 |
+
+**When displaying order status:**
+
+### Order Status
+
+Order ID: O...
+Order Progress: ...
+Delivery Status: ...
+Tracking Number: ...
+Estimated Delivery Time: ...
+
+If tracking number exists, provide tracking link.
 
 
 ====================================================
@@ -566,6 +587,7 @@ class TransactionSubAgent(BaseAgent):
         # Quick Order
         "create_order_draft_tool": "Quick Order",
         # Order / Delivery
+        "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
     }
 
@@ -580,6 +602,7 @@ class TransactionSubAgent(BaseAgent):
                 get_store_list_tool,
                 get_store_detail_tool,
                 create_order_draft_tool,
+                get_orders_of_user_tool,
                 get_order_status_tool,
             ],
             system_prompt=TRANSACTION_AGENT_SYSTEM_PROMPT,

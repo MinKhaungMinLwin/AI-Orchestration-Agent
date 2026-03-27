@@ -15,6 +15,8 @@ from .nearby_store_item import NearbyStoreItem
 from .nearby_store_request import NearbyStoreRequest
 from .nearby_store_response import NearbyStoreResponse
 from .order_delivery_response import OrderDeliveryResponse
+from .order_list_item import OrderListItem
+from .order_list_response import OrderListResponse
 from .price_response import PriceResponse
 from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
@@ -53,6 +55,8 @@ __all__ = (
     "NearbyStoreRequest",
     "NearbyStoreResponse",
     "OrderDeliveryResponse",
+    "OrderListItem",
+    "OrderListResponse",
     "PriceResponse",
     "ProductDescResponse",
     "ProductImage",

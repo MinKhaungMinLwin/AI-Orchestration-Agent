@@ -365,6 +365,33 @@
         ]
       }
     },
+    "/api/orders/": {
+      "get": {
+        "tags": [
+          "Order/Delivery AF - 주문 및 배송 추적"
+        ],
+        "summary": "주문 내역 조회",
+        "description": "인증된 사용자의 주문 내역(주문번호, 상품명, 수량, 등록일시)을 조회합니다.",
+        "operationId": "get_orders_api_orders__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/orders/summary": {
       "get": {
         "tags": [
@@ -1661,6 +1688,72 @@
           "query_no"
         ],
         "title": "OrderDeliveryResponse"
+      },
+      "OrderListItem": {
+        "properties": {
+          "ord_no": {
+            "type": "string",
+            "title": "Ord No",
+            "description": "주문 번호"
+          },
+          "goods_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods Nm",
+            "description": "상품명"
+          },
+          "ord_qty": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord Qty",
+            "description": "주문 수량"
+          },
+          "sys_reg_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sys Reg Dtime",
+            "description": "시스템 등록 일시"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ord_no"
+        ],
+        "title": "OrderListItem"
+      },
+      "OrderListResponse": {
+        "properties": {
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/OrderListItem"
+            },
+            "type": "array",
+            "title": "Orders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "orders"
+        ],
+        "title": "OrderListResponse"
       },
       "PriceResponse": {
         "properties": {
