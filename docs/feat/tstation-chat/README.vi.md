@@ -34,23 +34,19 @@ graph TB
 
     G --> I{Chain từng miền agent}
     I --> J[Discovery Agent]
-    I --> K[Pricing Agent]
-    I --> L[Order Agent]
-    I --> M[Support Agent]
-    I --> N[Leading Agent]
+    I --> K[Transaction Agent]
+    I --> L[Support Agent]
+    I --> M[Leading Agent]
 
     J --> O[Truuyền context cho agent tiếp theo]
     K --> O
     L --> O
-    M --> O
-    N --> P[StreamingResponse SSE]
+    M --> P[StreamingResponse SSE]
 
     H --> Q[TStationChatResponse]
 ```
 
-**Hai phiên bản dịch vụ**:
-- `chat.py`: Định tuyến đơn miền gốc (V1)
-- `chat_2.py`: V2 multi-agent streaming với phát hiện đa ý định
+**Main service**: `chat_2.py` with TStationChatServiceV2
 
 ## Workflow Sequence
 
@@ -216,8 +212,7 @@ class MultiAgentDomain(BaseModel):
     class Domain(str, Enum):
         LEADING = "leading"
         DISCOVERY = "discovery"
-        PRICING = "pricing"
-        ORDER = "order"
+        TRANSACTION = "transaction"
         SUPPORT = "support"
 
     reason: str = Field(description="Lý do phân loại")
@@ -263,41 +258,13 @@ TOOL_TO_AF_MAP = {
 }
 ```
 
-### Pricing Agent (`c_pricing_agent/`)
+### Transaction Agent (`c_transaction_agent/`)
 
-- Tra giá
+- Tra giá (đã hợp nhất từ pricing_agent)
 - Kiểm tra tồn kho (logistics, MD, cửa hàng)
-- Thông tin cửa hàng
-
-**TOOL_TO_AF_MAP**:
-```python
-TOOL_TO_AF_MAP = {
-    "get_final_price_tool": "Price",
-    "get_logistics_inventory_tool": "Inventory",
-    "get_md_inventory_tool": "Inventory",
-    "get_store_inventory_tool": "Inventory",
-    "get_nearby_stores_tool": "Store",
-    "get_store_list_tool": "Store",
-    "get_store_detail_tool": "Store",
-}
-```
-
-### Order Agent (`d_order_agent/`)
-
-- Tạo đơn hàng nhanh
-- Theo dõi đơn hàng
+- Thông tin và tìm kiếm cửa hàng
+- Tạo và theo dõi đơn hàng (đã hợp nhất từ order_agent)
 - Trạng thái giao hàng
-
-**TOOL_TO_AF_MAP**:
-```python
-TOOL_TO_AF_MAP = {
-    "get_nearby_stores_tool": "Store",
-    "get_store_details_tool": "Store",
-    "get_store_list_tool": "Store",
-    "create_order_draft_tool": "Quick Order",
-    "get_order_status_tool": "Order / Delivery",
-}
-```
 
 ### Support Agent (`e_support_agent/`)
 
@@ -344,10 +311,9 @@ Phân loại tin nhắn thành 5 miền với quy tắc ưu tiên rõ ràng.
 
 **Quy tắc ưu tiên**:
 1. Yêu cầu escalation → support (cao nhất)
-2. Ý định mua rõ ràng → order
-3. Giá/Tồn kho/Cửa hàng → pricing
-4. Khuyến nghị/Tương thích → discovery
-5. Chung/Không rõ → leading
+2. Giá/Tồn kho/Cửa hàng/Đơn hàng → transaction
+3. Khuyến nghị/Tương thích → discovery
+4. Chung/Không rõ → leading
 
 ### V2 Multi-Intent Classification Prompt
 

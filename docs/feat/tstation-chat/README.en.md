@@ -34,23 +34,19 @@ graph TB
 
     G --> I{Chain each domain agent}
     I --> J[Discovery Agent]
-    I --> K[Pricing Agent]
-    I --> L[Order Agent]
-    I --> M[Support Agent]
-    I --> N[Leading Agent]
+    I --> K[Transaction Agent]
+    I --> L[Support Agent]
+    I --> M[Leading Agent]
 
     J --> O[Context passed to next agent]
     K --> O
     L --> O
-    M --> O
-    N --> P[StreamingResponse SSE]
+    M --> P[StreamingResponse SSE]
 
     H --> Q[TStationChatResponse]
 ```
 
-**Two service versions**:
-- `chat.py`: Original single-domain routing (V1)
-- `chat_2.py`: V2 multi-agent streaming with multi-intent detection
+**Main service**: `chat_2.py` with TStationChatServiceV2
 
 ## Workflow Sequence
 
@@ -236,18 +232,16 @@ class MultiAgentDomain(BaseModel):
         return [agent_map[d] for d in self.domains if d in agent_map]
 ```
 
-### 6. AgentDomain (V1)
+### 6. AgentDomain (V1 - Deprecated)
 
-Routes agent based on domain.
+V1 single-domain routing. **V2 (MultiAgentDomain) is now default.**
 
 ```python
 def get_agent(self):
     if self.domain == self.Domain.DISCOVERY:
         return discovery_subagent
-    elif self.domain == self.Domain.PRICING:
-        return pricing_subagent
-    elif self.domain == self.Domain.ORDER:
-        return order_subagent
+    elif self.domain == self.Domain.TRANSACTION:
+        return transaction_subagent  # handles pricing + order
     elif self.domain == self.Domain.SUPPORT:
         return support_subagent
     else:
@@ -283,41 +277,13 @@ TOOL_TO_AF_MAP = {
 }
 ```
 
-### Pricing Agent (`c_pricing_agent/`)
+### Transaction Agent (`c_transaction_agent/`)
 
-- Price lookup
+- Price lookup (merged from former pricing_agent)
 - Stock checking (logistics, MD, store)
-- Store information
-
-**TOOL_TO_AF_MAP**:
-```python
-TOOL_TO_AF_MAP = {
-    "get_final_price_tool": "Price",
-    "get_logistics_inventory_tool": "Inventory",
-    "get_md_inventory_tool": "Inventory",
-    "get_store_inventory_tool": "Inventory",
-    "get_nearby_stores_tool": "Store",
-    "get_store_list_tool": "Store",
-    "get_store_detail_tool": "Store",
-}
-```
-
-### Order Agent (`d_order_agent/`)
-
-- Quick order creation
-- Order tracking
+- Store information and search
+- Order creation and tracking (merged from former order_agent)
 - Delivery status
-
-**TOOL_TO_AF_MAP**:
-```python
-TOOL_TO_AF_MAP = {
-    "get_nearby_stores_tool": "Store",
-    "get_store_details_tool": "Store",
-    "get_store_list_tool": "Store",
-    "create_order_draft_tool": "Quick Order",
-    "get_order_status_tool": "Order / Delivery",
-}
-```
 
 ### Support Agent (`e_support_agent/`)
 
@@ -364,10 +330,9 @@ Classifies messages into 5 domains with clear priority rules.
 
 **Priority Rules**:
 1. Escalation request → support (highest)
-2. Clear purchase intent → order
-3. Price/Stock/Store → pricing
-4. Recommendation/Compatibility → discovery
-5. General/Unclear → leading
+2. Price/Stock/Store/Order → transaction
+3. Recommendation/Compatibility → discovery
+4. General/Unclear → leading
 
 ### V2 Multi-Intent Classification Prompt
 

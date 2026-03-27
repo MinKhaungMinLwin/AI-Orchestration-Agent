@@ -34,23 +34,19 @@ graph TB
 
     G --> I{각 도메인 에이전트 체이닝}
     I --> J[Discovery 에이전트]
-    I --> K[Pricing 에이전트]
-    I --> L[Order 에이전트]
-    I --> M[Support 에이전트]
-    I --> N[Leading 에이전트]
+    I --> K[Transaction 에이전트]
+    I --> L[Support 에이전트]
+    I --> M[Leading 에이전트]
 
     J --> O[다음 에이전트에 컨텍스트 전달]
     K --> O
     L --> O
-    M --> O
-    N --> P[StreamingResponse SSE]
+    M --> P[StreamingResponse SSE]
 
     H --> Q[TStationChatResponse]
 ```
 
-**두 가지 서비스 버전**:
-- `chat.py`: 원본 단일 도메인 라우팅 (V1)
-- `chat_2.py`: 다중 인텐트 감지가 있는 V2 멀티 에이전트 스트리밍
+**메인 서비스**: `chat_2.py` with TStationChatServiceV2
 
 ## 워크플로 시퀀스
 
@@ -190,8 +186,7 @@ LLM을 사용하여 도메인을 구조화된 출력으로 분류합니다.
 
 **분류 규칙**:
 - 최고 우선순위: 에스컬레이션 → support
-- 명확한 구매 의도 → order
-- 가격/재고/매장 → pricing
+- 가격/재고/매장/주문 → transaction
 - 권장 사항/호환성 → discovery
 - 일반/불명확 → leading
 
@@ -224,8 +219,7 @@ class AgentDomain(BaseModel):
     class Domain(str, Enum):
         LEADING = "leading"
         DISCOVERY = "discovery"
-        PRICING = "pricing"
-        ORDER = "order"
+        TRANSACTION = "transaction"
         SUPPORT = "support"
 
     reason: str = Field(default="", description="Reason for the classification")
@@ -241,10 +235,8 @@ class AgentDomain(BaseModel):
 def get_agent(self):
     if self.domain == self.Domain.DISCOVERY:
         return discovery_subagent
-    elif self.domain == self.Domain.PRICING:
-        return pricing_subagent
-    elif self.domain == self.Domain.ORDER:
-        return order_subagent
+    elif self.domain == self.Domain.TRANSACTION:
+        return transaction_subagent  # pricing + order merged
     elif self.domain == self.Domain.SUPPORT:
         return support_subagent
     else:
@@ -280,41 +272,13 @@ TOOL_TO_AF_MAP = {
 }
 ```
 
-### Pricing Agent (`c_pricing_agent/`)
+### Transaction Agent (`c_transaction_agent/`)
 
-- 가격 조회
+- 가격 조회 (이전 pricing_agent 통합)
 - 재고 확인 (물류, MD, 매장)
-- 매장 정보
-
-**TOOL_TO_AF_MAP**:
-```python
-TOOL_TO_AF_MAP = {
-    "get_final_price_tool": "Price",
-    "get_logistics_inventory_tool": "Inventory",
-    "get_md_inventory_tool": "Inventory",
-    "get_store_inventory_tool": "Inventory",
-    "get_nearby_stores_tool": "Store",
-    "get_store_list_tool": "Store",
-    "get_store_detail_tool": "Store",
-}
-```
-
-### Order Agent (`d_order_agent/`)
-
-- 빠른 주문 생성
-- 주문 추적
+- 매장 정보 및 검색
+- 주문 생성 및 추적 (이전 order_agent 통합)
 - 배송 상태
-
-**TOOL_TO_AF_MAP**:
-```python
-TOOL_TO_AF_MAP = {
-    "get_nearby_stores_tool": "Store",
-    "get_store_details_tool": "Store",
-    "get_store_list_tool": "Store",
-    "create_order_draft_tool": "Quick Order",
-    "get_order_status_tool": "Order / Delivery",
-}
-```
 
 ### Support Agent (`e_support_agent/`)
 

@@ -8,8 +8,8 @@ This document provides a summary of the T-Station AI codebase structure. The pro
 
 | Service | Port | Description |
 |---------|------|-------------|
-| tstation-ai | 8000 | Main AI service |
-| tstation-be | 8001 | Backend service |
+| tstation-ai | 9000 | Main AI service |
+| tstation-be | 8000 | Backend service |
 | tstation-ui-demo | 7777 | Demo UI |
 
 ## Repository Structure
@@ -32,7 +32,6 @@ tstation-ai/
 │   │   │       │   ├── a_leading_agent/
 │   │   │       │   ├── b_discovery_agent/
 │   │   │       │   ├── c_transaction_agent/
-│   │   │       │   ├── d_order_agent/
 │   │   │       │   ├── e_support_agent/
 │   │   │       │   └── router.py
 │   │   │       └── chat.py
@@ -70,8 +69,7 @@ class BaseAgent(ABC):
 |-------|-----------|---------------------|
 | Leading | a_leading_agent/ | Orchestrator |
 | Discovery | b_discovery_agent/ | Product Compatibility, Product Recommendation, Product Description |
-| Transaction | c_transaction_agent/ | Purchase intent handling |
-| Order | d_order_agent/ | Order management |
+| Transaction | c_transaction_agent/ | Orders, purchase intent, price, stock, store |
 | Support | e_support_agent/ | Policies, warranty, FAQ |
 
 ### Agent Flow Streaming

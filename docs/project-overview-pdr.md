@@ -14,8 +14,8 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 
 | Service | Port |
 |---------|------|
-| tstation-ai | 8000 |
-| tstation-be | 8001 |
+| tstation-ai | 9000 |
+| tstation-be | 8000 |
 | tstation-ui-demo | 7777 |
 
 ## Technical Stack
@@ -32,7 +32,7 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-001 | Multi-agent chat system | Critical |
-| FR-002 | Domain classification (LEADING, DISCOVERY, TRANSACTION, SHOPPING, SUPPORT) | Critical |
+| FR-002 | Domain classification (LEADING, DISCOVERY, TRANSACTION, SUPPORT) | Critical |
 | FR-003 | Product discovery with recommendations | High |
 | FR-004 | Store/shopping agent | High |
 | FR-005 | Support agent (policies, FAQ) | High |
@@ -56,8 +56,7 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 |-------|---------|
 | a_leading_agent | Orchestrator, domain routing |
 | b_discovery_agent | Product recommendations, compatibility |
-| c_transaction_agent | Purchase intent, orders |
-| d_shopping_agent | Price, stock, store info |
+| c_transaction_agent | Orders, purchase intent, price, stock, store |
 | e_support_agent | Policies, warranty, FAQ |
 
 ### Domain Routing
@@ -67,7 +66,6 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 | LEADING | Leading |
 | DISCOVERY | Discovery |
 | TRANSACTION | Transaction |
-| SHOPPING | Shopping |
 | SUPPORT | Support |
 
 ---

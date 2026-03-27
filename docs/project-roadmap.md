@@ -6,7 +6,7 @@
 |-------|--------|-------------|
 | Phase 1: Foundation | Complete | Core infrastructure and backend |
 | Phase 2: AI Agents | Complete | Multi-agent system |
-| Phase 3: Shopping/Support | In Progress | Shopping and Support agents |
+| Phase 3: Support | In Progress | Support agent |
 | Phase 4: Production | Pending | Production hardening |
 
 ---
@@ -24,21 +24,19 @@
 
 - Leading Agent (domain classifier)
 - Discovery Agent for product recommendations
-- Transaction Agent (partial)
+- Transaction Agent (complete)
 - Multi-language support
 - Streaming response support
 
 ---
 
-## Phase 3: Shopping/Support (In Progress)
+## Phase 3: Support (In Progress)
 
 ### Current Tasks
 
 | Task | Status |
 |------|--------|
-| Shopping Agent implementation | In Progress |
 | Support Agent implementation | In Progress |
-| Transaction Agent completion | Pending |
 
 ### Agents
 
@@ -46,8 +44,7 @@
 |-------|--------|
 | a_leading_agent | Complete |
 | b_discovery_agent | Complete |
-| c_transaction_agent | Partial |
-| d_shopping_agent | Partial |
+| c_transaction_agent | Complete |
 | e_support_agent | Partial |
 
 ---

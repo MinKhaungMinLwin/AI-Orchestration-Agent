@@ -8,8 +8,8 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 
 | Service | Port | Description |
 |---------|------|-------------|
-| tstation-ai | 8000 | Main AI service (FastAPI) |
-| tstation-be | 8001 | Backend service (Oracle DB) |
+| tstation-ai | 9000 | Main AI service (FastAPI) |
+| tstation-be | 8000 | Backend service (Oracle DB) |
 | tstation-ui-demo | 7777 | Streamlit demo UI |
 
 ## High-Level Architecture
@@ -46,15 +46,15 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 │  │  └─────────────────────────────────────────────────┘   │  │
 │  │        │    │    │    │                                 │  │
 │  │        ▼    ▼    ▼    ▼                                 │  │
-│  │  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐                   │  │
-│  │  │ L │  │ D │  │ T │  │ S │  │ P │                   │  │
-│  │  │ e │  │ i │  │ r │  │ h │  │ u │                   │  │
-│  │  │ a │  │ s │  │ a │  │ o │  │ p │                   │  │
-│  │  │ d │  │ c │  │ n │  │ p │  │ p │                   │  │
-│  │  │ i │  │ o │  │ s │  │ i │  │ o │                   │  │
-│  │  │ n │  │ v │  │ a │  │ n │  │ r │                   │  │
-│  │  │ g │  │ e │  │ c │  │ t │  │ t │                   │  │
-│  │  └───┘  └───┘  └───┘  └───┘  └───┘                   │  │
+│  │  ┌───┐  ┌───┐  ┌───┐  ┌───┐                          │  │
+│  │  │ L │  │ D │  │ T │  │ P │                          │  │
+│  │  │ e │  │ i │  │ r │  │ u │                          │  │
+│  │  │ a │  │ s │  │ a │  │ p │                          │  │
+│  │  │ d │  │ c │  │ n │  │ p │                          │  │
+│  │  │ i │  │ o │  │ s │  │ o │                          │  │
+│  │  │ n │  │ v │  │ a │  │ r │                          │  │
+│  │  │ g │  │ e │  │ c │  │ t │                          │  │
+│  │  └───┘  └───┘  └───┘  └───┘                          │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                              │                                │
 │                              ▼                                │
@@ -67,7 +67,7 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    T-Station Backend                         │
-│                    (FastAPI, Port 8001)                      │
+│                    (FastAPI, Port 8000)                      │
 │    Shop | Price | Inventory | Recommendation | Order        │
 │    QuickOrder | Compatibility | Description | FAQ           │
 └─────────────────────────────────────────────────────────────┘
@@ -115,8 +115,7 @@ Routes queries to appropriate agents:
 |--------|-------|-------------|
 | LEADING | a_leading_agent | General/unclear queries |
 | DISCOVERY | b_discovery_agent | Product research, recommendations, compatibility |
-| TRANSACTION | c_transaction_agent | Purchase intent, orders |
-| SHOPPING | d_shopping_agent | Price, stock, store inquiries |
+| TRANSACTION | c_transaction_agent | Orders, purchase intent, price, stock, store |
 | SUPPORT | e_support_agent | Warranty, returns, policies |
 
 ### Agent Details
@@ -126,7 +125,6 @@ Routes queries to appropriate agents:
 | Leading | a_leading_agent/ | Yes | Yes |
 | Discovery | b_discovery_agent/ | Yes | Yes |
 | Transaction | c_transaction_agent/ | Yes | Yes |
-| Shopping | d_shopping_agent/ | Yes | Yes |
 | Support | e_support_agent/ | Yes | Yes |
 
 ## Backend Routers
