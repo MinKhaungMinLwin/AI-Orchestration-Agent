@@ -39,6 +39,11 @@ elif settings.ENV == Environment.STAGING:
     # Healthcheck & Metrics
     router.include_router(monitoring.router, tags=["Healthcheck & Metrics"], prefix="", include_in_schema=False)
     
+    # T-Station Chat
+    router.include_router(tstation_chat.router, tags=["T-Station Chat"], prefix="/tstation")
+    router.include_router(tstation_example_question.router, tags=["T-Station Chat"], prefix="/tstation")
+    router.include_router(tstation_validate_token.router, tags=["T-Station Chat"], prefix="/tstation")
+    
     # Queue System
     # router.include_router(queue.router, tags=["Queue System"], prefix="/queue", dependencies=[Depends(get_api_key)])
 
