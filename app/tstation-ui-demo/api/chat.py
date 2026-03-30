@@ -1,23 +1,19 @@
-"""API client for communicating with the backend."""
+"""API client for communicating with the backend using new chat API."""
 import json
-import os
+import uuid
 from typing import Dict, Generator, List, Union
 
 import requests
 import streamlit as st
 
 BASE_URL = "http://tstation-ai:8000/api"
-API_KEY = os.getenv("API_SECRET_KEY", None)
-HEADERS = {}
-if API_KEY:
-    HEADERS["Authorization"] = f"Bearer {API_KEY}"
+
 
 def get_examples(language: str) -> dict:
     """Fetch example questions from the API."""
     try:
         response = requests.get(
             f"{BASE_URL}/tstation/chat/example_questions/{language}",
-            headers=HEADERS,
         )
         response.raise_for_status()
         return response.json()
@@ -26,50 +22,58 @@ def get_examples(language: str) -> dict:
         return {}
 
 
-def send_chat_message(messages: List[Dict[str, str]],
-                      session_id: str,
-                      user_id: str,
-                      stream: bool = False,
-                      access_token: str | None = None) -> Union[str, Generator[str, None, None]]:
+def _get_or_create_session_id(session_id: str | None) -> str:
+    """Get session_id or create new one if None."""
+    if session_id:
+        return session_id
+    return str(uuid.uuid4())
+
+
+def send_chat_message(
+    content: str,
+    session_id: str | None,
+    stream: bool = False,
+    access_token: str | None = None,
+) -> Union[str, Generator[dict, None, None]]:
     """
-    Send chat message to the API and return response.
+    Send chat message using new API (content only, no messages array).
 
     Args:
-        messages: List of message dictionaries
-        session_id: Session identifier
-        user_id: User identifier
+        content: User message content only
+        session_id: Session identifier (optional, creates new if None)
         stream: If True, returns streaming generator; if False, returns complete response
-        access_token: Access token for tstation-be API calls
+        access_token: JWT access token (passed in Authorization header)
 
     Returns:
         str: Complete response when stream=False
         Generator[str, None, None]: Streaming generator when stream=True
     """
-    payload = {
-        "messages": messages,
-        "session_id": session_id,
-        "user_id": user_id,
-        "stream": stream,
-        "access_token": access_token,
+    if not access_token:
+        return "Access token is required."
 
-        # Tracing
-        "metadata": {
-            "position": "Streamlit Demo"
-        },
+    # Get or create session_id
+    session_id = _get_or_create_session_id(session_id)
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    payload = {
+        "content": content,
+        "session_id": session_id,
+        "stream": stream,
     }
 
     if stream:
-        return _handle_stream_response(payload)
+        return _handle_stream_response(payload, session_id, access_token)
     else:
-        return _handle_regular_response(payload)
+        return _handle_regular_response(payload, access_token)
 
 
-def _handle_regular_response(payload: dict) -> str:
+def _handle_regular_response(payload: dict, access_token: str) -> str:
     """Handle non-streaming response"""
     try:
+        headers = {"Authorization": f"Bearer {access_token}"}
         response = requests.post(
-            f"{BASE_URL}/tstation/chat",
-            headers=HEADERS,
+            f"{BASE_URL}/tstation/messages/chat",
+            headers=headers,
             json=payload
         )
         response.raise_for_status()
@@ -79,24 +83,26 @@ def _handle_regular_response(payload: dict) -> str:
         return f"Error when call to API: {e}"
 
 
-def _handle_stream_response(payload: dict) -> Generator[dict, None, None]:
+def _handle_stream_response(payload: dict, session_id: str, access_token: str) -> Generator[dict, None, None]:
     try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
         response = requests.post(
-            f"{BASE_URL}/tstation/chat",
+            f"{BASE_URL}/tstation/messages/chat",
             json=payload,
             stream=True,
-            headers={
-                "Accept": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Authorization": f"Bearer {API_KEY}",
-            },
+            headers=headers,
         )
 
         response.raise_for_status()
         response.encoding = "utf-8"
 
         buffer = ""
+        first_chunk = True
 
         for chunk in response.iter_content(chunk_size=1, decode_unicode=True):
 
@@ -119,6 +125,14 @@ def _handle_stream_response(payload: dict) -> Generator[dict, None, None]:
 
                     try:
                         data = json.loads(data_content)
+
+                        # First chunk contains session info - just yield it
+                        if first_chunk and data.get("stream_started"):
+                            first_chunk = False
+                            # Yield session info, continue to get content
+                            yield {"type": "session_info", "session_id": data.get("session_id")}
+                            continue
+
                         yield data
 
                     except json.JSONDecodeError:

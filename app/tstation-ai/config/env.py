@@ -53,7 +53,12 @@ class Settings(BaseSettings):
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str
 
-    ### -------------------------------
+    # Redis Conversation Management
+    REDIS_CONVERSATION_MANAGEMENT_PASSWORD: str
+    REDIS_CONVERSATION_MANAGEMENT_URL: str
+
+
+### -------------------------------
     # Queue System
     ### -------------------------------
     # Redis

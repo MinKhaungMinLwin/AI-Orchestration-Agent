@@ -12,9 +12,10 @@ def validate_token(access_token: str) -> dict:
     """
     base_url = "http://tstation-ai:8000/api"
     try:
+        headers = {"Authorization": f"Bearer {access_token}"}
         response = requests.post(
-            f"{base_url}/tstation/validate-token",
-            json={"access_token": access_token},
+            f"{base_url}/tstation/messages/validate-token",
+            headers=headers,
             timeout=10
         )
         return response.json()

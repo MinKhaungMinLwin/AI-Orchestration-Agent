@@ -1,9 +1,11 @@
 import json
 import os
+import uuid
 
 import streamlit as st
 import streamlit_nested_layout
 from api.chat import get_examples, send_chat_message
+from api.sessions import get_sessions, get_history, delete_session, get_user_info
 from api.validate_token import validate_token
 
 st.set_page_config(page_title="T-Station", layout="wide")
@@ -14,6 +16,10 @@ if "tstation_logged_in" not in st.session_state:
     st.session_state["tstation_logged_in"] = False
 if "access_token" not in st.session_state:
     st.session_state["access_token"] = None
+if "current_session_id" not in st.session_state:
+    st.session_state["current_session_id"] = str(uuid.uuid4())
+if "user_info" not in st.session_state:
+    st.session_state["user_info"] = None
 
 
 # Login Section
@@ -23,9 +29,20 @@ st.sidebar.header("🔐 T-Station Login")
 # Check login status
 if st.session_state.get("tstation_logged_in") and st.session_state.get("access_token"):
     st.sidebar.success("✅ Logged in")
+
+    # Display user info
+    user_info = st.session_state.get("user_info", {})
+    if user_info:
+        st.sidebar.markdown(f"**User ID:** {user_info.get('user_id', 'N/A')}")
+        if user_info.get("car_no"):
+            st.sidebar.markdown(f"**Car:** {user_info['car_no']}")
+
     if st.sidebar.button("Logout", key="logout_btn"):
         st.session_state["tstation_logged_in"] = False
         st.session_state["access_token"] = None
+        st.session_state["current_session_id"] = None
+        st.session_state["user_info"] = None
+        st.session_state["messages"] = []
         st.rerun()
 else:
     st.sidebar.info("Only logged-in users can call APIs")
@@ -45,6 +62,9 @@ else:
                 if result.get("valid"):
                     st.session_state["access_token"] = manual_token
                     st.session_state["tstation_logged_in"] = True
+                    # Fetch user info
+                    user_info = get_user_info(manual_token)
+                    st.session_state["user_info"] = user_info
                     st.success("Token saved!")
                     st.rerun()
                 else:
@@ -64,28 +84,92 @@ else:
 # Get access token for API calls
 access_token = st.session_state.get("access_token")
 
-# # Sidebar
-# st.sidebar.header("User Information")
-# user_options = ["Test-User", "Other"]
-# selected = st.sidebar.selectbox("User ID", user_options, index=0)
-# if selected == "Other":
-#     user_id = st.sidebar.text_input("Add your User ID", value="Test-User-Streamlit")
-#     session_id = st.sidebar.text_input("Session ID", value="test_session_id_123")
-# else:
-#     user_id = selected
-#     session_id = "01/01/2026"
-
-user_id = "Test-User-Streamlit"
-session_id = "01/01/2026"
-
 stream_mode = True
 
-# Examples (disabled)
-# language = st.sidebar.selectbox("Choose your language", ["ko", "en"], index=0 if os.getenv("ENV") == "local" else 0)
-language = "ko"  # Default Korean
-
+# Initialize messages if not exists
 if 'messages' not in st.session_state:
     st.session_state['messages'] = []
+
+# Session Management (only if logged in)
+if access_token:
+    st.sidebar.markdown("---")
+    st.sidebar.header("💬 Conversations")
+
+    # Fetch sessions
+    sessions = get_sessions(access_token)
+
+    # Create new session button
+    if st.sidebar.button("➕ New Conversation", key="new_session_btn"):
+        st.session_state["current_session_id"] = str(uuid.uuid4())
+        st.session_state["messages"] = []
+        st.rerun()
+
+    # Session selector
+    session_ids = [s["session_id"] for s in sessions]
+
+    # Check if current_session_id exists in sessions or is a new session
+    current_session_id = st.session_state.get("current_session_id")
+    is_new_session = current_session_id and current_session_id not in session_ids
+
+    if sessions:
+        if is_new_session:
+            # Current session is new, add it to options
+            session_options = ["New Conversation"] + session_ids + [current_session_id]
+            selected_idx = len(session_options) - 1  # Last one is the new session
+        else:
+            session_options = ["New Conversation"] + session_ids
+            selected_idx = 0
+            if current_session_id:
+                for i, s in enumerate(sessions):
+                    if s["session_id"] == current_session_id:
+                        selected_idx = i + 1
+                        break
+
+        selected_session = st.sidebar.selectbox(
+            "Select Conversation",
+            session_options,
+            index=selected_idx,
+            key="session_selector",
+            format_func=lambda x: "New Conversation" if x == "New Conversation" else (
+                f"{x[:8]}... - {next((s['last_message'][:30] for s in sessions if s['session_id'] == x), '')}"
+            )
+        )
+
+        # Handle session change
+        if selected_session == "New Conversation":
+            new_session_id = str(uuid.uuid4())
+        else:
+            new_session_id = selected_session
+
+        if new_session_id != st.session_state.get("current_session_id"):
+            st.session_state["current_session_id"] = new_session_id
+            st.session_state["messages"] = []
+
+            # Load history if session selected
+            if new_session_id and new_session_id in session_ids:
+                history = get_history(new_session_id, access_token)
+                st.session_state["messages"] = [
+                    {"role": msg["role"], "content": msg["content"]}
+                    for msg in history
+                ]
+            st.rerun()
+
+        # Delete session button
+        if st.session_state.get("current_session_id"):
+            if st.sidebar.button("🗑️ Delete Conversation", key="delete_session_btn"):
+                if delete_session(st.session_state["current_session_id"], access_token):
+                    st.session_state["current_session_id"] = None
+                    st.session_state["messages"] = []
+                    st.rerun()
+    else:
+        st.sidebar.info("No conversations yet")
+
+    # Display current session ID
+    if st.session_state.get("current_session_id"):
+        st.sidebar.markdown(f"**Session:** `{st.session_state['current_session_id'][:16]}...`")
+
+# Examples (disabled)
+language = "ko"  # Default Korean
 
 chat_container = st.container()
 
@@ -106,6 +190,9 @@ with input_container:
         prompt = st.chat_input(placeholder="Your question....")
 
 if prompt:
+    # Get current session ID
+    current_session_id = st.session_state.get("current_session_id")
+
     with chat_container:
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -127,14 +214,20 @@ if prompt:
 
                 try:
                     response_generator = send_chat_message(
-                        messages=st.session_state['messages'],
-                        session_id=session_id,
-                        user_id=user_id,
+                        content=prompt,
+                        session_id=current_session_id,
                         stream=True,
                         access_token=access_token
                     )
 
                     for chunk in response_generator:
+                        # Handle session info from first chunk
+                        if chunk.get("type") == "session_info":
+                            new_session_id = chunk.get("session_id")
+                            if new_session_id and new_session_id != st.session_state.get("current_session_id"):
+                                st.session_state["current_session_id"] = new_session_id
+                            continue
+
                         if chunk.get("type") == "tool":
                             tool_name = chunk.get("tool", "")
                             tool_input = chunk.get("input", {})
@@ -200,15 +293,25 @@ if prompt:
             else:
                 with st.spinner("Thinking..."):
                     bot_reply = send_chat_message(
-                        messages=st.session_state['messages'],
-                        session_id=session_id,
-                        user_id=user_id,
+                        content=prompt,
+                        session_id=current_session_id,
                         stream=stream_mode,
                         access_token=access_token
                     )
                 st.markdown(bot_reply)
 
     st.session_state['messages'].append({"role": "assistant", "content": bot_reply})
+
+    # Refresh sessions to show the new conversation
+    if access_token:
+        sessions = get_sessions(access_token)
+        # Check if current session_id is in the list, if not it was just created
+        current = st.session_state.get("current_session_id")
+        if current:
+            session_ids = [s["session_id"] for s in sessions]
+            if current not in session_ids:
+                # Refresh to update session list
+                st.rerun()
 
     if 'random_example_index' in st.session_state:
         del st.session_state.random_example_index

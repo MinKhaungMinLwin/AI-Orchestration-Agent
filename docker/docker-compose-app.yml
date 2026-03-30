@@ -24,6 +24,24 @@ services:
     networks:
       - project-net
 
+  # === Redis Conversation Management ===
+  redis-conversation-management:
+    image: redis
+    command: redis-server --requirepass ${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}
+    expose:
+      - 6379
+    volumes:
+      - ./volumes/${ENV}/redis:/data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - project-net
+
   # === APP UI ===
   tstation-ui-demo:
     build: ../app/tstation-ui-demo
