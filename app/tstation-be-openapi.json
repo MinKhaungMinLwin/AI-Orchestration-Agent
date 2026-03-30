@@ -1114,6 +1114,192 @@
           }
         ]
       }
+    },
+    "/api/product/reviews": {
+      "get": {
+        "tags": [
+          "Product Review AF - 상품 리뷰 조회"
+        ],
+        "summary": "상품 리뷰 조회",
+        "description": "상품 번호(goods_no)로 해당 상품의 리뷰 목록과 평점 정보(리뷰 수, 평균 평점)를 반환합니다.",
+        "operationId": "get_reviews_api_product_reviews_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "goods_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "상품 번호 (예: G000000314254)",
+              "title": "Goods No"
+            },
+            "description": "상품 번호 (예: G000000314254)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/messages": {
+      "post": {
+        "tags": [
+          "Chat Message History AF - 채팅 메시지 이력"
+        ],
+        "summary": "새 메시지 저장 및 어시스턴트 응답 처리",
+        "description": "사용자 메시지를 status='received'로 저장합니다. 이후 Agent/LLM 호출 결과를 어시스턴트 메시지로 status='completed'와 함께 삽입합니다. LLM 호출 실패 시 사용자 메시지 status를 'failed'로 업데이트합니다.",
+        "operationId": "create_message_api_messages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/messages/history/{session_id}": {
+      "get": {
+        "tags": [
+          "Chat Message History AF - 채팅 메시지 이력"
+        ],
+        "summary": "세션 메시지 이력 조회",
+        "description": "session_id에 해당하는 모든 메시지를 CREATED_AT 오름차순으로 반환합니다.",
+        "operationId": "get_history_api_messages_history__session_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/messages/{session_id}": {
+      "delete": {
+        "tags": [
+          "Chat Message History AF - 채팅 메시지 이력"
+        ],
+        "summary": "세션 메시지 이력 삭제",
+        "description": "session_id에 해당하는 모든 메시지를 삭제합니다.",
+        "operationId": "delete_history_api_messages__session_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1153,6 +1339,34 @@
           "items"
         ],
         "title": "CarModelSearchResponse"
+      },
+      "ChatHistoryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "메시지 수"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "type": "array",
+            "title": "Messages",
+            "description": "메시지 목록 (CREATED_AT 오름차순)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "total"
+        ],
+        "title": "ChatHistoryResponse"
       },
       "CompatibilityResponse": {
         "properties": {
@@ -1429,6 +1643,70 @@
         },
         "type": "object",
         "title": "LogisticsResponse"
+      },
+      "MessageCreate": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content",
+            "description": "사용자 메시지 내용"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "content"
+        ],
+        "title": "MessageCreate"
+      },
+      "MessageResponse": {
+        "properties": {
+          "msg_id": {
+            "type": "string",
+            "title": "Msg Id",
+            "description": "메시지 고유 ID (UUID)"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "메시지 역할 (user / assistant)"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content",
+            "description": "메시지 내용"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "처리 상태 (received / completed / failed)"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "생성 일시 (YYYY-MM-DD HH24:MI:SS)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "msg_id",
+          "session_id",
+          "role",
+          "content",
+          "status",
+          "created_at"
+        ],
+        "title": "MessageResponse"
       },
       "NearbyStoreItem": {
         "properties": {
@@ -1883,6 +2161,23 @@
             "type": "array",
             "title": "Images",
             "description": "상품 이미지 목록"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewRating"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItem"
+            },
+            "type": "array",
+            "title": "Reviews"
           }
         },
         "type": "object",
@@ -2186,6 +2481,116 @@
           "items"
         ],
         "title": "RecommendationResponse"
+      },
+      "ReviewData": {
+        "properties": {
+          "goods_no": {
+            "type": "string",
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "rating": {
+            "$ref": "#/components/schemas/ReviewRating",
+            "description": "평점 정보"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItem"
+            },
+            "type": "array",
+            "title": "Reviews",
+            "description": "리뷰 목록"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goods_no"
+        ],
+        "title": "ReviewData"
+      },
+      "ReviewItem": {
+        "properties": {
+          "goods_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "gdas_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gdas Score",
+            "description": "상품평 점수 (GDAS_SCR_VAL)"
+          },
+          "gdas_cont": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gdas Cont",
+            "description": "상품평 내용 (GDAS_CONT)"
+          },
+          "reg_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reg Dtime",
+            "description": "등록 일시 (SYS_REG_DTIME)"
+          }
+        },
+        "type": "object",
+        "title": "ReviewItem"
+      },
+      "ReviewRating": {
+        "properties": {
+          "review_count": {
+            "type": "integer",
+            "title": "Review Count",
+            "description": "리뷰 수",
+            "default": 0
+          },
+          "rating_avg": {
+            "type": "number",
+            "title": "Rating Avg",
+            "description": "평점 평균",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ReviewRating"
+      },
+      "ReviewResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ReviewData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "ReviewResponse"
       },
       "ShopIdItem": {
         "properties": {

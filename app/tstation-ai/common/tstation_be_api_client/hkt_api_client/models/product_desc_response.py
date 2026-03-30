@@ -10,6 +10,8 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.product_image import ProductImage
+    from ..models.review_item import ReviewItem
+    from ..models.review_rating import ReviewRating
 
 
 T = TypeVar("T", bound="ProductDescResponse")
@@ -25,6 +27,8 @@ class ProductDescResponse:
         pc_prod_tech_desc (None | str | Unset): 기술력 (PC_PROD_TECH_DESC)
         slogan (None | str | Unset): 슬로건 (SLOGAN)
         images (list[ProductImage] | Unset): 상품 이미지 목록
+        rating (None | ReviewRating | Unset):
+        reviews (list[ReviewItem] | Unset):
     """
 
     goods_no: str
@@ -33,9 +37,13 @@ class ProductDescResponse:
     pc_prod_tech_desc: None | str | Unset = UNSET
     slogan: None | str | Unset = UNSET
     images: list[ProductImage] | Unset = UNSET
+    rating: None | ReviewRating | Unset = UNSET
+    reviews: list[ReviewItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.review_rating import ReviewRating
+
         goods_no = self.goods_no
 
         ptrn_cd: None | str | Unset
@@ -69,6 +77,21 @@ class ProductDescResponse:
                 images_item = images_item_data.to_dict()
                 images.append(images_item)
 
+        rating: dict[str, Any] | None | Unset
+        if isinstance(self.rating, Unset):
+            rating = UNSET
+        elif isinstance(self.rating, ReviewRating):
+            rating = self.rating.to_dict()
+        else:
+            rating = self.rating
+
+        reviews: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.reviews, Unset):
+            reviews = []
+            for reviews_item_data in self.reviews:
+                reviews_item = reviews_item_data.to_dict()
+                reviews.append(reviews_item)
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -86,12 +109,18 @@ class ProductDescResponse:
             field_dict["slogan"] = slogan
         if images is not UNSET:
             field_dict["images"] = images
+        if rating is not UNSET:
+            field_dict["rating"] = rating
+        if reviews is not UNSET:
+            field_dict["reviews"] = reviews
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.product_image import ProductImage
+        from ..models.review_item import ReviewItem
+        from ..models.review_rating import ReviewRating
 
         d = dict(src_dict)
         goods_no = d.pop("goods_no")
@@ -141,6 +170,32 @@ class ProductDescResponse:
 
                 images.append(images_item)
 
+        def _parse_rating(data: object) -> None | ReviewRating | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                rating_type_0 = ReviewRating.from_dict(data)
+
+                return rating_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | ReviewRating | Unset, data)
+
+        rating = _parse_rating(d.pop("rating", UNSET))
+
+        _reviews = d.pop("reviews", UNSET)
+        reviews: list[ReviewItem] | Unset = UNSET
+        if _reviews is not UNSET:
+            reviews = []
+            for reviews_item_data in _reviews:
+                reviews_item = ReviewItem.from_dict(reviews_item_data)
+
+                reviews.append(reviews_item)
+
         product_desc_response = cls(
             goods_no=goods_no,
             ptrn_cd=ptrn_cd,
@@ -148,6 +203,8 @@ class ProductDescResponse:
             pc_prod_tech_desc=pc_prod_tech_desc,
             slogan=slogan,
             images=images,
+            rating=rating,
+            reviews=reviews,
         )
 
         product_desc_response.additional_properties = d

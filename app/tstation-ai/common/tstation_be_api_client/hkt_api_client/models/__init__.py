@@ -2,6 +2,7 @@
 
 from .car_model_search_item import CarModelSearchItem
 from .car_model_search_response import CarModelSearchResponse
+from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
 from .escalation_request import EscalationRequest
 from .escalation_response import EscalationResponse
@@ -11,6 +12,8 @@ from .goods_item import GoodsItem
 from .http_validation_error import HTTPValidationError
 from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
+from .message_create import MessageCreate
+from .message_response import MessageResponse
 from .nearby_store_item import NearbyStoreItem
 from .nearby_store_request import NearbyStoreRequest
 from .nearby_store_response import NearbyStoreResponse
@@ -27,6 +30,10 @@ from .quick_order_response import QuickOrderResponse
 from .rcmd_goods_item import RcmdGoodsItem
 from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
+from .review_data import ReviewData
+from .review_item import ReviewItem
+from .review_rating import ReviewRating
+from .review_response import ReviewResponse
 from .shop_id_item import ShopIdItem
 from .store_detail_response import StoreDetailResponse
 from .store_inventory_request import StoreInventoryRequest
@@ -42,6 +49,7 @@ from .verify_owner_response import VerifyOwnerResponse
 __all__ = (
     "CarModelSearchItem",
     "CarModelSearchResponse",
+    "ChatHistoryResponse",
     "CompatibilityResponse",
     "EscalationRequest",
     "EscalationResponse",
@@ -51,6 +59,8 @@ __all__ = (
     "HTTPValidationError",
     "LogisticsRequest",
     "LogisticsResponse",
+    "MessageCreate",
+    "MessageResponse",
     "NearbyStoreItem",
     "NearbyStoreRequest",
     "NearbyStoreResponse",
@@ -67,6 +77,10 @@ __all__ = (
     "RcmdGoodsItem",
     "RcmdType",
     "RecommendationResponse",
+    "ReviewData",
+    "ReviewItem",
+    "ReviewRating",
+    "ReviewResponse",
     "ShopIdItem",
     "StoreDetailResponse",
     "StoreInventoryRequest",

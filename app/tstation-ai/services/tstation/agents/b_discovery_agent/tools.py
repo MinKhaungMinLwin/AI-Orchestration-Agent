@@ -288,8 +288,9 @@ def get_product_description_tool(goods_no: str):
     - Key features (PC_PROD_REMARK_DESC)
     - Technology description (PC_PROD_TECH_DESC)
     - Product slogan (SLOGAN)
-
-    It also retrieves image and thumbnail paths from PR_PTRN_IMG_INFO.
+    - Product images (images)
+    - Rating info: review_count (리뷰 수), rating_avg (평점 평균)
+    - Review list: gdas_score (평점), gdas_cont (리뷰 내용), reg_dtime (등록일)
 
     Args:
         goods_no (str): Product number.
