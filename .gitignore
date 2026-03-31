@@ -41,3 +41,6 @@ playground
 .claude
 .mcp.json
 plans
+
+# Backups
+backup/*

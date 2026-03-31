@@ -233,7 +233,7 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     - region_code: ONLY geographic location words (city, district, neighborhood).
         Examples: '서울', '강남', '부산', '수원', '송파'
     - store_nm: ONLY business/store name keywords.
-        Examples: '삼송타이어', '극동상사', '한국타이어'
+        Examples: '티스테', '타이'
 
     When the user mentions BOTH a location and a store name, pass BOTH parameters simultaneously.
     Do NOT put the store name into region_code, or the region into store_nm.
@@ -243,12 +243,12 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
             Used for ADDR_BASE / ADDR_DTL LIKE search.
             Examples: '서울', '강남', '부산'
         store_nm (str | None): Store or business name keyword.
-            Examples: '삼송타이어', '극동상사', '한국타이어'
+            Examples: '티스테', '타이'
         limit (int): Maximum number of stores to return (default 20).
 
     Example Inputs:
-        # User says "강남에 삼송타이어 찾아줘" → pass BOTH
-        - {"region_code": "강남", "store_nm": "삼송타이어", "limit": 20}
+        # User says "강남에 티스테 찾아줘" → pass BOTH
+        - {"region_code": "강남", "store_nm": "티스테", "limit": 20}
 
         # User says "부산 한국타이어" → pass BOTH
         - {"region_code": "부산", "store_nm": "한국타이어", "limit": 20}

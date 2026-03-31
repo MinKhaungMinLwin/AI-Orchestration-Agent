@@ -129,5 +129,10 @@ class AgentDomain(BaseModel):
         - "warranty, return, maintenance" → SUPPORT
         - "find stores" → TRANSACTION
 
+        ⚠️ SPECIAL: Product Lines (e.g., "How much is Dynapro HPX?")
+        For queries with product name only (no goods_no), the multi-domain router
+        (chat_2.py) will handle as DISCOVERY → TRANSACTION to detect tire_size first.
+        See chat_2.py "SPECIAL CASE: PRODUCT LINE WITH MULTIPLE SIZES" for details.
+
         Korean vehicle numbers follow patterns: 12가3456, 123가1234
         """)
