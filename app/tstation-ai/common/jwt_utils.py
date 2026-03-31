@@ -37,6 +37,7 @@ def get_user_info_from_token(token: str, secret: Optional[str] = None) -> Option
     - user_id: Member number
     - user_type: Member type (10: member, 20: non-member)
     - car_no: Vehicle number (only if exists)
+    - mbr_nm: Member name (only if exists)
     - affiliate_yn: Affiliate status (Y, N)
     - entr_no: Affiliate company number (only if affiliated)
     - issued_at: Token issued time
@@ -55,6 +56,7 @@ def get_user_info_from_token(token: str, secret: Optional[str] = None) -> Option
         "user_id": payload.get("user_id"),
         "user_type": user_type_display,
         "car_no": payload.get("car_no"),
+        "mbr_nm": payload.get("mbr_nm"),
         "affiliate_yn": payload.get("affiliate_yn"),
         "entr_no": payload.get("entr_no"),
         "issued_at": payload.get("issued_at"),
