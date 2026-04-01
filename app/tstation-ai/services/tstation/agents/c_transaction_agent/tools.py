@@ -1,5 +1,7 @@
 import logging
 from typing import Any, List, Dict
+import re
+from typing import Any  # Two new import for execute_shopping_api_tool 
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
@@ -302,8 +304,9 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 # ORDER TOOLS
 # =====================================================
 
+
 @tool
-def execute_shopping_api_tool(goods_no: str, ord_qty: int, action_type: str):
+def execute_shopping_api_tool(goods_no: str, ord_qty: int | str, action_type: str = "quick_order", mbr_no: str | None = None):
     """
     Executes a shopping action: either Quick Order (Buy Now) or Add to Cart.
 
@@ -311,44 +314,46 @@ def execute_shopping_api_tool(goods_no: str, ord_qty: int, action_type: str):
     It automatically formats the goods data and applies the Smart Pay (smrtPayYn) rule.
 
     Use this tool when the user wants to:
-    - buy a product immediately (quick_order)
-    - create an order draft / proceed to checkout (quick_order)
-    - save an item to their shopping cart (cart)
-    - fallback to saving the item if a quick order attempt fails (cart)
+    - buy a product immediately / proceed to checkout (action_type="quick_order")
+    - save an item to their shopping cart (action_type="cart")
+    - fallback to saving the item if a quick order attempt fails (action_type="cart")
 
     Args:
         goods_no (str): Product number (e.g., G000000314254).
-        ord_qty (int): Quantity the user wants to purchase or save (minimum is 1).
+        ord_qty (int | str): Quantity the user wants to purchase. Can be an integer or a string like '4개'.
         action_type (str): MUST be either "quick_order" or "cart".
             - Use "quick_order" to generate a checkout page URL (Buy Now).
             - Use "cart" to save the item for later.
+        mbr_no (str | None): Optional member number.
 
     Example Inputs:
         - {"goods_no": "G000000313165", "ord_qty": 4, "action_type": "quick_order"}
-        - {"goods_no": "G000000309860", "ord_qty": 2, "action_type": "cart"}
+        - {"goods_no": "G000000309860", "ord_qty": "2개", "action_type": "cart"}
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "data": ...} or {"status": "error", "message": ...}
     """
     logger.info("[TOOL][execute_shopping_api_tool] Called with: goods_no=%s, ord_qty=%s, action_type=%s", goods_no, ord_qty, action_type)
 
-    # 1. Map the AI's action_type to the backend's drtPurYn flag
-    # "Y" = Direct Purchase (Quick Order), "N" = Add to Cart
+    # 1. BULLETPROOF QUANTITY PARSING: Strip out Korean text like "개" and convert to int
+    try:
+        cleaned_qty = re.sub(r'[^0-9]', '', str(ord_qty))
+        qty_int = int(cleaned_qty) if cleaned_qty else 1
+    except Exception:
+        qty_int = 1 # Safe fallback
+
+    # 2. Route the action type
     drt_pur_yn = "Y" if action_type == "quick_order" else "N"
-    
-    # 2. Format the goods information string as required by the API (GOODS_NO|ORD_QTY)
-    goods_info_str = f"{goods_no}|{ord_qty}"
-    
-    # 3. Build the request body using the generated model
-    body = SetOrderFormAIRequest(
-        goodsInfoArrStr=goods_info_str,
-        smrtPayYn="Y",          # Hardcoded to 'Y' per business rules for Smart Pay
-        drtPurYn=drt_pur_yn,    # Dynamically set based on user intent
-        # Optional fields from the spec can be left out or added later if needed:
-        # shopSeq=None, smrtPayInstMm=None, carLncCd=None 
-    )
+    goods_info_str = f"{goods_no}|{qty_int}"
     
     try:
+        # 3. USE SNAKE_CASE FOR THE GENERATED MODEL (Fix for Test 2)
+        body = SetOrderFormAIRequest(
+            goods_info_arr_str=goods_info_str,
+            smrt_pay_yn="Y",
+            drt_pur_yn=drt_pur_yn,
+        )
+        
         response = set_order_form_ai(client=get_client(), body=body)
         
         if response.parsed is None:
