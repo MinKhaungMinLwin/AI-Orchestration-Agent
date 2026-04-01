@@ -7,7 +7,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_nearby_stores_tool,
     get_store_list_tool,
     get_store_detail_tool,
-    create_order_draft_tool,
+    execute_shopping_api_tool,
     get_order_status_tool,
     get_orders_of_user_tool,
 )
@@ -597,7 +597,7 @@ class TransactionSubAgent(BaseAgent):
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
         # Quick Order
-        "create_order_draft_tool": "Quick Order",
+        "execute_shopping_api_tool": "Quick Order",
         # Order / Delivery
         "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
@@ -613,7 +613,7 @@ class TransactionSubAgent(BaseAgent):
                 get_nearby_stores_tool,
                 get_store_list_tool,
                 get_store_detail_tool,
-                create_order_draft_tool,
+                execute_shopping_api_tool,
                 get_orders_of_user_tool,
                 get_order_status_tool,
             ],

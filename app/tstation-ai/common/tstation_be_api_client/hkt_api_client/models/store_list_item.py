@@ -23,6 +23,10 @@ class StoreListItem:
         road_addr_dtl (None | str | Unset): 도로명주소 상세
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
+        shop_biz_strt_wday (None | str | Unset): 영업 시작 요일 (예: 월요일)
+        shop_biz_end_wday (None | str | Unset): 영업 종료 요일 (예: 금요일)
+        shop_sat_strt_time (None | str | Unset): 토요일 영업 시작 시간
+        shop_sat_end_time (None | str | Unset): 토요일 영업 종료 시간
     """
 
     shop_id: str
@@ -33,6 +37,10 @@ class StoreListItem:
     road_addr_dtl: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
+    shop_biz_strt_wday: None | str | Unset = UNSET
+    shop_biz_end_wday: None | str | Unset = UNSET
+    shop_sat_strt_time: None | str | Unset = UNSET
+    shop_sat_end_time: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +88,30 @@ class StoreListItem:
         else:
             shop_biz_end_time = self.shop_biz_end_time
 
+        shop_biz_strt_wday: None | str | Unset
+        if isinstance(self.shop_biz_strt_wday, Unset):
+            shop_biz_strt_wday = UNSET
+        else:
+            shop_biz_strt_wday = self.shop_biz_strt_wday
+
+        shop_biz_end_wday: None | str | Unset
+        if isinstance(self.shop_biz_end_wday, Unset):
+            shop_biz_end_wday = UNSET
+        else:
+            shop_biz_end_wday = self.shop_biz_end_wday
+
+        shop_sat_strt_time: None | str | Unset
+        if isinstance(self.shop_sat_strt_time, Unset):
+            shop_sat_strt_time = UNSET
+        else:
+            shop_sat_strt_time = self.shop_sat_strt_time
+
+        shop_sat_end_time: None | str | Unset
+        if isinstance(self.shop_sat_end_time, Unset):
+            shop_sat_end_time = UNSET
+        else:
+            shop_sat_end_time = self.shop_sat_end_time
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -101,6 +133,14 @@ class StoreListItem:
             field_dict["shop_biz_strt_time"] = shop_biz_strt_time
         if shop_biz_end_time is not UNSET:
             field_dict["shop_biz_end_time"] = shop_biz_end_time
+        if shop_biz_strt_wday is not UNSET:
+            field_dict["shop_biz_strt_wday"] = shop_biz_strt_wday
+        if shop_biz_end_wday is not UNSET:
+            field_dict["shop_biz_end_wday"] = shop_biz_end_wday
+        if shop_sat_strt_time is not UNSET:
+            field_dict["shop_sat_strt_time"] = shop_sat_strt_time
+        if shop_sat_end_time is not UNSET:
+            field_dict["shop_sat_end_time"] = shop_sat_end_time
 
         return field_dict
 
@@ -172,6 +212,42 @@ class StoreListItem:
 
         shop_biz_end_time = _parse_shop_biz_end_time(d.pop("shop_biz_end_time", UNSET))
 
+        def _parse_shop_biz_strt_wday(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_biz_strt_wday = _parse_shop_biz_strt_wday(d.pop("shop_biz_strt_wday", UNSET))
+
+        def _parse_shop_biz_end_wday(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_biz_end_wday = _parse_shop_biz_end_wday(d.pop("shop_biz_end_wday", UNSET))
+
+        def _parse_shop_sat_strt_time(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_sat_strt_time = _parse_shop_sat_strt_time(d.pop("shop_sat_strt_time", UNSET))
+
+        def _parse_shop_sat_end_time(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_sat_end_time = _parse_shop_sat_end_time(d.pop("shop_sat_end_time", UNSET))
+
         store_list_item = cls(
             shop_id=shop_id,
             shop_nm=shop_nm,
@@ -181,6 +257,10 @@ class StoreListItem:
             road_addr_dtl=road_addr_dtl,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,
+            shop_biz_strt_wday=shop_biz_strt_wday,
+            shop_biz_end_wday=shop_biz_end_wday,
+            shop_sat_strt_time=shop_sat_strt_time,
+            shop_sat_end_time=shop_sat_end_time,
         )
 
         store_list_item.additional_properties = d
