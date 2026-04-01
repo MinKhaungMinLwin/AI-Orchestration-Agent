@@ -304,8 +304,6 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 # ORDER TOOLS
 # =====================================================
 
-import re
-from langchain.tools import tool
 
 @tool
 def execute_shopping_api_tool(goods_no: str, ord_qty: int | str, action_type: str = "quick_order", mbr_no: str | None = None):
