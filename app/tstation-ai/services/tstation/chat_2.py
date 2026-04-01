@@ -16,6 +16,7 @@ from services.tstation.agents.router import (
     discovery_subagent,
     transaction_subagent,
     support_subagent,
+    ui_template_subagent,
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
@@ -413,6 +414,7 @@ class StreamingMultiAgentCoordinator:
         logger.info(f"[COORDINATOR] Streaming for domains: {[d.value for d in domains]}")
 
         accumulated_context = {}
+        accumulated_tool_data = []  # Collect tool outputs for UI Template Agent
 
         is_first_agent = True
 
@@ -465,6 +467,22 @@ class StreamingMultiAgentCoordinator:
                         full_response = content
                         logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
+                # Capture tool outputs for UI Template Agent
+                if event.get("type") == "tool":
+                    tool_output = event.get("output", "")
+                    if tool_output:
+                        try:
+                            parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                            accumulated_tool_data.append({
+                                "tool": event.get("tool", ""),
+                                "data": parsed
+                            })
+                        except (json.JSONDecodeError, TypeError):
+                            accumulated_tool_data.append({
+                                "tool": event.get("tool", ""),
+                                "data": tool_output
+                            })
+
             # Yield agent completion event
             yield {
                 "type": "sub-agent",
@@ -495,6 +513,55 @@ class StreamingMultiAgentCoordinator:
                 next_domain = next_domain_map.get(decision.next_domain.lower())
                 if next_domain:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
+
+        # Run UI Template Agent with accumulated data
+        if accumulated_tool_data:
+            logger.info(f"[COORDINATOR] Running UI Template Agent with {len(accumulated_tool_data)} tool outputs")
+
+            # Build context for UI Template Agent
+            ui_messages = list(messages)
+            # Append accumulated context
+            for prev_domain, content in accumulated_context.items():
+                if content and content.strip():
+                    ui_messages.append({
+                        "role": "assistant",
+                        "content": str(content)
+                    })
+                    ui_messages.append({
+                        "role": "user",
+                        "content": "Continue with next step"
+                    })
+                    break
+
+            # Append tool data summary
+            tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
+            ui_messages.append({
+                "role": "system",
+                "content": f"[Accumulated tool data for UI rendering]\n{tool_summary}"
+            })
+            ui_messages.append({
+                "role": "user",
+                "content": "Render this data as UI templates using the appropriate tools. Format each item as a UI template event."
+            })
+
+            # Yield UI Template Agent start event
+            yield {
+                "type": "sub-agent",
+                "agent": "[UI TEMPLATE AGENT]",
+                "status": "start",
+            }
+
+            # Stream from UI Template Agent (use stream_template to get data events)
+            for event in ui_template_subagent.stream_template(ui_messages):
+                event["source_domain"] = "ui_template"
+                yield event
+
+            # Yield UI Template Agent completion event
+            yield {
+                "type": "sub-agent",
+                "agent": "[UI TEMPLATE AGENT]",
+                "status": "done",
+            }
 
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}

@@ -35,6 +35,10 @@ transaction_subagent = TransactionSubAgent(LLM)
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
 support_subagent = SupportSubAgent(LLM)
 
+# UI Template Agent
+from services.tstation.agents.f_ui_template_agent.agent import UITemplateSubAgent
+ui_template_subagent = UITemplateSubAgent(LLM)
+
 ## Router
 class AgentDomain(BaseModel):
     class Domain(str, Enum):

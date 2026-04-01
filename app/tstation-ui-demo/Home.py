@@ -173,6 +173,116 @@ if access_token:
 # Examples (disabled)
 language = "ko"  # Default Korean
 
+
+def render_template_expander(template: str, data: dict):
+    """Render UI template data as Streamlit expanders."""
+    if template == "product":
+        items = data.get("products", [data])
+        for item in items:
+            with st.expander(f"🛞 {item.get('title', 'Product')}", expanded=True):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if item.get("imageUrl"):
+                        st.image(item["imageUrl"], width=150)
+                with col2:
+                    st.markdown(f"**{item.get('title', '')}**")
+                    st.markdown(f"💰 {item.get('price', 0):,}원")
+                    st.markdown(f"⭐ {item.get('rate', 0)}/5")
+                    st.markdown(f"🏷️ {item.get('tiers', '')}")
+                    st.markdown(f"🛋️ Comfort: {item.get('comfort', '')}")
+                    st.markdown(f"📦 Stock: {item.get('totalQuantity', 0)}")
+    elif template == "listCar":
+        items = data.get("listCar", [data])
+        for item in items:
+            with st.expander(f"🚗 {item.get('licensePlate', 'Car')}", expanded=True):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if item.get("imageUrl"):
+                        st.image(item["imageUrl"], width=150)
+                with col2:
+                    st.markdown(f"**{item.get('description', '')}**")
+                    st.markdown(f"🔖 {item.get('licensePlate', '')}")
+    elif template == "voucher":
+        items = data.get("vouchers", [data])
+        for item in items:
+            with st.expander(f"🎟️ {item.get('nameVoucher', 'Voucher')}", expanded=True):
+                st.markdown(f"**{item.get('nameVoucher', '')}**")
+                st.markdown(f"📝 {item.get('description', '')}")
+                st.markdown(f"💸 {item.get('discount', '')}")
+                st.markdown(f"📅 Valid until: {item.get('dateVoucher', '')}")
+                if item.get("myCouponLink"):
+                    st.markdown(f"[My Coupon]({item.get('myCouponLink')})")
+                if item.get("downloadLink"):
+                    st.markdown(f"[Download]({item.get('downloadLink')})")
+    elif template == "location":
+        items = data.get("locations", [data])
+        for item in items:
+            with st.expander(f"📍 {item.get('nameAddress', 'Store')}", expanded=True):
+                st.markdown(f"**{item.get('nameAddress', '')}**")
+                st.markdown(f"📌 {item.get('detailAddress', '')}")
+                st.markdown(f"📏 Distance: {item.get('distance', '')} km")
+                if item.get("lat") and item.get("long"):
+                    st.markdown(f"🗺️ ({item.get('lat')}, {item.get('long')})")
+    elif template == "datepick":
+        with st.expander(f"📅 {data.get('date', 'Date Picker')}", expanded=True):
+            st.markdown(f"**Available:** {'Yes' if data.get('available') else 'No'}")
+            st.markdown("**Time slots:**")
+            for slot in data.get("time_slots", []):
+                st.markdown(f"- {slot}")
+    elif template == "question":
+        with st.expander(f"❓ {data.get('question', 'Question')}", expanded=True):
+            st.markdown(f"**{data.get('question', '')}**")
+            for ans in data.get("listAnswer", []):
+                st.markdown(f"- {ans.get('label', '')} ({ans.get('value', '')})")
+    elif template == "billService":
+        with st.expander("📄 Service Bill", expanded=True):
+            st.markdown(f"**Car:** {data.get('carInfo', '')}")
+            st.markdown(f"**Store:** {data.get('storeName', '')}")
+            st.markdown(f"**Date:** {data.get('bookingDateTime', '')}")
+            st.markdown(f"**Visit:** {data.get('visitMethod', '')}")
+            st.markdown("**Services:**")
+            for svc in data.get("services", []):
+                st.markdown(f"- {svc.get('serviceName', '')} x{svc.get('quantity', 0)}: {svc.get('price', 0):,}원")
+            st.markdown(f"**Total:** {data.get('totalAmount', 0):,}원")
+            if data.get("actionLink"):
+                st.markdown(f"[{data.get('actionText', 'Action')}]({data.get('actionLink')})")
+    elif template == "billProduct":
+        with st.expander("🛍️ Product Bill", expanded=True):
+            st.markdown(f"**Car:** {data.get('carInfo', '')}")
+            st.markdown(f"**Store:** {data.get('storeName', '')}")
+            st.markdown(f"**Date:** {data.get('bookingDateTime', '')}")
+            st.markdown(f"**Visit:** {data.get('visitMethod', '')}")
+            st.markdown("**Products:**")
+            for prod in data.get("products", []):
+                st.markdown(f"- {prod.get('productName', '')} x{prod.get('quantity', 0)}: {prod.get('totalPrice', 0):,}원")
+            st.markdown(f"**Payment:** {data.get('paymentAmount', 0):,}원")
+            if data.get("actionLink"):
+                st.markdown(f"[{data.get('actionText', 'Action')}]({data.get('actionLink')})")
+            if data.get("cartLink"):
+                st.markdown(f"[View Cart]({data.get('cartLink')})")
+    elif template == "previewYoutube":
+        items = data.get("items", [data])
+        for item in items:
+            with st.expander(f"🎬 {item.get('title', 'YouTube Video')}", expanded=True):
+                st.markdown(f"**{item.get('title', '')}**")
+                if item.get("thumbnailUrl"):
+                    st.image(item["thumbnailUrl"], width=300)
+                if item.get("youtubeUrl"):
+                    st.markdown(f"[Watch on YouTube]({item.get('youtubeUrl')})")
+    elif template == "questionCreateOrder":
+        with st.expander("❓ Create Order", expanded=True):
+            st.markdown(f"**Key:** {data.get('key', '')}")
+            st.markdown(f"**Question:** {data.get('question', '')}")
+            st.markdown(f"**Type:** {data.get('type', '')}")
+            st.markdown(f"**Required:** {'Yes' if data.get('required') else 'No'}")
+            for ans in data.get("listAnswer", []):
+                st.markdown(f"- {ans.get('label', '')} ({ans.get('value', '')})")
+    else:
+        # Fallback: show as JSON
+        with st.expander(f"📄 {template}", expanded=True):
+            st.json(data)
+
+
 chat_container = st.container()
 
 with chat_container:
@@ -206,6 +316,9 @@ if prompt:
             if stream_mode:
                 # Tool calls display - list of expanders
                 tool_calls = []
+
+                # Data events for UI templates
+                data_events = []
 
                 # Agent flow display at top - list of steps
                 agent_flow_steps = []
@@ -259,6 +372,8 @@ if prompt:
                         elif chunk.get("type") == "error":
                             full_response += f"\nError: {chunk.get('content', '')}"
                             message_placeholder.markdown(full_response)
+                        elif chunk.get("type") == "data":
+                            data_events.append(chunk)
 
                     message_placeholder.markdown(full_response)
 
@@ -284,6 +399,17 @@ if prompt:
                                         else:
                                             output_text = json.dumps(output_data, indent=2, ensure_ascii=False)
                                         st.code(output_text, language="json")
+
+                    # Render UI template events
+                    if data_events:
+                        with st.expander("📋 Results", expanded=True):
+                            for item in data_events:
+                                template = item.get("template", "")
+                                data = item.get("data", {})
+                                # Handle items array or single item
+                                items = data.get("items", [data])
+                                for single_item in items:
+                                    render_template_expander(template, single_item)
 
                     bot_reply = full_response
 

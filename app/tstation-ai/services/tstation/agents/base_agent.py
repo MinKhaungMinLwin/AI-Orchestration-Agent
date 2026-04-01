@@ -13,6 +13,7 @@ class BaseAgent(ABC):
     """Base agent class with streaming support for agent name and AF (Agent Function) mapping."""
 
     TOOL_TO_AF_MAP: dict[str, str] = {}
+    TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
 
     def __init__(self, model, tools: list | None = None, system_prompt: str = "", name: str = ""):
         self.name = name
@@ -85,3 +86,47 @@ class BaseAgent(ABC):
                         }
 
         yield {"type": "token", "content": "\n\n"}
+
+    def stream_template(self, messages: list[dict]):
+        """
+        Stream that transforms tool calls into data template events.
+        Yields ONLY data events (no token or agent_flow events).
+
+        Use this when you want to format tool outputs as UI templates directly.
+        """
+        tool_calls_map: dict[str, dict] = {}
+
+        for mode, chunk in self.agent.stream(
+            {"messages": messages},
+            stream_mode=["messages", "updates"],
+        ):
+            if mode == "updates":
+                for node, update in chunk.items():
+                    message = update["messages"][-1]
+                    if isinstance(message, AIMessage):
+                        # Capture tool calls for input tracking
+                        if hasattr(message, "tool_calls") and message.tool_calls:
+                            for tc in message.tool_calls:
+                                tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
+                    elif isinstance(message, ToolMessage):
+                        # Check if this tool has a template mapping
+                        template_name = self.TOOL_TO_TEMPLATE_MAP.get(message.name)
+                        if template_name:
+                            # Get tool input args (from the LLM call, not from tool return)
+                            tool_input = tool_calls_map.get(message.tool_call_id, {}).get("args", {})
+                            # Check if input has "items" array
+                            items = tool_input.get("items", [])
+                            if items:
+                                # Yield ONE data event with all items
+                                yield {
+                                    "type": "data",
+                                    "template": template_name,
+                                    "data": {"items": items},
+                                }
+                            else:
+                                # Single item - yield directly
+                                yield {
+                                    "type": "data",
+                                    "template": template_name,
+                                    "data": tool_input,
+                                }
