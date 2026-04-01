@@ -34,6 +34,11 @@ from .review_data import ReviewData
 from .review_item import ReviewItem
 from .review_rating import ReviewRating
 from .review_response import ReviewResponse
+from .session_info import SessionInfo
+from .session_list_response import SessionListResponse
+from .set_order_form_ai_request import SetOrderFormAIRequest
+from .set_order_form_ai_response import SetOrderFormAIResponse
+from .set_order_form_ai_response_data_type_0 import SetOrderFormAIResponseDataType0
 from .shop_id_item import ShopIdItem
 from .store_detail_response import StoreDetailResponse
 from .store_inventory_request import StoreInventoryRequest
@@ -81,6 +86,11 @@ __all__ = (
     "ReviewItem",
     "ReviewRating",
     "ReviewResponse",
+    "SessionInfo",
+    "SessionListResponse",
+    "SetOrderFormAIRequest",
+    "SetOrderFormAIResponse",
+    "SetOrderFormAIResponseDataType0",
     "ShopIdItem",
     "StoreDetailResponse",
     "StoreInventoryRequest",

@@ -7,7 +7,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_nearby_stores_tool,
     get_store_list_tool,
     get_store_detail_tool,
-    create_order_draft_tool,
+    execute_shopping_api_tool,
     get_order_status_tool,
     get_orders_of_user_tool,
 )
@@ -317,23 +317,26 @@ When user wants to book appointment:
 
 
 ------------------------------------
-Flow 6 — Quick Checkout
+Flow 6 — Quick Shopping & Cart Fallback
 ------------------------------------
 
-When the user confirms a purchase:
+When the user confirms a purchase or says "I want to order":
 
-Required information
+**Step 1: Collect Information**
+1. Check if you have the `goods_no` and `ord_qty`. 
+2. If missing, politely ask the user: "How many tires would you like to order?"
 
-• goods_no
-• ord_qty
-• mbr_no (optional)
+**Step 2: Attempt Quick Order (Buy Now)**
+3. Once you have the info, call `execute_shopping_api_tool` with `action_type="quick_order"`.
+4. If the API succeeds and returns a `redirect_url`:
+   - Provide the checkout link to the user and guide them to complete the payment.
 
-Steps
-
-1. Call create_order_draft_tool
-2. The API returns a redirect_url
-3. Provide the checkout link to the user
-4. Guide the user to complete payment
+**Step 3: The Cart Fallback**
+5. If the Quick Order API FAILS to return a checkout page link:
+   - Apologize briefly and immediately prompt the user: "There was a temporary issue moving to the order page. Would you like me to save these tires to your cart instead?"
+6. If the user says "Yes" or "Save to cart":
+   - Call `execute_shopping_api_tool` again, but this time use `action_type="cart"`.
+   - Confirm it was saved successfully.
 
 
 ------------------------------------
@@ -597,7 +600,7 @@ class TransactionSubAgent(BaseAgent):
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
         # Quick Order
-        "create_order_draft_tool": "Quick Order",
+        "execute_shopping_api_tool": "Quick Order",
         # Order / Delivery
         "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
@@ -613,7 +616,7 @@ class TransactionSubAgent(BaseAgent):
                 get_nearby_stores_tool,
                 get_store_list_tool,
                 get_store_detail_tool,
-                create_order_draft_tool,
+                execute_shopping_api_tool,
                 get_orders_of_user_tool,
                 get_order_status_tool,
             ],

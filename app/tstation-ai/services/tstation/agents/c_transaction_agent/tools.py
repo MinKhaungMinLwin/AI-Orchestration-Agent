@@ -27,8 +27,8 @@ from common.tstation_be_api_client.hkt_api_client.models import (
 )
 
 # QUICK SHOPPING AF
-from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.create_quick_order_api_quick_order_draft_post import sync_detailed as create_quick_order
-from common.tstation_be_api_client.hkt_api_client.models import QuickOrderRequest
+from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.set_order_form_ai_api_quick_order_order_set_order_form_ai_do_post import sync_detailed as set_order_form_ai
+from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRequest
 
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
@@ -303,67 +303,67 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 # =====================================================
 
 @tool
-def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = None):
+def execute_shopping_api_tool(goods_no: str, ord_qty: int, action_type: str):
     """
-    Create a quick shopping order draft and generate a checkout page URL.
+    Executes a shopping action: either Quick Order (Buy Now) or Add to Cart.
 
-    This tool calls the Quick Shopping API to validate a product and create
-    an order draft for the user.
-
-    The API checks the product information from PR_GOODS_BASE, including:
-    - product sales status
-    - minimum order quantity
-
-    If the product is valid and the quantity is allowed, the system generates
-    a REDIRECT_URL that leads to the order creation page where the user can
-    complete the purchase.
+    This tool calls the SetOrderFormAI API to process the user's purchase intent.
+    It automatically formats the goods data and applies the Smart Pay (smrtPayYn) rule.
 
     Use this tool when the user wants to:
-    - buy a product immediately
-    - create an order draft
-    - proceed to checkout for a specific product
+    - buy a product immediately (quick_order)
+    - create an order draft / proceed to checkout (quick_order)
+    - save an item to their shopping cart (cart)
+    - fallback to saving the item if a quick order attempt fails (cart)
 
     Args:
         goods_no (str): Product number (e.g., G000000314254).
-        ord_qty (int): Quantity the user wants to purchase, min is 1.
-        mbr_no (None | str | Unset): Member number. If provided, the order draft
-            will be created for that member. If not provided, the checkout
-            page will ask the user to enter member information.
+        ord_qty (int): Quantity the user wants to purchase or save (minimum is 1).
+        action_type (str): MUST be either "quick_order" or "cart".
+            - Use "quick_order" to generate a checkout page URL (Buy Now).
+            - Use "cart" to save the item for later.
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 2, "mbr_no": "M200012931"}
-        - {"goods_no": "G000000309860", "ord_qty": 1, "mbr_no": "M200012932"}
-        - {"goods_no": "G000000313073", "ord_qty": 3, "mbr_no": "M200012933"}
+        - {"goods_no": "G000000313165", "ord_qty": 4, "action_type": "quick_order"}
+        - {"goods_no": "G000000309860", "ord_qty": 2, "action_type": "cart"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
+    logger.info("[TOOL][execute_shopping_api_tool] Called with: goods_no=%s, ord_qty=%s, action_type=%s", goods_no, ord_qty, action_type)
 
-    # TODO: [MOCK] Remove mock and use real API
-    logger.info("[TOOL][create_order_draft_tool] [MOCK] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
-    return _success_response(200, {"redirect_url": "https://example.com/quick-order/draft"})
-
-    # body = QuickOrderRequest(
-    #     goods_no=goods_no,
-    #     ord_qty=ord_qty,
-    #     mbr_no=mbr_no,
-    # )
-    #
-    # logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
-    #
-    # try:
-    #     response = create_quick_order(client=get_client(), body=body)
-    #     if response.parsed is None:
-    #         return _error_response(
-    #             response.status_code,
-    #             f"HTTP {response.status_code}",
-    #             response.content.decode(errors="ignore") or "Failed to create quick order draft"
-    #         )
-    #     logger.info("[TOOL][create_order_draft_tool] Response: %s", response.parsed)
-    #     return _success_response(response.status_code, _to_dict(response.parsed))
-    # except Exception as e:
-    #     logger.exception("[TOOL][create_order_draft_tool] Failed")
-    #     return _error_response(None, str(e), "Failed to create quick order draft")
+    # 1. Map the AI's action_type to the backend's drtPurYn flag
+    # "Y" = Direct Purchase (Quick Order), "N" = Add to Cart
+    drt_pur_yn = "Y" if action_type == "quick_order" else "N"
+    
+    # 2. Format the goods information string as required by the API (GOODS_NO|ORD_QTY)
+    goods_info_str = f"{goods_no}|{ord_qty}"
+    
+    # 3. Build the request body using the generated model
+    body = SetOrderFormAIRequest(
+        goodsInfoArrStr=goods_info_str,
+        smrtPayYn="Y",          # Hardcoded to 'Y' per business rules for Smart Pay
+        drtPurYn=drt_pur_yn,    # Dynamically set based on user intent
+        # Optional fields from the spec can be left out or added later if needed:
+        # shopSeq=None, smrtPayInstMm=None, carLncCd=None 
+    )
+    
+    try:
+        response = set_order_form_ai(client=get_client(), body=body)
+        
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or f"Failed to execute {action_type}"
+            )
+            
+        logger.info("[TOOL][execute_shopping_api_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+        
+    except Exception as e:
+        logger.exception("[TOOL][execute_shopping_api_tool] Failed")
+        return _error_response(None, str(e), f"Failed to execute {action_type} API")
 
 
 @tool

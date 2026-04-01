@@ -18,12 +18,24 @@ class StoreDetailResponse:
         shop_nm (None | str | Unset): 매장명
         tel_no (None | str | Unset): 전화번호
         holiday (None | str | Unset): 휴무일
+        shop_biz_strt_time (None | str | Unset): 영업 시작 시간
+        shop_biz_end_time (None | str | Unset): 영업 종료 시간
+        shop_biz_strt_wday (None | str | Unset): 영업 시작 요일 (예: 월요일)
+        shop_biz_end_wday (None | str | Unset): 영업 종료 요일 (예: 금요일)
+        shop_sat_strt_time (None | str | Unset): 토요일 영업 시작 시간
+        shop_sat_end_time (None | str | Unset): 토요일 영업 종료 시간
         available_slots (list[str] | Unset): 예약 가능 시간 슬롯 목록 (예: ['09','10','11'])
     """
 
     shop_nm: None | str | Unset = UNSET
     tel_no: None | str | Unset = UNSET
     holiday: None | str | Unset = UNSET
+    shop_biz_strt_time: None | str | Unset = UNSET
+    shop_biz_end_time: None | str | Unset = UNSET
+    shop_biz_strt_wday: None | str | Unset = UNSET
+    shop_biz_end_wday: None | str | Unset = UNSET
+    shop_sat_strt_time: None | str | Unset = UNSET
+    shop_sat_end_time: None | str | Unset = UNSET
     available_slots: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -46,6 +58,42 @@ class StoreDetailResponse:
         else:
             holiday = self.holiday
 
+        shop_biz_strt_time: None | str | Unset
+        if isinstance(self.shop_biz_strt_time, Unset):
+            shop_biz_strt_time = UNSET
+        else:
+            shop_biz_strt_time = self.shop_biz_strt_time
+
+        shop_biz_end_time: None | str | Unset
+        if isinstance(self.shop_biz_end_time, Unset):
+            shop_biz_end_time = UNSET
+        else:
+            shop_biz_end_time = self.shop_biz_end_time
+
+        shop_biz_strt_wday: None | str | Unset
+        if isinstance(self.shop_biz_strt_wday, Unset):
+            shop_biz_strt_wday = UNSET
+        else:
+            shop_biz_strt_wday = self.shop_biz_strt_wday
+
+        shop_biz_end_wday: None | str | Unset
+        if isinstance(self.shop_biz_end_wday, Unset):
+            shop_biz_end_wday = UNSET
+        else:
+            shop_biz_end_wday = self.shop_biz_end_wday
+
+        shop_sat_strt_time: None | str | Unset
+        if isinstance(self.shop_sat_strt_time, Unset):
+            shop_sat_strt_time = UNSET
+        else:
+            shop_sat_strt_time = self.shop_sat_strt_time
+
+        shop_sat_end_time: None | str | Unset
+        if isinstance(self.shop_sat_end_time, Unset):
+            shop_sat_end_time = UNSET
+        else:
+            shop_sat_end_time = self.shop_sat_end_time
+
         available_slots: list[str] | Unset = UNSET
         if not isinstance(self.available_slots, Unset):
             available_slots = self.available_slots
@@ -59,6 +107,18 @@ class StoreDetailResponse:
             field_dict["tel_no"] = tel_no
         if holiday is not UNSET:
             field_dict["holiday"] = holiday
+        if shop_biz_strt_time is not UNSET:
+            field_dict["shop_biz_strt_time"] = shop_biz_strt_time
+        if shop_biz_end_time is not UNSET:
+            field_dict["shop_biz_end_time"] = shop_biz_end_time
+        if shop_biz_strt_wday is not UNSET:
+            field_dict["shop_biz_strt_wday"] = shop_biz_strt_wday
+        if shop_biz_end_wday is not UNSET:
+            field_dict["shop_biz_end_wday"] = shop_biz_end_wday
+        if shop_sat_strt_time is not UNSET:
+            field_dict["shop_sat_strt_time"] = shop_sat_strt_time
+        if shop_sat_end_time is not UNSET:
+            field_dict["shop_sat_end_time"] = shop_sat_end_time
         if available_slots is not UNSET:
             field_dict["available_slots"] = available_slots
 
@@ -95,12 +155,72 @@ class StoreDetailResponse:
 
         holiday = _parse_holiday(d.pop("holiday", UNSET))
 
+        def _parse_shop_biz_strt_time(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_biz_strt_time = _parse_shop_biz_strt_time(d.pop("shop_biz_strt_time", UNSET))
+
+        def _parse_shop_biz_end_time(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_biz_end_time = _parse_shop_biz_end_time(d.pop("shop_biz_end_time", UNSET))
+
+        def _parse_shop_biz_strt_wday(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_biz_strt_wday = _parse_shop_biz_strt_wday(d.pop("shop_biz_strt_wday", UNSET))
+
+        def _parse_shop_biz_end_wday(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_biz_end_wday = _parse_shop_biz_end_wday(d.pop("shop_biz_end_wday", UNSET))
+
+        def _parse_shop_sat_strt_time(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_sat_strt_time = _parse_shop_sat_strt_time(d.pop("shop_sat_strt_time", UNSET))
+
+        def _parse_shop_sat_end_time(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_sat_end_time = _parse_shop_sat_end_time(d.pop("shop_sat_end_time", UNSET))
+
         available_slots = cast(list[str], d.pop("available_slots", UNSET))
 
         store_detail_response = cls(
             shop_nm=shop_nm,
             tel_no=tel_no,
             holiday=holiday,
+            shop_biz_strt_time=shop_biz_strt_time,
+            shop_biz_end_time=shop_biz_end_time,
+            shop_biz_strt_wday=shop_biz_strt_wday,
+            shop_biz_end_wday=shop_biz_end_wday,
+            shop_sat_strt_time=shop_sat_strt_time,
+            shop_sat_end_time=shop_sat_end_time,
             available_slots=available_slots,
         )
 

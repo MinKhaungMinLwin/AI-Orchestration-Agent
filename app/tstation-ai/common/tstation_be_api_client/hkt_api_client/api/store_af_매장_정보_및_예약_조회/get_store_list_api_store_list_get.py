@@ -85,10 +85,10 @@ def sync_detailed(
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
+        region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -122,10 +122,10 @@ def sync(
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
+        region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -154,10 +154,10 @@ async def asyncio_detailed(
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
+        region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -189,10 +189,10 @@ async def asyncio(
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
 
-     지역명(ADDR_BASE, ADDR_DTL LIKE 검색) 기준으로 매장 목록을 반환합니다. region_code 미입력 시 전체 조회.
+     지역명
 
     Args:
-        region_code (None | str | Unset): 지역 검색어 (ADDR_BASE, ADDR_DTL LIKE 검색, 예: '서울', '강남')
+        region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
