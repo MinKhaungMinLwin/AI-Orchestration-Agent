@@ -24,6 +24,11 @@ class RcmdGoodsItem:
         t_silence (float | None | Unset): 정숙성 (T_SILENCE)
         t_life_span (float | None | Unset): 수명 (T_LIFE_SPAN)
         t_fuel_eff_convert (float | None | Unset): 연비 (T_FUEL_EFF_CONVERT)
+        image_url (None | str | Unset):
+        title (None | str | Unset):
+        price (int | None | Unset):
+        rate (float | None | Unset):
+        comfort (float | None | Unset):
     """
 
     goods_no: str
@@ -35,6 +40,11 @@ class RcmdGoodsItem:
     t_silence: float | None | Unset = UNSET
     t_life_span: float | None | Unset = UNSET
     t_fuel_eff_convert: float | None | Unset = UNSET
+    image_url: None | str | Unset = UNSET
+    title: None | str | Unset = UNSET
+    price: int | None | Unset = UNSET
+    rate: float | None | Unset = UNSET
+    comfort: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -88,6 +98,36 @@ class RcmdGoodsItem:
         else:
             t_fuel_eff_convert = self.t_fuel_eff_convert
 
+        image_url: None | str | Unset
+        if isinstance(self.image_url, Unset):
+            image_url = UNSET
+        else:
+            image_url = self.image_url
+
+        title: None | str | Unset
+        if isinstance(self.title, Unset):
+            title = UNSET
+        else:
+            title = self.title
+
+        price: int | None | Unset
+        if isinstance(self.price, Unset):
+            price = UNSET
+        else:
+            price = self.price
+
+        rate: float | None | Unset
+        if isinstance(self.rate, Unset):
+            rate = UNSET
+        else:
+            rate = self.rate
+
+        comfort: float | None | Unset
+        if isinstance(self.comfort, Unset):
+            comfort = UNSET
+        else:
+            comfort = self.comfort
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -111,6 +151,16 @@ class RcmdGoodsItem:
             field_dict["t_life_span"] = t_life_span
         if t_fuel_eff_convert is not UNSET:
             field_dict["t_fuel_eff_convert"] = t_fuel_eff_convert
+        if image_url is not UNSET:
+            field_dict["image_url"] = image_url
+        if title is not UNSET:
+            field_dict["title"] = title
+        if price is not UNSET:
+            field_dict["price"] = price
+        if rate is not UNSET:
+            field_dict["rate"] = rate
+        if comfort is not UNSET:
+            field_dict["comfort"] = comfort
 
         return field_dict
 
@@ -191,6 +241,51 @@ class RcmdGoodsItem:
 
         t_fuel_eff_convert = _parse_t_fuel_eff_convert(d.pop("t_fuel_eff_convert", UNSET))
 
+        def _parse_image_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        image_url = _parse_image_url(d.pop("image_url", UNSET))
+
+        def _parse_title(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        title = _parse_title(d.pop("title", UNSET))
+
+        def _parse_price(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        price = _parse_price(d.pop("price", UNSET))
+
+        def _parse_rate(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        rate = _parse_rate(d.pop("rate", UNSET))
+
+        def _parse_comfort(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        comfort = _parse_comfort(d.pop("comfort", UNSET))
+
         rcmd_goods_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
@@ -201,6 +296,11 @@ class RcmdGoodsItem:
             t_silence=t_silence,
             t_life_span=t_life_span,
             t_fuel_eff_convert=t_fuel_eff_convert,
+            image_url=image_url,
+            title=title,
+            price=price,
+            rate=rate,
+            comfort=comfort,
         )
 
         rcmd_goods_item.additional_properties = d

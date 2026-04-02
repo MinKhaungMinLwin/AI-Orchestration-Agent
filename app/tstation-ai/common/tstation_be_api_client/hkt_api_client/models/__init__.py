@@ -1,5 +1,7 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .available_coupon_item import AvailableCouponItem
+from .available_coupon_response import AvailableCouponResponse
 from .car_model_search_item import CarModelSearchItem
 from .car_model_search_response import CarModelSearchResponse
 from .chat_history_response import ChatHistoryResponse
@@ -14,6 +16,8 @@ from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
 from .message_create import MessageCreate
 from .message_response import MessageResponse
+from .my_coupon_item import MyCouponItem
+from .my_coupon_response import MyCouponResponse
 from .nearby_store_item import NearbyStoreItem
 from .nearby_store_request import NearbyStoreRequest
 from .nearby_store_response import NearbyStoreResponse
@@ -52,6 +56,8 @@ from .verify_owner_request import VerifyOwnerRequest
 from .verify_owner_response import VerifyOwnerResponse
 
 __all__ = (
+    "AvailableCouponItem",
+    "AvailableCouponResponse",
     "CarModelSearchItem",
     "CarModelSearchResponse",
     "ChatHistoryResponse",
@@ -66,6 +72,8 @@ __all__ = (
     "LogisticsResponse",
     "MessageCreate",
     "MessageResponse",
+    "MyCouponItem",
+    "MyCouponResponse",
     "NearbyStoreItem",
     "NearbyStoreRequest",
     "NearbyStoreResponse",

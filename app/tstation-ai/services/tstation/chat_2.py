@@ -63,6 +63,14 @@ def prompt_router() -> str:
       * DISCOVERY → TRANSACTION: recommendation + price
       * DISCOVERY → TRANSACTION: recommendation + purchase
       * TRANSACTION: price + buy/reserve (single agent handles all)
+
+    ⚠️ CRITICAL RULE — [ORDER_READY] DETECTION:
+        If the previous agent response contains the text "[ORDER_READY]",
+        you MUST return next_action=CONTINUE and next_domain="transaction".
+        This block means the Discovery Agent has resolved the goods_no and
+        the Transaction Agent must create the order draft immediately.
+        Do NOT return STOP when [ORDER_READY] is present, even if the agent
+        also asked a confirmation question.
     """)
 
 
@@ -261,6 +269,21 @@ EXAMPLE QUERIES → FLOW:
     → DISCOVERY
     (Recommendation → Description)
 
+21. "벤투스 S2 225/45R17 4개 주문할게"
+    "Order 4 Ventus S2 225/45R17"
+    → DISCOVERY → TRANSACTION
+    (Product Name+Size Search → goods_no Resolution → Order Draft)
+
+22. "키네르기 EX 205/55R16 2개 사고 싶어"
+    "I want to buy 2 Kinergy EX 205/55R16"
+    → DISCOVERY → TRANSACTION
+    (Product Name+Size Search → goods_no Resolution → Order Draft)
+
+23. "Ventus S1 evo3 245/45R18 주문"
+    "Order Ventus S1 evo3 245/45R18"
+    → DISCOVERY → TRANSACTION
+    (Product Name+Size Search → Order)
+
 ====================================================
 DECISION RULES
 ====================================================
@@ -295,7 +318,7 @@ SUPPORT if user wants:
 Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요"
 
 LEADING if:
-- Just greeting ("hello", "hi", "xin chào", "안녕하세요")
+- Just greeting ("hello", "hi", "안녕하세요")
 - No clear goal or action requested
 - General capability questions ("what can you do")
 Examples: "Hi", "What can you help me with?", "Hello"
