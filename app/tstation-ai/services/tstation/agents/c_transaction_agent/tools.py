@@ -28,8 +28,8 @@ from common.tstation_be_api_client.hkt_api_client.models import (
 )
 
 # QUICK SHOPPING AF
-from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.create_quick_order_api_quick_order_draft_post import sync_detailed as create_quick_order
-from common.tstation_be_api_client.hkt_api_client.models import QuickOrderRequest
+from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.set_order_form_ai_api_quick_order_order_set_order_form_ai_do_post import sync_detailed as set_order_form_ai
+from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRequest
 
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
@@ -333,67 +333,71 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 # =====================================================
 
 @tool
-def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = None):
+def set_order_form_ai_tool(
+    goods_no: str,
+    ord_qty: int,
+    shop_seq: str,
+    drt_pur_yn: str = "Y",
+    car_lnc_cd: str | None = None,
+):
     """
-    Create a quick shopping order draft and generate a checkout page URL.
+    Create an AI Quick Shopping or Cart Registration order via the T-Station AI API.
 
-    This tool calls the Quick Shopping API to validate a product and create
-    an order draft for the user.
+    This tool calls the setOrderFormAI API to create a direct purchase order
+    or add to cart, with a specific store (shop_seq) selected.
 
-    The API checks the product information from PR_GOODS_BASE, including:
-    - product sales status
-    - minimum order quantity
+    IMPORTANT: shop_seq (방문 매장 가맹점주문번호) is REQUIRED.
+    - shop_seq must come from get_store_list_tool or get_nearby_stores_tool result.
+    - If shop_seq is not selected yet, do NOT call this tool.
+    - If user declines store selection, pass shop_seq="" with drt_pur_yn="N" to add to cart.
 
-    If the product is valid and the quantity is allowed, the system generates
-    a REDIRECT_URL that leads to the order creation page where the user can
-    complete the purchase.
-
-    Use this tool when the user wants to:
-    - buy a product immediately
-    - create an order draft
-    - proceed to checkout for a specific product
+    drt_pur_yn controls the flow:
+    - "Y": Direct purchase (주문하기) — proceeds to checkout
+    - "N": Add to cart (장바구니) — saves to cart without checkout
 
     Args:
-        goods_no (str): Product number (e.g., G000000314254).
-        ord_qty (int): Quantity the user wants to purchase, min is 1.
-        mbr_no (None | str | Unset): Member number. If provided, the order draft
-            will be created for that member. If not provided, the checkout
-            page will ask the user to enter member information.
+        goods_no (str): Product number (e.g., G000000309783).
+        ord_qty (int): Quantity to purchase (min 1).
+        shop_seq (str): Store sequence number (방문 매장 SHOP_SEQ from ET_SHOP_INFO).
+            Must be obtained from store search tool results. Pass "" for cart-only.
+        drt_pur_yn (str): Order type. "Y" = direct purchase, "N" = add to cart. Default "Y".
+        car_lnc_cd (str | None): Vehicle launch code (WCODE). Optional.
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 2, "mbr_no": "M200012931"}
-        - {"goods_no": "G000000309860", "ord_qty": 1, "mbr_no": "M200012932"}
-        - {"goods_no": "G000000313073", "ord_qty": 3, "mbr_no": "M200012933"}
+        - {"goods_no": "G000000309783", "ord_qty": 4, "shop_seq": "F00019", "drt_pur_yn": "Y"}
+        - {"goods_no": "G000000313165", "ord_qty": 2, "shop_seq": "B01018", "drt_pur_yn": "N"}
+        - {"goods_no": "G000000309860", "ord_qty": 1, "shop_seq": "", "drt_pur_yn": "N"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
+    goods_info_arr_str = f"{goods_no}|{ord_qty}"
 
-    # TODO: [MOCK] Remove mock and use real API
-    logger.info("[TOOL][create_order_draft_tool] [MOCK] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
-    return _success_response(200, {"redirect_url": "https://example.com/quick-order/draft"})
+    logger.info(
+        "[TOOL][set_order_form_ai_tool] Called with: goods_no=%s, ord_qty=%s, shop_seq=%s, drt_pur_yn=%s, car_lnc_cd=%s",
+        goods_no, ord_qty, shop_seq, drt_pur_yn, car_lnc_cd
+    )
 
-    # body = QuickOrderRequest(
-    #     goods_no=goods_no,
-    #     ord_qty=ord_qty,
-    #     mbr_no=mbr_no,
-    # )
-    #
-    # logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
-    #
-    # try:
-    #     response = create_quick_order(client=get_client(), body=body)
-    #     if response.parsed is None:
-    #         return _error_response(
-    #             response.status_code,
-    #             f"HTTP {response.status_code}",
-    #             response.content.decode(errors="ignore") or "Failed to create quick order draft"
-    #         )
-    #     logger.info("[TOOL][create_order_draft_tool] Response: %s", response.parsed)
-    #     return _success_response(response.status_code, _to_dict(response.parsed))
-    # except Exception as e:
-    #     logger.exception("[TOOL][create_order_draft_tool] Failed")
-    #     return _error_response(None, str(e), "Failed to create quick order draft")
+    try:
+        body = SetOrderFormAIRequest(
+            goods_info_arr_str=goods_info_arr_str,
+            smrt_pay_yn="N",
+            drt_pur_yn=drt_pur_yn,
+            shop_seq=shop_seq if shop_seq else None,
+            car_lnc_cd=car_lnc_cd,
+        )
+        response = set_order_form_ai(client=get_client(), body=body)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to create order"
+            )
+        logger.info("[TOOL][set_order_form_ai_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][set_order_form_ai_tool] Failed")
+        return _error_response(None, str(e), "Failed to create order")
 
 
 @tool

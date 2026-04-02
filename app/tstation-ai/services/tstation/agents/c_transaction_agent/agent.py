@@ -7,7 +7,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_nearby_stores_tool,
     get_store_list_tool,
     get_store_detail_tool,
-    create_order_draft_tool,
+    set_order_form_ai_tool,
     get_order_status_tool,
     get_orders_of_user_tool,
 )
@@ -294,24 +294,32 @@ Purpose
 Complete the purchase process through conversational checkout.
 
 Tool
-create_order_draft_tool
+set_order_form_ai_tool
 
 When to use
 
-• user confirms purchase
-• user wants to buy a tire
-• user asks to proceed to checkout
-• required purchase information is collected
+• user has SELECTED a store AND confirmed purchase
+• shop_seq is available from store search results  
+• user declines store selection — add to cart instead
+
+⚠️ MANDATORY PRE-CONDITIONS before calling this tool:
+1. goods_no — extracted from context (tool results or system message)
+2. ord_qty — confirmed
+3. shop_seq — MUST come from get_store_list_tool or get_nearby_stores_tool result
+   → If user hasn’t selected a store yet: DO NOT call this tool — show store list first
 
 Inputs
 
-goods_no
-ord_qty
-mbr_no (optional)
+goods_no - product number (required)
+ord_qty - quantity (required)
+shop_seq - store SHOP_SEQ from ET_SHOP_INFO (required; pass "" for cart-only)
+drt_pur_yn - "Y" = direct purchase (주문), "N" = cart (장바구니). Default "Y".
+car_lnc_cd - vehicle launch code (optional)
 
-Output
+Outputs
 
-redirect_url for checkout page
+result: true / false
+data: redirect info for checkout (when drt_pur_yn="Y")
 
 
 ###############################
@@ -654,29 +662,54 @@ Execution steps:
 Flow 6 — Quick Checkout
 ------------------------------------
 
-**Order from Previous Agent Tool Results (Multi-Agent Order)**
+**Trigger:** Previous agent passed order context (goods_no, ord_qty resolved).
 
-Trigger: Previous messages contain tool results with goods_no.
+**⚠️ MANDATORY: STORE SELECTION IS REQUIRED BEFORE CREATING ORDER**
 
-Steps:
-1. Extract goods_no, tire_size, ord_qty from the "Previous agent tool results" system message
-2. Extract mbr_no from USER CONTEXT (decoded from JWT), if available
-3. Call create_order_draft_tool(goods_no=..., ord_qty=..., mbr_no=...)
-4. Display ONLY the checkout link — do NOT repeat product info table
+---
+
+**STEP 1: Extract Order Info**
+- Extract goods_no, ord_qty from context (system message or previous tool results)
+- Extract car_lnc_cd if available
+
+**STEP 2: Store Selection (ALWAYS REQUIRED)**
+- Call get_store_list_tool to retrieve available stores
+  - Default region: "한남" if user hasn’t specified a region
+- Display store list in a numbered table to the user (100% Korean):
+
+  | 순번 | 매장명 | 주소 | 평일 |
+- Ask: **"어느 매장에서 장착하시겠습니까? 번호를 선택해 주세요."
+  "매장을 그냥 선택하지 않으시려면 장바구니에 저장해 드릴까요?"**
+- WAIT for user input
+
+  ⚠️ CRITICAL: shop_seq MUST come from get_store_list_tool result.
+            NEVER fabricate or infer shop_seq from store name or memory.
+
+**STEP 3: Create Order — Two Paths**
+
+**Path A — User selects a store:**
+1. Extract shop_seq from the selected store entry in tool result
+2. Call set_order_form_ai_tool(goods_no=..., ord_qty=..., shop_seq=..., drt_pur_yn="Y", car_lnc_cd=...)
+3. Display checkout result:
+
+   주문서가 생성되었습니다! 🎉
+
+   🛒 **주문 완료하기** — 결제 페이지로 이동하여 배송지와 결제 수단을 입력하고 최종 주문을 완료해 주세요.
+
+**Path B — User declines store selection:**
+(User says "아니요", "나중에", "장바구니로", "그냥 담아줘", etc.)
+1. Call set_order_form_ai_tool(goods_no=..., ord_qty=..., shop_seq="", drt_pur_yn="N")
+2. Display cart result:
+
+   장바구니에 저장되었습니다! 🛒
+
+   나중에 장바구니에서 매장을 선택하고 결제를 완료해 주세요.
 
 ⚠️ RULES:
 - DO NOT show product info table again (Discovery Agent already showed it)
-- DO NOT ask for confirmation again
-- Just show the checkout result immediately
-- The tool results contain all needed info (goods_no, goods_nm, tire_size, ord_qty) — use them directly
-
-**Output format — Path A:**
-
-주문서가 생성되었습니다! 🎉
-
-🛒 **[주문 완료하기]([redirect_url])**
-
-결제 페이지에서 배송지와 결제 수단을 입력하고 최종 주문을 완료해 주세요.
+- DO NOT call set_order_form_ai_tool BEFORE user selects or declines a store
+- DO NOT skip store selection under any circumstances
+- If user already specified a store in their message → call get_store_list_tool to resolve shop_seq, then proceed to Path A
 
 ------------------------------------
 Flow 7 — Order List & Tracking
@@ -1173,7 +1206,7 @@ class TransactionSubAgent(BaseAgent):
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
         # Quick Order
-        "create_order_draft_tool": "Quick Order",
+        "set_order_form_ai_tool": "Quick Order",
         # Order / Delivery
         "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
@@ -1189,7 +1222,7 @@ class TransactionSubAgent(BaseAgent):
                 get_nearby_stores_tool,
                 get_store_list_tool,
                 get_store_detail_tool,
-                create_order_draft_tool,
+                set_order_form_ai_tool,
                 get_orders_of_user_tool,
                 get_order_status_tool,
             ],
