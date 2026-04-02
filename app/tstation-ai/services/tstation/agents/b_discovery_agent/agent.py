@@ -191,6 +191,7 @@ When to use
 Inputs
 
 keyword - search keyword (required)
+size - tire size (optional). **CRITICAL**: If the user's vehicle tire size is known from previous context, OR if the user explicitly mentions a size in the chat, you MUST provide it here to narrow down the exact product.
 limit - max results (optional, default 20)
 
 
@@ -352,10 +353,13 @@ Flow 4 — Product Search
 
 When the user searches for a specific tire by name:
 
-1. Call search_product_tool with keyword
-2. Display 3-5 best matching products (sorted by relevance)
-3. Show Rating column in table (call get_product_description_tool for each to get rating)
-4. After table: Show Rating & Description for #1 best match only
+1. **CRITICAL SIZE RULE**: Check if you know the tire size. 
+   - If the user explicitly mentions a specific size in their message (e.g., "225/45R17"), you MUST pass it into the `size` parameter. (Prioritize this over the vehicle's size).
+   - If NO size is explicitly mentioned, but you ALREADY KNOW their vehicle's tire size from earlier context (e.g., via `get_user_vehicles_tool`), you MUST pass the vehicle's size into the `size` parameter.
+2. Call search_product_tool with `keyword` and `size` (if found).
+3. Display 3-5 best matching products (sorted by relevance)
+4. Show Rating column in table (call get_product_description_tool for each to get rating)
+5. After table: Show Rating & Description for #1 best match only
 
 
 ------------------------------------

@@ -168,29 +168,32 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 
 @tool
-def search_product_tool(keyword: str, limit: int = 20):
+def search_product_tool(keyword: str, size: str | None = None, limit: int = 20):
     """
     상품 검색
 
-    제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원.
-    (예: '벤투스', 's1 evo', '아이온 suv')
+    제품명 키워드로 상품을 검색합니다. 사용자의 차량 타이어 사이즈나 대화에서 명시된 사이즈가 있다면 함께 전달하여 정확한 상품을 찾습니다.
 
     Args:
         keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        size (str | None): 타이어 사이즈 (예: '2254517' 또는 '225/45R17'). 차량 정보나 대화에서 파악된 사이즈.
         limit (int): 반환할 최대 상품 수 Default: 20.
 
     Example Inputs:
-        - {"keyword": "벤투스 S2", "limit": 20}
-        - {"keyword": "Ventus S2", "limit": 20}
-        - {"keyword": "s1-evo", "limit": 20}
+        - {"keyword": "Ventus S2 AS", "size": "2254517", "limit": 5}
+        - {"keyword": "s1-evo", "size": "245/40R19", "limit": 20}
+        - {"keyword": "다이나프로", "limit": 20}
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "data": ...} or {"status": "error", "message": ...}
     """
-    logger.info("[TOOL][search_product_tool] Called with: keyword=%s, limit=%s", keyword, limit)
+    logger.info("[TOOL][search_product_tool] Called with: keyword=%s, size=%s, limit=%s", keyword, size, limit)
+
+    # Safely combine keyword and size to narrow down the search results
+    search_kw = f"{keyword} {size}" if size else keyword
 
     try:
-        response = search_product(client=get_client(), keyword=keyword, limit=limit)
+        response = search_product(client=get_client(), keyword=search_kw, limit=limit)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
