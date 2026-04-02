@@ -496,6 +496,88 @@ Steps:
 **⚠️ NEVER ask user for goods_no — always resolve it via search_product_tool**
 
 
+------------------------------------
+Flow 9 — Order Resolution: Buy với xe của user (KHÔNG có tire size)
+------------------------------------
+
+**Trigger:** User wants to ORDER/BUY a product by name + quantity
+BUT does NOT provide tire size. System auto-fetches from user's registered vehicle.
+
+Examples:
+- "I want to buy 4 Ventus S2 AS"
+- "Ventus S2 AS 4개 살래"
+- "벤투스 S2 AS 4개 주문하고 싶어"
+
+**Context info (từ JWT context đã inject trong chat history — có sẵn không cần hỏi user):**
+- car_no: "29조3344" (đã có từ JWT)
+- owner_nm: "공태웅" (đã có từ JWT)
+- Lấy từ: `messages[0]["content"]` — system message chứa user context
+
+Steps:
+
+1. **STEP 1: Get user's tire size from their car**
+   - Call get_user_vehicles_tool(car_no=car_no, owner_nm=owner_nm)
+   - Extract: tire_size, car_lnc_cd, car_nm from response
+   - If no tire size found → Ask user: "타이어 사이즈를 확인 할 수 없습니다. 직접 사이즈를 입력해 주시겠어요?"
+
+2. **STEP 2: Search product với name + size**
+   - Call search_product_tool(keyword="Ventus S2 AS", size=tire_size, limit=5)
+
+3. **STEP 3: Handle search results**
+
+   **Case A: Exactly 1 result**
+   → Use that goods_no
+   → IMMEDIATELY continue to compatibility check
+
+   **Case B: Multiple results**
+   → Display candidates in table
+   → User selects → Go to Case A
+
+   **Case C: No results**
+   → "입력하신 사이즈 [size]의 Ventus S2 AS 제품을 찾을 수 없습니다."
+   → "다른 사이즈로 검색해 드릴까요?"
+   → STOP and wait for user to provide new size
+
+4. **STEP 4: Compatibility Check (SAU khi có goods_no)**
+   - Call check_compatibility_tool(goods_no=goods_no, car_no=car_no, owner_nm=owner_nm)
+
+   **Case Compatible:**
+   → Continue to Transaction Agent (store selection)
+   → IMMEDIATELY emit [ORDER_READY] block WITHOUT waiting for user reply
+
+    Output format:
+    ---
+    주문 정보를 확인했습니다:
+
+    | 항목 | 내용 |
+    |------|------|
+    | 상품명 | Ventus S2 AS |
+    | 사이즈 | [tire_size] |
+    | 상품번호 | [goods_no] |
+    | 수량 | [ord_qty]개 |
+    | 차량 | [car_no] |
+
+    매장 선택을 진행합니다...
+
+    [ORDER_READY]
+    goods_no: G000000XXXXXX
+    goods_nm: Ventus S2 AS
+    tire_size: 225/45R17
+    ord_qty: 4
+    car_no: 29조3344
+    [/ORDER_READY]
+    ---
+
+    ⚠️ DO NOT ask "진행하시겠습니까?" or any confirmation question.
+    ⚠️ DO NOT ask user to select store yet — just emit [ORDER_READY].
+    ⚠️ The Transaction Agent will handle store selection.
+
+   **Case NOT Compatible:**
+   → "죄송합니다. 해당 상품은 고객님의 차량([car_no])과 호환되지 않습니다."
+   → "다른 사이즈나 상품으로 검색해 드릴까요?"
+   → STOP and wait for user input
+
+
 ###############################
 4️⃣ PRODUCT INFORMATION & REVIEWS
 ###############################
@@ -580,6 +662,12 @@ ord_qty: [quantity]
 ```
 This structured block allows the Transaction Agent to extract all required info
 and call create_order_draft_tool WITHOUT asking the user for goods_no again.
+
+**⚠️ FLOW 9 ORDER HANDOVER:**
+When user wants to BUY without tire size (Flow 9):
+→ After compatibility check passes, emit [ORDER_READY] block
+→ Coordinator will route to Transaction Agent for store selection
+→ DO NOT ask user to select store yet — let Transaction Agent handle it
 
 
 ====================================================

@@ -54,15 +54,25 @@ def prompt_router() -> str:
 
     STOP when:
     - Single-domain request completed
-    - Agent asks user for more information
     - Response is greeting, farewell, or acknowledgment
+    - Agent asks user for more information (e.g., user needs to provide input)
 
-    CONTINUE (next_domain: "X") when:
+    CONTINUE when:
     - User asked multi-domain question (e.g., "recommend AND tell price")
     - Example flows:
       * DISCOVERY → TRANSACTION: recommendation + price
       * DISCOVERY → TRANSACTION: recommendation + purchase
       * TRANSACTION: price + buy/reserve (single agent handles all)
+    - Agent needs another agent's tools to complete the request
+
+    ⚠️ CRITICAL HANDOVER RULES:
+    - Transaction Agent says "검색", "확인하기 위해", "상품 번호를 확인" → CONTINUE → DISCOVERY
+      (Agent needs Discovery tools: search_product, get_user_vehicles, check_compatibility)
+    - Discovery Agent completed product search with goods_no → CONTINUE → TRANSACTION
+    - Discovery Agent says "다른 사이즈로 검색" → CONTINUE → DISCOVERY
+    - Agent asks user to input tire size manually → STOP (wait for user input)
+
+    KEY PRINCIPLE: If agent says it will search but has no tools to search → HANDOVER NEEDED.
 
     ⚠️ CRITICAL RULE — [ORDER_READY] DETECTION:
         If the previous agent response contains the text "[ORDER_READY]",
@@ -609,6 +619,10 @@ class TStationChatServiceV2:
         # get user info with mbr_nm
         # Always add language instruction to last user message
         if messages and messages[-1].get("role") == "user":
+            # Remove duplicate "hi" message if exists (frontend sends both "hi" and "# Respond in Korean language\nhi")
+            if len(messages) >= 2 and messages[-2].get("role") == "user" and messages[-2].get("content") == "hi":
+                messages.pop(-2)
+
             messages[-1]["content"] = (
                 f"# Respond in Korean language\n"
                 f"{messages[-1]['content']}"
@@ -622,13 +636,15 @@ class TStationChatServiceV2:
                 user_info_lines.append(f"{k}: {v}")
             
             user_context = "\n".join(user_info_lines)
-            
-            system_message = {
-                "role": "system",
+
+            user_context_message = {
+                "role": "user",
                 "content": (
                     f"## USER CONTEXT INFORMATION (Always Available)\n"
                     f"{user_context}\n\n"
                     f"## INSTRUCTIONS FOR AGENTS:\n"
+                    f"🔹 Always prioritize data provided directly by the user\n"
+                    f"🔹 If no direct data is provided, reference the personal data below\n"
                     f"🔹 When user mentions 'my car' (내 차) → Use car_no and mbr_nm from context directly\n"
                     f"🔹 Do NOT ask user for car_no or owner name (mbr_nm) - use injected values instead\n"
                     f"🔹 For API calls like get_user_vehicles_tool → Always pass owner_nm=mbr_nm from this context\n"
@@ -636,9 +652,9 @@ class TStationChatServiceV2:
                     f"🔹 Response language → Korean\n"
                 )
             }
-            
-            # Insert system message at the beginning
-            messages.insert(0, system_message)
+
+            # Insert user context message at the beginning
+            messages.insert(0, user_context_message)
 
         return messages
 
