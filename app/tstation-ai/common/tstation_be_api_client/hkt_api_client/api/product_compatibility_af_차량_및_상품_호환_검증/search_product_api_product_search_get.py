@@ -12,13 +12,26 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    keyword: str,
+    keyword: None | str | Unset = UNSET,
+    size: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["keyword"] = keyword
+    json_keyword: None | str | Unset
+    if isinstance(keyword, Unset):
+        json_keyword = UNSET
+    else:
+        json_keyword = keyword
+    params["keyword"] = json_keyword
+
+    json_size: None | str | Unset
+    if isinstance(size, Unset):
+        json_size = UNSET
+    else:
+        json_size = size
+    params["size"] = json_size
 
     params["limit"] = limit
 
@@ -66,15 +79,18 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    keyword: str,
+    keyword: None | str | Unset = UNSET,
+    size: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
 
      제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
+    사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다. (예: '2254517')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -87,6 +103,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         keyword=keyword,
+        size=size,
         limit=limit,
     )
 
@@ -100,15 +117,18 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    keyword: str,
+    keyword: None | str | Unset = UNSET,
+    size: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
 
      제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
+    사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다. (예: '2254517')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -122,6 +142,7 @@ def sync(
     return sync_detailed(
         client=client,
         keyword=keyword,
+        size=size,
         limit=limit,
     ).parsed
 
@@ -129,15 +150,18 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    keyword: str,
+    keyword: None | str | Unset = UNSET,
+    size: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
 
      제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
+    사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다. (예: '2254517')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -150,6 +174,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         keyword=keyword,
+        size=size,
         limit=limit,
     )
 
@@ -161,15 +186,18 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    keyword: str,
+    keyword: None | str | Unset = UNSET,
+    size: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
 
      제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')
+    사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다. (예: '2254517')
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -184,6 +212,7 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             keyword=keyword,
+            size=size,
             limit=limit,
         )
     ).parsed

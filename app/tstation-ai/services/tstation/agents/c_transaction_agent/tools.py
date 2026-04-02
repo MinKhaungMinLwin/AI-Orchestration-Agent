@@ -1,7 +1,5 @@
 import logging
 from typing import Any, List, Dict
-import re
-from typing import Any  # Two new import for execute_shopping_api_tool 
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
@@ -30,8 +28,8 @@ from common.tstation_be_api_client.hkt_api_client.models import (
 )
 
 # QUICK SHOPPING AF
-from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.set_order_form_ai_api_quick_order_order_set_order_form_ai_do_post import sync_detailed as set_order_form_ai
-from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRequest
+from common.tstation_be_api_client.hkt_api_client.api.quick_shopping_af_퀵_쇼핑주문서_초안_생성.create_quick_order_api_quick_order_draft_post import sync_detailed as create_quick_order
+from common.tstation_be_api_client.hkt_api_client.models import QuickOrderRequest
 
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
@@ -272,7 +270,12 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s", region_code, store_nm, limit)
 
     try:
-        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit)
+        kwargs = {"limit": limit}
+        if region_code is not None:
+            kwargs["region_code"] = region_code
+        if store_nm is not None:
+            kwargs["store_nm"] = store_nm
+        response = get_store_list(client=get_client(), **kwargs)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -329,69 +332,68 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 # ORDER TOOLS
 # =====================================================
 
-
 @tool
-def execute_shopping_api_tool(goods_no: str, ord_qty: int | str, action_type: str = "quick_order", mbr_no: str | None = None, shop_id: str | None = None):
+def create_order_draft_tool(goods_no: str, ord_qty: int, mbr_no: str | None = None):
     """
-    Executes a shopping action: either Quick Order (Buy Now) or Add to Cart.
+    Create a quick shopping order draft and generate a checkout page URL.
+
+    This tool calls the Quick Shopping API to validate a product and create
+    an order draft for the user.
+
+    The API checks the product information from PR_GOODS_BASE, including:
+    - product sales status
+    - minimum order quantity
+
+    If the product is valid and the quantity is allowed, the system generates
+    a REDIRECT_URL that leads to the order creation page where the user can
+    complete the purchase.
 
     Use this tool when the user wants to:
-    - buy a product immediately / proceed to checkout (action_type="quick_order")
-    - save an item to their shopping cart (action_type="cart")
+    - buy a product immediately
+    - create an order draft
+    - proceed to checkout for a specific product
 
     Args:
         goods_no (str): Product number (e.g., G000000314254).
-        ord_qty (int | str): Quantity the user wants to purchase. Can be an integer or a string like '4개'.
-        action_type (str): MUST be either "quick_order" or "cart".
-            - Use "quick_order" to generate a checkout page URL (Buy Now).
-            - Use "cart" to save the item for later.
-        mbr_no (str | None): Optional member number.
-        shop_id (str | None): The ID of the store the user selected for installation (e.g., "B00712").
+        ord_qty (int): Quantity the user wants to purchase, min is 1.
+        mbr_no (None | str | Unset): Member number. If provided, the order draft
+            will be created for that member. If not provided, the checkout
+            page will ask the user to enter member information.
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 4, "action_type": "quick_order", "shop_id": "B00712"}
-        - {"goods_no": "G000000309860", "ord_qty": "2개", "action_type": "cart"}
+        - {"goods_no": "G000000313165", "ord_qty": 2, "mbr_no": "M200012931"}
+        - {"goods_no": "G000000309860", "ord_qty": 1, "mbr_no": "M200012932"}
+        - {"goods_no": "G000000313073", "ord_qty": 3, "mbr_no": "M200012933"}
 
     Returns:
-        dict: {"status": "success", "data": ...} or {"status": "error", "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][execute_shopping_api_tool] Called with: goods_no=%s, ord_qty=%s, action_type=%s, shop_id=%s", goods_no, ord_qty, action_type, shop_id)
 
-    # 1. BULLETPROOF QUANTITY PARSING
-    try:
-        cleaned_qty = re.sub(r'[^0-9]', '', str(ord_qty))
-        qty_int = int(cleaned_qty) if cleaned_qty else 1
-    except Exception:
-        qty_int = 1 
+    # TODO: [MOCK] Remove mock and use real API
+    logger.info("[TOOL][create_order_draft_tool] [MOCK] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
+    return _success_response(200, {"redirect_url": "https://example.com/quick-order/draft"})
 
-    # 2. Route the action type
-    drt_pur_yn = "Y" if action_type == "quick_order" else "N"
-    goods_info_str = f"{goods_no}|{qty_int}"
-    
-    try:
-        # 3. SET PAYLOAD (Updated per Senior's request)
-        body = SetOrderFormAIRequest(
-            goods_info_arr_str=goods_info_str,
-            smrt_pay_yn="N",          # Changed to "N"!
-            drt_pur_yn=drt_pur_yn,
-            shop_seq=shop_id          # Added the shop ID so the backend knows where to send the tires!
-        )
-        
-        response = set_order_form_ai(client=get_client(), body=body)
-        
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or f"Failed to execute {action_type}"
-            )
-            
-        logger.info("[TOOL][execute_shopping_api_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-        
-    except Exception as e:
-        logger.exception("[TOOL][execute_shopping_api_tool] Failed")
-        return _error_response(None, str(e), f"Failed to execute {action_type} API")
+    # body = QuickOrderRequest(
+    #     goods_no=goods_no,
+    #     ord_qty=ord_qty,
+    #     mbr_no=mbr_no,
+    # )
+    #
+    # logger.info("[TOOL][create_order_draft_tool] Called with: goods_no=%s, ord_qty=%s, mbr_no=%s", goods_no, ord_qty, mbr_no)
+    #
+    # try:
+    #     response = create_quick_order(client=get_client(), body=body)
+    #     if response.parsed is None:
+    #         return _error_response(
+    #             response.status_code,
+    #             f"HTTP {response.status_code}",
+    #             response.content.decode(errors="ignore") or "Failed to create quick order draft"
+    #         )
+    #     logger.info("[TOOL][create_order_draft_tool] Response: %s", response.parsed)
+    #     return _success_response(response.status_code, _to_dict(response.parsed))
+    # except Exception as e:
+    #     logger.exception("[TOOL][create_order_draft_tool] Failed")
+    #     return _error_response(None, str(e), "Failed to create quick order draft")
 
 
 @tool
