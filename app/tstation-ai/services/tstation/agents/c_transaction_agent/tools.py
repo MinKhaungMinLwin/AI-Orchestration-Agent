@@ -4,6 +4,7 @@ from typing import Any, List, Dict
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
+from services.tstation.agents.c_transaction_agent.brand_mapping import normalize_brand_name
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +263,11 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s, limit=%s", region_code, store_nm, limit)
+    # Normalize brand name to Korean equivalent
+    if store_nm:
+        store_nm = normalize_brand_name(store_nm)
+    
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s", region_code, store_nm, limit)
 
     try:
         response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit)

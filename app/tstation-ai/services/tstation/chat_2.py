@@ -315,8 +315,7 @@ Examples:
 KEY PRINCIPLES:
 - "stores near [location]" → TRANSACTION
 - "find stores" → TRANSACTION
-- "price of [specific product]" → TRANSACTION (if goods_no known)
-- "How much is [product name ONLY]?" → DISCOVERY → TRANSACTION (unknown goods_no, need tire size first)
+- "price of [specific product]" → TRANSACTION
 - "search tires named [X]" → DISCOVERY
 - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
 - "buy tires" → TRANSACTION
@@ -325,76 +324,6 @@ KEY PRINCIPLES:
 - When multiple intents present, return ALL relevant domains in flow order
 
 Korean vehicle numbers follow patterns: 12가3456, 123가1234
-
-————————————————————————————————————————————
-⚠️ SPECIAL CASE: PRODUCT LINE WITH MULTIPLE SIZES
-————————————————————————————————————————————
-
-CRITICAL DISTINCTION:
-• "Dynapro HPX" is a PRODUCT LINE (NOT a single SKU)
-• One product line = 20–50 different tire sizes
-• Each size = separate goods_no (e.g., G000000314254, G000000314255, etc.)
-
-When user asks "How much is Dynapro HPX?" with ONLY product name:
-→ Must route DISCOVERY → TRANSACTION
-→ DISCOVERY engine presents TWO methods for tire size selection:
-
-**METHOD 1: Use Registered Vehicle (Auto-confirmation)**
-If user has registered vehicle:
-  1. Check: User has registered vehicle in context?
-  2. If YES → Extract tire_size automatically from vehicle registration
-  3. Confirm with user (simple & direct):
-     예: "당신의 등록된 차량은 [245/45R18] 사이즈를 사용하시네요.
-          다이나프로 HPX의 이 사이즈 가격을 확인해드릴까요?
-          [YES, 확인] [아니면 다른 사이즈 보기]"
-     영: "Your registered vehicle uses [245/45R18].
-          Would you like the price for Dynapro HPX in that size?
-          [YES] [Or browse other sizes]"
-  4. User confirms YES:
-     - Call search_product_tool("Dynapro HPX", limit=10)
-     - Filter results to get goods_no for that tire_size
-     - Extract and pass goods_no to TRANSACTION agent
-  5. User wants other size:
-     - Go to METHOD 2 (show size table)
-
-**METHOD 2: Browse & Select from Size Table**
-If user has no registered vehicle OR wants different size:
-  1. Introduce method:
-     예: "다이나프로 HPX는 여러 사이즈가 있어요.
-          아래 표에서 원하는 사이즈를 선택하면 가격을 알려드리겠습니다."
-     영: "Dynapro HPX comes in multiple sizes.
-          Select the size you'd like from the table below."
-  2. Call search_product_tool("Dynapro HPX", limit=30) to fetch all sizes
-  3. Display TABLE (hide goods_no, but store it in data):
-     
-     | No | Tire Size  | Stock          | ... |
-     |----|------------|----------------|-----|
-     | 1  | 245/45R18  | ✓ In Stock      |
-     | 2  | 235/55R19  | ✓ In Stock      |
-     | 3  | 255/50R16  | △ Limited Stock |
-     | 4  | 235/60R16  | ✓ In Stock      |
-
-  4. Ask user to select:
-     예: "원하는 사이즈를 선택해주세요. (예: '245/45R18' 또는 번호 '1')"
-     영: "Which size would you like? (e.g., '245/45R18' or '1')"
-  5. User selects → Extract corresponding goods_no
-  6. Pass goods_no to TRANSACTION agent for price query
-
-**Decision Logic:**
-```
-User: "Dynapro HPX 가격?"
-  → Check: registered vehicle exists?
-     YES → Present METHOD 1 (with METHOD 2 as fallback)
-     NO → Present METHOD 2 directly
-  → User selects size → Extract goods_no → TRANSACTION for price
-```
-
-**Output to TRANSACTION Agent:**
-Always format: "Product (tire_size) - goods_no"
-Example: "Selected: Dynapro HPX (245/45R18) - G000000314254"
-
-This ensures Transaction Agent can extract correct goods_no for price query.
-
 """
 
 
@@ -580,39 +509,46 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _build_messages_with_user_info(request: TStationChatRequest) -> list[dict]:
-        """Build messages with user info injected conditionally when user references personal context."""
+        """Build messages with user info injected as system context for all agents."""
         messages = list(request.messages)
 
         user_info = None
         if request.access_token:
             user_info = get_user_info_from_token(request.access_token)
 
-        if not user_info:
+        # get user info with mbr_nm
+        # Always add language instruction to last user message
+        if messages and messages[-1].get("role") == "user":
             messages[-1]["content"] = (
-                f"# Response user in Korean language\n"
-                f"{messages[-1]["content"]}"
+                f"# Respond in Korean language\n"
+                f"{messages[-1]['content']}"
             )
-            return messages
 
-        user_info_str = "\n".join([f"# {k}: {v}" for k, v in user_info.items()])
-
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                original_content = messages[i].get("content", "")
-
-                messages.insert(i, {
-                    "role": "user",
-                    "content": (
-                        f"# My information:\n{user_info_str}\n"
-                        f"# Only use this info when user asks about personal context "
-                        f"(my car, my order, my profile, etc.)"
-                    ),
-                })
-                messages[i + 1]["content"] = (
-                    f"# Response user in Korean language\n"
-                    f"User question: {original_content}"
+        # If user info available, inject as system message at beginning
+        if user_info:
+            # Build user info context
+            user_info_lines = []
+            for k, v in user_info.items():
+                user_info_lines.append(f"{k}: {v}")
+            
+            user_context = "\n".join(user_info_lines)
+            
+            system_message = {
+                "role": "system",
+                "content": (
+                    f"## USER CONTEXT INFORMATION (Always Available)\n"
+                    f"{user_context}\n\n"
+                    f"## INSTRUCTIONS FOR AGENTS:\n"
+                    f"🔹 When user mentions 'my car' (내 차) → Use car_no and mbr_nm from context directly\n"
+                    f"🔹 Do NOT ask user for car_no or owner name (mbr_nm) - use injected values instead\n"
+                    f"🔹 For API calls like get_user_vehicles_tool → Always pass owner_nm=mbr_nm from this context\n"
+                    f"🔹 For vehicle-related queries → Use car_no from context without asking\n"
+                    f"🔹 Response language → Korean\n"
                 )
-                break
+            }
+            
+            # Insert system message at the beginning
+            messages.insert(0, system_message)
 
         return messages
 
