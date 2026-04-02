@@ -331,17 +331,13 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 
 
 @tool
-def execute_shopping_api_tool(goods_no: str, ord_qty: int | str, action_type: str = "quick_order", mbr_no: str | None = None):
+def execute_shopping_api_tool(goods_no: str, ord_qty: int | str, action_type: str = "quick_order", mbr_no: str | None = None, shop_id: str | None = None):
     """
     Executes a shopping action: either Quick Order (Buy Now) or Add to Cart.
-
-    This tool calls the SetOrderFormAI API to process the user's purchase intent.
-    It automatically formats the goods data and applies the Smart Pay (smrtPayYn) rule.
 
     Use this tool when the user wants to:
     - buy a product immediately / proceed to checkout (action_type="quick_order")
     - save an item to their shopping cart (action_type="cart")
-    - fallback to saving the item if a quick order attempt fails (action_type="cart")
 
     Args:
         goods_no (str): Product number (e.g., G000000314254).
@@ -350,33 +346,35 @@ def execute_shopping_api_tool(goods_no: str, ord_qty: int | str, action_type: st
             - Use "quick_order" to generate a checkout page URL (Buy Now).
             - Use "cart" to save the item for later.
         mbr_no (str | None): Optional member number.
+        shop_id (str | None): The ID of the store the user selected for installation (e.g., "B00712").
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 4, "action_type": "quick_order"}
+        - {"goods_no": "G000000313165", "ord_qty": 4, "action_type": "quick_order", "shop_id": "B00712"}
         - {"goods_no": "G000000309860", "ord_qty": "2개", "action_type": "cart"}
 
     Returns:
         dict: {"status": "success", "data": ...} or {"status": "error", "message": ...}
     """
-    logger.info("[TOOL][execute_shopping_api_tool] Called with: goods_no=%s, ord_qty=%s, action_type=%s", goods_no, ord_qty, action_type)
+    logger.info("[TOOL][execute_shopping_api_tool] Called with: goods_no=%s, ord_qty=%s, action_type=%s, shop_id=%s", goods_no, ord_qty, action_type, shop_id)
 
-    # 1. BULLETPROOF QUANTITY PARSING: Strip out Korean text like "개" and convert to int
+    # 1. BULLETPROOF QUANTITY PARSING
     try:
         cleaned_qty = re.sub(r'[^0-9]', '', str(ord_qty))
         qty_int = int(cleaned_qty) if cleaned_qty else 1
     except Exception:
-        qty_int = 1 # Safe fallback
+        qty_int = 1 
 
     # 2. Route the action type
     drt_pur_yn = "Y" if action_type == "quick_order" else "N"
     goods_info_str = f"{goods_no}|{qty_int}"
     
     try:
-        # 3. USE SNAKE_CASE FOR THE GENERATED MODEL (Fix for Test 2)
+        # 3. SET PAYLOAD (Updated per Senior's request)
         body = SetOrderFormAIRequest(
             goods_info_arr_str=goods_info_str,
-            smrt_pay_yn="Y",
+            smrt_pay_yn="N",          # Changed to "N"!
             drt_pur_yn=drt_pur_yn,
+            shop_seq=shop_id          # Added the shop ID so the backend knows where to send the tires!
         )
         
         response = set_order_form_ai(client=get_client(), body=body)
