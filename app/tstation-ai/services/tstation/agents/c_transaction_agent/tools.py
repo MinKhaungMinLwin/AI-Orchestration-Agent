@@ -6,6 +6,7 @@ from typing import Any  # Two new import for execute_shopping_api_tool
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
+from services.tstation.agents.c_transaction_agent.brand_mapping import normalize_brand_name
 
 logger = logging.getLogger(__name__)
 
@@ -226,25 +227,49 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 @tool
 def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20):
     """
-    Get store list by region.
+    Get store list by region and/or store name.
 
-    Retrieve store list based on region name (ADDR_BASE, ADDR_DTL LIKE search).
-    Returns all stores if region_code is not provided.
+    Retrieve store list based on region name and/or store name keyword search.
+    Returns all stores if no filters are provided.
+
+    IMPORTANT — Parameter separation rules:
+    - region_code: ONLY geographic location words (city, district, neighborhood).
+        Examples: '서울', '강남', '부산', '수원', '송파'
+    - store_nm: ONLY business/store name keywords.
+        Examples: '티스테', '타이'
+
+    When the user mentions BOTH a location and a store name, pass BOTH parameters simultaneously.
+    Do NOT put the store name into region_code, or the region into store_nm.
 
     Args:
-        region_code (str | None): Region search term (ADDR_BASE, ADDR_DTL LIKE search), Using Korean address, Examples: '서울', '강남'
-        store_nm (str | None): Store name search term.
+        region_code (str | None): Geographic region keyword — Korean city, district, or neighborhood.
+            Used for ADDR_BASE / ADDR_DTL LIKE search.
+            Examples: '서울', '강남', '부산'
+        store_nm (str | None): Store or business name keyword.
+            Examples: '티스테', '타이'
         limit (int): Maximum number of stores to return (default 20).
 
     Example Inputs:
-        - {"region_code": "서울", "store_nm": "삼송타이어", "limit": 20}
-        - {"region_code": "강남", "store_nm": "극동상사", "limit": 20}
+        # User says "강남에 티스테 찾아줘" → pass BOTH
+        - {"region_code": "강남", "store_nm": "티스테", "limit": 20}
+
+        # User says "부산 한국타이어" → pass BOTH
         - {"region_code": "부산", "store_nm": "한국타이어", "limit": 20}
+
+        # User says "서울 매장 보여줘" → region only
+        - {"region_code": "서울", "store_nm": None, "limit": 20}
+
+        # User says "극동상사 찾아줘" → store name only
+        - {"region_code": None, "store_nm": "극동상사", "limit": 20}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s, limit=%s", region_code, store_nm, limit)
+    # Normalize brand name to Korean equivalent
+    if store_nm:
+        store_nm = normalize_brand_name(store_nm)
+    
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s", region_code, store_nm, limit)
 
     try:
         response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit)

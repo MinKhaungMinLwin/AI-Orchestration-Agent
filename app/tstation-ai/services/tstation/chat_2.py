@@ -576,39 +576,46 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _build_messages_with_user_info(request: TStationChatRequest) -> list[dict]:
-        """Build messages with user info injected conditionally when user references personal context."""
+        """Build messages with user info injected as system context for all agents."""
         messages = list(request.messages)
 
         user_info = None
         if request.access_token:
             user_info = get_user_info_from_token(request.access_token)
 
-        if not user_info:
+        # get user info with mbr_nm
+        # Always add language instruction to last user message
+        if messages and messages[-1].get("role") == "user":
             messages[-1]["content"] = (
-                f"# Response user in Korean language\n"
-                f"{messages[-1]["content"]}"
+                f"# Respond in Korean language\n"
+                f"{messages[-1]['content']}"
             )
-            return messages
 
-        user_info_str = "\n".join([f"# {k}: {v}" for k, v in user_info.items()])
-
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                original_content = messages[i].get("content", "")
-
-                messages.insert(i, {
-                    "role": "user",
-                    "content": (
-                        f"# My information:\n{user_info_str}\n"
-                        f"# Only use this info when user asks about personal context "
-                        f"(my car, my order, my profile, etc.)"
-                    ),
-                })
-                messages[i + 1]["content"] = (
-                    f"# Response user in Korean language\n"
-                    f"User question: {original_content}"
+        # If user info available, inject as system message at beginning
+        if user_info:
+            # Build user info context
+            user_info_lines = []
+            for k, v in user_info.items():
+                user_info_lines.append(f"{k}: {v}")
+            
+            user_context = "\n".join(user_info_lines)
+            
+            system_message = {
+                "role": "system",
+                "content": (
+                    f"## USER CONTEXT INFORMATION (Always Available)\n"
+                    f"{user_context}\n\n"
+                    f"## INSTRUCTIONS FOR AGENTS:\n"
+                    f"🔹 When user mentions 'my car' (내 차) → Use car_no and mbr_nm from context directly\n"
+                    f"🔹 Do NOT ask user for car_no or owner name (mbr_nm) - use injected values instead\n"
+                    f"🔹 For API calls like get_user_vehicles_tool → Always pass owner_nm=mbr_nm from this context\n"
+                    f"🔹 For vehicle-related queries → Use car_no from context without asking\n"
+                    f"🔹 Response language → Korean\n"
                 )
-                break
+            }
+            
+            # Insert system message at the beginning
+            messages.insert(0, system_message)
 
         return messages
 
