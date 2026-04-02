@@ -6,7 +6,7 @@ from typing import Any  # Two new import for execute_shopping_api_tool
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
-from services.tstation.agents.c_transaction_agent.brand_mapping import normalize_brand_name
+from common.brand_mapping import normalize_brand_name
 
 logger = logging.getLogger(__name__)
 
