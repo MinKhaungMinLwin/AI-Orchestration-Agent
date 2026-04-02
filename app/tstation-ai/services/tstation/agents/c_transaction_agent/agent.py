@@ -654,12 +654,12 @@ Execution steps:
 Flow 6 — Quick Checkout
 ------------------------------------
 
-**Order from [ORDER_READY] block (Multi-Agent Order)**
+**Order from Previous Agent Tool Results (Multi-Agent Order)**
 
-Trigger: Previous messages contain [ORDER_READY] block.
+Trigger: Previous messages contain tool results with goods_no.
 
 Steps:
-1. Parse [ORDER_READY] block → extract goods_no, goods_nm, tire_size, ord_qty
+1. Extract goods_no, tire_size, ord_qty from the "Previous agent tool results" system message
 2. Extract mbr_no from USER CONTEXT (decoded from JWT), if available
 3. Call create_order_draft_tool(goods_no=..., ord_qty=..., mbr_no=...)
 4. Display ONLY the checkout link — do NOT repeat product info table
@@ -668,6 +668,7 @@ Steps:
 - DO NOT show product info table again (Discovery Agent already showed it)
 - DO NOT ask for confirmation again
 - Just show the checkout result immediately
+- The tool results contain all needed info (goods_no, goods_nm, tire_size, ord_qty) — use them directly
 
 **Output format — Path A:**
 

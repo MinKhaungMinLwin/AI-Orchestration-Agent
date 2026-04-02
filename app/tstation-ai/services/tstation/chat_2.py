@@ -475,6 +475,15 @@ class StreamingMultiAgentCoordinator:
                         logger.info(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
 
+            # Append accumulated tool data for next agent (so they can use results like goods_no)
+            if accumulated_tool_data:
+                tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
+                enriched_messages.append({
+                    "role": "system",
+                    "content": f"[Previous agent tool results]\n{tool_summary}"
+                })
+                logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
+
             domain_key = domain.value
             logger.info(f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)[:1000]}")
 
