@@ -94,7 +94,7 @@ class BaseAgent(ABC):
 
         Use this when you want to format tool outputs as UI templates directly.
         """
-        tool_calls_map: dict[str, dict] = {}
+        import json
 
         for mode, chunk in self.agent.stream(
             {"messages": messages},
@@ -103,30 +103,19 @@ class BaseAgent(ABC):
             if mode == "updates":
                 for node, update in chunk.items():
                     message = update["messages"][-1]
-                    if isinstance(message, AIMessage):
-                        # Capture tool calls for input tracking
-                        if hasattr(message, "tool_calls") and message.tool_calls:
-                            for tc in message.tool_calls:
-                                tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
-                    elif isinstance(message, ToolMessage):
-                        # Check if this tool has a template mapping
+                    if isinstance(message, ToolMessage):
                         template_name = self.TOOL_TO_TEMPLATE_MAP.get(message.name)
                         if template_name:
-                            # Get tool input args (from the LLM call, not from tool return)
-                            tool_input = tool_calls_map.get(message.tool_call_id, {}).get("args", {})
-                            # Check if input has "items" array
-                            items = tool_input.get("items", [])
-                            if items:
-                                # Yield ONE data event with all items
-                                yield {
-                                    "type": "data",
-                                    "template": template_name,
-                                    "data": {"items": items},
-                                }
-                            else:
-                                # Single item - yield directly
-                                yield {
-                                    "type": "data",
-                                    "template": template_name,
-                                    "data": tool_input,
-                                }
+                            # Parse tool output (message.content is JSON string)
+                            try:
+                                tool_output = json.loads(message.content)
+                                tool_data = tool_output.get("data", {})
+                            except (json.JSONDecodeError, TypeError):
+                                tool_data = {}
+
+                            # Yield data event with tool's actual output data
+                            yield {
+                                "type": "data",
+                                "template": template_name,
+                                "data": tool_data,
+                            }

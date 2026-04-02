@@ -40,16 +40,26 @@ RULES:
 TEMPLATE TYPES (use ONE that best fits)
 ====================================================
 
-• list_car_tool → "listCar" - Cars with license_plate, description, image_url
-• list_product_tool → "listProduct" - Products with items: image_url, title, tiers, comfort, price (int), rate (float), total_qty (int)
-• list_voucher_tool → "listVoucher" - Vouchers with items: name_voucher, description, discount, date_voucher, download_url
-• list_location_tool → "listLocation" - Locations with items: name, address, location, distance (float), detail_address
-• list_preview_youtube_tool → "listPreviewYoutube" - Videos with items: video_id, title, thumbnail_url
-• datepick_tool → "datepick" - Date picker with: date, time_slots, selected_date
-• question_tool → "question" - Questions with: question_text, options
-• bill_service_tool → "bill_service" - Service bills with: service_items, total (int), date
-• bill_product_tool → "bill_product" - Product bills with: product_items, total (int), date
-• question_create_order_tool → "question_create_order" - Order confirmations with: product_info, confirmation_needed
+• list_car_tool → "listCar" - Cars with fields: licensePlate, description, imageUrl (camelCase, no underscore)
+• list_product_tool → "product" - Products with fields: imageUrl, title, tiers, comfort, price (int), rate (float), totalQuantity (camelCase, no underscore)
+• list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher, description, discount, dateVoucher, myCouponLink, downloadLink (camelCase, no underscore)
+• list_location_tool → "location" - Locations with fields: nameAddress, distance (str), detailAddress, long (float), lat (float) (camelCase, no underscore)
+• list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore)
+• datepick_tool → "datepick" - Date picker with fields: date, available (bool), timeSlots[], selectedDate (camelCase, no underscore)
+• question_tool → "question" - Questions with fields: question, listAnswer[[{{id, label, value}}]] (camelCase, no underscore)
+• bill_service_tool → "billService" - Service bills with fields: carInfo, services[[{{serviceName, quantity, price}}]], storeName, bookingDateTime, visitMethod, totalAmount, actionLink, actionText (camelCase, no underscore)
+• bill_product_tool → "billProduct" - Product bills with fields: carInfo, products[[{{productName, quantity, unitPrice, totalPrice}}]], storeName, bookingDateTime, visitMethod, paymentAmount, actionLink, actionText, cartLink (camelCase, no underscore)
+• question_create_order_tool → "questionCreateOrder" - Order questions with fields: key, question, type, listAnswer[[{{id, label, value}}]], required (camelCase, no underscore)
+
+====================================================
+KEY RULE: ALL FIELD NAMES USE CAMELCASE (NO UNDERSCORES)
+====================================================
+
+• Use camelCase for composite names: imageUrl, licensePlate, nameVoucher, myCouponLink, etc.
+• NEVER use underscores in field names: image_url, license_plate, name_voucher are WRONG
+• This matches JavaScript/TypeScript conventions
+• Example correct: {{"imageUrl": "..."}} NOT {{"image_url": "..."}}
+• Example correct: {{"licensePlate": "..."}} NOT {{"license_plate": "..."}}
 
 ====================================================
 SELECTION RULES

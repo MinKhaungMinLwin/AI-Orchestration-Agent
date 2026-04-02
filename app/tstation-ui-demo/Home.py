@@ -227,7 +227,7 @@ def render_template_expander(template: str, data: dict):
         with st.expander(f"📅 {data.get('date', 'Date Picker')}", expanded=True):
             st.markdown(f"**Available:** {'Yes' if data.get('available') else 'No'}")
             st.markdown("**Time slots:**")
-            for slot in data.get("time_slots", []):
+            for slot in data.get("timeSlots", []):
                 st.markdown(f"- {slot}")
     elif template == "question":
         with st.expander(f"❓ {data.get('question', 'Question')}", expanded=True):
