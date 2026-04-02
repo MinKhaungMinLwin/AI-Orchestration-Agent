@@ -41,7 +41,7 @@ TEMPLATE TYPES (use ONE that best fits)
 ====================================================
 
 • list_car_tool → "listCar" - Cars with fields: licensePlate, description, imageUrl (camelCase, no underscore)
-• list_product_tool → "product" - Products with fields: imageUrl, title, tiers, comfort, price (int), rate (float), totalQuantity (camelCase, no underscore)
+• list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher, description, discount, dateVoucher, myCouponLink, downloadLink (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress, distance (str), detailAddress, long (float), lat (float) (camelCase, no underscore)
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore)

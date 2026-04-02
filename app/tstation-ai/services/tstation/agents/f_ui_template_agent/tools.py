@@ -33,7 +33,7 @@ def list_car_tool(
 
 @tool
 def list_product_tool(
-    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tiers (str), comfort (str), price (int), rate (float), totalQuantity (int)"]
+    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int)"]
 ) -> dict:
     """Render product list cards.
 
@@ -43,7 +43,7 @@ def list_product_tool(
     Field Details:
         - imageUrl (str): URL of product image. Rule: required, valid URL string.
         - title (str): Product name. Rule: required, non-empty string.
-        - tiers (str): Product tier/category. Rule: optional, string (e.g., "SUV", "Sedan").
+        - tires (str): Product tier/category. Rule: optional, string (e.g., "SUV", "Sedan").
         - comfort (str): Comfort level. Rule: optional, string (e.g., "high", "medium", "low").
         - price (int): Product price in KRW. Rule: required, 0 <= price.
         - rate (float): Rating score. Rule: required, 0 <= rate <= 5.
