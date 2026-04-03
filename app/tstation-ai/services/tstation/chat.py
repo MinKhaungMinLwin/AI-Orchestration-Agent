@@ -606,6 +606,12 @@ class StreamingMultiAgentCoordinator:
                 "status": "start",
             }
 
+            # Yield waiting event while UI Template Agent processes
+            yield {
+                "type": "waiting",
+                "agent": "[UI TEMPLATE AGENT]",
+            }
+
             # Stream from UI Template Agent (use stream_template to get data events)
             for event in ui_template_subagent.stream_template(ui_messages):
                 event["source_domain"] = "ui_template"
