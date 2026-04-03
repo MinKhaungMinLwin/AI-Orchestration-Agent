@@ -382,42 +382,39 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
 
 
 @tool
-def quick_order_tool(goods_no: str, ord_qty: int, shop_seq: str, car_lnc_cd: str | None = None):
+def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str | None = None):
     """
     퀵쇼핑 주문을 실행합니다 (매장 선택 포함).
 
-    매장(shop_seq)이 선택된 상태에서 퀵쇼핑 주문을 생성하는 API입니다.
+    매장이 선택된 상태에서 퀵쇼핑 주문을 생성하는 API입니다.
     setOrderFormAI API를 drtPurYn="Y" (주문하기 모드)으로 호출합니다.
 
     Use this tool when:
     - User has confirmed goods_no, quantity, AND selected a store
-    - shop_seq is available from get_store_list_tool or get_store_detail_tool result
-
-    ⚠️ IMPORTANT: shop_seq comes from ET_SHOP_INFO.SHOP_SEQ column in store data.
-    This is different from shop_id. Get shop_seq from store tool results.
+    - shop_id is available from get_store_list_tool or get_nearby_stores_tool result
 
     Args:
         goods_no (str): Product number (e.g., G000000314254).
         ord_qty (int): Quantity to order, min is 1.
-        shop_seq (str): Store franchise order number (from store tool results).
+        shop_id (str): Store ID from store tool results (e.g., "C01306", "B01018").
         car_lnc_cd (str | None): Vehicle launch code (optional, for vehicle info).
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 4, "shop_seq": "12345"}
-        - {"goods_no": "G000000309860", "ord_qty": 2, "shop_seq": "67890", "car_lnc_cd": "LNC12345"}
+        - {"goods_no": "G000000313165", "ord_qty": 4, "shop_id": "C01306"}
+        - {"goods_no": "G000000309860", "ord_qty": 2, "shop_id": "B01018", "car_lnc_cd": "LNC12345"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
-    logger.info("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_seq=%s, car_lnc_cd=%s", goods_info_arr_str, shop_seq, car_lnc_cd)
+    logger.info("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s", goods_info_arr_str, shop_id, car_lnc_cd)
 
     try:
         body = SetOrderFormAIRequest(
             goods_info_arr_str=goods_info_arr_str,
             smrt_pay_yn="N",
             drt_pur_yn="Y",
-            shop_seq=shop_seq,
+            shop_seq=shop_id,
             car_lnc_cd=car_lnc_cd,
         )
         response = set_order_form_ai(client=get_client(), body=body)
