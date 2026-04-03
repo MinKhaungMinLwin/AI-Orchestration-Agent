@@ -69,7 +69,7 @@ def prompt_router() -> str:
     - Transaction Agent says "검색", "확인하기 위해", "상품 번호를 확인" → CONTINUE → DISCOVERY
       (Agent needs Discovery tools: search_product, get_user_vehicles, check_compatibility)
     - Discovery Agent completed product search with goods_no → CONTINUE → TRANSACTION
-      (Transaction Agent will handle: quantity check, store selection, cart/order)
+      (Transaction Agent will handle: price lookup, quantity check, store selection, cart/order)
     - Discovery Agent says "다른 사이즈로 검색" → CONTINUE → DISCOVERY
     - Agent asks user to input tire size manually → STOP (wait for user input)
     - Transaction Agent asks user to select quantity → STOP (wait for user input)
@@ -77,12 +77,17 @@ def prompt_router() -> str:
 
     KEY PRINCIPLE: If agent says it will search but has no tools to search → HANDOVER NEEDED.
 
-    ⚠️ CRITICAL RULE — ORDER FLOW DETECTION:
-        If the Discovery Agent response contains goods_no and mentions
-        "주문 진행" or "연결합니다", you MUST return next_action=CONTINUE
-        and next_domain="transaction". The Transaction Agent will then
-        guide the user through quantity confirmation, store selection,
-        and cart save or quick order.
+    ⚠️ CRITICAL RULE — DISCOVERY → TRANSACTION DETECTION:
+        If the Discovery Agent response contains goods_no (e.g., G000000XXXXXX)
+        and mentions any of: "가격을 확인", "주문 진행", "연결합니다",
+        you MUST return next_action=CONTINUE and next_domain="transaction".
+
+        This applies to BOTH:
+        - Price queries: Discovery found goods_no → Transaction gets price
+        - Order queries: Discovery found goods_no → Transaction handles order
+
+        Do NOT return STOP when Discovery has found goods_no and the original
+        user request includes price/order intent.
     """)
 
 
@@ -221,6 +226,17 @@ EXAMPLE QUERIES → FLOW:
    → DISCOVERY → TRANSACTION
    (Description → Price)
 
+8.1. "Dynapro HPX 가격 얼마야?"
+     "How much is Dynapro HPX?"
+     → DISCOVERY → TRANSACTION
+     (Product Name Search with JWT tire size → Price)
+     ⚠️ goods_no NOT known → DISCOVERY first, NOT TRANSACTION alone
+
+8.2. "벤투스 S2 가격"
+     "Ventus S2 price"
+     → DISCOVERY → TRANSACTION
+     (Product Name Search → Price)
+
 9. "추천 타이어 중 강남점 재고 알려줘"
    "Show Gangnam store stock for recommended tires"
    → DISCOVERY → TRANSACTION
@@ -311,7 +327,7 @@ DECISION RULES
 ====================================================
 
 TRANSACTION if user wants:
-- "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
+- "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "G000000314254 가격")
 - "In stock?", "available?" for specific product at specific store
 - Check logistics stock (warehouse availability)
 - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
@@ -322,14 +338,20 @@ TRANSACTION if user wants:
 - "장바구니에 담아줘", "장바구니 저장" (save to cart)
 - Select quantity, select store for order
 - Book store visit/reservation with specific date/time
-Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "G000000314254 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345"
+Examples: "G000000314254 가격 얼마야?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "G000000314254 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
 - Recommend tires (vehicle-specific or general)
 - Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
 - Product specifications, features, technology
-Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?"
+- **Price for product by NAME (goods_no NOT known)** → DISCOVERY to find goods_no
+Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격"
+
+⚠️ CRITICAL DISTINCTION for price queries:
+- "G000000314254 가격" → goods_no KNOWN → TRANSACTION only
+- "Dynapro HPX 가격" → goods_no NOT known → DISCOVERY, TRANSACTION
+- "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY, TRANSACTION
 
 SUPPORT if user wants:
 - Tire replacement guidance (when to replace, air pressure, maintenance)
