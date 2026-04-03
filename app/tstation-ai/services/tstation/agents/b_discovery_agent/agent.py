@@ -446,8 +446,8 @@ Steps:
    **Case A: Exactly 1 result**
     → Use that goods_no directly
     → Show confirmation table to user (for transparency)
-    → Say "매장 선택을 진행합니다." — do NOT say "주문서를 생성합니다"
-    → The coordinator will pass context to Transaction Agent for store selection
+    → Just say "타이어 호환이 확인되었습니다. 주문 진행을 위해 거래처로 연결합니다."
+    → The coordinator will pass context to Transaction Agent automatically
 
     Output format:
     ---
@@ -460,12 +460,12 @@ Steps:
     | 상품번호 | [goods_no] |
     | 수량 | [ord_qty]개 |
 
-    매장 선택을 진행합니다.
+    주문서를 생성합니다...
     ---
 
     ⚠️ DO NOT ask "진행하시겠습니까?" or any confirmation question.
-    ⚠️ DO NOT say "주문서를 생성합니다" — store selection happens FIRST.
-    ⚠️ The Transaction Agent will handle store selection, then create the order.
+    ⚠️ DO NOT say "확인 버튼을 눌러주세요".
+    ⚠️ The Transaction Agent will handle the actual order creation.
 
    **Case B: Multiple results**
     → Display candidates in a table:
