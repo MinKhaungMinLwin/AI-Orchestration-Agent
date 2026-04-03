@@ -10,13 +10,15 @@ class ChatMessageRequest(BaseModel):
     content: str = Field(..., description="User message content")
     session_id: str = Field(..., description="Session ID (required)")
     stream: bool = Field(default=False, description="Stream mode")
+    user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "content": "타이어 추천해주세요",
                 "session_id": "test_session_id_12345",
-                "stream": False
+                "stream": False,
+                "user_info": {"tire_size": "225/45R17"}
             }
         }
     }

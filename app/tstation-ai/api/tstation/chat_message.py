@@ -31,7 +31,7 @@ from schemas.tstation.chat_message import (
     DeleteSessionResponse,
 )
 from services.tstation.chat_history_service import get_chat_history_service
-from services.tstation.chat_2 import TStationChatServiceV2
+from services.tstation.chat import TStationChatServiceV2
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -77,13 +77,11 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     # Build messages list from history
     history = service.get_history(session_id)
-    messages = [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in history
-    ]
+    messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
-    # Add current user message
-    messages.append({"role": "user", "content": request.content})
+    # Add current user message only if not duplicate of last history
+    if not (messages and messages[-1].get("role") == "user" and messages[-1].get("content") == request.content):
+        messages.append({"role": "user", "content": request.content})
 
     # Prepare request for chat service
     from schemas.tstation.chat import TStationChatRequest
@@ -95,6 +93,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         user_id=user_id,
         session_id=session_id,
         access_token=user["token"],
+        user_info=request.user_info,
     )
 
     # Call chat service
@@ -131,7 +130,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
 async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, service):
     """Stream chat response and save assistant messages as they arrive."""
-    from services.tstation.chat_2 import TStationChatServiceV2
+    from services.tstation.chat import TStationChatServiceV2
 
     full_assistant_content = ""
 

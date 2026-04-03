@@ -80,7 +80,7 @@ def list_voucher_tool(
 
 @tool
 def list_location_tool(
-    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), long (float), lat (float)"]
+    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str)"]
 ) -> dict:
     """Render location list cards.
 
@@ -91,8 +91,6 @@ def list_location_tool(
         - nameAddress (str): Location/store name. Rule: required, non-empty string.
         - distance (str): Distance from user location. Rule: required, string (e.g., "2.5km").
         - detailAddress (str): Full address. Rule: required, non-empty string.
-        - long (float): Longitude. Rule: optional, -180 <= long <= 180.
-        - lat (float): Latitude. Rule: optional, -90 <= lat <= 90.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"locations": items}}
