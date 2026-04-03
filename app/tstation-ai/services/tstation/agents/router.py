@@ -83,7 +83,7 @@ class AgentDomain(BaseModel):
         DECISION RULES:
 
         TRANSACTION if user wants:
-        - "How much", "price", "cost", "discount" for SPECIFIC product (goods_no known)
+        - "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "G000000314254 가격")
         - "In stock?", "available?" for specific product at specific store
         - Check logistics stock (warehouse availability)
         - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
@@ -96,7 +96,7 @@ class AgentDomain(BaseModel):
         - Select quantity for order (e.g., "4개 주문", "2개")
         - Select store for order
         Examples:
-        - "How much is Ventus S1 evo3?"
+        - "G000000314254 가격 얼마야?" (goods_no known → TRANSACTION)
         - "Is G000000314254 in stock?"
         - "Show me stores near Gangnam"
         - "G000000314254 4개 주문할게" (goods_no known → TRANSACTION)
@@ -109,7 +109,13 @@ class AgentDomain(BaseModel):
         - Recommend tires (vehicle-specific or general)
         - Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
         - Product specifications, features, technology
-        Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?"
+        - **Price for product by NAME (goods_no NOT known)** → DISCOVERY first to find goods_no
+        Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격"
+
+        ⚠️ CRITICAL DISTINCTION for price queries:
+        - "G000000314254 가격" → goods_no KNOWN → TRANSACTION only
+        - "Dynapro HPX 가격" → goods_no NOT known, product NAME only → DISCOVERY (to find goods_no first)
+        - "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY
 
         SUPPORT if user wants:
         - Tire replacement guidance (when to replace, air pressure, maintenance)
