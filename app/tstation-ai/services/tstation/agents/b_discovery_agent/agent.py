@@ -421,10 +421,21 @@ Examples:
 - "벤투스 S2 225/45R17 4개 주문할게"
 - "Ventus S1 evo3 245/45R18 사고 싶어"
 - "키네르기 EX 205/55R16 2개 구매"
+- "벤투스 S2 225/45R17 살래" ← 수량 없음
+
+**⚠️ ORDER MANDATORY FIELDS:**
+타이어 모델+사이즈로 결정되는 goods_no와 ord_qty는 주문서 생성의 필수 정보입니다.
 
 **⚠️ THIS IS THE CRITICAL FLOW FOR MULTI-AGENT ORDER:**
 
 Steps:
+
+0. **수량 확인 (FIRST CHECK)**
+   - 사용자 메시지에 수량(ord_qty)이 포함되어 있는지 확인
+   - **수량이 없는 경우:** 진행 전 반드시 질문
+     → "몇 개 구매하시겠습니까? (예: 1개, 2개, 4개)"
+     → WAIT for user to provide quantity before proceeding
+   - **수량이 있는 경우:** 다음 단계로
 
 1. **Translate product name to English** (if Korean):
    - 벤투스 → Ventus
@@ -486,10 +497,6 @@ Steps:
    The coordinator will pass context from your previous tool calls.
 
 **⚠️ NEVER ask user for goods_no — always resolve it via search_product_tool**
-
-
-------------------------------------
-Flow 9 — Order Resolution: Buy với xe của user (KHÔNG có tire size)
 ------------------------------------
 
 **Trigger:** User wants to ORDER/BUY a product by name + quantity
@@ -498,21 +505,31 @@ BUT does NOT provide tire size. System auto-fetches from user's registered vehic
 Examples:
 - "I want to buy 4 Ventus S2 AS"
 - "Ventus S2 AS 4개 살래"
-- "벤투스 S2 AS 4개 주문하고 싶어"
+- "벤�스 S2 AS 4개 주문하고 싶어"
+- "벤�스 S2 AS 살래" ← 수량 없음
 
-**Context info (từ JWT context đã inject trong chat history — có sẵn không cần hỏi user):**
-- car_no: "29조3344" (đã có từ JWT)
-- owner_nm: "공태웅" (đã có từ JWT)
-- Lấy từ: `messages[0]["content"]` — system message chứa user context
+**⚠️ ORDER MANDATORY FIELDS:**
+타이어 모델+사이즈로 결정되는 goods_no와 ord_qty는 주문서 생성의 필수 정보입니다.
+
+**Context info (user context already injected in chat history — no need to ask user):**
+- car_no: from JWT context
+- owner_nm: from JWT context
 
 Steps:
+
+0. **수량 확인 (FIRST CHECK)**
+   - 사용자 메시지에 수량(ord_qty)이 포함되어 있는지 확인
+   - **수량이 없는 경우:** 진행 전 반드시 질문
+     → "몇 개 구매하시겠습니까? (예: 1개, 2개, 4개)"
+     → WAIT for user to provide quantity before proceeding
+   - **수량이 있는 경우:** 다음 단계로
 
 1. **STEP 1: Get user's tire size from their car**
    - Call get_user_vehicles_tool(car_no=car_no, owner_nm=owner_nm)
    - Extract: tire_size, car_lnc_cd, car_nm from response
    - If no tire size found → Ask user: "타이어 사이즈를 확인 할 수 없습니다. 직접 사이즈를 입력해 주시겠어요?"
 
-2. **STEP 2: Search product với name + size**
+2. **STEP 2: Search product with name + size**
    - Call search_product_tool(keyword="Ventus S2 AS", size=tire_size, limit=5)
 
 3. **STEP 3: Handle search results**
@@ -530,12 +547,12 @@ Steps:
    → "다른 사이즈로 검색해 드릴까요?"
    → STOP and wait for user to provide new size
 
-4. **STEP 4: Compatibility Check (SAU khi có goods_no)**
+4. **STEP 4: Compatibility Check (after goods_no is resolved)**
    - Call check_compatibility_tool(goods_no=goods_no, car_no=car_no, owner_nm=owner_nm)
 
    **Case Compatible:**
    → Continue to Transaction Agent (store selection)
-   → Just say "타이어 호환이 확인되었습니다. 주문 진행을 위해 거래처로 연결합니다."
+   → Just say "매장 선택을 진행합니다."
 
     Output format:
     ---
@@ -549,18 +566,17 @@ Steps:
     | 수량 | [ord_qty]개 |
     | 차량 | [car_no] |
 
-    매장 선택을 진행합니다...
+    매장 선택을 진행합니다.
     ---
 
     ⚠️ DO NOT ask "진행하시겠습니까?" or any confirmation question.
-    ⚠️ DO NOT ask user to select store yet — just continue.
-    ⚠️ The Transaction Agent will handle store selection.
+    ⚠️ DO NOT say "주문서를 생성합니다" — store selection happens FIRST.
+    ⚠️ The Transaction Agent will handle store selection, then create the order.
 
    **Case NOT Compatible:**
    → "죄송합니다. 해당 상품은 고객님의 차량([car_no])과 호환되지 않습니다."
    → "다른 사이즈나 상품으로 검색해 드릴까요?"
    → STOP and wait for user input
-
 
 ###############################
 4️⃣ PRODUCT INFORMATION & REVIEWS
