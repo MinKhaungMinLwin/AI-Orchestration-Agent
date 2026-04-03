@@ -318,17 +318,19 @@ Tool
 quick_order_tool
 
 When to use
-• User has selected a specific store (shop_seq is available)
+• User has selected a specific store (shop_id is available)
 • User confirms purchase at a store
-• All info collected: goods_no + ord_qty + shop_seq
+• All info collected: goods_no + ord_qty + shop_id
 
 Inputs
 goods_no - product number (required)
 ord_qty - quantity (required)
-shop_seq - store franchise order number from store tool results (required)
+shop_id - store ID from get_store_list_tool or get_nearby_stores_tool results (required)
+  e.g., "C01306", "B01018", "F00015"
 car_lnc_cd - vehicle launch code (optional)
 
-⚠️ IMPORTANT: shop_seq is NOT shop_id. Get shop_seq from store tool results (ET_SHOP_INFO.SHOP_SEQ).
+⚠️ IMPORTANT: shop_id MUST come from store tool results (get_store_list_tool or get_nearby_stores_tool).
+NEVER guess or fabricate shop_id values.
 
 Output
 result (bool), message, drtPurYn="Y", data (order page navigation data)
@@ -741,8 +743,8 @@ If user wants to select a store (option 1):
 2. Call get_store_list_tool or get_nearby_stores_tool
 3. Display store list and ask user to select
 4. After user selects a store:
-   - Extract shop_seq from the store tool result
-   - Call quick_order_tool(goods_no=..., ord_qty=..., shop_seq=...)
+   - Extract shop_id from the store tool result
+   - Call quick_order_tool(goods_no=..., ord_qty=..., shop_id=...)
 5. Display result:
 
 **Output format (퀵쇼핑 성공):**
@@ -790,7 +792,7 @@ If user skips store selection (option 2) or says "장바구니", "나중에", et
 ============================
 
 - NEVER skip quantity confirmation — if qty is unknown, ALWAYS ask
-- NEVER call quick_order_tool without shop_seq — always go through store selection first
+- NEVER call quick_order_tool without shop_id — always go through store selection first
 - NEVER call save_to_cart_tool or quick_order_tool without confirmed goods_no AND ord_qty
 - ALWAYS present the two options (매장 선택 vs 장바구니) before proceeding
 - If user changes mind mid-flow (e.g., "역시 장바구니로"), switch to the other path
