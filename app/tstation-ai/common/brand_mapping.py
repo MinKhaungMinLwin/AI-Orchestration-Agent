@@ -46,43 +46,55 @@ def normalize_brand_name(user_input: str) -> str:
     """
     Normalize English brand name to Korean equivalent.
 
+    Only replaces the matched brand portion, preserving the rest of the input
+    (e.g., branch names like "한남점").
+
     Args:
         user_input (str): User-provided brand name (can be English or Korean).
 
     Returns:
-        str: Normalized Korean brand name, or original input if no match found.
+        str: Input with brand portion normalized to Korean, rest preserved.
 
     Example:
         >>> normalize_brand_name("The Tire Shop")
         "더타이어샵"
 
-        >>> normalize_brand_name("T-Station")
-        "티스테이션"
+        >>> normalize_brand_name("T-Station 한남점")
+        "티스테이션 한남점"
+
+        >>> normalize_brand_name("티스테이션 한남점")
+        "티스테이션 한남점"  # Already Korean, brand portion unchanged
 
         >>> normalize_brand_name("강남 매장")
-        "강남 매장"  # Already Korean, return as-is
-
-        >>> normalize_brand_name("unknown brand")
-        "unknown brand"  # No mapping found, return original
+        "강남 매장"  # No brand match, return as-is
     """
     if not user_input or not isinstance(user_input, str):
         return user_input
 
-    # Normalize to lowercase for comparison
-    lower_input = user_input.lower().strip()
+    stripped = user_input.strip()
+    lower_input = stripped.lower()
 
-    # Check for exact matches first
+    # Check for exact matches first (entire input is just a brand name)
     if lower_input in BRAND_MAPPING:
         return BRAND_MAPPING[lower_input]
 
-    # Check for partial matches (substring search)
+    # Check for partial matches — replace only the matched brand portion
     for key, korean in BRAND_MAPPING.items():
-        if key in lower_input:
-            return korean
+        idx = lower_input.find(key)
+        if idx != -1:
+            # Skip if input already contains the Korean brand name
+            if korean in stripped:
+                return stripped
+            # Replace only the matched portion, keep the rest
+            before = stripped[:idx]
+            after = stripped[idx + len(key):]
+            result = (before + korean + after).strip()
+            # Clean up double spaces
+            result = " ".join(result.split())
+            return result
 
     # No match found — return original input
-    # (fuzzy/embedding search can handle it)
-    return user_input
+    return stripped
 
 
 def is_likely_english_brand(text: str) -> bool:
