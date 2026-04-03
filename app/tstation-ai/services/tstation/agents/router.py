@@ -89,17 +89,20 @@ class AgentDomain(BaseModel):
         - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
         - Find stores by NAME (e.g., "find Hankook store")
         - Check store inventory (which stores have this tire)
-        - "Buy", "purchase", "order", "checkout"
+        - "Buy", "purchase", "order", "checkout" WITH goods_no already known
         - Track existing order (provide order number)
-        - Create order draft
+        - "장바구니에 담아줘", "장바구니 저장" (cart save)
         - Book store visit/reservation with specific date/time
+        - Select quantity for order (e.g., "4개 주문", "2개")
+        - Select store for order
         Examples:
         - "How much is Ventus S1 evo3?"
         - "Is G000000314254 in stock?"
         - "Show me stores near Gangnam"
-        - "I want to buy tires"
+        - "G000000314254 4개 주문할게" (goods_no known → TRANSACTION)
         - "Book installation at 2pm"
         - "Track my order 12345"
+        - "장바구니에 담아줘"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
