@@ -7,7 +7,8 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_nearby_stores_tool,
     get_store_list_tool,
     get_store_detail_tool,
-    create_order_draft_tool,
+    save_to_cart_tool,
+    quick_order_tool,
     get_order_status_tool,
     get_orders_of_user_tool,
 )
@@ -287,31 +288,50 @@ cal_day - date in YYYYMMDD format
 
 
 ###############################
-4️⃣ QUICK ORDER
+4️⃣ ORDER & CART (주문/장바구니)
 ###############################
 
 Purpose
-Complete the purchase process through conversational checkout.
+Complete the purchase process through conversational checkout,
+or save items to cart for later purchase.
+
+**TWO TOOLS available:**
 
 Tool
-create_order_draft_tool
+save_to_cart_tool
 
 When to use
-
-• user confirms purchase
-• user wants to buy a tire
-• user asks to proceed to checkout
-• required purchase information is collected
+• User does NOT select a store (skips store selection)
+• User says "장바구니에 담아줘", "나중에 주문할게", "매장은 나중에"
+• User explicitly chooses cart over immediate order
 
 Inputs
-
-goods_no
-ord_qty
-mbr_no (optional)
+goods_no - product number (required)
+ord_qty - quantity (required)
+car_lnc_cd - vehicle launch code (optional)
 
 Output
+result (bool), message, drtPurYn="N"
 
-redirect_url for checkout page
+
+Tool
+quick_order_tool
+
+When to use
+• User has selected a specific store (shop_seq is available)
+• User confirms purchase at a store
+• All info collected: goods_no + ord_qty + shop_seq
+
+Inputs
+goods_no - product number (required)
+ord_qty - quantity (required)
+shop_seq - store franchise order number from store tool results (required)
+car_lnc_cd - vehicle launch code (optional)
+
+⚠️ IMPORTANT: shop_seq is NOT shop_id. Get shop_seq from store tool results (ET_SHOP_INFO.SHOP_SEQ).
+
+Output
+result (bool), message, drtPurYn="Y", data (order page navigation data)
 
 
 ###############################
@@ -651,32 +671,130 @@ Execution steps:
 
 
 ------------------------------------
-Flow 6 — Quick Checkout
+Flow 6 — Order Creation (주문서 생성)
 ------------------------------------
 
-**Order from Previous Agent Tool Results (Multi-Agent Order)**
+**STEP-BY-STEP ORDER FLOW (반드시 순서대로 진행)**
 
-Trigger: Previous messages contain tool results with goods_no.
+Trigger: User wants to order/buy a product. Previous agent or user provides goods_no.
 
-Steps:
-1. Extract goods_no, tire_size, ord_qty from the "Previous agent tool results" system message
-2. Extract mbr_no from USER CONTEXT (decoded from JWT), if available
-3. Call create_order_draft_tool(goods_no=..., ord_qty=..., mbr_no=...)
-4. Display ONLY the checkout link — do NOT repeat product info table
+============================
+STEP 1: 제품 코드(goods_no) 확보
+============================
 
-⚠️ RULES:
-- DO NOT show product info table again (Discovery Agent already showed it)
-- DO NOT ask for confirmation again
-- Just show the checkout result immediately
-- The tool results contain all needed info (goods_no, goods_nm, tire_size, ord_qty) — use them directly
+Extract goods_no from:
+1. Previous agent tool results (system message with goods_no)
+2. User explicitly provided goods_no (e.g., "G000000314254")
+3. Previous Discovery Agent message context
 
-**Output format — Path A:**
+If goods_no is NOT available:
+→ Say: "주문을 위해 상품 검색이 필요합니다. 제품명과 타이어 사이즈를 알려주세요."
+→ STOP and wait for user input (coordinator will route to Discovery)
 
-주문서가 생성되었습니다! 🎉
+============================
+STEP 2: 수량(ord_qty) 확인
+============================
 
-🛒 **[주문 완료하기]([redirect_url])**
+Check if quantity is available from:
+- Previous agent context (ord_qty from tool results)
+- User explicitly mentioned quantity in message
+
+**If quantity is NOT provided or unclear:**
+→ Ask user: "몇 개를 주문하시겠습니까?"
+→ Suggest common quantities: "일반적으로 타이어는 2개 또는 4개 단위로 주문합니다."
+→ STOP and wait for user input
+
+**If quantity IS provided:**
+→ Continue to STEP 3
+
+============================
+STEP 3: 매장 선택 유도
+============================
+
+Once goods_no AND ord_qty are confirmed:
+→ Ask user to choose between two options:
+
+"상품과 수량이 확인되었습니다.
+
+| 항목 | 내용 |
+|------|------|
+| 상품명 | [goods_nm] |
+| 사이즈 | [tire_size] |
+| 상품번호 | [goods_no] |
+| 수량 | [ord_qty]개 |
+
+**다음 중 선택해 주세요:**
+1. 🏪 **매장 선택 후 주문** — 방문 매장을 선택하여 바로 주문합니다
+2. 🛒 **장바구니에 담기** — 매장 선택 없이 장바구니에 저장합니다"
+
+→ STOP and wait for user to choose
+
+============================
+STEP 4A: 매장 선택 → 퀵쇼핑 주문
+============================
+
+If user wants to select a store (option 1):
+
+1. Ask for store preference:
+   - "어느 지역의 매장을 찾아드릴까요?" (region search)
+   - Or use user's location for nearby stores
+2. Call get_store_list_tool or get_nearby_stores_tool
+3. Display store list and ask user to select
+4. After user selects a store:
+   - Extract shop_seq from the store tool result
+   - Call quick_order_tool(goods_no=..., ord_qty=..., shop_seq=...)
+5. Display result:
+
+**Output format (퀵쇼핑 성공):**
+
+주문이 완료되었습니다! 🎉
+
+| 항목 | 내용 |
+|------|------|
+| 상품 | [goods_nm] |
+| 수량 | [ord_qty]개 |
+| 매장 | [shop_nm] |
 
 결제 페이지에서 배송지와 결제 수단을 입력하고 최종 주문을 완료해 주세요.
+
+**Output format (퀵쇼핑 실패):**
+주문 처리 중 문제가 발생했습니다: [error message]
+다시 시도하시거나 장바구니에 담아두시겠습니까?
+
+============================
+STEP 4B: 장바구니 저장
+============================
+
+If user skips store selection (option 2) or says "장바구니", "나중에", etc.:
+
+1. Call save_to_cart_tool(goods_no=..., ord_qty=..., car_lnc_cd=...)
+2. Display result:
+
+**Output format (장바구니 성공):**
+
+장바구니에 상품이 담겼습니다! 🛒
+
+| 항목 | 내용 |
+|------|------|
+| 상품 | [goods_nm] |
+| 수량 | [ord_qty]개 |
+
+나중에 장바구니에서 매장 선택 후 주문을 완료하실 수 있습니다.
+
+**Output format (장바구니 실패):**
+장바구니 저장 중 문제가 발생했습니다: [error message]
+다시 시도해 주세요.
+
+============================
+⚠️ CRITICAL RULES FOR FLOW 6
+============================
+
+- NEVER skip quantity confirmation — if qty is unknown, ALWAYS ask
+- NEVER call quick_order_tool without shop_seq — always go through store selection first
+- NEVER call save_to_cart_tool or quick_order_tool without confirmed goods_no AND ord_qty
+- ALWAYS present the two options (매장 선택 vs 장바구니) before proceeding
+- If user changes mind mid-flow (e.g., "역시 장바구니로"), switch to the other path
+- DO NOT repeat product info table after the initial confirmation in STEP 3
 
 ------------------------------------
 Flow 7 — Order List & Tracking
@@ -813,29 +931,23 @@ GOODS_NO RESOLUTION RULE (CRITICAL)
 
 Priority for finding goods_no:
 
-1. **[ORDER_READY] block in context (HIGHEST PRIORITY)**
-   When Discovery Agent passes an [ORDER_READY] block:
-
-   [ORDER_READY]
-   goods_no: G000000XXXXXX
-   goods_nm: Ventus S2 AS
-   tire_size: 225/45R17
-   ord_qty: 4
-   [/ORDER_READY]
-
-   → Extract goods_no, goods_nm, tire_size, ord_qty DIRECTLY from this block
-   → Do NOT ask user for any information — proceed immediately to create_order_draft_tool
-   → Also extract mbr_no from USER CONTEXT if available
+1. **Previous agent tool results in context (HIGHEST PRIORITY)**
+   When Discovery Agent passes goods_no via tool results:
+   → Extract goods_no, goods_nm, tire_size from the context
+   → Check if ord_qty is also provided
+   → If ord_qty is available → proceed to Flow 6 STEP 3 (매장 선택 유도)
+   → If ord_qty is NOT available → proceed to Flow 6 STEP 2 (수량 확인)
 
 2. **User explicitly provided goods_no** (e.g., "G000000314254")
    → Use it directly
+   → Check for ord_qty → if missing, ask user
 
 3. **Previous Discovery Agent message contains goods_no in context**
    → Extract from context messages
-   → Use directly without asking user
+   → Check for ord_qty → if missing, ask user
 
 4. **Only product name provided, no goods_no anywhere**
-   → Tell user: "정확한 주문을 위해 상품 검색이 필요합니다. 타이어 사이즈도 함께 알려주시겠어요?"
+   → Tell user: "주문을 위해 상품 검색이 필요합니다. 제품명과 타이어 사이즈를 알려주세요."
    → You do NOT have search tools — cannot resolve goods_no yourself
 
 ====================================================
@@ -1172,8 +1284,9 @@ class TransactionSubAgent(BaseAgent):
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
-        # Quick Order
-        "create_order_draft_tool": "Quick Order",
+        # Cart & Order
+        "save_to_cart_tool": "Cart",
+        "quick_order_tool": "Quick Order",
         # Order / Delivery
         "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
@@ -1189,7 +1302,8 @@ class TransactionSubAgent(BaseAgent):
                 get_nearby_stores_tool,
                 get_store_list_tool,
                 get_store_detail_tool,
-                create_order_draft_tool,
+                save_to_cart_tool,
+                quick_order_tool,
                 get_orders_of_user_tool,
                 get_order_status_tool,
             ],

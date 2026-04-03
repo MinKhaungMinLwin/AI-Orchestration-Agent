@@ -69,18 +69,20 @@ def prompt_router() -> str:
     - Transaction Agent says "검색", "확인하기 위해", "상품 번호를 확인" → CONTINUE → DISCOVERY
       (Agent needs Discovery tools: search_product, get_user_vehicles, check_compatibility)
     - Discovery Agent completed product search with goods_no → CONTINUE → TRANSACTION
+      (Transaction Agent will handle: quantity check, store selection, cart/order)
     - Discovery Agent says "다른 사이즈로 검색" → CONTINUE → DISCOVERY
     - Agent asks user to input tire size manually → STOP (wait for user input)
+    - Transaction Agent asks user to select quantity → STOP (wait for user input)
+    - Transaction Agent asks user to choose store vs cart → STOP (wait for user input)
 
     KEY PRINCIPLE: If agent says it will search but has no tools to search → HANDOVER NEEDED.
 
-    ⚠️ CRITICAL RULE — [ORDER_READY] DETECTION:
-        If the previous agent response contains the text "[ORDER_READY]",
-        you MUST return next_action=CONTINUE and next_domain="transaction".
-        This block means the Discovery Agent has resolved the goods_no and
-        the Transaction Agent must create the order draft immediately.
-        Do NOT return STOP when [ORDER_READY] is present, even if the agent
-        also asked a confirmation question.
+    ⚠️ CRITICAL RULE — ORDER FLOW DETECTION:
+        If the Discovery Agent response contains goods_no and mentions
+        "주문 진행" or "연결합니다", you MUST return next_action=CONTINUE
+        and next_domain="transaction". The Transaction Agent will then
+        guide the user through quantity confirmation, store selection,
+        and cart save or quick order.
     """)
 
 
@@ -282,17 +284,27 @@ EXAMPLE QUERIES → FLOW:
 21. "벤투스 S2 225/45R17 4개 주문할게"
     "Order 4 Ventus S2 225/45R17"
     → DISCOVERY → TRANSACTION
-    (Product Name+Size Search → goods_no Resolution → Order Draft)
+    (Product Name+Size Search → goods_no Resolution → Quantity Confirm → Store or Cart)
 
 22. "키네르기 EX 205/55R16 2개 사고 싶어"
     "I want to buy 2 Kinergy EX 205/55R16"
     → DISCOVERY → TRANSACTION
-    (Product Name+Size Search → goods_no Resolution → Order Draft)
+    (Product Name+Size Search → goods_no Resolution → Quantity Confirm → Store or Cart)
 
 23. "Ventus S1 evo3 245/45R18 주문"
     "Order Ventus S1 evo3 245/45R18"
     → DISCOVERY → TRANSACTION
-    (Product Name+Size Search → Order)
+    (Product Name+Size Search → Quantity Confirm → Store or Cart)
+
+24. "장바구니에 담아줘"
+    "Save to cart"
+    → TRANSACTION
+    (Cart Save - goods_no and qty must be in context)
+
+25. "G000000314254 4개 주문할게"
+    "Order 4 of G000000314254"
+    → TRANSACTION
+    (goods_no known → Quantity confirmed → Store or Cart)
 
 ====================================================
 DECISION RULES
@@ -305,11 +317,12 @@ TRANSACTION if user wants:
 - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
 - Find stores by NAME (e.g., "find Hankook store")
 - Check store inventory (which stores have this tire)
-- "Buy", "purchase", "order", "checkout"
+- "Buy", "purchase", "order", "checkout" with goods_no known
 - Track existing order (provide order number)
-- Create order draft
+- "장바구니에 담아줘", "장바구니 저장" (save to cart)
+- Select quantity, select store for order
 - Book store visit/reservation with specific date/time
-Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "I want to buy tires", "Book installation at 2pm", "Track my order 12345"
+Examples: "How much is Ventus S1 evo3?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "G000000314254 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
