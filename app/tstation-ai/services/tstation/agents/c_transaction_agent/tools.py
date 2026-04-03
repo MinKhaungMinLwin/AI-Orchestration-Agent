@@ -264,18 +264,19 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     # Normalize brand name to Korean equivalent
-    if store_nm:
-        store_nm = normalize_brand_name(store_nm)
+    # if store_nm:
+    #     store_nm = normalize_brand_name(store_nm)
     
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s", region_code, store_nm, limit)
 
     try:
-        kwargs = {"limit": limit}
-        if region_code is not None:
-            kwargs["region_code"] = region_code
-        if store_nm is not None:
-            kwargs["store_nm"] = store_nm
-        response = get_store_list(client=get_client(), **kwargs)
+        # kwargs = {"limit": limit}
+        # if region_code is not None:
+        #     kwargs["region_code"] = region_code
+        # if store_nm is not None:
+        #     kwargs["store_nm"] = store_nm
+        # response = get_store_list(client=get_client(), **kwargs)
+        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit)
         if response.parsed is None:
             return _error_response(
                 response.status_code,

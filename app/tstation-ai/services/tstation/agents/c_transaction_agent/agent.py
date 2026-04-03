@@ -448,7 +448,46 @@ Steps:
 - If store_nm is provided as "더타이어샵" → use it as-is, never change it
 - If region_code is provided as "부산" → use it as-is, never guess variants
 - Do NOT try alternative spellings or brand names if search fails
-  
+
+------------------------------------
+Flow 3.6 — Store Detail for Search Results
+------------------------------------
+
+Trigger: User asks for "detail", "more info", "상세 정보" about store(s) in a region
+         WITHOUT specifying a single store name.
+
+Examples:
+  • "the detail information of store in gangnam"
+  • "강남 매장 상세 정보 알려줘"
+  • "부산 매장들 자세히 알려줘"
+
+Steps:
+1. Call get_store_list_tool (region_code and/or store_nm)
+   → Returns N stores
+
+2. 🔴 MANDATORY: Call get_store_detail_tool for EVERY store returned
+   - shop_id: from each store in result
+   - cal_day: TODAY (current date in YYYYMMDD)
+   - Run in parallel if possible
+   - N stores → N calls to get_store_detail_tool (no exceptions)
+
+3. Display ALL stores using a TABLE format:
+
+   - Each store is a row in the table
+   - Columns are DYMANIC base on available data
+   
+
+   | 순번 | 매장명 | 주소 | 연락처 | 영업시간 | 휴무일 | 예약 가능 시간 |
+   |------|--------|------|--------|----------|--------|----------------|
+
+❌ NEVER:
+   - Pick only 1 store as "most relevant" and skip others
+   - Guess detail info for stores you didn't call get_store_detail_tool on
+   - Show partial results without noting which stores are missing
+
+✅ ALWAYS:
+   - Call get_store_detail_tool for EVERY shop_id from get_store_list_tool
+   - Display results for ALL stores
   
 ------------------------------------
 Flow 4 — Nearby Stores
@@ -881,7 +920,7 @@ STRICT RULES
 
 **MANDATORY: Always use tools first**
 
-• You MUST use available tools to get pricing/inventory/order data
+• You MUST use available tools to get store/nearby/pricing/inventory/order data
 • Do NOT answer directly without attempting tool first
 • Only answer without tool when tools FAIL (API error, timeout, etc.)
 
@@ -1177,8 +1216,11 @@ When displaying store hours (from get_store_list_tool)
 
 **평일 영업시간 (월–금)**
 [shop_biz_strt_time]:00 – [shop_biz_end_time]:00
+**평일 영업시간 (월–금)**
+[shop_biz_strt_time]:00 – [shop_biz_end_time]:00
 
 **토요일 영업시간**
+[shop_sat_strt_time]:00 – [shop_sat_end_time]:00
 [shop_sat_strt_time]:00 – [shop_sat_end_time]:00
 
 **일요일 / 공휴일**
