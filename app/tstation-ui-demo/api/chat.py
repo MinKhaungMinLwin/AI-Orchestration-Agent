@@ -34,6 +34,7 @@ def send_chat_message(
     session_id: str | None,
     stream: bool = False,
     access_token: str | None = None,
+    user_info: dict | None = None,
 ) -> Union[str, Generator[dict, None, None]]:
     """
     Send chat message using new API (content only, no messages array).
@@ -43,6 +44,7 @@ def send_chat_message(
         session_id: Session identifier (optional, creates new if None)
         stream: If True, returns streaming generator; if False, returns complete response
         access_token: JWT access token (passed in Authorization header)
+        user_info: Additional user info from UI (e.g., location)
 
     Returns:
         str: Complete response when stream=False
@@ -60,6 +62,8 @@ def send_chat_message(
         "session_id": session_id,
         "stream": stream,
     }
+    if user_info:
+        payload["user_info"] = user_info
 
     if stream:
         return _handle_stream_response(payload, session_id, access_token)

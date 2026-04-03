@@ -39,6 +39,17 @@ if st.session_state.get("tstation_logged_in") and st.session_state.get("access_t
         if user_info.get("car_no"):
             st.sidebar.markdown(f"**Car:** {user_info['car_no']}")
 
+    # Location input
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📍 Location")
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.number_input("X (lon)", value=127.0276, format="%.4f", key="xpos_input")
+    with col2:
+        st.number_input("Y (lat)", value=37.4979, format="%.4f", key="ypos_input")
+    xpos = st.session_state.xpos_input
+    ypos = st.session_state.ypos_input
+
     if st.sidebar.button("Logout", key="logout_btn"):
         st.session_state["tstation_logged_in"] = False
         st.session_state["access_token"] = None
@@ -332,7 +343,8 @@ if prompt:
                         content=prompt,
                         session_id=current_session_id,
                         stream=True,
-                        access_token=access_token
+                        access_token=access_token,
+                        user_info={"location": {"xpos": st.session_state.xpos_input, "ypos": st.session_state.ypos_input}}
                     )
 
                     for chunk in response_generator:
@@ -424,7 +436,8 @@ if prompt:
                         content=prompt,
                         session_id=current_session_id,
                         stream=stream_mode,
-                        access_token=access_token
+                        access_token=access_token,
+                        user_info={"location": {"xpos": st.session_state.xpos_input, "ypos": st.session_state.ypos_input}}
                     )
                 st.markdown(bot_reply)
 
