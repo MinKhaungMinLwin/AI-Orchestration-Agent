@@ -75,7 +75,7 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, reservation, store visit/booking, order tracking, create order draft
+        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, reservation, store visit/booking, order tracking, create order draft, coupon inquiry
         - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
         - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
         - LEADING: Greeting, unclear intent
@@ -95,6 +95,7 @@ class AgentDomain(BaseModel):
         - Book store visit/reservation with specific date/time
         - Select quantity for order (e.g., "4개 주문", "2개")
         - Select store for order
+        - Coupon inquiry ("쿠폰 조회", "내 쿠폰", "받을 수 있는 쿠폰")
         Examples:
         - "G000000314254 가격 얼마야?" (goods_no known → TRANSACTION)
         - "Is G000000314254 in stock?"
@@ -103,6 +104,9 @@ class AgentDomain(BaseModel):
         - "Book installation at 2pm"
         - "Track my order 12345"
         - "장바구니에 담아줘"
+        - "쿠폰 조회해줘"
+        - "내 쿠폰 보여줘"
+        - "받을 수 있는 쿠폰有哪些?"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")

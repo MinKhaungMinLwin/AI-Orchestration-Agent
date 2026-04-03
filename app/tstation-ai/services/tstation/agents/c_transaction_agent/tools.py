@@ -16,6 +16,8 @@ from common.tstation_be_api_client.hkt_api_client.models import NearbyStoreReque
 
 # PRICE AF
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_available_coupons_api_prices_coupons_available_get import sync_detailed as get_available_coupons
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_my_coupons_api_prices_coupons_mine_get import sync_detailed as get_my_coupons
 
 # INVENTORY AF
 from common.tstation_be_api_client.hkt_api_client.api.inventory_af_재고_조회.get_logistics_inventory_api_inventory_logistics_post import sync_detailed as get_logistics_inventory
@@ -92,6 +94,82 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
         return _error_response(None, str(e), "Failed to get product price")
+
+
+@tool
+def get_available_coupons_tool(lang_cd: str = "ko"):
+    """
+    다운로드 가능 쿠폰 조회.
+
+    현재 사용자가 다운로드 가능한 쿠폰 목록을 조회합니다.
+
+    Use this tool when:
+    - User asks about coupons available for download
+    - User asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons"
+
+    Args:
+        lang_cd (str): Language code (default: 'ko' for Korean).
+
+    Example Inputs:
+        - {"lang_cd": "ko"}
+        - {"lang_cd": "ko"}
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][get_available_coupons_tool] Called with: lang_cd=%s", lang_cd)
+
+    try:
+        response = get_available_coupons(client=get_client(), lang_cd=lang_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get available coupons"
+            )
+        logger.info("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_available_coupons_tool] Failed")
+        return _error_response(None, str(e), "Failed to get available coupons")
+
+
+@tool
+def get_my_coupons_tool(lang_cd: str = "ko"):
+    """
+    내 쿠폰 목록 조회.
+
+    사용자가 보유한 사용 가능한 쿠폰 목록을 조회합니다.
+
+    Use this tool when:
+    - User asks about their owned coupons
+    - User asks "내 쿠폰", "我的优惠券", "my coupons"
+
+    Args:
+        lang_cd (str): Language code (default: 'ko' for Korean).
+
+    Example Inputs:
+        - {"lang_cd": "ko"}
+        - {"lang_cd": "ko"}
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][get_my_coupons_tool] Called with: lang_cd=%s", lang_cd)
+
+    try:
+        response = get_my_coupons(client=get_client(), lang_cd=lang_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get my coupons"
+            )
+        logger.info("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_coupons_tool] Failed")
+        return _error_response(None, str(e), "Failed to get my coupons")
 
 
 # =====================================================

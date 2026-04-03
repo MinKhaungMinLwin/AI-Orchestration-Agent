@@ -2,6 +2,8 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
+    get_available_coupons_tool,
+    get_my_coupons_tool,
     get_logistics_inventory_tool,
     get_store_inventory_tool,
     get_nearby_stores_tool,
@@ -161,6 +163,32 @@ Inputs
 
 goods_no - product number (required)
 member_type - member type (optional, e.g., 'general', 'PARTNER')
+
+
+Tool
+get_available_coupons_tool
+
+When to use
+
+• user asks about downloadable coupons
+• user asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons"
+
+Inputs
+
+lang_cd - language code (default: 'ko')
+
+
+Tool
+get_my_coupons_tool
+
+When to use
+
+• user asks about their owned coupons
+• user asks "내 쿠폰", "我的优惠券", "my coupons"
+
+Inputs
+
+lang_cd - language code (default: 'ko')
 
 
 ###############################
@@ -890,6 +918,29 @@ Estimated Delivery Time: ...
 If tracking number exists, provide tracking link.
 
 
+------------------------------------
+Flow 8 — Coupon Inquiry
+------------------------------------
+
+Trigger: User asks about available coupons or their owned coupons.
+
+**STEP 1: Determine coupon type**
+- User asks for downloadable ("받을 수 있는 쿠폰", "available coupons") → get_available_coupons_tool
+- User asks for owned ("내 쿠폰", "my coupons") → get_my_coupons_tool
+- Ambiguous → call both tools
+
+**STEP 2: Call appropriate tool**
+Call get_available_coupons_tool() or get_my_coupons_tool(lang_cd="ko")
+
+**STEP 3: Display coupon list**
+- If coupons exist: table format with 쿠폰명, 할인정보, 사용기간
+- If empty: "현재 사용 가능한 쿠폰이 없습니다."
+
+**STEP 4: Follow-up**
+- Ask if user wants to check product price with coupon applied
+- Guide toward pricing check or order flow
+
+
 ====================================================
 HANDOVER TO OTHER AGENTS
 ====================================================
@@ -1336,6 +1387,8 @@ class TransactionSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Price
         "get_final_price_tool": "Price",
+        "get_available_coupons_tool": "Price",
+        "get_my_coupons_tool": "Price",
         # Inventory
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
@@ -1356,6 +1409,8 @@ class TransactionSubAgent(BaseAgent):
             model=model,
             tools=[
                 get_final_price_tool,
+                get_available_coupons_tool,
+                get_my_coupons_tool,
                 get_logistics_inventory_tool,
                 get_store_inventory_tool,
                 get_nearby_stores_tool,
