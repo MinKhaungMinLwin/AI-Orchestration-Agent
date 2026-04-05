@@ -17,12 +17,12 @@ from services.tstation.agents.router import (
     transaction_subagent,
     support_subagent,
     ui_template_subagent,
+    QC_LLM,
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 
 from services.tstation.agents.g_qc_agent.agent import stream_qc
-from langchain_litellm import ChatLiteLLM 
 
 logger = logging.getLogger(__name__)
 
@@ -776,14 +776,6 @@ class TStationChatServiceV2:
         source_data_chunks = []
         original_message_events = [] # Hold message events to sync history
         coordinator_done_event = None # Hold the premature [DONE] event
-        
-        from langchain_litellm import ChatLiteLLM
-        llm = ChatLiteLLM(
-            api_base=settings.AI_GATEWAY_BASE_URL,
-            api_key=settings.AI_GATEWAY_API_KEY,
-            model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
-            temperature=0.0 
-        )
 
         user_query = ""
         for msg in reversed(messages):
@@ -822,30 +814,37 @@ class TStationChatServiceV2:
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        # 2. RUN THE STRICT QC AGENT
-        if draft_response.strip():
-            source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
-            
+        # 2. RUN THE STRICT QC AGENT (only when tool data exists)
+        if draft_response.strip() and source_data_chunks:
+            source_data_str = "\n\n".join(source_data_chunks)
+
             yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
-            
+
             final_qc_text = ""
             try:
-                for chunk in stream_qc(llm, user_query, draft_response, source_data_str):
+                for chunk in stream_qc(QC_LLM, user_query, draft_response, source_data_str):
                     final_qc_text += chunk
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
             except Exception as e:
                 logger.exception(f"[QC_AGENT] Failed: {e}")
                 final_qc_text = draft_response # fallback
                 yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
-                
+
             # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
             if original_message_events:
                 final_msg_event = original_message_events[-1]
                 final_msg_event["content"] = final_qc_text
                 yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+        elif draft_response.strip():
+            # No tool data: skip QC, pass draft directly to client
+            yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
+            if original_message_events:
+                final_msg_event = original_message_events[-1]
+                final_msg_event["content"] = draft_response
+                yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
         else:
             # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
-            # if they actually contain text. We DO NOT want to save empty assistant 
+            # if they actually contain text. We DO NOT want to save empty assistant
             # messages to Redis, as it pollutes the LLM's future context window.
             for msg_event in original_message_events:
                 if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
