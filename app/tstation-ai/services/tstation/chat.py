@@ -23,6 +23,7 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 
 from services.tstation.agents.g_qc_agent.agent import stream_qc
+from services.tstation.agents.g_qc_agent.source_filter import filter_source_data
 
 logger = logging.getLogger(__name__)
 
@@ -819,7 +820,9 @@ class TStationChatServiceV2:
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 output_data = event.get("output", "")
                 if output_data:
-                    source_data_chunks.append(f"Tool [{event.get('tool', 'Unknown')}]:\n{output_data}")
+                    tool_name = event.get("tool", "Unknown")
+                    filtered = filter_source_data(tool_name, output_data)
+                    source_data_chunks.append(f"Tool [{tool_name}]:\n{filtered}")
                 continue
                 
             # --- INTERCEPT EARLY DONE EVENT ---
