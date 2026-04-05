@@ -1,0 +1,97 @@
+version: "3.11"
+
+services:
+  # === API ===
+  tstation-ai:
+    build: ../app/tstation-ai
+    expose:
+      - 8000
+    volumes:
+      # Shared files
+      - shared-files:/app/static/public/files
+      # Log folder
+      - log-folder:/app/logs
+    env_file:
+      - ../.env
+      - ../.env.docker
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - project-net
+
+  # === Redis Conversation Management ===
+  redis-conversation-management:
+    image: redis
+    command: redis-server --requirepass ${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}
+    expose:
+      - 6379
+    volumes:
+      - ./volumes/${ENV}/redis:/data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - project-net
+
+  # === APP UI ===
+  tstation-ui-demo:
+    build: ../app/tstation-ui-demo
+    expose:
+      - 3000
+    env_file:
+      - ../.env
+    restart: unless-stopped
+    networks:
+      - project-net
+
+  # === Monitoring Agent - Grafana Alloy ===
+  monitor-agent:
+    image: grafana/alloy:latest
+    hostname: monitor-agent
+    command: >
+      run --server.http.listen-addr=0.0.0.0:12345
+      --storage.path=/var/lib/alloy/data
+      /etc/alloy/config.alloy
+    depends_on:
+      - tstation-ai
+    env_file:
+      - ../.env
+    expose:
+      - 12345
+    volumes:
+      - ./config/conf-grafana.alloy:/etc/alloy/config.alloy
+      # Log folder
+      - log-folder:/app/logs
+      # Node Exporter metrics
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    networks:
+      - project-net
+
+# === Network ===
+networks:
+  project-net:
+    name: ${DOCKER_NETWORK_NAME}
+    driver: bridge
+
+# === Volumes ===
+volumes:
+  shared-files:
+    external: true
+    name: ${DOCKER_SHARED_FILES_NAME}
+
+  log-folder:
+    external: true
+    name: ${DOCKER_LOG_FOLDER_NAME}

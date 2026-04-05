@@ -1,0 +1,30 @@
+version: "3.11"
+
+services:
+  # === AI Gateway ===
+  ai-gateway:
+    image: ghcr.io/berriai/litellm:main-stable
+    volumes:
+      - ./config/llm/conf-gateway.yaml:/app/config.yaml
+    command: ["--config=/app/config.yaml", "--port", "8000"]
+    expose:
+      - 8000
+    env_file:
+      - ../.env
+    environment:
+      - LITELLM_LOG=${LOG_LEVEL}
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health/liveliness || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - project-net
+
+# === Network ===
+networks:
+  project-net:
+    name: ${DOCKER_NETWORK_NAME}
+    driver: bridge
