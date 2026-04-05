@@ -784,6 +784,7 @@ class TStationChatServiceV2:
                 break
 
         # 1. Iterate through the main coordinator stream
+        yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
         for event in _coordinator.stream(messages):
             event_type = event.get("type")
             
