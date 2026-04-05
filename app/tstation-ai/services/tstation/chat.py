@@ -653,6 +653,21 @@ class StreamingMultiAgentCoordinator:
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
 
 
+import re
+
+_FACTUAL_CLAIM_PATTERN = re.compile(
+    r'\d{1,3}(?:,\d{3})*\s*원'   # 가격 패턴 (e.g. 150,000원, 15000원)
+    r'|goods_no'                   # 상품 ID
+    r'|shop(?:Seq|_id|Id)'         # 매장 ID
+    r'|재고|할인|%\s*할인'          # 재고/할인
+    r'|G\d{9,}',                   # goods_no 형식 (e.g. G000000314254)
+    re.IGNORECASE,
+)
+
+def _has_factual_claims(text: str) -> bool:
+    """Check if draft contains factual commerce claims that need QC verification."""
+    return bool(_FACTUAL_CLAIM_PATTERN.search(text))
+
 # Singleton coordinator instance
 _coordinator = StreamingMultiAgentCoordinator()
 
@@ -815,34 +830,40 @@ class TStationChatServiceV2:
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        # 2. RUN THE STRICT QC AGENT (only when tool data exists)
-        if draft_response.strip() and source_data_chunks:
-            source_data_str = "\n\n".join(source_data_chunks)
+        # 2. RUN THE STRICT QC AGENT
+        # - Tool data exists: verify draft against source data
+        # - No tool data but draft has factual claims: QC catches hallucinations
+        #   (prompt rule: "Source Data is empty → draft MUST NOT claim prices/stock/store details")
+        # - No tool data and no factual claims (greetings, FAQ): skip QC
+        if draft_response.strip():
+            source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
+            needs_qc = bool(source_data_chunks) or _has_factual_claims(draft_response)
 
-            yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+            if needs_qc:
+                yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
 
-            final_qc_text = ""
-            try:
-                for chunk in stream_qc(QC_LLM, user_query, draft_response, source_data_str):
-                    final_qc_text += chunk
-                    yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
-            except Exception as e:
-                logger.exception(f"[QC_AGENT] Failed: {e}")
-                final_qc_text = draft_response # fallback
-                yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
+                final_qc_text = ""
+                try:
+                    for chunk in stream_qc(QC_LLM, user_query, draft_response, source_data_str):
+                        final_qc_text += chunk
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    logger.exception(f"[QC_AGENT] Failed: {e}")
+                    final_qc_text = draft_response # fallback
+                    yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
 
-            # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
-            if original_message_events:
-                final_msg_event = original_message_events[-1]
-                final_msg_event["content"] = final_qc_text
-                yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
-        elif draft_response.strip():
-            # No tool data: skip QC, pass draft directly to client
-            yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
-            if original_message_events:
-                final_msg_event = original_message_events[-1]
-                final_msg_event["content"] = draft_response
-                yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+                # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
+                if original_message_events:
+                    final_msg_event = original_message_events[-1]
+                    final_msg_event["content"] = final_qc_text
+                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+            else:
+                # No factual claims (greetings, FAQ): skip QC, pass draft directly
+                yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
+                if original_message_events:
+                    final_msg_event = original_message_events[-1]
+                    final_msg_event["content"] = draft_response
+                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
         else:
             # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
             # if they actually contain text. We DO NOT want to save empty assistant
