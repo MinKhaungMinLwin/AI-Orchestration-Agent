@@ -57,7 +57,7 @@ def list_product_tool(
 
 @tool
 def list_voucher_tool(
-    items: Annotated[list[dict], "List of vouchers. Each: description (str), nameVoucher (str), discount (str), dateVoucher (str), myCouponLink (str), downloadLink (str)"]
+    items: Annotated[list[dict], "List of vouchers. Each: nameVoucher (str), discount (str), dateVoucher (str), downloadLink (str)"]
 ) -> dict:
     """Render voucher list cards.
 
@@ -65,16 +65,24 @@ def list_voucher_tool(
         items: List of voucher objects.
 
     Field Details:
-        - description (str): Voucher description. Rule: required, non-empty string.
-        - nameVoucher (str): Voucher name. Rule: required, non-empty string.
-        - discount (str): Discount value. Rule: required, string (e.g., "10%", "50,000원").
-        - dateVoucher (str): Expiry date. Rule: required, string format (e.g., "2024-12-31").
-        - myCouponLink (str): Link to view my coupons. Rule: optional, valid URL string.
-        - downloadLink (str): Link to download voucher. Rule: optional, valid URL string.
+        - nameVoucher (str): Voucher name (source: cpn_nm). Rule: required, non-empty string.
+        - discount (str): Discount value (source: rt_amt_val). Rule: required, string (e.g., "10%", "50,000원").
+        - dateVoucher (str): Expiry date (source: use_end_dtime). Rule: required, string format (e.g., "2024-12-31").
+        - downloadLink (str): Link to download voucher. Rule: optional, valid URL string. If BE returns null, mock the link.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"vouchers": items}}
     """
+
+    # Static myCouponLink injected into each voucher
+    _MY_COUPON_LINK = {
+        "pc": "https://wwwqa.tstation.com/mypage/tstation/coupon/couponList",
+        "mobile": "https://mqa.tstation.com/coupon/myCouponList",
+    }
+
+    # Inject static myCouponLink into each item
+    for item in items:
+        item["myCouponLink"] = _MY_COUPON_LINK
     return _success_response(200, {"vouchers": items})
 
 

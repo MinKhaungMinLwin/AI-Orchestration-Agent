@@ -648,6 +648,7 @@ class StreamingMultiAgentCoordinator:
 
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
+        yield {"type": "DONE"}
 
 
 # Singleton coordinator instance
