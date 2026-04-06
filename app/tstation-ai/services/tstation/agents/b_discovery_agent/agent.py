@@ -4,6 +4,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
     get_user_vehicles_tool,
+    get_my_cars_tool,
     search_car_model_tool,
     search_youtube_video_tool,
 )
@@ -119,6 +120,24 @@ Inputs
 
 car_no - vehicle registration number (required)
 owner_nm - owner name (required)
+
+
+
+Tool
+get_my_cars_tool
+
+When to use
+
+• user asks to view their registered vehicles (by member number)
+• user says "my cars", "xe của tôi", "내 차 목록"
+
+**PRIORITY RULE:**
+- If user provides mbr_no → use that (highest priority)
+- If no user input → use mbr_no from user information (JWT)
+
+Inputs
+
+mbr_no - member number (required)
 
 
 
@@ -687,6 +706,45 @@ When handing over to Transaction Agent (for price, order, etc.):
 → The coordinator will pass the context from your tool calls to Transaction Agent
 
 
+------------------------------------
+Flow 11 — My Registered Vehicles (내 등록 차량 조회)
+------------------------------------
+
+**Trigger:** User asks to view their registered vehicles.
+
+Examples:
+- "xe của tôi là gì?" (Vietnamese: "what are my cars?")
+- "내 차 목록 보여줘"
+- "my registered vehicles"
+- "xem xe đã đăng ký"
+
+**PRIORITY RULE for mbr_no:**
+1. User provides mbr_no in message → use that (user input)
+2. User does not provide → use mbr_no from user information (JWT)
+
+**Steps:**
+
+1. **STEP 1: Determine mbr_no**
+   - CHECK: Does user provide mbr_no in current message?
+     - YES → use user-provided mbr_no
+     - NO → check user information (JWT) for mbr_no
+   - If neither available → ask user for mbr_no
+
+2. **STEP 2: Call get_my_cars_tool**
+   - Call get_my_cars_tool(mbr_no=mbr_no)
+
+3. **STEP 3: Display Results**
+   - Show vehicles in numbered list with key info:
+     - car_nm (차량명)
+     - car_no (차량번호)
+     - tire_size_fr / tire_size_re (전/후륜 타이어 사이즈)
+   - Ask user to SELECT a vehicle for further action
+
+4. **STEP 4: After Selection (optional)**
+   - If user selected a vehicle for tire recommendation → proceed to RECOMMENDATION ENGINE
+   - If user just wanted to view → stop after showing list
+
+
 ====================================================
 STRICT RULES
 ====================================================
@@ -886,6 +944,7 @@ class DiscoverySubAgent(BaseAgent):
         "check_compatibility_tool": "Vehicle & Compatibility",
         "search_product_tool": "Product Search",
         "get_user_vehicles_tool": "Vehicle & Compatibility",
+        "get_my_cars_tool": "Vehicle & Compatibility",
         "search_car_model_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
@@ -903,6 +962,7 @@ class DiscoverySubAgent(BaseAgent):
                 check_compatibility_tool,
                 search_product_tool,
                 get_user_vehicles_tool,
+                get_my_cars_tool,
                 search_car_model_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool,

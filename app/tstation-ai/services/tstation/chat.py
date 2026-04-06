@@ -346,7 +346,8 @@ DISCOVERY if user wants:
 - Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
 - Product specifications, features, technology
 - **Price for product by NAME (goods_no NOT known)** → DISCOVERY to find goods_no
-Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격"
+- View user's registered vehicles (list my cars, my vehicle list)
+Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles"
 
 ⚠️ CRITICAL DISTINCTION for price queries:
 - "G000000314254 가격" → goods_no KNOWN → TRANSACTION only

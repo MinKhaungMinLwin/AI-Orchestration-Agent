@@ -23,6 +23,10 @@ from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 
 
+# Member Car Info
+from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
+
+
 def get_client() -> AuthenticatedClient:
     """Get authenticated client for tstation-be API."""
     return get_tstation_be_client()
@@ -35,6 +39,7 @@ DOMAIN_TOOL_MAP = {
         "check_compatibility",
         "search_product",
         "get_user_vehicles",
+        "get_my_cars",
         "search_car_model",
 
         # Product Recommendation
@@ -240,6 +245,40 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
         return _error_response(None, str(e), "Failed to get user vehicles")
+
+
+@tool
+def get_my_cars_tool(mbr_no: str):
+    """
+    Get user's registered vehicles (by member number).
+
+    This API retrieves all vehicles registered under the given member number.
+
+    Args:
+        mbr_no (str): Member number.
+
+    Example Inputs:
+        - {"mbr_no": "M000000001"}
+        - {"mbr_no": "M123456789"}
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
+
+    try:
+        response = get_member_cars(client=get_client(), mbr_no=mbr_no)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get member cars"
+            )
+        logger.info("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_cars_tool] Failed")
+        return _error_response(None, str(e), "Failed to get member cars")
 
 
 @tool

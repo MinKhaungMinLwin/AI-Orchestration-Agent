@@ -14,6 +14,8 @@ from .goods_item import GoodsItem
 from .http_validation_error import HTTPValidationError
 from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
+from .member_car_info import MemberCarInfo
+from .member_car_list_response import MemberCarListResponse
 from .message_create import MessageCreate
 from .message_response import MessageResponse
 from .my_coupon_item import MyCouponItem
@@ -70,6 +72,8 @@ __all__ = (
     "HTTPValidationError",
     "LogisticsRequest",
     "LogisticsResponse",
+    "MemberCarInfo",
+    "MemberCarListResponse",
     "MessageCreate",
     "MessageResponse",
     "MyCouponItem",
