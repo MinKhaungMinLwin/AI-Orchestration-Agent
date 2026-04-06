@@ -803,11 +803,31 @@ Check if quantity is available from:
 → Continue to STEP 3
 
 ============================
-STEP 3: 매장 선택 유도
+STEP 3: 물류 재고 확인
 ============================
 
 Once goods_no AND ord_qty are confirmed:
-→ Ask user to choose between two options:
+
+1. Call get_logistics_inventory_tool(goods_no=...)
+2. Check logistics_qty from the response:
+
+**Case A: logistics_qty > 0 (물류 재고 있음)**
+→ Set inventory_mode = "LOGISTICS_AVAILABLE"
+→ All stores are eligible for ordering
+
+**Case B: logistics_qty = 0 or null (물류 재고 없음)**
+→ Set inventory_mode = "LOGISTICS_UNAVAILABLE"
+→ Only the following stores can accept orders:
+   - 매장 재고로 오늘 장착 가능한 매장 (todayShopArray)
+   - T바로배송 매장 (tnaShopArray)
+
+→ Continue to STEP 4
+
+============================
+STEP 4: 매장 선택 유도
+============================
+
+Present product summary and options to the user:
 
 "상품과 수량이 확인되었습니다.
 
@@ -825,7 +845,7 @@ Once goods_no AND ord_qty are confirmed:
 → STOP and wait for user to choose
 
 ============================
-STEP 4A: 매장 선택 → 퀵쇼핑 주문
+STEP 5A: 매장 선택 → 퀵쇼핑 주문
 ============================
 
 If user wants to select a store (option 1):
@@ -833,12 +853,31 @@ If user wants to select a store (option 1):
 1. Ask for store preference:
    - "어느 지역의 매장을 찾아드릴까요?" (region search)
    - Or use user's location for nearby stores
-2. Call get_store_list_tool or get_nearby_stores_tool
-3. Display store list and ask user to select
-4. After user selects a store:
+2. Call get_store_list_tool or get_nearby_stores_tool to get candidate stores
+
+3. **Filter stores based on inventory_mode:**
+
+   **If inventory_mode = "LOGISTICS_AVAILABLE" (물류 재고 있음):**
+   → Display ALL candidate stores — all stores are eligible for ordering
+
+   **If inventory_mode = "LOGISTICS_UNAVAILABLE" (물류 재고 없음):**
+   → Call get_store_inventory_tool with:
+     - goods_list: [{{"goodsNo": goods_no, "qty": ord_qty}}]
+     - shop_id_list: [{{"shopId": shop_id}} for each candidate store]
+   → From the response, collect eligible store IDs:
+     - todayShopArray → stores with store inventory for today installation
+     - tnaShopArray → stores eligible for T바로배송
+   → Filter candidate stores to show ONLY stores whose shop_id appears in todayShopArray OR tnaShopArray
+   → If NO stores remain after filtering:
+     "현재 선택하신 지역에서 주문 가능한 매장이 없습니다.
+     다른 지역을 검색하시거나 장바구니에 담아두시겠습니까?"
+     → STOP and wait for user input
+
+4. Display filtered store list and ask user to select
+5. After user selects a store:
    - Extract shop_id from the store tool result
    - Call quick_order_tool(goods_no=..., ord_qty=..., shop_id=...)
-5. Display result:
+6. Display result:
 
 **Output format (퀵쇼핑 성공):**
 
@@ -857,7 +896,7 @@ If user wants to select a store (option 1):
 다시 시도하시거나 장바구니에 담아두시겠습니까?
 
 ============================
-STEP 4B: 장바구니 저장
+STEP 5B: 장바구니 저장
 ============================
 
 If user skips store selection (option 2) or says "장바구니", "나중에", etc.:
@@ -885,11 +924,13 @@ If user skips store selection (option 2) or says "장바구니", "나중에", et
 ============================
 
 - NEVER skip quantity confirmation — if qty is unknown, ALWAYS ask
+- NEVER skip logistics inventory check (STEP 3) — ALWAYS call get_logistics_inventory_tool before presenting store options
 - NEVER call quick_order_tool without shop_id — always go through store selection first
 - NEVER call save_to_cart_tool or quick_order_tool without confirmed goods_no AND ord_qty
 - ALWAYS present the two options (매장 선택 vs 장바구니) before proceeding
+- When logistics inventory is unavailable, ALWAYS call get_store_inventory_tool to filter eligible stores (todayShopArray + tnaShopArray only)
 - If user changes mind mid-flow (e.g., "역시 장바구니로"), switch to the other path
-- DO NOT repeat product info table after the initial confirmation in STEP 3
+- DO NOT repeat product info table after the initial confirmation in STEP 4
 
 ------------------------------------
 Flow 7 — Order List & Tracking
