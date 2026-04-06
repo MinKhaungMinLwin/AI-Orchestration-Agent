@@ -165,6 +165,18 @@
             "description": "매장명 명칭 검색"
           },
           {
+            "name": "all_my_t_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "True 이면 all my T 매장만 조회",
+              "default": false,
+              "title": "All My T Only"
+            },
+            "description": "True 이면 all my T 매장만 조회"
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -2710,6 +2722,12 @@
             "type": "number",
             "title": "Distance Km",
             "description": "거리 (km)"
+          },
+          "is_all_my_t": {
+            "type": "boolean",
+            "title": "Is All My T",
+            "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
           }
         },
         "type": "object",
@@ -2751,6 +2769,12 @@
             ],
             "title": "Svc Codes",
             "description": "서비스 구분 코드 목록 (ET_SHOP_ITEM_SVC_INFO.SHOP_ITEM_SVC_SCT_CD). 입력된 코드 중 하나라도 보유한 매장을 반환합니다. 예: [\"101\", \"102\"] → 타이어(오프라인) 또는 경정비 서비스 보유 매장"
+          },
+          "all_my_t_only": {
+            "type": "boolean",
+            "title": "All My T Only",
+            "description": "True 이면 all my T 매장만 조회 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
           }
         },
         "type": "object",
@@ -3785,6 +3809,12 @@
             "title": "Tel No",
             "description": "전화번호"
           },
+          "is_all_my_t": {
+            "type": "boolean",
+            "title": "Is All My T",
+            "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
+          },
           "holiday": {
             "anyOf": [
               {
@@ -3947,6 +3977,12 @@
             ],
             "title": "Shop Nm",
             "description": "매장명"
+          },
+          "is_all_my_t": {
+            "type": "boolean",
+            "title": "Is All My T",
+            "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
           },
           "addr_base": {
             "anyOf": [

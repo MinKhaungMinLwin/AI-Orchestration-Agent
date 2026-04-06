@@ -461,16 +461,27 @@ When user searches for a store by name, region, or both:
 **✅ Region and store name parameters are ALREADY NORMALIZED by the system**
 **Do NOT attempt to extract or convert them yourself**
 
+**✅ "all my T" 매장 필터 규칙:**
+사용자가 아래 표현 중 하나라도 사용하면 all_my_t_only=True 로 설정하세요:
+- "all my T", "all my t", "All My T"
+- "올마이티", "올마이t", "올마이T"
+- "allMyT", "allmyt"
+
+해당 매장 결과에는 is_all_my_t 필드가 포함됩니다.
+is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그를 표시하세요.
+
 Steps:
 1. You receive already-prepared parameters:
    - region_code (if provided): already in Korean (e.g., '강남', '부산')
    - store_nm (if provided): already in Korean (e.g., '더타이어샵', '티스테이션')
+   - all_my_t_only (if user requests "all my T" stores): True
 
 2. Use parameters EXACTLY AS PROVIDED:
-   - Call get_store_list_tool(region_code, store_nm) with the values provided
+   - Call get_store_list_tool(region_code, store_nm, all_my_t_only=all_my_t_only) with the values provided
    - Do NOT modify, translate, or guess alternative names
 
 3. Display results in store table format (100% Korean)
+   - For stores with is_all_my_t=true, show "[all my T]" tag next to store name
 
 **Important:**
 - If store_nm is provided as "더타이어샵" → use it as-is, never change it

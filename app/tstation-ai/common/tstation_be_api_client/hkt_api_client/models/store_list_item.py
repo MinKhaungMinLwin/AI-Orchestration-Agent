@@ -17,6 +17,7 @@ class StoreListItem:
     Attributes:
         shop_id (str): 매장 ID
         shop_nm (None | str | Unset): 매장명
+        is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
         addr_base (None | str | Unset): 일반주소
         addr_dtl (None | str | Unset): 일반주소
         road_addr_base (None | str | Unset): 도로명주소
@@ -31,6 +32,7 @@ class StoreListItem:
 
     shop_id: str
     shop_nm: None | str | Unset = UNSET
+    is_all_my_t: bool | Unset = False
     addr_base: None | str | Unset = UNSET
     addr_dtl: None | str | Unset = UNSET
     road_addr_base: None | str | Unset = UNSET
@@ -51,6 +53,8 @@ class StoreListItem:
             shop_nm = UNSET
         else:
             shop_nm = self.shop_nm
+
+        is_all_my_t = self.is_all_my_t
 
         addr_base: None | str | Unset
         if isinstance(self.addr_base, Unset):
@@ -121,6 +125,8 @@ class StoreListItem:
         )
         if shop_nm is not UNSET:
             field_dict["shop_nm"] = shop_nm
+        if is_all_my_t is not UNSET:
+            field_dict["is_all_my_t"] = is_all_my_t
         if addr_base is not UNSET:
             field_dict["addr_base"] = addr_base
         if addr_dtl is not UNSET:
@@ -157,6 +163,8 @@ class StoreListItem:
             return cast(None | str | Unset, data)
 
         shop_nm = _parse_shop_nm(d.pop("shop_nm", UNSET))
+
+        is_all_my_t = d.pop("is_all_my_t", UNSET)
 
         def _parse_addr_base(data: object) -> None | str | Unset:
             if data is None:
@@ -251,6 +259,7 @@ class StoreListItem:
         store_list_item = cls(
             shop_id=shop_id,
             shop_nm=shop_nm,
+            is_all_my_t=is_all_my_t,
             addr_base=addr_base,
             addr_dtl=addr_dtl,
             road_addr_base=road_addr_base,

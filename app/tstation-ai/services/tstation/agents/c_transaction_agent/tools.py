@@ -259,7 +259,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
 # =====================================================
 
 @tool
-def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 20.0, svc_codes: List[str] | None = None):
+def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 20.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False):
     """
     Get nearby stores.
 
@@ -273,6 +273,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
         svc_codes (List[str] | None): Service category codes.
             Returns stores that have ANY of the specified services.
             Example: ["101", "102"]
+        all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
+            Default: False.
 
     Example Inputs:
         - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "svc_codes": ["101", "102"]}
@@ -282,8 +284,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, radius_km=radius_km, svc_codes=svc_codes)
-    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s", user_xpos, user_ypos, radius_km, svc_codes)
+    body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, radius_km=radius_km, svc_codes=svc_codes, all_my_t_only=all_my_t_only)
+    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, all_my_t_only=%s", user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only)
 
     try:
         response = get_nearby_stores(client=get_client(), body=body)
@@ -301,7 +303,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 
 
 @tool
-def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20):
+def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20, all_my_t_only: bool = False):
     """
     Get store list by region and/or store name.
 
@@ -317,6 +319,15 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     When the user mentions BOTH a location and a store name, pass BOTH parameters simultaneously.
     Do NOT put the store name into region_code, or the region into store_nm.
 
+    ⚠️ "all my T" 매장 필터 규칙:
+    사용자가 아래 표현 중 하나라도 사용하면 all_my_t_only=True 로 설정하세요:
+    - "all my T", "all my t", "All My T"
+    - "올마이티", "올마이t", "올마이T"
+    - "allMyT", "allmyt"
+
+    해당 매장 결과에는 is_all_my_t 필드가 포함됩니다.
+    is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그를 표시하세요.
+
     Args:
         region_code (str | None): Geographic region keyword — Korean city, district, or neighborhood.
             Used for ADDR_BASE / ADDR_DTL LIKE search.
@@ -324,6 +335,8 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         store_nm (str | None): Store or business name keyword.
             Examples: '티스테', '타이'
         limit (int): Maximum number of stores to return (default 20).
+        all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
+            Default: False.
 
     Example Inputs:
         # User says "강남에 티스테 찾아줘" → pass BOTH
@@ -338,14 +351,17 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         # User says "극동상사 찾아줘" → store name only
         - {"region_code": None, "store_nm": "극동상사", "limit": 20}
 
+        # User says "all my T 매장" → all_my_t_only=True
+        - {"region_code": None, "store_nm": None, "limit": 20, "all_my_t_only": True}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     # Normalize brand name to Korean equivalent
     # if store_nm:
     #     store_nm = normalize_brand_name(store_nm)
-    
-    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s", region_code, store_nm, limit)
+
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, all_my_t_only=%s", region_code, store_nm, limit, all_my_t_only)
 
     try:
         # kwargs = {"limit": limit}
@@ -354,7 +370,7 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         # if store_nm is not None:
         #     kwargs["store_nm"] = store_nm
         # response = get_store_list(client=get_client(), **kwargs)
-        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit)
+        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit, all_my_t_only=all_my_t_only)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
