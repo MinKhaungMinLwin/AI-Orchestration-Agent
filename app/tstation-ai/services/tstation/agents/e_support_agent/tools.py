@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any
 
 from common.qna_payload import make_qna_payload_url
@@ -8,6 +9,11 @@ from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_f
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
 from langchain.tools import tool
+from services.tstation.rag import (
+    get_qdrant_service,
+    get_embedding_service,
+)
+from config.env import settings
 
 logger = logging.getLogger(__name__)
 
@@ -37,48 +43,87 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
-
 @tool
-def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: int = 50):
+def search_faq_rag_tool(
+    query: str, 
+    top_k: int = 5, 
+    score_threshold: float = 0.6
+) -> dict:
     """
-    Get FAQ list.
+    Search FAQs using Retrieval-Augmented Generation (RAG).
 
-    Retrieve frequently asked questions from CS_CUST_INQ_MGMT_INFO.
-    Only FAQ data (INQ_TYPE_CD='FAQ') is retrieved. 1:1 inquiry history
-    is excluded for privacy protection.
-
-    Can filter by large category (lrcl_cd) and medium category (mdcl_cd).
+    This tool performs a semantic search over the FAQ database to find relevant entries based on the user's query.
+    It returns the top_k most relevant FAQs that exceed the specified score_threshold.
 
     Args:
-        lrcl_cd (str | None): Large category code filter (LRCL_CD).
-        mdcl_cd (str | None): Medium category code filter (MDCL_CD).
-        limit (int): Number of FAQs to return (default 50, max 200).
-
-    Example Inputs:
-        - {"lrcl_cd": "C01", "mdcl_cd": "C0103", "limit": 50}
-        - {"lrcl_cd": "C02", "mdcl_cd": "C0201", "limit": 50}
-        - {"lrcl_cd": "C03", "mdcl_cd": "C0303", "limit": 50}
-        - {"lrcl_cd": None, "mdcl_cd": None, "limit": 50}
+        query (str): The user's search query.
+        top_k (int): The maximum number of FAQ entries to return (default is 5).
+        score_threshold (float): The minimum relevance score for an FAQ to be included in the results (default is 0.6).
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: A dictionary containing the search results, including status, HTTP status code, and data or error message.
+    
+    Example:
+        result = search_faq_rag_tool(
+            query="Do you offer refunds?",
+            top_k=5,
+            score_threshold=0.6
+        )
     """
-    logger.info("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
+    logger.info(
+        "[TOOL][search_faq_rag_tool] Called with: query=%s, top_k=%s, score_threshold=%s",
+        query,
+        top_k,
+        score_threshold,
+    )
 
     try:
-        response = get_faq(client=get_client(), lrcl_cd=lrcl_cd, mdcl_cd=mdcl_cd, limit=limit)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get FAQ"
-            )
-        logger.info("[TOOL][get_faq_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][get_faq_tool] Failed")
-        return _error_response(None, str(e), "Failed to get FAQ")
+        # Get API key from environment or settings
+        openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+        
+        # 1. Get embedding for query
+        embedding_service = get_embedding_service(
+            model=settings.EMBEDDING_MODEL,
+            provider=settings.EMBEDDING_PROVIDER,
+            api_key=openai_api_key,
+        )
+        query_embedding = embedding_service.embed_text(query)
+        logger.debug(f"[TOOL][search_faq_rag_tool] Query embedding dimension: {len(query_embedding)}")
 
+        # 2. Search in Qdrant
+        qdrant_service = get_qdrant_service(
+            host=settings.QDRANT_HOST,
+            port=settings.QDRANT_PORT,
+            api_key=settings.QDRANT_API_KEY or None,
+        )
+
+        search_results = qdrant_service.search(
+            collection_name=settings.QDRANT_COLLECTION_FAQ,
+            query_vector=query_embedding,
+            top_k=top_k,
+            score_threshold=score_threshold,
+        )
+
+        # 3. Format results
+        formatted_results = []
+        for result in search_results:
+            hit = {
+                "id": result.get("id"),
+                "score": result.get("score"),
+                "content": result.get("payload", {}).get("content", ""),
+                "metadata": result.get("payload", {}).get("metadata", {}),
+            }
+            formatted_results.append(hit)
+
+        logger.info(
+            f"[TOOL][search_faq_rag_tool] Found {len(formatted_results)} relevant FAQs "
+            f"(score_threshold={score_threshold})"
+        )
+        return _success_response(200, formatted_results)
+
+    except Exception as e:
+        logger.exception("[TOOL][search_faq_rag_tool] Failed")
+        return _error_response(None, str(e), "Failed to search FAQs using RAG")
 
 @tool
 def escalate_tool(

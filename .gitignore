@@ -44,3 +44,5 @@ plans
 
 # Backups
 backup/*
+
+.env
