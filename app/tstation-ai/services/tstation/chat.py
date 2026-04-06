@@ -17,9 +17,13 @@ from services.tstation.agents.router import (
     transaction_subagent,
     support_subagent,
     ui_template_subagent,
+    QC_LLM,
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
+
+from services.tstation.agents.g_qc_agent.agent import stream_qc
+from services.tstation.agents.g_qc_agent.source_filter import filter_source_data
 
 logger = logging.getLogger(__name__)
 
@@ -652,6 +656,21 @@ class StreamingMultiAgentCoordinator:
         yield {"type": "DONE"}
 
 
+import re
+
+_FACTUAL_CLAIM_PATTERN = re.compile(
+    r'\d{1,3}(?:,\d{3})*\s*원'   # 가격 패턴 (e.g. 150,000원, 15000원)
+    r'|goods_no'                   # 상품 ID
+    r'|shop(?:Seq|_id|Id)'         # 매장 ID
+    r'|재고|할인|%\s*할인'          # 재고/할인
+    r'|G\d{9,}',                   # goods_no 형식 (e.g. G000000314254)
+    re.IGNORECASE,
+)
+
+def _has_factual_claims(text: str) -> bool:
+    """Check if draft contains factual commerce claims that need QC verification."""
+    return bool(_FACTUAL_CLAIM_PATTERN.search(text))
+
 # Singleton coordinator instance
 _coordinator = StreamingMultiAgentCoordinator()
 
@@ -717,10 +736,6 @@ class TStationChatServiceV2:
     def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
-
-        Workflow:
-        1. Classify multi-intent (detect all relevant domains)
-        2. Chain agents and stream their outputs
         """
         logger.debug(f"[CHAT_V2] Received request: {request}")
 
@@ -741,10 +756,28 @@ class TStationChatServiceV2:
                 },
             )
 
-        # NON STREAM MODE - invoke leading agent only
+        # NON STREAM MODE
         try:
-            content = leading_agent.invoke(messages)
-            return TStationChatResponse(content=content)
+            final_content = ""
+            last_message_content = "" # NEW: Track the last message event
+            
+            for event_str in TStationChatServiceV2._stream_response_multi(messages):
+                if event_str.startswith("data: "):
+                    json_str = event_str[6:].strip()
+                    if json_str and json_str != "[DONE]":
+                        event = json.loads(json_str)
+                        
+                        if event.get("type") == "token":
+                            final_content += event.get("content", "")
+                        elif event.get("type") == "message":
+                            last_message_content = event.get("content", "") # Capture it
+                            
+            # SAFETY NET: Fallback to message content if no tokens were emitted
+            if not final_content and last_message_content:
+                final_content = last_message_content
+                
+            return TStationChatResponse(content=final_content)
+            
         except ValueError as e:
             logger.warning(f"User Error: {e}")
             raise ValueError(e)
@@ -752,9 +785,100 @@ class TStationChatServiceV2:
             logger.exception(f"Server Error: {e}")
             raise Exception("Internal Server Error")
 
+
     @staticmethod
     def _stream_response_multi(messages: list[dict]):
-        """Stream response from multi-agent coordinator."""
+        """Stream response from multi-agent coordinator with Strict QC Layer."""
+        
+        draft_response = ""
+        source_data_chunks = []
+        original_message_events = [] # Hold message events to sync history
+        coordinator_done_event = None # Hold the premature [DONE] event
+
+        user_query = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_query = msg.get("content", "")
+                break
+
+        # 1. Iterate through the main coordinator stream
+        yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
         for event in _coordinator.stream(messages):
+            event_type = event.get("type")
+            
+            # --- INTERCEPT TOKENS (Draft Response) ---
+            if event_type == "token":
+                if event.get("content"):
+                    draft_response += event["content"]
+                continue
+                
+            # --- INTERCEPT MESSAGES (History Sync ONLY) ---
+            if event_type == "message":
+                original_message_events.append(event)
+                continue
+            
+            # --- COLLECT SOURCE DATA (Tools Only = True Ground Truth) ---
+            if event_type == "tool":
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                output_data = event.get("output", "")
+                if output_data:
+                    tool_name = event.get("tool", "Unknown")
+                    filtered = filter_source_data(tool_name, output_data)
+                    source_data_chunks.append(f"Tool [{tool_name}]:\n{filtered}")
+                continue
+                
+            # --- INTERCEPT EARLY DONE EVENT ---
+            if event_type == "sub-agent" and event.get("agent") == "[DONE]":
+                coordinator_done_event = event
+                continue
+
+            # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        # 2. RUN THE STRICT QC AGENT
+        # - Tool data exists: verify draft against source data
+        # - No tool data but draft has factual claims: QC catches hallucinations
+        #   (prompt rule: "Source Data is empty → draft MUST NOT claim prices/stock/store details")
+        # - No tool data and no factual claims (greetings, FAQ): skip QC
+        if draft_response.strip():
+            source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
+            needs_qc = bool(source_data_chunks) or _has_factual_claims(draft_response)
+
+            if needs_qc:
+                yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+
+                final_qc_text = ""
+                try:
+                    for chunk in stream_qc(QC_LLM, user_query, draft_response, source_data_str):
+                        final_qc_text += chunk
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    logger.exception(f"[QC_AGENT] Failed: {e}")
+                    final_qc_text = draft_response # fallback
+                    yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
+
+                # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
+                if original_message_events:
+                    final_msg_event = original_message_events[-1]
+                    final_msg_event["content"] = final_qc_text
+                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+            else:
+                # No factual claims (greetings, FAQ): skip QC, pass draft directly
+                yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
+                if original_message_events:
+                    final_msg_event = original_message_events[-1]
+                    final_msg_event["content"] = draft_response
+                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+        else:
+            # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
+            # if they actually contain text. We DO NOT want to save empty assistant
+            # messages to Redis, as it pollutes the LLM's future context window.
+            for msg_event in original_message_events:
+                if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
+                    yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
+
+        # 4. FINALIZE THE STREAM
+        if coordinator_done_event:
+            yield f"data: {json.dumps(coordinator_done_event, ensure_ascii=False)}\n\n"
+            
         yield "data: [DONE]\n\n"
