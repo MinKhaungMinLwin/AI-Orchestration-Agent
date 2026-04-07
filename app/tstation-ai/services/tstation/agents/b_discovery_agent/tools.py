@@ -103,11 +103,10 @@ def post_vehicle_verify_owner_tool(car_no: str):
     Verify vehicle ownership.
 
     This API verifies whether the user is the registered owner of a vehicle
-    based on the provided request information.
+    based on the provided request information. Input is wrapped in VerifyOwnerRequest model.
 
     Args:
-        car_no (str): Request payload containing the information
-            required to verify vehicle ownership.
+        car_no (str): Vehicle registration number (wrapping into VerifyOwnerRequest body).
 
     Example Inputs:
         - {"car_no": "33가3333"}

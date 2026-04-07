@@ -182,7 +182,7 @@ def get_logistics_inventory_tool(goods_no: str):
     Get product logistics inventory.
 
     Retrieve logistics stock using the product number.
-    Returns stock quantity from logistics warehouse.
+    Returns stock quantity from logistics warehouse (Oracle function FN_GET_GOODS_STOCK_QTY).
 
     Args:
         goods_no (str): Product number.
@@ -224,9 +224,9 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
 
     Args:
         goods_list (List[Dict[str, Any]]): Product list for stock check.
-            Input format: [{"goodsNo": "G123", "qty": 4}]
+            Each item: {"goodsNo": "G123", "qty": "4"} where qty is STRING type.
         shop_id_list (List[Dict[str, Any]]): Store list for stock check.
-            Input format: [{"shopId": "F0001"}]
+            Each item: {"shopId": "F0001"}
 
     Example Inputs:
         - {"goods_list": [{"goodsNo": "G000000309860", "qty": "4"}], "shop_id_list": [{"shopId": "B01018"}]}
@@ -266,6 +266,10 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
     Retrieve stores within specified radius (default 20km) based on customer coordinates,
     including distance (km) from customer location.
 
+    Response stores include is_installable field:
+    - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
+    - is_installable=false: 매장은 온라인 쇼핑 장착 불가
+
     Args:
         user_xpos (float): Customer current X coordinate (longitude).
         user_ypos (float): Customer current Y coordinate (latitude).
@@ -283,6 +287,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        Response data includes is_installable field per store.
     """
     body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, radius_km=radius_km, svc_codes=svc_codes, all_my_t_only=all_my_t_only)
     logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, all_my_t_only=%s", user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only)
@@ -328,6 +333,10 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     해당 매장 결과에는 is_all_my_t 필드가 포함됩니다.
     is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그를 표시하세요.
 
+    Response stores include is_installable field:
+    - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
+    - is_installable=false: 매장은 온라인 쇼핑 장착 불가
+
     Args:
         region_code (str | None): Geographic region keyword — Korean city, district, or neighborhood.
             Used for ADDR_BASE / ADDR_DTL LIKE search.
@@ -356,6 +365,7 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        Response data includes is_installable field per store.
     """
     # Normalize brand name to Korean equivalent
     # if store_nm:
@@ -392,6 +402,10 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     Retrieve store information and available reservation time slots (hourly)
     based on store ID and date.
 
+    Response includes is_installable field:
+    - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
+    - is_installable=false: 매장은 온라인 쇼핑 장착 불가
+
     Args:
         shop_id (str): Store ID.
         cal_day (str): Query date in YYYYMMDD format.
@@ -405,6 +419,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        Response data includes is_installable field.
     """
     logger.info("[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
 

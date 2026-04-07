@@ -23,6 +23,7 @@ class NearbyStoreItem:
         road_addr_base (None | str | Unset): 도로명 주소
         road_addr_dtl (None | str | Unset): 도로명 주소 상세
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
+        is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
     """
 
     shop_id: str
@@ -33,6 +34,7 @@ class NearbyStoreItem:
     road_addr_base: None | str | Unset = UNSET
     road_addr_dtl: None | str | Unset = UNSET
     is_all_my_t: bool | Unset = False
+    is_installable: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +74,8 @@ class NearbyStoreItem:
 
         is_all_my_t = self.is_all_my_t
 
+        is_installable = self.is_installable
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -92,6 +96,8 @@ class NearbyStoreItem:
             field_dict["road_addr_dtl"] = road_addr_dtl
         if is_all_my_t is not UNSET:
             field_dict["is_all_my_t"] = is_all_my_t
+        if is_installable is not UNSET:
+            field_dict["is_installable"] = is_installable
 
         return field_dict
 
@@ -149,6 +155,8 @@ class NearbyStoreItem:
 
         is_all_my_t = d.pop("is_all_my_t", UNSET)
 
+        is_installable = d.pop("is_installable", UNSET)
+
         nearby_store_item = cls(
             shop_id=shop_id,
             distance_km=distance_km,
@@ -158,6 +166,7 @@ class NearbyStoreItem:
             road_addr_base=road_addr_base,
             road_addr_dtl=road_addr_dtl,
             is_all_my_t=is_all_my_t,
+            is_installable=is_installable,
         )
 
         nearby_store_item.additional_properties = d

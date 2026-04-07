@@ -867,13 +867,18 @@ If user wants to select a store (option 1):
      | 2 | 티스테이션 광주역점 | 광주시 ... | ❌ |
    → Ask user to select a store
 
-4. **🚨 MANDATORY — Check is_installable BEFORE proceeding:**
+4. **🚨 MANDATORY — Call get_store_detail_tool to verify is_installable:**
 
-   After user selects a store, you MUST check the is_installable value from the tool result.
-   DO NOT skip this check. DO NOT call quick_order_tool without performing this check.
+   After user selects a store, you MUST call get_store_detail_tool to verify is_installable status.
+   DO NOT skip this step. DO NOT call quick_order_tool without performing this verification.
+
+   Call: get_store_detail_tool(shop_id=[selected_shop_id], cal_day=TODAY)
+   Extract is_installable from the response:
+   - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
+   - is_installable=false: 매장은 온라인 쇼핑 장착 불가
 
    **Case A: is_installable=true:**
-   → Continue to inventory check (step 5)
+   → Continue to step 5 (inventory check)
 
    **Case B: is_installable=false:**
    → 🛑 STOP — DO NOT proceed to quick_order_tool

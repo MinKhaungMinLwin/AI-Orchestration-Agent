@@ -2728,6 +2728,12 @@
             "title": "Is All My T",
             "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
             "default": false
+          },
+          "is_installable": {
+            "type": "boolean",
+            "title": "Is Installable",
+            "description": "쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))",
+            "default": false
           }
         },
         "type": "object",
@@ -3815,6 +3821,12 @@
             "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
             "default": false
           },
+          "is_installable": {
+            "type": "boolean",
+            "title": "Is Installable",
+            "description": "쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))",
+            "default": false
+          },
           "holiday": {
             "anyOf": [
               {
@@ -3982,6 +3994,12 @@
             "type": "boolean",
             "title": "Is All My T",
             "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
+          },
+          "is_installable": {
+            "type": "boolean",
+            "title": "Is Installable",
+            "description": "쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))",
             "default": false
           },
           "addr_base": {
