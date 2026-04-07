@@ -87,7 +87,8 @@ services:
     tmpfs:
       - /tmp
       - /tmp/uv-cache
-      - /app/logs
+      - /app/logs:mode=1777
+      - /app/static/public:mode=1777
     environment:
       - UV_CACHE_DIR=/tmp/uv-cache
     env_file:

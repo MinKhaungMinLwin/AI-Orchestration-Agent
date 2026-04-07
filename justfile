@@ -64,18 +64,26 @@ stop-local:
         down
 
 ### Deployment ###
-start-remote:
-    @echo "Starting PROJECT '{{PROJECT_NAME}}' with ENVIRONMENT: {{ENV}}"
+precreate-remote:
+    @echo "Building Docker images without cache for ENVIRONMENT: {{ENV}}"
     docker compose --env-file .env \
         -p {{PROJECT_NAME}}-{{ENV}} \
         -f docker/docker-compose.yml \
-        up --build -d
+        up --build --force-recreate --no-start
 
 stop-remote:
     docker compose --env-file .env \
         -p {{PROJECT_NAME}}-{{ENV}} \
         -f docker/docker-compose.yml \
         down
+
+
+start-remote: precreate-remote stop-remote
+    @echo "Starting PROJECT '{{PROJECT_NAME}}' with ENVIRONMENT: {{ENV}}"
+    docker compose --env-file .env \
+        -p {{PROJECT_NAME}}-{{ENV}} \
+        -f docker/docker-compose.yml \
+        up --build -d
 
 stop:
     @if [ "{{ENV}}" = "local" ]; then \
@@ -126,9 +134,10 @@ scan-images:
 help:
     @echo "### For Deployment (dev, stag, prod)"
     @echo "just environment     Setup .env file"
-    @echo "just start           Start servers with docker"
-    @echo "just stop            Stop servers"
-    @echo "just scan-images    Scan Docker images for vulnerabilities"
+    @echo "just build-no-cache  Build Docker images without cache"
+    @echo "just start-remote    Build (no cache) + Start servers"
+    @echo "just stop-remote     Stop servers"
+    @echo "just scan-images     Scan Docker images for vulnerabilities"
 
     @echo "### For Development (local)"
     @echo "just environment     Setup .env file"
