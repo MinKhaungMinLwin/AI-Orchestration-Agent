@@ -709,11 +709,14 @@ class TStationChatServiceV2:
 
         # If user info available, inject as system message at beginning
         if user_info:
-            # Build user info context
+            # Only expose safe fields to LLM (name, car info)
+            # Other JWT fields (user_id, user_type, affiliate_yn, etc.) are kept internal for API auth only
+            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd"}
             user_info_lines = []
             for k, v in user_info.items():
-                user_info_lines.append(f"{k}: {v}")
-            
+                if k in safe_fields:
+                    user_info_lines.append(f"{k}: {v}")
+
             user_context = "\n".join(user_info_lines)
 
             user_context_message = {
@@ -724,6 +727,7 @@ class TStationChatServiceV2:
                     f"## INSTRUCTIONS FOR AGENTS:\n"
                     f"🔹 Always prioritize data provided directly by the user\n"
                     f"🔹 If no direct data is provided, reference the personal data below\n"
+                    f"🔹 NEVER expose internal identifiers (user_id, user_type, affiliate_yn, tokens, etc.) in responses\n"
                 )
             }
 
