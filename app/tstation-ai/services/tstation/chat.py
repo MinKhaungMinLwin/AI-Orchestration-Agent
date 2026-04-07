@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Iterator
 from textwrap import dedent
 
@@ -513,6 +514,25 @@ class StreamingMultiAgentCoordinator:
 
             # Append accumulated tool data for next agent (so they can use results like goods_no)
             if accumulated_tool_data:
+                # Extract ord_qty from user messages when chaining to Transaction Agent
+                if domain == MultiAgentDomain.Domain.TRANSACTION:
+                    has_ord_qty = any(
+                        isinstance(item.get("data"), dict) and "ord_qty" in item.get("data", {})
+                        for item in accumulated_tool_data
+                    )
+                    if not has_ord_qty:
+                        user_text = " ".join(
+                            msg.get("content", "") for msg in messages if msg.get("role") == "user"
+                        )
+                        qty_match = re.search(r"(\d+)\s*개", user_text)
+                        if qty_match:
+                            ord_qty = int(qty_match.group(1))
+                            accumulated_tool_data.append({
+                                "tool": "user_intent",
+                                "data": {"ord_qty": ord_qty}
+                            })
+                            logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
+
                 tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
                 enriched_messages.append({
                     "role": "system",
