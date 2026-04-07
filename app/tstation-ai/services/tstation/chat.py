@@ -837,8 +837,9 @@ class TStationChatServiceV2:
     @staticmethod
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
-        event = {"type": "message", "content": GUARDRAIL_RESPONSE}
-        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     @staticmethod
