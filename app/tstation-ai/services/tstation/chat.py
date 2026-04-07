@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Iterator
 from textwrap import dedent
 
@@ -21,6 +22,7 @@ from services.tstation.agents.router import (
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
+from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
 from services.tstation.agents.g_qc_agent.agent import stream_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data
@@ -517,6 +519,25 @@ class StreamingMultiAgentCoordinator:
 
             # Append accumulated tool data for next agent (so they can use results like goods_no)
             if accumulated_tool_data:
+                # Extract ord_qty from user messages when chaining to Transaction Agent
+                if domain == MultiAgentDomain.Domain.TRANSACTION:
+                    has_ord_qty = any(
+                        isinstance(item.get("data"), dict) and "ord_qty" in item.get("data", {})
+                        for item in accumulated_tool_data
+                    )
+                    if not has_ord_qty:
+                        user_text = " ".join(
+                            msg.get("content", "") for msg in messages if msg.get("role") == "user"
+                        )
+                        qty_match = re.search(r"(\d+)\s*개", user_text)
+                        if qty_match:
+                            ord_qty = int(qty_match.group(1))
+                            accumulated_tool_data.append({
+                                "tool": "user_intent",
+                                "data": {"ord_qty": ord_qty}
+                            })
+                            logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
+
                 tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
                 enriched_messages.append({
                     "role": "system",
@@ -708,11 +729,14 @@ class TStationChatServiceV2:
 
         # If user info available, inject as system message at beginning
         if user_info:
-            # Build user info context
+            # Only expose safe fields to LLM (name, car info)
+            # Other JWT fields (user_id, user_type, affiliate_yn, etc.) are kept internal for API auth only
+            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd"}
             user_info_lines = []
             for k, v in user_info.items():
-                user_info_lines.append(f"{k}: {v}")
-            
+                if k in safe_fields:
+                    user_info_lines.append(f"{k}: {v}")
+
             user_context = "\n".join(user_info_lines)
 
             user_context_message = {
@@ -723,6 +747,7 @@ class TStationChatServiceV2:
                     f"## INSTRUCTIONS FOR AGENTS:\n"
                     f"🔹 Always prioritize data provided directly by the user\n"
                     f"🔹 If no direct data is provided, reference the personal data below\n"
+                    f"🔹 NEVER expose internal identifiers (user_id, user_type, affiliate_yn, tokens, etc.) in responses\n"
                 )
             }
 
@@ -740,6 +765,26 @@ class TStationChatServiceV2:
         logger.debug(f"[CHAT_V2] Received request: {request}")
 
         set_tstation_be_token(request.access_token)
+
+        # PII Guardrail: check the latest user message before any agent processing
+        last_user_msg = next(
+            (m.get("content", "") for m in reversed(request.messages) if m.get("role") == "user"),
+            "",
+        )
+        pii_detected = check_pii(last_user_msg)
+        if pii_detected:
+            logger.warning(f"[CHAT_V2] PII guardrail blocked: {pii_detected}")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_guardrail_response(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
         messages = TStationChatServiceV2._build_messages_with_user_info(request)
         logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
@@ -785,6 +830,13 @@ class TStationChatServiceV2:
             logger.exception(f"Server Error: {e}")
             raise Exception("Internal Server Error")
 
+
+    @staticmethod
+    def _stream_guardrail_response():
+        """Stream a guardrail rejection response without invoking any agent."""
+        event = {"type": "message", "content": GUARDRAIL_RESPONSE}
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
 
     @staticmethod
     def _stream_response_multi(messages: list[dict]):
