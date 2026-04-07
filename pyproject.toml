@@ -52,7 +52,7 @@ tstation-ai = [
     # LangChain Agents
     "langchain==1.2.10",
     "langchain-openai==1.1.10",
-    "langchain-litellm==0.5.1",
+    "langchain-litellm>=0.6.4",
     # MCP
     "langchain-mcp-adapters==0.2.1",
     "langchain-community==0.4.1",
@@ -85,6 +85,10 @@ tstation-ai = [
 
     # Youtube search
     "youtube-search==2.2.0",
+
+    # Override transitive dep for CVE fix
+    "nltk>=3.9.3",
+    "litellm>=1.83.0",
 ]
 
 
