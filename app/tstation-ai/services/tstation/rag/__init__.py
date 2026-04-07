@@ -12,6 +12,7 @@ from services.tstation.rag.embedding_service import (
 )
 from services.tstation.rag.chunking import ChunkingService
 from services.tstation.rag.document_processor import DocumentProcessor
+from services.tstation.rag.reranker_service import RerankerService, get_reranker_service
 
 __all__ = [
     "QdrantService",
@@ -20,4 +21,6 @@ __all__ = [
     "get_embedding_service",
     "ChunkingService",
     "DocumentProcessor",
+    "RerankerService",
+    "get_reranker_service",
 ]

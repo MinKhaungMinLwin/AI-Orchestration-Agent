@@ -42,6 +42,18 @@ services:
     networks:
       - project-net
 
+  # ===== Ingestion for embedding document === #
+  ingestion:
+    build: ../app/tstation-ingestion
+    depends_on:
+      - qdrant
+    env_file:
+      - ../.env
+      - ../.env.docker
+    networks:
+      - project-net
+    restart: "no"
+
   # === APP UI ===
   tstation-ui-demo:
     build: ../app/tstation-ui-demo
@@ -77,6 +89,17 @@ services:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
+    networks:
+      - project-net
+
+  # === Vector Database - Qdrant ===
+  qdrant:
+    image: qdrant/qdrant
+    expose:
+      - 6333  
+    container_name: qdrant
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
     networks:
       - project-net
 

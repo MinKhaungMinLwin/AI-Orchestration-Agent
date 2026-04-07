@@ -48,3 +48,5 @@ backup/*
 .env
 
 docker/qdrant_storage/collections/
+/qdrant_storage/
+example/

@@ -12,6 +12,7 @@ from langchain.tools import tool
 from services.tstation.rag import (
     get_qdrant_service,
     get_embedding_service,
+    get_reranker_service,
 )
 from config.env import settings
 
@@ -45,79 +46,89 @@ def _success_response(http_status: int, data: Any) -> dict:
 
 @tool
 def search_faq_rag_tool(
-    query: str, 
-    top_k: int = 5, 
-    score_threshold: float = 0.6
+    query: str,
+    top_k: int = 5,
+    score_threshold: float = 0.6,
 ) -> dict:
     """
-    Search FAQs using Retrieval-Augmented Generation (RAG).
+    Search FAQs using Retrieval-Augmented Generation (RAG) with multi-vector hybrid search.
 
-    This tool performs a semantic search over the FAQ database to find relevant entries based on the user's query.
-    It returns the top_k most relevant FAQs that exceed the specified score_threshold.
+    Performs semantic search over the FAQ database using named vectors ('question' and 'answer'),
+    fused with Reciprocal Rank Fusion (RRF), then reranks results with keyword-overlap scoring.
 
     Args:
         query (str): The user's search query.
-        top_k (int): The maximum number of FAQ entries to return (default is 5).
-        score_threshold (float): The minimum relevance score for an FAQ to be included in the results (default is 0.6).
+        top_k (int): Maximum number of FAQ entries to return (default 5).
+        score_threshold (float): Minimum relevance score to include a result (default 0.6).
 
     Returns:
-        dict: A dictionary containing the search results, including status, HTTP status code, and data or error message.
-    
+        dict: {"status": "success", "http_status": 200, "data": [...]} or error dict.
+
     Example:
-        result = search_faq_rag_tool(
-            query="Do you offer refunds?",
-            top_k=5,
-            score_threshold=0.6
-        )
+        result = search_faq_rag_tool(query="환불 가능한가요?", top_k=5, score_threshold=0.6)
     """
     logger.info(
-        "[TOOL][search_faq_rag_tool] Called with: query=%s, top_k=%s, score_threshold=%s",
-        query,
-        top_k,
-        score_threshold,
+        "[TOOL][search_faq_rag_tool] query=%s, top_k=%s, score_threshold=%s",
+        query, top_k, score_threshold,
     )
 
     try:
-        # Get API key from environment or settings
         openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
-        
-        # 1. Get embedding for query
+
+        # 1. Embed the query
         embedding_service = get_embedding_service(
             model=settings.EMBEDDING_MODEL,
             provider=settings.EMBEDDING_PROVIDER,
             api_key=openai_api_key,
         )
         query_embedding = embedding_service.embed_text(query)
-        logger.debug(f"[TOOL][search_faq_rag_tool] Query embedding dimension: {len(query_embedding)}")
+        logger.debug("[TOOL][search_faq_rag_tool] Embedding dim: %d", len(query_embedding))
 
-        # 2. Search in Qdrant
         qdrant_service = get_qdrant_service(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT,
             api_key=settings.QDRANT_API_KEY or None,
         )
 
-        search_results = qdrant_service.search(
-            collection_name=settings.QDRANT_COLLECTION_FAQ,
-            query_vector=query_embedding,
-            top_k=top_k,
-            score_threshold=score_threshold,
-        )
+        # 2. Multi-vector hybrid search (RRF fusion of question + answer vectors).
+        #    Retrieve top_k * 3 initially so the reranker has enough candidates.
+        try:
+            raw_results = qdrant_service.search_multi_vector(
+                collection_name=settings.QDRANT_COLLECTION_FAQ,
+                query_vector=query_embedding,
+                top_k=max(top_k * 3, 15),
+                score_threshold=score_threshold,
+            )
+            logger.info("[TOOL][search_faq_rag_tool] Multi-vector search: %d candidates", len(raw_results))
+        except Exception:
+            # Fallback to single-vector search for collections without named vectors
+            logger.warning("[TOOL][search_faq_rag_tool] Multi-vector failed, falling back to single-vector")
+            raw_results = qdrant_service.search(
+                collection_name=settings.QDRANT_COLLECTION_FAQ,
+                query_vector=query_embedding,
+                top_k=max(top_k * 3, 15),
+                score_threshold=score_threshold,
+            )
 
-        # 3. Format results
-        formatted_results = []
-        for result in search_results:
-            hit = {
-                "id": result.get("id"),
-                "score": result.get("score"),
-                "content": result.get("payload", {}).get("content", ""),
-                "metadata": result.get("payload", {}).get("metadata", {}),
+        # 3. Rerank candidates with keyword-overlap scoring
+        reranker = get_reranker_service()
+        reranked = reranker.rerank(query=query, results=raw_results, top_k=top_k)
+
+        # 4. Format output
+        formatted_results = [
+            {
+                "id": r.get("id"),
+                "content": r.get("payload", {}).get("content", ""),
+                "question": r.get("payload", {}).get("question", ""),
+                "answer": r.get("payload", {}).get("answer", ""),
+                "metadata": r.get("payload", {}).get("metadata", {}),
             }
-            formatted_results.append(hit)
+            for r in reranked
+        ]
 
         logger.info(
-            f"[TOOL][search_faq_rag_tool] Found {len(formatted_results)} relevant FAQs "
-            f"(score_threshold={score_threshold})"
+            "[TOOL][search_faq_rag_tool] Returned %d FAQs after reranking (threshold=%.2f)",
+            len(formatted_results), score_threshold,
         )
         return _success_response(200, formatted_results)
 
