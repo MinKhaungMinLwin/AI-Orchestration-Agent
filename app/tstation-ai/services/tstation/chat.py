@@ -21,6 +21,7 @@ from services.tstation.agents.router import (
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
+from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
 logger = logging.getLogger(__name__)
 
@@ -750,6 +751,26 @@ class TStationChatServiceV2:
 
         set_tstation_be_token(request.access_token)
 
+        # PII Guardrail: check the latest user message before any agent processing
+        last_user_msg = next(
+            (m.get("content", "") for m in reversed(request.messages) if m.get("role") == "user"),
+            "",
+        )
+        pii_detected = check_pii(last_user_msg)
+        if pii_detected:
+            logger.warning(f"[CHAT_V2] PII guardrail blocked: {pii_detected}")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_guardrail_response(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=GUARDRAIL_RESPONSE)
+
         messages = TStationChatServiceV2._build_messages_with_user_info(request)
         logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
@@ -775,6 +796,13 @@ class TStationChatServiceV2:
         except Exception as e:
             logger.exception(f"Server Error: {e}")
             raise Exception("Internal Server Error")
+
+    @staticmethod
+    def _stream_guardrail_response():
+        """Stream a guardrail rejection response without invoking any agent."""
+        event = {"type": "message", "content": GUARDRAIL_RESPONSE}
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
 
     @staticmethod
     def _stream_response_multi(messages: list[dict]):
