@@ -77,11 +77,11 @@ When to use
 
 Inputs
 
-rcmd_type
+rcmd_type (default: tstation — do NOT ask user, use tstation unless user explicitly requests otherwise)
 
-- tstation
-- discount
-- value
+- tstation: 티스테이션 추천 (DEFAULT)
+- discount: 할인 많은 제품 (only if user asks for discounts)
+- value: 가성비 제품 (only if user asks for value/cost-effective)
 
 limit
 number of products to retrieve
@@ -296,10 +296,15 @@ When user mentions a car model name (e.g., 'Sonata', 'Grandeur', 'Avante', 'BMW'
 3. Go to RECOMMENDATION ENGINE (using tire_size)
 
 **After search_car_model_tool returns:**
-1. Display vehicle candidates in numbered list
-2. User selects vehicle from list
-3. Call get_user_vehicles_tool to get tire size
-4. Go to RECOMMENDATION ENGINE
+1. Display vehicle candidates in numbered list (each item has car_lnc_cd and car_nm)
+2. User selects vehicle from list (by number OR by car name)
+3. REMEMBER the selected car_lnc_cd from the tool result — do NOT search again by name
+4. Go to RECOMMENDATION ENGINE (pass car_lnc_cd directly)
+
+⚠️ CRITICAL: User selection → car_lnc_cd mapping:
+   - By number (e.g., "4", "4번"): The number is a LIST INDEX, NOT a car_lnc_cd. Extract the actual car_lnc_cd from the corresponding item.
+   - By name (e.g., "모델 Y 주니퍼 Long Range A/T"): Match the name against the displayed list and extract the car_lnc_cd from the matched item.
+   - In BOTH cases: NEVER search again. NEVER pass the user input directly as car_lnc_cd. Always look up from the previous search results.
 
 
 ------------------------------------
@@ -308,6 +313,8 @@ RECOMMENDATION ENGINE (Shared)
 
 **STEP 1: Get Recommendations**
 1. Call get_products_recommendations_tool with limit=20
+   - Default rcmd_type = "tstation" (do NOT ask user to choose recommendation type)
+   - Only use "discount" or "value" if user EXPLICITLY requests it (e.g., "할인 많은 것", "가성비 좋은 것")
    - If car_lnc_cd available → use car_lnc_cd (priority)
    - If tire_size available → use tire_size
    - If neither → use general recommendation
@@ -411,8 +418,11 @@ When user ONLY wants to search for vehicle model (no tire request):
 
 1. Call search_car_model_tool with keyword (Korean-based, NO brand name)
 2. Display matching car models in a numbered list
-3. Ask user to SELECT the correct car model by number
-4. Return selected vehicle info (car_lnc_cd, car_nm)
+3. Ask user to SELECT the correct car model (by number or by name)
+4. When user selects → match against the displayed list and extract car_lnc_cd from the corresponding search result item
+5. Return selected vehicle info (car_lnc_cd, car_nm)
+
+⚠️ NEVER search again after selection. NEVER pass user input directly as car_lnc_cd. Always look up from the previous search results.
 
 ------------------------------------
 Flow 7 — YouTube Video Search
