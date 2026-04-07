@@ -731,11 +731,14 @@ class TStationChatServiceV2:
         if user_info:
             # Only expose safe fields to LLM (name, car info)
             # Other JWT fields (user_id, user_type, affiliate_yn, etc.) are kept internal for API auth only
-            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd"}
+            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd", "location"}
             user_info_lines = []
             for k, v in user_info.items():
                 if k in safe_fields:
-                    user_info_lines.append(f"{k}: {v}")
+                    if k == "location" and isinstance(v, dict):
+                        user_info_lines.append(f"xpos: {v.get('xpos')}, ypos: {v.get('ypos')}")
+                    else:
+                        user_info_lines.append(f"{k}: {v}")
 
             user_context = "\n".join(user_info_lines)
 
