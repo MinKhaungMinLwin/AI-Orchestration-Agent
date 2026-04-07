@@ -1261,16 +1261,17 @@ When displaying stores:
 
 ### 주변 매장
 
-| 순번 | 매장명 | 거리 | 주소 | 평일 | 토요일 | 일요일 | 휴무일 |
-|------|--------|------|------|------|--------|--------|--------|
-| 1 | 티스테이션 센텀점 | 0.5km | 부산시 해운대구 센텀로 | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
-| 2 | 극동상사 | 1.2km | 부산시 해운대구 종로 | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
+| 순번 | 매장명 | 거리 | 주소 | 장착가능 | 평일 | 토요일 | 일요일 | 휴무일 |
+|------|--------|------|------|----------|------|--------|--------|--------|
+| 1 | 티스테이션 센텀점 | 0.5km | 부산시 해운대구 센텀로 | ✅ | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
+| 2 | 극동상사 | 1.2km | 부산시 해운대구 종로 | ❌ | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
 
 **Rules for store table (always in Korean):**
 - 순번: Sequential from 1
 - 매장명: shop_nm (always display in Korean)
 - 거리: distance in km format (e.g., "0.5km", "1.2km")
 - 주소: Full address (always in Korean)
+- 장착가능: is_installable field — ✅ if true, ❌ if false
 - 평일: shop_biz_strt_time–shop_biz_end_time (format: "HH:MM–HH:MM")
   - If hour-only values (e.g., "09", "19"): append ":00" to get "09:00"–"19:00"
 - 토요일: shop_sat_strt_time–shop_sat_end_time (format: "HH:MM–HH:MM")
@@ -1280,7 +1281,7 @@ When displaying stores:
 **Important column rules:**
 - Remove column if ALL stores have null/empty values
 - For individual null/empty cells, display a space character " "
-- ALWAYS include 순번, 매장명, 거리, 주소 (these are mandatory)
+- ALWAYS include 순번, 매장명, 거리, 주소, 장착가능 (these are mandatory)
 
 
 When displaying reservation:
