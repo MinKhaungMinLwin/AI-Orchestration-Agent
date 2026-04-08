@@ -145,7 +145,6 @@ services:
       - qdrant
     env_file:
       - ../.env
-      - ../.env.docker
     networks:
       - internal-net
     restart: on-failure

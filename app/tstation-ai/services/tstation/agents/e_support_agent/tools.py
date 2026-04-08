@@ -118,6 +118,7 @@ def search_faq_rag_tool(
         formatted_results = [
             {
                 "id": r.get("id"),
+                # "content": r.get("payload", {}).get("content", ""),
                 "question": r.get("payload", {}).get("question", ""),
                 "answer": r.get("payload", {}).get("answer", ""),
                 "metadata": r.get("payload", {}).get("metadata", {}),
