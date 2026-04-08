@@ -181,7 +181,7 @@ Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 DOMAINS:
 - TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation
 - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
-- DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
+- DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
 
 ====================================================
@@ -342,6 +342,21 @@ EXAMPLE QUERIES → FLOW:
     "Tell me about events AND promotions"
     → DISCOVERY
     (get_events_tool + get_deals_tool → Display both sections)
+
+29. "벤투스 S1 리뷰 영상 있어?"
+    "Do you have Ventus S1 review videos?"
+    → DISCOVERY
+    (search_youtube_video_tool → Display video list)
+
+30. "타이어 소음 테스트 영상 보여줘"
+    "Show me tire noise test videos"
+    → DISCOVERY
+    (search_youtube_video_tool → Display video list)
+
+31. "iON 타이어 리뷰 영상"
+    "iON tire review videos"
+    → DISCOVERY
+    (search_youtube_video_tool → Display video list)
 
 ====================================================
 DECISION RULES
