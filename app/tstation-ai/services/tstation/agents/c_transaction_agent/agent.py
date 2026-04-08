@@ -461,7 +461,10 @@ If goods_no is NOT available from any source:
 Extract qty from:
 - Previous agent context (ord_qty from tool results)
 - User explicitly mentioned quantity in message (e.g., "4개")
-- Default: 2 (if not provided, use 2 without asking)
+
+If qty is NOT available:
+→ Ask user: "몇 개를 조회하시겠습니까?"
+→ STOP and wait for user input
 
 **STEP 3: Find stores**
 If shop_id_list is known:
@@ -478,7 +481,6 @@ If shop_id_list is NOT known:
    • todayShopArray → stores that can install today
    • tnaShopArray → stores eligible for T-NA delivery
 5. If both arrays empty → product not available at requested stores
-6. If qty was defaulted to 2, mention: "수량은 2개 기준으로 조회했습니다. 다른 수량을 원하시면 말씀해 주세요."
 
 
 ------------------------------------
@@ -998,6 +1000,95 @@ If user skips store selection (option 2) or says "장바구니", "나중에", et
 - When logistics inventory is unavailable, ALWAYS call get_store_inventory_tool to filter eligible stores (todayShopArray + tnaShopArray only)
 - If user changes mind mid-flow (e.g., "역시 장바구니로"), switch to the other path
 - DO NOT repeat product info table after the initial confirmation in STEP 4
+
+
+------------------------------------
+Flow 6.1 — Mid-Flow Quantity Change
+------------------------------------
+
+Trigger: User changes quantity AFTER any step in Flow 6 has already been completed.
+Examples:
+- "4개로 변경해줘", "수량 2개로 바꿔", "아 역시 4개로 할게"
+
+⚠️ CRITICAL: Preserve all previously collected context (goods_no, shop_id, etc.).
+Only replace ord_qty with the new value. NEVER restart from STEP 1.
+
+**Branch by current progress when quantity change is requested:**
+
+┌───────────────────────────────────────────────────────────────────────┐
+│ Current progress              │ Action                                │
+├───────────────────────────────┼───────────────────────────────────────┤
+│ After STEP 2 (qty confirmed) │ Resume from STEP 3 with new qty       │
+│                               │ (logistics inventory check)           │
+├───────────────────────────────┼───────────────────────────────────────┤
+│ After STEP 4 (before store    │ Resume from STEP 3 with new qty       │
+│ selection)                    │ (re-check logistics → STEP 4)         │
+├───────────────────────────────┼───────────────────────────────────────┤
+│ After STEP 5A (store selected)│ Keep existing shop_id                 │
+│                               │ → Check inventory with new qty        │
+│                               │ (get_store_inventory_tool)            │
+│                               │ → If in stock: proceed to order       │
+├───────────────────────────────┼───────────────────────────────────────┤
+│ After quick_order_tool        │ Keep existing shop_id                 │
+│ (order created)               │ → Check inventory with new qty        │
+│                               │ (get_store_inventory_tool)            │
+│                               │ → If in stock: re-create order        │
+│                               │ (call quick_order_tool again)         │
+└───────────────────────────────────────────────────────────────────────┘
+
+Steps:
+
+1. Extract new ord_qty from user message
+2. Retain existing context from conversation:
+   - goods_no: keep as-is
+   - shop_id: keep if already selected
+3. If store is already selected (shop_id available):
+   → Call get_store_inventory_tool(goods_list=[{{"goodsNo": goods_no, "qty": new_ord_qty}}], shop_id_list=[{{"shopId": shop_id}}])
+   → If in stock: call quick_order_tool(goods_no, ord_qty=new_qty, shop_id)
+   → If out of stock: "변경된 수량(N개)은 선택하신 매장에 재고가 부족합니다. 다른 매장을 검색하시겠습니까?"
+4. If store is NOT yet selected:
+   → Resume from STEP 3 (logistics inventory check) with new qty
+
+Response example:
+"수량을 [N]개로 변경하였습니다. 선택하신 [매장명] 매장에서 재고를 확인하겠습니다."
+
+
+------------------------------------
+Flow 6.2 — Mid-Flow Product Change
+------------------------------------
+
+Trigger: User changes product AFTER any step in Flow 6 has already been completed.
+Examples:
+- "벤투스 S2 AS 말고 키네르기 EX로 변경해줘"
+- "다른 사이즈로 바꿀게"
+
+⚠️ CRITICAL: Preserve previously collected context (ord_qty, shop_id).
+Only replace goods_no. Since goods_no changes, inventory MUST be re-checked.
+
+**Resolving new goods_no:**
+- If user provides new goods_no directly → use immediately
+- If user provides product name only → say "상품을 검색하겠습니다." → handover to Discovery Agent
+  → When Discovery returns with new goods_no, continue below
+
+**After new goods_no is obtained (keep existing ord_qty and shop_id):**
+
+┌───────────────────────────────────────────────────────────────────────┐
+│ Current progress              │ Action                                │
+├───────────────────────────────┼───────────────────────────────────────┤
+│ Before store selection        │ New goods_no + existing ord_qty       │
+│                               │ → Resume from STEP 3 (logistics)      │
+├───────────────────────────────┼───────────────────────────────────────┤
+│ Store selected / order created│ Keep existing shop_id + ord_qty       │
+│                               │ + new goods_no → check inventory      │
+│                               │ (get_store_inventory_tool)            │
+│                               │ → If in stock: re-create order        │
+│                               │ → If out of stock: suggest other      │
+│                               │   stores or ask user                  │
+└───────────────────────────────────────────────────────────────────────┘
+
+Response example:
+"상품을 [새 상품명]으로 변경하였습니다. 선택하신 [매장명] 매장에서 재고를 확인하겠습니다."
+
 
 ------------------------------------
 Flow 7 — Order List & Tracking
