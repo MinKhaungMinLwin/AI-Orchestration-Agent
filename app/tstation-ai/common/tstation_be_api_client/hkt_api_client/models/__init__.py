@@ -6,8 +6,12 @@ from .car_model_search_item import CarModelSearchItem
 from .car_model_search_response import CarModelSearchResponse
 from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
+from .deal_item import DealItem
+from .deal_list_response import DealListResponse
 from .escalation_request import EscalationRequest
 from .escalation_response import EscalationResponse
+from .event_item import EventItem
+from .event_list_response import EventListResponse
 from .faq_item import FaqItem
 from .faq_list_response import FaqListResponse
 from .goods_item import GoodsItem
@@ -64,8 +68,12 @@ __all__ = (
     "CarModelSearchResponse",
     "ChatHistoryResponse",
     "CompatibilityResponse",
+    "DealItem",
+    "DealListResponse",
     "EscalationRequest",
     "EscalationResponse",
+    "EventItem",
+    "EventListResponse",
     "FaqItem",
     "FaqListResponse",
     "GoodsItem",

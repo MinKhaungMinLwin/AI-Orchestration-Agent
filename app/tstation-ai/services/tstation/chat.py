@@ -351,6 +351,21 @@ EXAMPLE QUERIES → FLOW:
     → DISCOVERY → TRANSACTION
     (Product Name Search → goods_no Resolution → All My T Store Search)
 
+30. "이벤트 알려줘" / "현재 진행중인 이벤트 뭐야?"
+    "Tell me about current events"
+    → DISCOVERY
+    (get_events_tool → Display event list)
+
+31. "기획전 정보" / "지금 어떤 기획전 하고 있어?"
+    "What promotions are available?"
+    → DISCOVERY
+    (get_deals_tool → Display deal list)
+
+32. "이벤트랑 기획전 다 알려줘"
+    "Tell me about events AND promotions"
+    → DISCOVERY
+    (get_events_tool + get_deals_tool → Display both sections)
+
 ====================================================
 DECISION RULES
 ====================================================
@@ -376,7 +391,8 @@ DISCOVERY if user wants:
 - Product specifications, features, technology
 - **Price for product by NAME (goods_no NOT known)** → DISCOVERY to find goods_no
 - View user's registered vehicles (list my cars, my vehicle list)
-Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles"
+- **Event/Deal information** ("이벤트 알려줘", "기획전 정보", "현재 진행중인 이벤트")
+Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles", "이벤트 알려줘", "기획전 정보"
 
 ⚠️ CRITICAL DISTINCTION for price queries:
 - "G000000314254 가격" → goods_no KNOWN → TRANSACTION only
@@ -754,14 +770,18 @@ class TStationChatServiceV2:
 
         # If user info available, inject as system message at beginning
         if user_info:
-            # Only expose safe fields to LLM (name, car info)
-            # Other JWT fields (user_id, user_type, affiliate_yn, etc.) are kept internal for API auth only
-            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd", "location"}
+            # Only expose safe fields to LLM (name, car info, member id)
+            # Other JWT fields (user_type, affiliate_yn, tokens, etc.) are kept internal for API auth only
+            # NOTE: user_id in JWT = mbr_no (member number) — needed for get_my_cars_tool
+            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd", "location", "user_id"}
             user_info_lines = []
             for k, v in user_info.items():
                 if k in safe_fields:
                     if k == "location" and isinstance(v, dict):
                         user_info_lines.append(f"xpos: {v.get('xpos')}, ypos: {v.get('ypos')}")
+                    elif k == "user_id":
+                        # Map user_id (JWT) to mbr_no for agents — this is the member number used by get_my_cars_tool
+                        user_info_lines.append(f"mbr_no: {v}")
                     else:
                         user_info_lines.append(f"{k}: {v}")
 
