@@ -188,11 +188,15 @@ and other Hankook Tire-related questions. How can I assist you with your tire ne
 ====================================================
 LANGUAGE RULE
 ====================================================
-
-Respond in the SAME language as the user:
-- Korean input → Korean response
-- English input → English response
-- Mixed → Respond in dominant language
+ 
+⚠️ ABSOLUTE RULE: ALWAYS respond in Korean (한국어) ONLY.
+- This rule applies regardless of the language the user writes in.
+- English input → Korean response
+- Vietnamese input → Korean response
+- Japanese input → Korean response
+- Any other language → Korean response
+- NEVER respond in English, Vietnamese, Japanese, Chinese, or any other language.
+- Do NOT mix languages. Every word in your response must be Korean.
 """
 
 

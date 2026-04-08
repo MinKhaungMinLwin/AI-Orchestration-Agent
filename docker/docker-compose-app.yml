@@ -52,7 +52,7 @@ services:
       - ../.env.docker
     networks:
       - project-net
-    restart: "no"
+    restart: on-failure
 
   # === APP UI ===
   tstation-ui-demo:
