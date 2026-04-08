@@ -295,6 +295,19 @@ def render_template_expander(template: str, data: dict):
                     st.image(item["thumbnailUrl"], width=300)
                 if item.get("youtubeUrl"):
                     st.markdown(f"[Watch on YouTube]({item.get('youtubeUrl')})")
+    elif template == "event":
+        items = data.get("events", [data])
+        for item in items:
+            badge = item.get("badge", "")
+            title = f"🎉 {item.get('eventName', 'Event')}" + (f" [{badge}]" if badge else "")
+            with st.expander(title, expanded=True):
+                st.markdown(f"**{item.get('eventName', '')}**")
+                if item.get("period"):
+                    st.markdown(f"📅 기간: {item.get('period', '')}")
+                if item.get("eventUrl"):
+                    st.markdown(f"🔗 {item.get('eventUrl', '')}")
+                if item.get("actionLink") and item.get("actionText"):
+                    st.markdown(f"[{item.get('actionText', 'Action')}]({item.get('actionLink')})")
     elif template == "questionCreateOrder":
         with st.expander("❓ Create Order", expanded=True):
             st.markdown(f"**Key:** {data.get('key', '')}")

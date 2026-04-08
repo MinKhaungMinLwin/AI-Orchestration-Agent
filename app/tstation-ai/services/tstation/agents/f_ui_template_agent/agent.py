@@ -4,6 +4,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     list_product_tool,
     list_voucher_tool,
     list_location_tool,
+    list_event_tool,
     list_preview_youtube_tool,
     datepick_tool,
     question_tool,
@@ -44,7 +45,8 @@ TEMPLATE TYPES (use ONE that best fits)
 • list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t from /api/store/detail or /api/store/list), todayInstall (src: is_installable from /api/store/detail), tnaDelivery (src: is_tna_delivery from /api/store/detail) (camelCase, no underscore)
-• list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore)
+• list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
+• list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
 • datepick_tool → "datepick" - Date picker with fields: date, available (bool), timeSlots[], selectedDate (camelCase, no underscore)
 • question_tool → "question" - Questions with fields: question, listAnswer[[{{id, label, value}}]] (camelCase, no underscore)
 • bill_service_tool → "billService" - Service bills with fields: carInfo, services[[{{serviceName, quantity, price}}]], storeName, bookingDateTime, visitMethod, totalAmount, actionLink, actionText (camelCase, no underscore)
@@ -95,6 +97,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_product_tool": "Product",
         "list_voucher_tool": "Voucher",
         "list_location_tool": "Store",
+        "list_event_tool": "Event",
         "list_preview_youtube_tool": "YouTube",
         "datepick_tool": "Date Picker",
         "question_tool": "Question",
@@ -108,6 +111,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_product_tool": "product",
         "list_voucher_tool": "voucher",
         "list_location_tool": "location",
+        "list_event_tool": "event",
         "list_preview_youtube_tool": "previewYoutube",
         "datepick_tool": "datepick",
         "question_tool": "question",
@@ -124,6 +128,7 @@ class UITemplateSubAgent(BaseAgent):
                 list_product_tool,
                 list_voucher_tool,
                 list_location_tool,
+                list_event_tool,
                 list_preview_youtube_tool,
                 datepick_tool,
                 question_tool,
