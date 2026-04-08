@@ -86,14 +86,17 @@ def prompt_router() -> str:
     ⚠️ CRITICAL RULE — DISCOVERY → TRANSACTION DETECTION:
         If the Discovery Agent response contains goods_no (e.g., G000000XXXXXX)
         and mentions any of: "가격을 확인", "주문 진행", "연결합니다",
+        "매장", "재고", "장착", "배송",
         you MUST return next_action=CONTINUE and next_domain="transaction".
 
-        This applies to BOTH:
+        This applies to ALL of:
         - Price queries: Discovery found goods_no → Transaction gets price
         - Order queries: Discovery found goods_no → Transaction handles order
+        - Store queries: Discovery found goods_no → Transaction finds stores / checks inventory
+        - Installation queries: Discovery found goods_no → Transaction checks today install / T-NA delivery
 
         Do NOT return STOP when Discovery has found goods_no and the original
-        user request includes price/order intent.
+        user request includes price/order/store/inventory/installation intent.
     """)
 
 
@@ -328,17 +331,37 @@ EXAMPLE QUERIES → FLOW:
     → TRANSACTION
     (goods_no known → Quantity confirmed → Store or Cart)
 
-26. "이벤트 알려줘" / "현재 진행중인 이벤트 뭐야?"
+26. "벤투스 S2 AS 살 수 있는 매장 찾아줘"
+    "Find stores where I can buy Ventus S2 AS"
+    → DISCOVERY → TRANSACTION
+    (Product Name Search → goods_no Resolution → Store Search / Store Inventory)
+
+27. "Ventus S2 AS 4개 살건데 오늘 장착 가능한 매장 찾아줘"
+    "I want to buy 4 Ventus S2 AS, find stores that can install today"
+    → DISCOVERY → TRANSACTION
+    (Product Name Search → goods_no Resolution → Store Inventory with today install filter)
+
+28. "키네르기 EX T바로배송 되는 매장 알려줘"
+    "Show stores with T-NA delivery for Kinergy EX"
+    → DISCOVERY → TRANSACTION
+    (Product Name Search → goods_no Resolution → Store Inventory with T-NA filter)
+
+29. "벤투스 S2 AS 올마이티 매장에서 사고 싶어"
+    "I want to buy Ventus S2 AS at an All My T store"
+    → DISCOVERY → TRANSACTION
+    (Product Name Search → goods_no Resolution → All My T Store Search)
+
+30. "이벤트 알려줘" / "현재 진행중인 이벤트 뭐야?"
     "Tell me about current events"
     → DISCOVERY
     (get_events_tool → Display event list)
 
-27. "기획전 정보" / "지금 어떤 기획전 하고 있어?"
+31. "기획전 정보" / "지금 어떤 기획전 하고 있어?"
     "What promotions are available?"
     → DISCOVERY
     (get_deals_tool → Display deal list)
 
-28. "이벤트랑 기획전 다 알려줘"
+32. "이벤트랑 기획전 다 알려줘"
     "Tell me about events AND promotions"
     → DISCOVERY
     (get_events_tool + get_deals_tool → Display both sections)
@@ -561,13 +584,15 @@ class StreamingMultiAgentCoordinator:
                             msg.get("content", "") for msg in messages if msg.get("role") == "user"
                         )
                         qty_match = re.search(r"(\d+)\s*개", user_text)
+                        ord_qty = int(qty_match.group(1)) if qty_match else 2
+                        accumulated_tool_data.append({
+                            "tool": "user_intent",
+                            "data": {"ord_qty": ord_qty}
+                        })
                         if qty_match:
-                            ord_qty = int(qty_match.group(1))
-                            accumulated_tool_data.append({
-                                "tool": "user_intent",
-                                "data": {"ord_qty": ord_qty}
-                            })
                             logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
+                        else:
+                            logger.info(f"[COORDINATOR] No qty found in user message, using default ord_qty={ord_qty}")
 
                 tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
                 enriched_messages.append({
