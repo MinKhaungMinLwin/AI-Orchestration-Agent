@@ -690,7 +690,6 @@ class StreamingMultiAgentCoordinator:
 
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
-        yield {"type": "DONE"}
 
 
 import re
@@ -956,5 +955,6 @@ class TStationChatServiceV2:
         # 4. FINALIZE THE STREAM
         if coordinator_done_event:
             yield f"data: {json.dumps(coordinator_done_event, ensure_ascii=False)}\n\n"
-            
+
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
