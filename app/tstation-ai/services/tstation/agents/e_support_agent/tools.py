@@ -91,12 +91,13 @@ def search_faq_rag_tool(
         )
 
         # 2. Multi-vector hybrid search (RRF fusion of question + answer vectors).
-        #    Retrieve top_k * 3 initially so the reranker has enough candidates.
+        #    Retrieve top_k + 5 extra candidates for reranker headroom.
+        fetch_k = top_k + 5
         try:
             raw_results = qdrant_service.search_multi_vector(
                 collection_name=settings.QDRANT_COLLECTION_FAQ,
                 query_vector=query_embedding,
-                top_k=max(top_k * 3, 15),
+                top_k=fetch_k,
                 score_threshold=score_threshold,
             )
             logger.info("[TOOL][search_faq_rag_tool] Multi-vector search: %d candidates", len(raw_results))
@@ -106,7 +107,7 @@ def search_faq_rag_tool(
             raw_results = qdrant_service.search(
                 collection_name=settings.QDRANT_COLLECTION_FAQ,
                 query_vector=query_embedding,
-                top_k=max(top_k * 3, 15),
+                top_k=fetch_k,
                 score_threshold=score_threshold,
             )
 

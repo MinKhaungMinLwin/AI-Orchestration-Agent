@@ -9,6 +9,7 @@ Provides interface for:
 
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from qdrant_client import QdrantClient
@@ -287,25 +288,26 @@ class QdrantService:
         """
         Hybrid search using RRF fusion of 'question' and 'answer' named vectors.
 
-        Retrieves top_k*3 from each vector then fuses with Reciprocal Rank Fusion.
+        Retrieves top_k candidates from each vector then fuses with Reciprocal Rank Fusion.
         The fused score is normalized to [0,1] and filtered by score_threshold.
         """
-        fetch_k = max(top_k * 3, 15)
+        fetch_k = top_k
         try:
-            q_results = self.client.query_points(
-                collection_name=collection_name,
-                query=query_vector,
-                using="question",
-                limit=fetch_k,
-                with_payload=True,
-            )
-            a_results = self.client.query_points(
-                collection_name=collection_name,
-                query=query_vector,
-                using="answer",
-                limit=fetch_k,
-                with_payload=True,
-            )
+            # Run question/answer vector searches in parallel to halve network latency
+            def _query(vector_name: str):
+                return self.client.query_points(
+                    collection_name=collection_name,
+                    query=query_vector,
+                    using=vector_name,
+                    limit=fetch_k,
+                    with_payload=True,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                q_future = executor.submit(_query, "question")
+                a_future = executor.submit(_query, "answer")
+                q_results = q_future.result()
+                a_results = a_future.result()
         except Exception as e:
             logger.exception(f"Failed multi-vector search in {collection_name}")
             raise

@@ -594,8 +594,13 @@ class StreamingMultiAgentCoordinator:
             }
 
             # LLM Decision: After first agent, use LLM to decide next action
+            # Support domain rarely chains to other agents — skip LLM decision to save ~300ms
             if is_first_agent:
                 is_first_agent = False
+                if domain == MultiAgentDomain.Domain.SUPPORT:
+                    logger.info("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
+                    break
+
                 decision = decide_next_action(
                     original_messages=messages,
                     previous_agent_response=full_response,
