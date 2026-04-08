@@ -1047,8 +1047,8 @@ class DiscoverySubAgent(BaseAgent):
         # Product Reviews
         "search_youtube_video_tool": "Product Reviews",
         # Event/Deal
-        "get_events_tool": "Event/Deal Info",
-        "get_deals_tool": "Event/Deal Info",
+        "get_events_tool": "Price",
+        "get_deals_tool": "Price",
     }
 
     def __init__(self, model):
