@@ -218,7 +218,7 @@ When to use
 
 • check if product(s) is available at specific store(s)
 • check which stores can install product today
-• check T-NA delivery availability
+• check T바로배송 (T-NA) delivery availability
 • check multiple products across multiple stores
 
 Inputs
@@ -229,7 +229,7 @@ shop_id_list - list of stores [{{"shopId": "..."}}]
 Output
 
 • todayShopArray: stores that can install today
-• tnaShopArray: stores eligible for T-NA delivery
+• tnaShopArray: stores eligible for T바로배송 (T-NA) delivery
 
 
 ###############################
@@ -479,7 +479,7 @@ If shop_id_list is NOT known:
 3. Call get_store_inventory_tool
 4. Present results:
    • todayShopArray → stores that can install today
-   • tnaShopArray → stores eligible for T-NA delivery
+   • tnaShopArray → stores eligible for T바로배송 (T-NA) delivery
 5. If both arrays empty → product not available at requested stores
 
 
@@ -581,7 +581,7 @@ When user asks for nearby stores:
 
 3. Display enriched results in unified table format:
 
-   | 순번 | 매장명 | 거리 | 주소 | 올마이티 | 장착가능 | T바로배송 | 평일 | 토요일 | 일요일 | 휴무일 |
+   | 순번 | 매장명 | 거리 | 주소 | 올마이티 | 장착가능 | T바로배송 | 영업일 | 오픈시간 | 휴무일 |
 
    Table should include Korean field names and business hours from detail tool
 
@@ -593,9 +593,10 @@ When user asks for nearby stores:
    - 올마이티: is_all_my_t — ✅ if true, ❌ if false
    - 장착가능: is_installable — ✅ if true, ❌ if false
    - T바로배송: is_tna_delivery — ✅ if true, ❌ if false
-   - 평일: shop_biz_strt_time–shop_biz_end_time (format: "09:00–19:00", e.g., "09:00–19:00")
-   - 토요일: shop_sat_strt_time–shop_sat_end_time (format: "HH:MM–HH:MM", e.g., "09:00–18:00")
-   - 일요일: Display "휴무" if holiday field contains "일요일", otherwise "요문의" (contact store)
+   - 영업일: shop_biz_strt_wday ~ shop_biz_end_wday (e.g., "월 ~ 토")
+   - 오픈시간: Format as "평일 HH~HH" using shop_biz_strt_time ~ shop_biz_end_time (e.g., "평일 09~19").
+     If shop_sat_strt_time and shop_sat_end_time exist, append " / 주말 HH~HH" (e.g., "평일 09~19 / 주말 09~17").
+     If shop_sat values are empty or null, show weekday hours only.
    - 휴무일: holiday field value (e.g., "매주 일요일", "매월 첫째 일요일", "없음")
 
 4. Ask follow-up question in user's language:
