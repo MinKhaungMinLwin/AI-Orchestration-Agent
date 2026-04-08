@@ -7,6 +7,8 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_my_cars_tool,
     search_car_model_tool,
     search_youtube_video_tool,
+    get_events_tool,
+    get_deals_tool,
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
@@ -930,6 +932,88 @@ Apologize briefly and redirect to your supported domain.
 Example decline:
 "I'm sorry, but I can only help with tire-related questions and Hankook products. How can I assist you with your tire needs today?"
 
+
+====================================================
+EVENT/DEAL INFORMATION
+====================================================
+
+Purpose: Provide information about current events and promotional campaigns.
+
+Tool: get_events_tool(lang_cd="ko")
+
+When to use:
+• user asks "이벤트 알려줘" (tell me about events)
+• user asks "현재 진행중인 이벤트" (current ongoing events)
+• user asks "이벤트有哪些" (what events are there)
+• user wants to know about promotional events/campaigns
+
+Tool: get_deals_tool()
+
+When to use:
+• user asks "기획전 정보" (tell me about deals/promotions)
+• user asks "기획전 목록" (list of promotions)
+• user asks "기획전有哪些" (what promotions are there)
+• user asks about promotional campaigns
+
+
+------------------------------------
+Flow 12 — Event/Deal Information
+------------------------------------
+
+**Trigger:** User asks about events OR deals/promotions
+
+Examples:
+- "이벤트 알려줘" / "이벤트有哪些"
+- "기획전 정보" / "기획전有哪些"
+- "현재 진행중인 이벤트 뭐야?"
+- "지금 어떤 기획전 하고 있어?"
+
+**STEP 1: Identify request type**
+- If user mentions "이벤트" → Call get_events_tool(lang_cd="ko")
+- If user mentions "기획전" → Call get_deals_tool()
+- If user mentions BOTH → Call both tools
+
+**STEP 2: Call tool(s)**
+- Call the appropriate tool(s)
+
+**STEP 3: Format response**
+Display results in structured Markdown table.
+
+For Events:
+### 현재 진행 중인 이벤트
+
+| No | 이벤트명 | 기간 | 상태 |
+|----|----------|------|------|
+| 1  | ...      | ...  | ...  |
+
+Show: evt_nm, evt_strt_dtime~evt_end_dtime, evt_prgs_stat_cd
+⚠️ Do NOT display URL column — URLs are not functional
+
+For Deals/기획전:
+### 현재 진행 중인 기획전
+
+| No | 기획전명 | 브랜드 | 기간 |
+|----|----------|--------|------|
+| 1  | ...      | ...   | ...  |
+
+Show: deal_nm, deal_brand_logo, disp_strt_dtime~disp_end_dtime
+⚠️ Do NOT display banner image URL column
+
+**STEP 4: Add call-to-action**
+- If event has notice/info → suggest: "자세한 내용은 매장staff에게 문의하세요"
+- If deal has notice → suggest viewing details at store
+
+
+------------------------------------
+Combined Request (Both Events & Deals)
+------------------------------------
+
+If user asks for BOTH (e.g., "이벤트랑 기획전 다 알려줘"):
+1. Call get_events_tool(lang_cd="ko")
+2. Call get_deals_tool()
+3. Display both sections sequentially
+
+
 ====================================================
 CONVERSATION STYLE
 ====================================================
@@ -962,6 +1046,9 @@ class DiscoverySubAgent(BaseAgent):
         "get_product_description_tool": "Product Description",
         # Product Reviews
         "search_youtube_video_tool": "Product Reviews",
+        # Event/Deal
+        "get_events_tool": "Event/Deal Info",
+        "get_deals_tool": "Event/Deal Info",
     }
 
     def __init__(self, model):
@@ -976,7 +1063,9 @@ class DiscoverySubAgent(BaseAgent):
                 search_car_model_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool,
-                search_youtube_video_tool # <-- Added this!
+                search_youtube_video_tool,
+                get_events_tool,
+                get_deals_tool,
             ],
             system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
             name="Discovery Agent",

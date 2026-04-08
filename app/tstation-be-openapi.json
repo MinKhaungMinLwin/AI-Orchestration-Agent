@@ -1563,6 +1563,84 @@
           }
         }
       }
+    },
+    "/api/events/": {
+      "get": {
+        "tags": [
+          "Event/Deal AF - 이벤트 및 기획전 조회"
+        ],
+        "summary": "이벤트 목록 조회",
+        "description": "현재 전시 중인 이벤트 목록을 조회합니다. (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)",
+        "operationId": "get_events_api_events__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lang_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "언어코드 (기본값: ko)",
+              "default": "ko",
+              "title": "Lang Cd"
+            },
+            "description": "언어코드 (기본값: ko)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events/deals": {
+      "get": {
+        "tags": [
+          "Event/Deal AF - 이벤트 및 기획전 조회"
+        ],
+        "summary": "기획전 목록 조회",
+        "description": "현재 전시 중인 기획전 목록을 조회합니다. (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)",
+        "operationId": "get_deals_api_events_deals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1764,6 +1842,18 @@
             "type": "string",
             "title": "Car Nm",
             "description": "차량명"
+          },
+          "car_model_det": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Model Det",
+            "description": "차량 상세 모델명"
           }
         },
         "type": "object",
@@ -1871,6 +1961,174 @@
         ],
         "title": "CompatibilityResponse"
       },
+      "DealItem": {
+        "properties": {
+          "deal_no": {
+            "type": "string",
+            "title": "Deal No",
+            "description": "기획전 번호"
+          },
+          "deal_tp_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Tp Cd",
+            "description": "기획전 유형 코드"
+          },
+          "deal_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Nm",
+            "description": "기획전명"
+          },
+          "disp_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Seq",
+            "description": "전시 순서"
+          },
+          "deal_cpn_tp_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Cpn Tp Cd",
+            "description": "기획전 쿠폰 유형 코드"
+          },
+          "bnr_pc_img_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bnr Pc Img Url",
+            "description": "배너 이미지 PC"
+          },
+          "bnr_mc_img_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bnr Mc Img Url",
+            "description": "배너 이미지 모바일"
+          },
+          "disp_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Strt Dtime",
+            "description": "전시 시작 일시"
+          },
+          "disp_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp End Dtime",
+            "description": "전시 종료 일시"
+          },
+          "new_deal_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Deal Yn",
+            "description": "신규 기획전 여부"
+          },
+          "deal_brand_logo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Brand Logo",
+            "description": "기획전 브랜드 로고"
+          },
+          "deal_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Notice",
+            "description": "기획전 유의사항"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deal_no"
+        ],
+        "title": "DealItem"
+      },
+      "DealListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "반환된 기획전 수"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DealItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "DealListResponse"
+      },
       "EscalationRequest": {
         "properties": {
           "mbr_no": {
@@ -1951,6 +2209,180 @@
           "redirect_url"
         ],
         "title": "EscalationResponse"
+      },
+      "EventItem": {
+        "properties": {
+          "evt_no": {
+            "type": "string",
+            "title": "Evt No",
+            "description": "이벤트 번호"
+          },
+          "evt_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Nm",
+            "description": "이벤트명"
+          },
+          "evt_clss_cd": {
+            "type": "string",
+            "title": "Evt Clss Cd",
+            "description": "이벤트 분류 코드"
+          },
+          "evt_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Strt Dtime",
+            "description": "이벤트 시작 일시"
+          },
+          "evt_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt End Dtime",
+            "description": "이벤트 종료 일시"
+          },
+          "evt_prgs_stat_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Prgs Stat Cd",
+            "description": "이벤트 진행 상태 코드"
+          },
+          "evt_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Url Addr",
+            "description": "이벤트 URL 주소"
+          },
+          "bnr_img_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bnr Img Url Addr",
+            "description": "배너 이미지 URL 주소"
+          },
+          "dtl_conts_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dtl Conts Url Addr",
+            "description": "상세 컨텐츠 URL 주소"
+          },
+          "frdm_cmps_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frdm Cmps Url Addr",
+            "description": "자유 구성 URL 주소"
+          },
+          "evt_badge_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Badge Nm",
+            "description": "이벤트 뱃지 이름"
+          },
+          "new_evt_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Evt Yn",
+            "description": "신규 이벤트 여부"
+          },
+          "dtl_evt_cont": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dtl Evt Cont",
+            "description": "상세 이벤트 내용"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evt_no",
+          "evt_clss_cd"
+        ],
+        "title": "EventItem"
+      },
+      "EventListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "반환된 이벤트 수"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "EventListResponse"
       },
       "FaqItem": {
         "properties": {
@@ -3825,6 +4257,12 @@
             "type": "boolean",
             "title": "Is Installable",
             "description": "쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))",
+            "default": false
+          },
+          "is_tna_delivery": {
+            "type": "boolean",
+            "title": "Is Tna Delivery",
+            "description": "T바로배송(한국타이어 퀵배송) 가능 매장 여부",
             "default": false
           },
           "holiday": {

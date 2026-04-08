@@ -24,6 +24,10 @@ from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 
 
+# Event/Deal
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_events_api_events_get import sync_detailed as get_events
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
+
 # Member Car Info
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
 
@@ -48,6 +52,10 @@ DOMAIN_TOOL_MAP = {
 
         # Product Description
         "get_description",
+
+        # Event/Deal
+        "get_events",
+        "get_deals",
     },
     "transaction": {
         # Price
@@ -431,6 +439,70 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
         return _error_response(None, str(e), "Failed to get product recommendations")
+
+
+@tool
+def get_events_tool(lang_cd: str = "ko"):
+    """이벤트 목록 조회
+
+    현재 전시 중인 이벤트 목록을 조회합니다.
+    (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)
+
+    Args:
+        lang_cd (str): 언어코드 (기본값: ko)
+
+    Example Inputs:
+        - {"lang_cd": "ko"}
+        - {"lang_cd": "en"}
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    """
+    logger.info("[TOOL][get_events_tool] Called with: lang_cd=%s", lang_cd)
+
+    try:
+        response = get_events(client=get_client(), lang_cd=lang_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get events"
+            )
+        logger.info("[TOOL][get_events_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_events_tool] Failed")
+        return _error_response(None, str(e), "Failed to get events")
+
+
+@tool
+def get_deals_tool():
+    """기획전 목록 조회
+
+    현재 전시 중인 기획전 목록을 조회합니다.
+    (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)
+
+    Example Inputs:
+        - {}
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    """
+    logger.info("[TOOL][get_deals_tool] Called")
+
+    try:
+        response = get_deals(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get deals"
+            )
+        logger.info("[TOOL][get_deals_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_deals_tool] Failed")
+        return _error_response(None, str(e), "Failed to get deals")
 
 
 # Add this new tool for YouTube video search related to hankook tire and tstation tv. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.
