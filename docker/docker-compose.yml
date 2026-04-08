@@ -138,6 +138,19 @@ services:
     networks:
       - internal-net
 
+  # ===== Ingestion for embedding document === #
+  ingestion:
+    build: ../app/tstation-ingestion
+    depends_on:
+      - qdrant
+    env_file:
+      - ../.env
+      - ../.env.docker
+    networks:
+      - internal-net
+    restart: on-failure
+
+
   # === Redis Conversation Management ===
   redis-conversation-management:
     image: redis
