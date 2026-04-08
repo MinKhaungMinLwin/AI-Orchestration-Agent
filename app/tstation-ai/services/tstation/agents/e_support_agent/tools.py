@@ -44,6 +44,74 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
+
+# RAG category_lv1 → DB lrcl_cd 매핑 (키워드 기반 추론용)
+_KEYWORD_TO_LRCL = {
+    "배송": "배송/장착", "장착": "배송/장착", "매장": "배송/장착",
+    "주문": "주문/결제", "결제": "주문/결제", "반품": "주문/결제", "환불": "주문/결제", "교환": "주문/결제",
+    "쿠폰": "혜택/프로모션", "할인": "혜택/프로모션", "프로모션": "혜택/프로모션", "이벤트": "혜택/프로모션",
+    "회원": "회원/계정", "가입": "회원/계정", "탈퇴": "회원/계정", "비밀번호": "회원/계정",
+    "워런티": "워런티", "보증": "워런티", "A/S": "워런티",
+    "타이어": "상품/서비스", "경정비": "상품/서비스",
+}
+
+
+def _infer_lrcl_cd(query: str, rag_results: list[dict]) -> str | None:
+    """RAG 결과의 category_lv1 또는 쿼리 키워드로 DB lrcl_cd를 추론한다."""
+    # 1순위: RAG 최상위 결과의 카테고리
+    if rag_results:
+        category = rag_results[0].get("payload", {}).get("metadata", {}).get("category_lv1")
+        if category:
+            return category
+
+    # 2순위: 쿼리 키워드 매칭
+    for keyword, lrcl in _KEYWORD_TO_LRCL.items():
+        if keyword in query:
+            return lrcl
+
+    return None
+
+
+def _fallback_db_faq(query: str, rag_results: list[dict], top_k: int) -> list[dict]:
+    """RAG 점수가 낮을 때 DB FAQ API로 카테고리 기반 보충 검색."""
+    lrcl_cd = _infer_lrcl_cd(query, rag_results)
+
+    try:
+        response = get_faq(client=get_client(), lrcl_cd=lrcl_cd, limit=top_k)
+        if response.parsed is None:
+            return []
+
+        parsed = response.parsed
+        items = parsed.items if hasattr(parsed, "items") else []
+
+        # RAG에 이미 있는 질문은 중복 제거
+        existing_questions = {
+            r.get("payload", {}).get("question", "") for r in rag_results
+        }
+
+        results = []
+        for item in items:
+            item_dict = _to_dict(item)
+            question = item_dict.get("cust_quest", "")
+            if question in existing_questions:
+                continue
+            results.append({
+                "id": None,
+                "question": question,
+                "answer": item_dict.get("pc_ans_cont", ""),
+                "metadata": {
+                    "category_lv1": item_dict.get("lrcl_cd", ""),
+                    "category_lv2": item_dict.get("mdcl_cd", ""),
+                },
+                "source": "db",
+            })
+
+        return results[:top_k]
+
+    except Exception as e:
+        logger.warning("[TOOL][_fallback_db_faq] DB fallback failed: %s", e)
+        return []
+
 @tool
 def search_faq_rag_tool(
     query: str,
@@ -115,20 +183,30 @@ def search_faq_rag_tool(
         reranker = get_reranker_service()
         reranked = reranker.rerank(query=query, results=raw_results, top_k=top_k)
 
-        # 4. Format output
+        # 4. Format RAG results
         formatted_results = [
             {
                 "id": r.get("id"),
-                # "content": r.get("payload", {}).get("content", ""),
                 "question": r.get("payload", {}).get("question", ""),
                 "answer": r.get("payload", {}).get("answer", ""),
                 "metadata": r.get("payload", {}).get("metadata", {}),
+                "source": "rag",
             }
             for r in reranked
         ]
 
+        # 5. DB fallback: if RAG best score < 0.7, supplement with DB FAQ
+        best_score = reranked[0].get("score", 0.0) if reranked else 0.0
+        if best_score < 0.7:
+            db_results = _fallback_db_faq(query, reranked, top_k)
+            if db_results:
+                formatted_results.extend(db_results)
+                logger.info(
+                    "[TOOL][search_faq_rag_tool] DB fallback added %d FAQs", len(db_results),
+                )
+
         logger.info(
-            "[TOOL][search_faq_rag_tool] Returned %d FAQs after reranking (threshold=%.2f)",
+            "[TOOL][search_faq_rag_tool] Returned %d FAQs (RAG+DB, threshold=%.2f)",
             len(formatted_results), score_threshold,
         )
         return _success_response(200, formatted_results)

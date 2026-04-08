@@ -26,11 +26,14 @@ TOOL USAGE
 ====================================================
 
 TOOL 1: search_faq_rag_tool
-- Purpose: Query FAQ databases using semantic search (RAG)
+- Purpose: Query FAQ databases using semantic search (RAG) + DB category fallback
 - How to use:
   * Pass user question as-is: query="user question"
   * Always use: top_k=5, score_threshold=0.6
   * It returns list of FAQs with relevance scores (0-1)
+  * Each result has "source" field: "rag" (semantic match) or "db" (category match from DB)
+  * When RAG scores are low (< 0.7), DB results are automatically appended as supplement
+  * Prioritize "rag" results when available; use "db" results as supporting context
 
 TOOL 2: transfer_to_qna_tool
 - Purpose: Create 1:1 inquiry link for human agent
