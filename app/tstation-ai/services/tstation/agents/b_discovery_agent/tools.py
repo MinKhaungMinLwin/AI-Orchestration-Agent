@@ -544,12 +544,15 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
             is_official_channel = any(allowed in channel_name for allowed in allowed_channels)
             
             if is_official_channel:
+                thumbs = res.get("thumbnails") or []
                 formatted_results.append({
                     "title": res.get("title"),
-                    "channel": res.get("channel"),  # Keep original casing for display
+                    "channel": res.get("channel"),
                     "views": res.get("views"),
                     "duration": res.get("duration"),
-                    "url": f"https://www.youtube.com{res.get('url_suffix')}"
+                    "url": f"https://www.youtube.com{res.get('url_suffix')}",
+                    "thumbnailUrl": thumbs[0] if thumbs else None,
+                    "videoId": res.get("id"),
                 })
                 
             # 5. Stop once we have gathered enough official videos
