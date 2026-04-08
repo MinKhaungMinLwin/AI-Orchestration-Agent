@@ -72,9 +72,9 @@ The tool will return a JSON with:
   }}
 
 ⚠️ CRITICAL RULE FOR RELEVANCE SCORING:
-- HIGH RELEVANCE (score >= 0.8): Use to answer directly - question is clearly FAQ-related
-- MEDIUM RELEVANCE (score 0.6-0.8): Use as supporting info - question has some FAQ overlap
-- OUT OF FAQ SCOPE (all scores < 0.6): Question is NOT related to FAQs
+- HIGH RELEVANCE (score >= 0.7): Use to answer directly - question is clearly FAQ-related
+- MEDIUM RELEVANCE (score 0.45-0.7): Use as supporting info - question has some FAQ overlap
+- OUT OF FAQ SCOPE (all scores < 0.45): Question is NOT related to FAQs
   * This means the user's question is outside FAQ/Support Agent scope
   * Do NOT try to answer with unrelated content
   * MUST decline and redirect to appropriate domain
