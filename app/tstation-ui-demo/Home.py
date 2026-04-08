@@ -228,10 +228,25 @@ def render_template_expander(template: str, data: dict):
     elif template == "location":
         items = data.get("locations", [data])
         for item in items:
-            with st.expander(f"📍 {item.get('nameAddress', 'Store')}", expanded=True):
+            badges = []
+            if item.get("isAllMyT"):
+                badges.append("🏆 All My T")
+            if item.get("todayInstall"):
+                badges.append("🔧 오늘 장착")
+            if item.get("tnaDelivery"):
+                badges.append("🚚 T바로배송")
+
+            badge_text = " | ".join(badges) if badges else ""
+            expander_label = f"📍 {item.get('nameAddress', 'Store')}"
+            if badge_text:
+                expander_label += f" [{badge_text}]"
+
+            with st.expander(expander_label, expanded=True):
                 st.markdown(f"**{item.get('nameAddress', '')}**")
                 st.markdown(f"📌 {item.get('detailAddress', '')}")
                 st.markdown(f"📏 Distance: {item.get('distance', '')} km")
+                if badges:
+                    st.markdown(f"**Badges:** {badge_text}")
                 if item.get("lat") and item.get("long"):
                     st.markdown(f"🗺️ ({item.get('lat')}, {item.get('long')})")
     elif template == "datepick":

@@ -19,6 +19,7 @@ class StoreDetailResponse:
         tel_no (None | str | Unset): 전화번호
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
         is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
+        is_tna_delivery (bool | Unset): T바로배송(한국타이어 퀵배송) 가능 매장 여부 Default: False.
         holiday (None | str | Unset): 휴무일
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
@@ -33,6 +34,7 @@ class StoreDetailResponse:
     tel_no: None | str | Unset = UNSET
     is_all_my_t: bool | Unset = False
     is_installable: bool | Unset = False
+    is_tna_delivery: bool | Unset = False
     holiday: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
@@ -59,6 +61,8 @@ class StoreDetailResponse:
         is_all_my_t = self.is_all_my_t
 
         is_installable = self.is_installable
+
+        is_tna_delivery = self.is_tna_delivery
 
         holiday: None | str | Unset
         if isinstance(self.holiday, Unset):
@@ -117,6 +121,8 @@ class StoreDetailResponse:
             field_dict["is_all_my_t"] = is_all_my_t
         if is_installable is not UNSET:
             field_dict["is_installable"] = is_installable
+        if is_tna_delivery is not UNSET:
+            field_dict["is_tna_delivery"] = is_tna_delivery
         if holiday is not UNSET:
             field_dict["holiday"] = holiday
         if shop_biz_strt_time is not UNSET:
@@ -161,6 +167,8 @@ class StoreDetailResponse:
         is_all_my_t = d.pop("is_all_my_t", UNSET)
 
         is_installable = d.pop("is_installable", UNSET)
+
+        is_tna_delivery = d.pop("is_tna_delivery", UNSET)
 
         def _parse_holiday(data: object) -> None | str | Unset:
             if data is None:
@@ -232,6 +240,7 @@ class StoreDetailResponse:
             tel_no=tel_no,
             is_all_my_t=is_all_my_t,
             is_installable=is_installable,
+            is_tna_delivery=is_tna_delivery,
             holiday=holiday,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,

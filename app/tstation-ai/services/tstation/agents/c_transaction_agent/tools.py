@@ -402,9 +402,11 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     Retrieve store information and available reservation time slots (hourly)
     based on store ID and date.
 
-    Response includes is_installable field:
+    Response includes is_installable and is_tna_delivery fields:
     - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
     - is_installable=false: 매장은 온라인 쇼핑 장착 불가
+    - is_tna_delivery=true: T바로배송(한국타이어 퀵배송) 가능 매장
+    - is_tna_delivery=false: T바로배송 불가 매장
 
     Args:
         shop_id (str): Store ID.

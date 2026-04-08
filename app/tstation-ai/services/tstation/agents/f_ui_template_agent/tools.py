@@ -88,7 +88,7 @@ def list_voucher_tool(
 
 @tool
 def list_location_tool(
-    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str)"]
+    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), isAllMyT (bool), todayInstall (bool), tnaDelivery (bool)"]
 ) -> dict:
     """Render location list cards.
 
@@ -96,9 +96,12 @@ def list_location_tool(
         items: List of location/store objects.
 
     Field Details:
-        - nameAddress (str): Location/store name. Rule: required, non-empty string.
-        - distance (str): Distance from user location. Rule: required, string (e.g., "2.5km").
-        - detailAddress (str): Full address. Rule: required, non-empty string.
+        - nameAddress (str): Location/store name (src: shop_nm). Rule: required, non-empty string.
+        - distance (str): Distance from user location (src: distance). Rule: required, string (e.g., "2.5km").
+        - detailAddress (str): Full address (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl). Rule: required, non-empty string.
+        - isAllMyT (bool): All My T badge (src: is_all_my_t from /api/store/detail or /api/store/list). Rule: optional, default false.
+        - todayInstall (bool): Today Install badge (src: is_installable from /api/store/detail). Rule: optional, default false.
+        - tnaDelivery (bool): T-NA Delivery badge (src: is_tna_delivery from /api/store/detail). Rule: optional, default false.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"locations": items}}

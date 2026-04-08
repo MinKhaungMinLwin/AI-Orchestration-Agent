@@ -549,16 +549,18 @@ When user asks for nearby stores:
    Example: For 5 nearby stores → call get_store_detail_tool 5 times (can run in parallel)
 
 3. Display enriched results in unified table format:
-   
-   | 순번 | 매장명 | 거리 | 주소 | 평일 | 토요일 | 일요일 | 휴무일 |
-   
+
+   | 순번 | 매장명 | 거리 | 주소 | 장착가능 | T바로배송 | 평일 | 토요일 | 일요일 | 휴무일 |
+
    Table should include Korean field names and business hours from detail tool
-   
+
    Mapping:
    - 순번: Sequential from 1
    - 매장명: shop_nm
    - 거리: distance (format: "X.Xkm")
    - 주소: address
+   - 장착가능: is_installable — ✅ if true, ❌ if false
+   - T바로배송: is_tna_delivery — ✅ if true, ❌ if false
    - 평일: shop_biz_strt_time–shop_biz_end_time (format: "09:00–19:00", e.g., "09:00–19:00")
    - 토요일: shop_sat_strt_time–shop_sat_end_time (format: "HH:MM–HH:MM", e.g., "09:00–18:00")
    - 일요일: Display "휴무" if holiday field contains "일요일", otherwise "요문의" (contact store)
@@ -855,16 +857,16 @@ If user wants to select a store (option 1):
    - Or use user's location for nearby stores
 2. Call get_store_list_tool or get_nearby_stores_tool to get candidate stores
 
-3. **Display store list with 장착가능 column:**
+3. **Display store list with 장착가능 and T바로배송 columns:**
    → Display ALL candidate stores to the user
-   → Add a separate "장착가능" column in the store table:
-     - is_installable=true → "✅"
-     - is_installable=false → "❌"
+   → Add columns in the store table:
+     - 장착가능: is_installable=true → "✅", is_installable=false → "❌"
+     - T바로배송: is_tna_delivery=true → "✅", is_tna_delivery=false → "❌"
    → Example table format:
-     | 순번 | 매장명 | 주소 | 장착가능 |
-     |------|--------|------|----------|
-     | 1 | 티스테이션 강남점 | 서울시 강남구 ... | ✅ |
-     | 2 | 티스테이션 광주역점 | 광주시 ... | ❌ |
+     | 순번 | 매장명 | 주소 | 장착가능 | T바로배송 |
+     |------|--------|------|----------|----------|
+     | 1 | 티스테이션 강남점 | 서울시 강남구 ... | ✅ | ✅ |
+     | 2 | 티스테이션 광주역점 | 광주시 ... | ❌ | ❌ |
    → Ask user to select a store
 
 4. **🚨 MANDATORY — Call get_store_detail_tool to verify is_installable:**
@@ -1261,10 +1263,10 @@ When displaying stores:
 
 ### 주변 매장
 
-| 순번 | 매장명 | 거리 | 주소 | 장착가능 | 평일 | 토요일 | 일요일 | 휴무일 |
-|------|--------|------|------|----------|------|--------|--------|--------|
-| 1 | 티스테이션 센텀점 | 0.5km | 부산시 해운대구 센텀로 | ✅ | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
-| 2 | 극동상사 | 1.2km | 부산시 해운대구 종로 | ❌ | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
+| 순번 | 매장명 | 거리 | 주소 | 장착가능 | T바로배송 | 평일 | 토요일 | 일요일 | 휴무일 |
+|------|--------|------|------|----------|----------|------|--------|--------|--------|
+| 1 | 티스테이션 센텀점 | 0.5km | 부산시 해운대구 센텀로 | ✅ | ✅ | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
+| 2 | 극동상사 | 1.2km | 부산시 해운대구 종로 | ❌ | ❌ | 09:00–19:00 | 09:00–18:00 | 휴무 | 매주 일요일 |
 
 **Rules for store table (always in Korean):**
 - 순번: Sequential from 1
@@ -1272,6 +1274,7 @@ When displaying stores:
 - 거리: distance in km format (e.g., "0.5km", "1.2km")
 - 주소: Full address (always in Korean)
 - 장착가능: is_installable field — ✅ if true, ❌ if false
+- T바로배송: is_tna_delivery field — ✅ if true, ❌ if false
 - 평일: shop_biz_strt_time–shop_biz_end_time (format: "HH:MM–HH:MM")
   - If hour-only values (e.g., "09", "19"): append ":00" to get "09:00"–"19:00"
 - 토요일: shop_sat_strt_time–shop_sat_end_time (format: "HH:MM–HH:MM")
