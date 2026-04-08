@@ -36,7 +36,7 @@ temp/*
 app/tstation-ai/static/public/*
 app/tstation-ai/api/router_local.py
 playground
-
+bin
 # Claude
 .claude
 .mcp.json

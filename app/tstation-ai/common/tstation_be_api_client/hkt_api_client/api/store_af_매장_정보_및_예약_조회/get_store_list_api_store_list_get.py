@@ -14,6 +14,7 @@ def _get_kwargs(
     *,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -32,6 +33,8 @@ def _get_kwargs(
     else:
         json_store_nm = store_nm
     params["store_nm"] = json_store_nm
+
+    params["all_my_t_only"] = all_my_t_only
 
     params["limit"] = limit
 
@@ -81,6 +84,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
@@ -90,6 +94,7 @@ def sync_detailed(
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -103,6 +108,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         region_code=region_code,
         store_nm=store_nm,
+        all_my_t_only=all_my_t_only,
         limit=limit,
     )
 
@@ -118,6 +124,7 @@ def sync(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
@@ -127,6 +134,7 @@ def sync(
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -141,6 +149,7 @@ def sync(
         client=client,
         region_code=region_code,
         store_nm=store_nm,
+        all_my_t_only=all_my_t_only,
         limit=limit,
     ).parsed
 
@@ -150,6 +159,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
@@ -159,6 +169,7 @@ async def asyncio_detailed(
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -172,6 +183,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         region_code=region_code,
         store_nm=store_nm,
+        all_my_t_only=all_my_t_only,
         limit=limit,
     )
 
@@ -185,6 +197,7 @@ async def asyncio(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
@@ -194,6 +207,7 @@ async def asyncio(
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -209,6 +223,7 @@ async def asyncio(
             client=client,
             region_code=region_code,
             store_nm=store_nm,
+            all_my_t_only=all_my_t_only,
             limit=limit,
         )
     ).parsed

@@ -40,9 +40,9 @@ RULES:
 TEMPLATE TYPES (use ONE that best fits)
 ====================================================
 
-• list_car_tool → "listCar" - Cars with fields: licensePlate, description, imageUrl (camelCase, no underscore)
+• list_car_tool → "listCar" - Cars with fields: licensePlate (src: car_no), description (src: car_model_det), imageUrl (src: thnl_img_path_nm or mo_img_path_nm or pc_img_path_nm) (camelCase, no underscore)
 • list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity (camelCase, no underscore)
-• list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher, description, discount, dateVoucher, myCouponLink, downloadLink (camelCase, no underscore)
+• list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress, distance (str), detailAddress (camelCase, no underscore)
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore)
 • datepick_tool → "datepick" - Date picker with fields: date, available (bool), timeSlots[], selectedDate (camelCase, no underscore)

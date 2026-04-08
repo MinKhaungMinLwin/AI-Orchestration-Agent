@@ -39,6 +39,14 @@ support_subagent = SupportSubAgent(LLM)
 from services.tstation.agents.f_ui_template_agent.agent import UITemplateSubAgent
 ui_template_subagent = UITemplateSubAgent(LLM)
 
+# QC Agent LLM (lightweight model, temperature=0.0 for deterministic fact-checking)
+QC_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL}",
+    temperature=0.0,
+)
+
 ## Router
 class AgentDomain(BaseModel):
     class Domain(str, Enum):
@@ -88,6 +96,7 @@ class AgentDomain(BaseModel):
         - Check logistics stock (warehouse availability)
         - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
         - Find stores by NAME (e.g., "find Hankook store")
+        - Find "All My T" stores (e.g., "all my T", "All My T", "올마이티", "allMyT")
         - Check store inventory (which stores have this tire)
         - "Buy", "purchase", "order", "checkout" WITH goods_no already known
         - Track existing order (provide order number)
@@ -100,6 +109,9 @@ class AgentDomain(BaseModel):
         - "G000000314254 가격 얼마야?" (goods_no known → TRANSACTION)
         - "Is G000000314254 in stock?"
         - "Show me stores near Gangnam"
+        - "Show me nearby All My T stores"
+        - "All My T 매장 찾아줘"
+        - "올마이티 매장 검색"
         - "G000000314254 4개 주문할게" (goods_no known → TRANSACTION)
         - "Book installation at 2pm"
         - "Track my order 12345"
@@ -138,6 +150,8 @@ class AgentDomain(BaseModel):
 
         KEY PRINCIPLES:
         - "stores near [location]" → TRANSACTION
+        - "store near me" + "All My T" → TRANSACTION
+        - "find All My T stores" → TRANSACTION
         - "price of [specific product]" → TRANSACTION
         - "search tires named [X]" → DISCOVERY
         - "does [tire] fit [car]?" → DISCOVERY (compatibility check)

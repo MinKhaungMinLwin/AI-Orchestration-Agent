@@ -4,6 +4,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
     get_user_vehicles_tool,
+    get_my_cars_tool,
     search_car_model_tool,
     search_youtube_video_tool,
 )
@@ -76,11 +77,11 @@ When to use
 
 Inputs
 
-rcmd_type
+rcmd_type (default: tstation — do NOT ask user, use tstation unless user explicitly requests otherwise)
 
-- tstation
-- discount
-- value
+- tstation: 티스테이션 추천 (DEFAULT)
+- discount: 할인 많은 제품 (only if user asks for discounts)
+- value: 가성비 제품 (only if user asks for value/cost-effective)
 
 limit
 number of products to retrieve
@@ -119,6 +120,24 @@ Inputs
 
 car_no - vehicle registration number (required)
 owner_nm - owner name (required)
+
+
+
+Tool
+get_my_cars_tool
+
+When to use
+
+• user asks to view their registered vehicles (by member number)
+• user says "my cars", "xe của tôi", "내 차 목록"
+
+**PRIORITY RULE:**
+- If user provides mbr_no → use that (highest priority)
+- If no user input → use mbr_no from user information (JWT)
+
+Inputs
+
+mbr_no - member number (required)
 
 
 
@@ -277,10 +296,15 @@ When user mentions a car model name (e.g., 'Sonata', 'Grandeur', 'Avante', 'BMW'
 3. Go to RECOMMENDATION ENGINE (using tire_size)
 
 **After search_car_model_tool returns:**
-1. Display vehicle candidates in numbered list
-2. User selects vehicle from list
-3. Call get_user_vehicles_tool to get tire size
-4. Go to RECOMMENDATION ENGINE
+1. Display vehicle candidates in numbered list (each item has car_lnc_cd and car_nm)
+2. User selects vehicle from list (by number OR by car name)
+3. REMEMBER the selected car_lnc_cd from the tool result — do NOT search again by name
+4. Go to RECOMMENDATION ENGINE (pass car_lnc_cd directly)
+
+⚠️ CRITICAL: User selection → car_lnc_cd mapping:
+   - By number (e.g., "4", "4번"): The number is a LIST INDEX, NOT a car_lnc_cd. Extract the actual car_lnc_cd from the corresponding item.
+   - By name (e.g., "모델 Y 주니퍼 Long Range A/T"): Match the name against the displayed list and extract the car_lnc_cd from the matched item.
+   - In BOTH cases: NEVER search again. NEVER pass the user input directly as car_lnc_cd. Always look up from the previous search results.
 
 
 ------------------------------------
@@ -289,6 +313,8 @@ RECOMMENDATION ENGINE (Shared)
 
 **STEP 1: Get Recommendations**
 1. Call get_products_recommendations_tool with limit=20
+   - Default rcmd_type = "tstation" (do NOT ask user to choose recommendation type)
+   - Only use "discount" or "value" if user EXPLICITLY requests it (e.g., "할인 많은 것", "가성비 좋은 것")
    - If car_lnc_cd available → use car_lnc_cd (priority)
    - If tire_size available → use tire_size
    - If neither → use general recommendation
@@ -392,8 +418,11 @@ When user ONLY wants to search for vehicle model (no tire request):
 
 1. Call search_car_model_tool with keyword (Korean-based, NO brand name)
 2. Display matching car models in a numbered list
-3. Ask user to SELECT the correct car model by number
-4. Return selected vehicle info (car_lnc_cd, car_nm)
+3. Ask user to SELECT the correct car model (by number or by name)
+4. When user selects → match against the displayed list and extract car_lnc_cd from the corresponding search result item
+5. Return selected vehicle info (car_lnc_cd, car_nm)
+
+⚠️ NEVER search again after selection. NEVER pass user input directly as car_lnc_cd. Always look up from the previous search results.
 
 ------------------------------------
 Flow 7 — YouTube Video Search
@@ -687,6 +716,45 @@ When handing over to Transaction Agent (for price, order, etc.):
 → The coordinator will pass the context from your tool calls to Transaction Agent
 
 
+------------------------------------
+Flow 11 — My Registered Vehicles (내 등록 차량 조회)
+------------------------------------
+
+**Trigger:** User asks to view their registered vehicles.
+
+Examples:
+- "xe của tôi là gì?" (Vietnamese: "what are my cars?")
+- "내 차 목록 보여줘"
+- "my registered vehicles"
+- "xem xe đã đăng ký"
+
+**PRIORITY RULE for mbr_no:**
+1. User provides mbr_no in message → use that (user input)
+2. User does not provide → use mbr_no from user information (JWT)
+
+**Steps:**
+
+1. **STEP 1: Determine mbr_no**
+   - CHECK: Does user provide mbr_no in current message?
+     - YES → use user-provided mbr_no
+     - NO → check user information (JWT) for mbr_no
+   - If neither available → ask user for mbr_no
+
+2. **STEP 2: Call get_my_cars_tool**
+   - Call get_my_cars_tool(mbr_no=mbr_no)
+
+3. **STEP 3: Display Results**
+   - Show vehicles in numbered list with key info:
+     - car_nm (차량명)
+     - car_no (차량번호)
+     - tire_size_fr / tire_size_re (전/후륜 타이어 사이즈)
+   - Ask user to SELECT a vehicle for further action
+
+4. **STEP 4: After Selection (optional)**
+   - If user selected a vehicle for tire recommendation → proceed to RECOMMENDATION ENGINE
+   - If user just wanted to view → stop after showing list
+
+
 ====================================================
 STRICT RULES
 ====================================================
@@ -886,6 +954,7 @@ class DiscoverySubAgent(BaseAgent):
         "check_compatibility_tool": "Vehicle & Compatibility",
         "search_product_tool": "Product Search",
         "get_user_vehicles_tool": "Vehicle & Compatibility",
+        "get_my_cars_tool": "Vehicle & Compatibility",
         "search_car_model_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
@@ -903,6 +972,7 @@ class DiscoverySubAgent(BaseAgent):
                 check_compatibility_tool,
                 search_product_tool,
                 get_user_vehicles_tool,
+                get_my_cars_tool,
                 search_car_model_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool,

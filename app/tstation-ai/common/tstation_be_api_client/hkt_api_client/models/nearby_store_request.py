@@ -20,12 +20,14 @@ class NearbyStoreRequest:
         radius_km (float | Unset): 검색 반경 (km), 기본값 20km Default: 20.0.
         svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록 (ET_SHOP_ITEM_SVC_INFO.SHOP_ITEM_SVC_SCT_CD). 입력된 코드 중 하나라도
             보유한 매장을 반환합니다. 예: ["101", "102"] → 타이어(오프라인) 또는 경정비 서비스 보유 매장
+        all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 (SMART_CARE_SHOP_YN = 'Y') Default: False.
     """
 
     user_xpos: float
     user_ypos: float
     radius_km: float | Unset = 20.0
     svc_codes: list[str] | None | Unset = UNSET
+    all_my_t_only: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,6 +46,8 @@ class NearbyStoreRequest:
         else:
             svc_codes = self.svc_codes
 
+        all_my_t_only = self.all_my_t_only
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -56,6 +60,8 @@ class NearbyStoreRequest:
             field_dict["radius_km"] = radius_km
         if svc_codes is not UNSET:
             field_dict["svc_codes"] = svc_codes
+        if all_my_t_only is not UNSET:
+            field_dict["all_my_t_only"] = all_my_t_only
 
         return field_dict
 
@@ -85,11 +91,14 @@ class NearbyStoreRequest:
 
         svc_codes = _parse_svc_codes(d.pop("svc_codes", UNSET))
 
+        all_my_t_only = d.pop("all_my_t_only", UNSET)
+
         nearby_store_request = cls(
             user_xpos=user_xpos,
             user_ypos=user_ypos,
             radius_km=radius_km,
             svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
         )
 
         nearby_store_request.additional_properties = d

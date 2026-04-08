@@ -17,6 +17,8 @@ class StoreDetailResponse:
     Attributes:
         shop_nm (None | str | Unset): 매장명
         tel_no (None | str | Unset): 전화번호
+        is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
+        is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
         holiday (None | str | Unset): 휴무일
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
@@ -29,6 +31,8 @@ class StoreDetailResponse:
 
     shop_nm: None | str | Unset = UNSET
     tel_no: None | str | Unset = UNSET
+    is_all_my_t: bool | Unset = False
+    is_installable: bool | Unset = False
     holiday: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
@@ -51,6 +55,10 @@ class StoreDetailResponse:
             tel_no = UNSET
         else:
             tel_no = self.tel_no
+
+        is_all_my_t = self.is_all_my_t
+
+        is_installable = self.is_installable
 
         holiday: None | str | Unset
         if isinstance(self.holiday, Unset):
@@ -105,6 +113,10 @@ class StoreDetailResponse:
             field_dict["shop_nm"] = shop_nm
         if tel_no is not UNSET:
             field_dict["tel_no"] = tel_no
+        if is_all_my_t is not UNSET:
+            field_dict["is_all_my_t"] = is_all_my_t
+        if is_installable is not UNSET:
+            field_dict["is_installable"] = is_installable
         if holiday is not UNSET:
             field_dict["holiday"] = holiday
         if shop_biz_strt_time is not UNSET:
@@ -145,6 +157,10 @@ class StoreDetailResponse:
             return cast(None | str | Unset, data)
 
         tel_no = _parse_tel_no(d.pop("tel_no", UNSET))
+
+        is_all_my_t = d.pop("is_all_my_t", UNSET)
+
+        is_installable = d.pop("is_installable", UNSET)
 
         def _parse_holiday(data: object) -> None | str | Unset:
             if data is None:
@@ -214,6 +230,8 @@ class StoreDetailResponse:
         store_detail_response = cls(
             shop_nm=shop_nm,
             tel_no=tel_no,
+            is_all_my_t=is_all_my_t,
+            is_installable=is_installable,
             holiday=holiday,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,
