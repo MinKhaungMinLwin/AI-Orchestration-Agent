@@ -14,6 +14,7 @@ from services.tstation.rag import (
     get_embedding_service,
     get_reranker_service,
 )
+from services.tstation.rag.rag_config import RAGDynamicConfig
 from config.env import settings
 
 logger = logging.getLogger(__name__)
@@ -143,14 +144,13 @@ def search_faq_rag_tool(
     try:
         openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
 
-        # 1. Embed the query
+        # 1. Embed query — cached; repeat queries return in <1ms instead of ~200ms API call
         embedding_service = get_embedding_service(
             model=settings.EMBEDDING_MODEL,
             provider=settings.EMBEDDING_PROVIDER,
             api_key=openai_api_key,
         )
-        query_embedding = embedding_service.embed_text(query)
-        logger.debug("[TOOL][search_faq_rag_tool] Embedding dim: %d", len(query_embedding))
+        query_embedding = embedding_service.embed_text_cached(query)
 
         qdrant_service = get_qdrant_service(
             host=settings.QDRANT_HOST,
@@ -158,35 +158,54 @@ def search_faq_rag_tool(
             api_key=settings.QDRANT_API_KEY or None,
         )
 
-        # 2. Multi-vector hybrid search (RRF fusion of question + answer vectors).
-        #    Retrieve top_k + 5 extra candidates for reranker headroom.
-        fetch_k = top_k + 5
+        # 2. Dynamic fetch_k: scales logarithmically with collection size (cached 5 min).
+        #    Prevents both over-fetch (noise) and under-fetch (missing good docs).
+        collection_size = qdrant_service.get_collection_size_cached(settings.QDRANT_COLLECTION_FAQ)
+        fetch_k = RAGDynamicConfig.compute_fetch_k(collection_size=collection_size, final_top_k=top_k)
+        logger.info(
+            "[TOOL][search_faq_rag_tool] collection_size=%d, fetch_k=%d",
+            collection_size, fetch_k,
+        )
+
+        # 3. Multi-vector hybrid search — 2 Qdrant calls run in parallel (ThreadPoolExecutor).
+        #    No hard score_threshold here; adaptive threshold is applied after retrieval.
         try:
             raw_results = qdrant_service.search_multi_vector(
                 collection_name=settings.QDRANT_COLLECTION_FAQ,
                 query_vector=query_embedding,
                 top_k=fetch_k,
-                score_threshold=score_threshold,
+                score_threshold=0.0,
             )
             logger.info("[TOOL][search_faq_rag_tool] Multi-vector search: %d candidates", len(raw_results))
         except Exception:
-            # Fallback to single-vector search for collections without named vectors
             logger.warning("[TOOL][search_faq_rag_tool] Multi-vector failed, falling back to single-vector")
             raw_results = qdrant_service.search(
                 collection_name=settings.QDRANT_COLLECTION_FAQ,
                 query_vector=query_embedding,
                 top_k=fetch_k,
-                score_threshold=score_threshold,
+                score_threshold=None,
             )
 
-        # 3. Rerank candidates with keyword-overlap scoring
+        # 4. Adaptive threshold: detect natural score gap instead of using fixed 0.6.
+        #    score_threshold param from the agent call acts as the absolute floor.
+        retrieval_scores = [r.get("score", 0.0) for r in raw_results]
+        effective_threshold = RAGDynamicConfig.adaptive_threshold(
+            scores=retrieval_scores,
+            base_threshold=score_threshold,
+        )
+        filtered = [r for r in raw_results if r.get("score", 0.0) >= effective_threshold]
+        logger.info(
+            "[TOOL][search_faq_rag_tool] adaptive_threshold=%.3f (base=%.3f) → %d/%d passed",
+            effective_threshold, score_threshold, len(filtered), len(raw_results),
+        )
+
+        # 5. Rerank filtered candidates with keyword-overlap scoring
         reranker = get_reranker_service()
-        reranked = reranker.rerank(query=query, results=raw_results, top_k=top_k)
+        reranked = reranker.rerank(query=query, results=filtered, top_k=top_k)
 
         # 4. Format RAG results
         formatted_results = [
             {
-                "id": r.get("id"),
                 "question": r.get("payload", {}).get("question", ""),
                 "answer": r.get("payload", {}).get("answer", ""),
                 "metadata": r.get("payload", {}).get("metadata", {}),
