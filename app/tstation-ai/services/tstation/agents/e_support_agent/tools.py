@@ -195,9 +195,9 @@ def search_faq_rag_tool(
             for r in reranked
         ]
 
-        # 5. DB fallback: if RAG best score < 0.4, supplement with DB FAQ
+        # 5. DB fallback: if RAG best score < 0.7, supplement with DB FAQ
         best_score = reranked[0].get("score", 0.0) if reranked else 0.0
-        if best_score < 0.4:
+        if best_score < 0.7:
             db_results = _fallback_db_faq(query, reranked, top_k)
             if db_results:
                 formatted_results.extend(db_results)
