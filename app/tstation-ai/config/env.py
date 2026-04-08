@@ -95,5 +95,33 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str
     LANGFUSE_PUBLIC_KEY: str
 
+    ### -------------------------------
+    # RAG (Retrieval-Augmented Generation)
+    ### -------------------------------
+    # Qdrant Vector Store
+    QDRANT_HOST: str = Field(default="localhost")
+    QDRANT_PORT: int = Field(default=6333)
+    QDRANT_API_KEY: str = Field(default="")
+    QDRANT_COLLECTION_FAQ: str = Field(
+        default="hankook_faq_docs",
+        description="Qdrant collection name for FAQ documents",
+    )
+    # Embedding
+    EMBEDDING_PROVIDER: str = Field(default="openai")
+    EMBEDDING_MODEL: str = Field(default="text-embedding-3-small")
+    # Chunking
+    RAG_CHUNK_SIZE: int = Field(default=512)
+    RAG_CHUNK_OVERLAP: int = Field(default=50)
+    # Search
+    RAG_SEARCH_TOP_K: int = Field(default=5)
+    RAG_SEARCH_SCORE_THRESHOLD: float = Field(default=0.7)
+
+    class Config:
+        # automatically load variables from a .env file in the project root
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = True
+        extra = "ignore"  # ignore any additional vars like NGINX_PORT, AWS_BEARER_TOKEN_BEDROCK
+
 
 settings = Settings()

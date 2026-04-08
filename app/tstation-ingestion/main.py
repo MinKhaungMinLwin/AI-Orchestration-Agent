@@ -1,0 +1,143 @@
+import json
+import os
+import logging
+from pathlib import Path
+
+# Load env
+from dotenv import load_dotenv
+
+project_root = Path(__file__).parent.parent.parent
+env_file = project_root / ".env"
+
+if env_file.exists():
+    load_dotenv(env_file)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
+BASE_DIR = Path(__file__).parent
+logger = logging.getLogger("ingestion")
+
+def load_documents():
+    """Load FAQ data"""
+    data_path = BASE_DIR / "data" / "faq_data.json"
+    with open(data_path, "r", encoding="utf-8") as f:
+        documents = json.load(f)
+
+    logger.info(f"Loaded {len(documents)} documents")
+    return documents
+
+
+def init_services():
+    """Initialize Qdrant + Embedding."""
+    from rag.qdrant_service import get_qdrant_service
+    from rag.embedding_service import get_embedding_service
+
+    from config.env import settings
+
+    qdrant_svc = get_qdrant_service(
+        host=settings.QDRANT_HOST,
+        port=settings.QDRANT_PORT,
+    )
+
+    api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+
+    embedding_svc = get_embedding_service(
+        model=settings.EMBEDDING_MODEL,
+        provider=settings.EMBEDDING_PROVIDER,
+        api_key=api_key,
+    )
+
+    if not qdrant_svc.health_check():
+        raise RuntimeError("Qdrant is not available")
+
+    if not embedding_svc.health_check():
+        raise RuntimeError("Embedding service is not available")
+
+    return qdrant_svc, embedding_svc
+
+
+def build_embeddings(documents, embedding_svc):
+    """Convert documents → embeddings."""
+    from rag.document_processor import DocumentProcessor
+
+    question_texts = []
+    answer_texts = []
+
+    for doc in documents:
+        q, a = DocumentProcessor.build_embedding_texts(doc)
+        question_texts.append(q)
+        answer_texts.append(a)
+
+    all_texts = question_texts + answer_texts
+    embeddings = embedding_svc.embed_texts(all_texts)
+
+    return (
+        embeddings[: len(documents)],       # question
+        embeddings[len(documents) :],       # answer
+    )
+
+
+def upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc):
+    """Push data into Qdrant."""
+    from config.env import settings
+    from rag.document_processor import DocumentProcessor
+
+    vector_size = embedding_svc.get_embedding_dimension()
+
+    qdrant_svc.create_collection_multi_vector(
+        collection_name=settings.QDRANT_COLLECTION_FAQ,
+        vector_size=vector_size,
+    )
+
+    slim_docs = []
+
+    for doc in documents:
+        meta = dict(doc.get("metadata", {}))
+        meta["keywords_normalized"] = DocumentProcessor.normalize_keywords(
+            meta.get("keywords", [])
+        )
+
+        slim_docs.append(
+            {
+                "id": doc.get("id"),
+                "question": doc.get("question", ""),
+                "answer": doc.get("answer", ""),
+                "metadata": meta,
+            }
+        )
+
+    result = qdrant_svc.upsert_multi_vector(
+        collection_name=settings.QDRANT_COLLECTION_FAQ,
+        documents=slim_docs,
+        question_vectors=q_vecs,
+        answer_vectors=a_vecs,
+        batch_size=50,
+    )
+
+    logger.info(f"Indexed {result['upserted_count']} documents")
+
+
+def main():
+    """ENTRYPOINT - ingestion pipeline"""
+    logger.info("🚀 Starting ingestion pipeline")
+
+    # 1. Load data
+    documents = load_documents()
+
+    # 2. Init services
+    qdrant_svc, embedding_svc = init_services()
+
+    # 3. Embed
+    q_vecs, a_vecs = build_embeddings(documents, embedding_svc)
+
+    # 4. Upsert
+    upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc)
+
+    logger.info("✅ Ingestion completed successfully")
+
+
+if __name__ == "__main__":
+    main()
