@@ -292,9 +292,9 @@ def render_template_expander(template: str, data: dict):
             with st.expander(f"🎬 {item.get('title', 'YouTube Video')}", expanded=True):
                 st.markdown(f"**{item.get('title', '')}**")
                 if item.get("thumbnailUrl"):
-                    st.image(item["thumbnailUrl"], width=300)
+                    st.markdown(f"🖼️ {item.get('thumbnailUrl', '')}")
                 if item.get("youtubeUrl"):
-                    st.markdown(f"[Watch on YouTube]({item.get('youtubeUrl')})")
+                    st.markdown(f"🔗 {item.get('youtubeUrl', '')}")
     elif template == "event":
         items = data.get("events", [data])
         for item in items:
