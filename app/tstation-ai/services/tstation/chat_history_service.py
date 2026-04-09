@@ -3,12 +3,15 @@ Chat History Service - Redis-based conversation management.
 
 Uses langchain_community RedisChatMessageHistory for message persistence.
 Session management per user_id from JWT token.
+Slot persistence per session for conversation context tracking.
 """
 import json
 import logging
 import uuid
 from datetime import datetime
 from typing import List, Optional
+
+from schemas.tstation.slots import ConversationSlots
 
 import redis
 from langchain_community.chat_message_histories import RedisChatMessageHistory
@@ -247,6 +250,20 @@ class ChatHistoryService:
         meta_key = _get_meta_key(session_id)
         session_user_id = self.redis.hget(meta_key, "user_id")
         return session_user_id == user_id
+
+    def save_slots(self, session_id: str, slots: ConversationSlots) -> None:
+        """Save conversation slots to session metadata."""
+        meta_key = _get_meta_key(session_id)
+        self.redis.hset(meta_key, "slots", slots.model_dump_json())
+        logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
+
+    def get_slots(self, session_id: str) -> ConversationSlots:
+        """Load conversation slots from session metadata."""
+        meta_key = _get_meta_key(session_id)
+        raw = self.redis.hget(meta_key, "slots")
+        if raw:
+            return ConversationSlots.model_validate_json(raw)
+        return ConversationSlots()
 
 
 # Singleton instance
