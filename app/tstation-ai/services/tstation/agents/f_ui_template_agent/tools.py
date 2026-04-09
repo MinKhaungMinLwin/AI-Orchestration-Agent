@@ -156,26 +156,34 @@ def list_preview_youtube_tool(
 
 @tool
 def datepick_tool(
-    date: Annotated[str, "Date in YYYYMMDD format"],
-    available: Annotated[bool, "Whether date is available for selection"],
-    timeSlots: Annotated[list[str], "Available time slots"] = None,
-    selectedDate: Annotated[str | None, "User selected date"] = None
+    dates: Annotated[list[dict], "List of date entries. Each: date (str '2026년 4월 9일 (화)'), available (bool), availableTimes (list[int 8-22]), index (int 0-based position in sorted order)"],
+    selectedDate: Annotated[int | None, "Selected date index in dates list (0-based)"] = None
 ) -> dict:
-    """Render date picker card.
+    """Render multi-date picker card (calendar month view).
 
     Args:
-        date: Selected date. Rule: required, YYYYMMDD format string (e.g., "20240315").
-        available: Whether date is available for selection. Rule: required, boolean.
-        timeSlots: List of available time slots. Rule: optional, list of "HH:MM" strings.
-        selectedDate: Previously selected date. Rule: optional, YYYYMMDD format string.
+        dates: List of date entries. Each entry contains:
+            - date: str in format "2026년 4월 9일 (화)" (year년 month월 day일 (weekday)).
+            - available: bool - whether date can be selected.
+            - availableTimes: list[int 8-22] - available hours. Empty = fully booked.
+            - index: int - 0-based position in sorted order (0 = earliest date).
+        selectedDate: Selected date index. Rule: optional, int index (0-based).
+
+    Example Inputs:
+        - {{
+            "dates": [
+                {{"date": "2026년 4월 15일 (수)", "available": True, "availableTimes": [8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "index": 0}},
+                {{"date": "2026년 4월 16일 (목)", "available": True, "availableTimes": [8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "index": 1}},
+                {{"date": "2026년 4월 17일 (금)", "available": False, "availableTimes": [], "index": 2}}
+            ],
+            "selectedDate": 0
+        }}
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"date": ..., "available": ..., "timeSlots": ..., "selectedDate": ...}}
+        {"status": "success", "http_status": 200, "data": {"dates": ..., "selectedDate": ...}}
     """
     return _success_response(200, {
-        "date": date,
-        "available": available,
-        "timeSlots": timeSlots or [],
+        "dates": dates,
         "selectedDate": selectedDate,
     })
 

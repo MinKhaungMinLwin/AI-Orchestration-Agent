@@ -250,11 +250,29 @@ def render_template_expander(template: str, data: dict):
                 if item.get("lat") and item.get("long"):
                     st.markdown(f"🗺️ ({item.get('lat')}, {item.get('long')})")
     elif template == "datepick":
-        with st.expander(f"📅 {data.get('date', 'Date Picker')}", expanded=True):
-            st.markdown(f"**Available:** {'Yes' if data.get('available') else 'No'}")
-            st.markdown("**Time slots:**")
-            for slot in data.get("timeSlots", []):
-                st.markdown(f"- {slot}")
+        dates = data.get("dates", [data])
+        selected_idx = data.get("selectedDate")
+        selected_date_str = ""
+        if selected_idx is not None and 0 <= selected_idx < len(dates):
+            selected_date_str = dates[selected_idx].get("date", "")
+        with st.expander(f"📅 Date Picker {'(selected: ' + selected_date_str + ')' if selected_date_str else ''}", expanded=True):
+            for item in dates:
+                date_str = item.get("date", "")
+                idx = item.get("index", "")
+                available = item.get("available", False)
+                times = item.get("availableTimes", [])
+                badges = []
+                if available:
+                    badges.append("✓ Available")
+                else:
+                    badges.append("✗ Unavailable")
+                if not times:
+                    badges.append("Fully booked")
+                badge_text = " | ".join(badges)
+                marker = "→ " if selected_idx is not None and dates[selected_idx].get("date") == date_str else "  "
+                st.markdown(f"{marker}**{date_str}** [{idx}] {badge_text}")
+                if times:
+                    st.markdown(f"   Available times: {', '.join(str(t) + ':00' for t in times)}")
     elif template == "question":
         with st.expander(f"❓ {data.get('question', 'Question')}", expanded=True):
             st.markdown(f"**{data.get('question', '')}**")
@@ -442,10 +460,10 @@ if prompt:
 
                     # Render UI template events
                     if data_events:
-                        with st.expander("📋 Results", expanded=True):
-                            for item in data_events:
-                                template = item.get("template", "")
-                                data = item.get("data", {})
+                        for item in data_events:
+                            template = item.get("template", "")
+                            data = item.get("data", {})
+                            with st.expander(f"📋 Results [{template}]", expanded=True):
                                 # Handle items array or single item
                                 items = data.get("items", [data])
                                 for single_item in items:

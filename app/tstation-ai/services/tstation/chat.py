@@ -703,9 +703,16 @@ class StreamingMultiAgentCoordinator:
                 "role": "system",
                 "content": f"[Accumulated tool data for UI rendering]\n{tool_summary}"
             })
+            # Build chat history for context
+            chat_history = "\n".join([
+                f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+                for msg in messages
+                if msg.get("role") in ("user", "assistant") and msg.get("content")
+            ])
+
             ui_messages.append({
                 "role": "user",
-                "content": "Render this data as UI templates using the appropriate tools. Format each item as a UI template event."
+                "content": f"[Chat History]\n{chat_history}\n\nRender this data as UI templates using the appropriate tools. Format each item as a UI template event."
             })
 
             # Yield UI Template Agent start event

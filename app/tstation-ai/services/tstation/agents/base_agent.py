@@ -113,6 +113,10 @@ class BaseAgent(ABC):
                             except (json.JSONDecodeError, TypeError):
                                 tool_data = {}
 
+                            # Skip if tool_data is null or empty
+                            if not tool_data:
+                                continue
+
                             # Yield data event with tool's actual output data
                             yield {
                                 "type": "data",

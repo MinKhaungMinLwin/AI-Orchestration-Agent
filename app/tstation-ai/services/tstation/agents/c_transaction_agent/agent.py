@@ -723,6 +723,19 @@ Trigger: User asks about available reservation slots at store(s),
 DO NOT ask the user to provide missing info upfront.
 Apply defaults immediately, execute the flow, THEN suggest alternatives at the end.
 
+⚡ MULTI-DAY AVAILABILITY SCAN (auto-applied when no date specified):
+  When checking available slots WITHOUT a specific date:
+  • Scan TODAY + the next 3 days (4 days total) IN PARALLEL
+  • For each store: call get_store_detail_tool 4 times with cal_day = [TODAY, +1, +2, +3 days]
+  • From the 4 results, pick the NEAREST day with available_slots ≠ []
+  • Display ONLY the nearest available day + its time slots
+  • If ALL 4 days have no slots → show "예약 가능한 시간이 없습니다"
+
+Example: "F00098 매장 예약 가능한 시간" (no date)
+  → Call get_store_detail_tool(F00098, TODAY), (F00098, +1d), (F00098, +2d), (F00098, +3d) in parallel
+  → If TODAY=no slots, +1=no slots, +2=[09:00,10:00], +3=[14:00]
+  → Show ONLY +2 day with [09:00, 10:00]
+
 ---
 
 Sub-cases and execution:
@@ -754,27 +767,35 @@ Execution steps:
 2. Call get_store_list_tool (region_code, store_nm if provided)
    → Collect all shop_id values from result
 
-3. For EACH shop_id, call get_store_detail_tool (shop_id, cal_day)
-   → Run in parallel if possible; collect all responses
+3. For EACH shop_id, call get_store_detail_tool 4 times in PARALLEL:
+   - get_store_detail_tool(shop_id, cal_day=TODAY)
+   - get_store_detail_tool(shop_id, cal_day=TODAY+1)
+   - get_store_detail_tool(shop_id, cal_day=TODAY+2)
+   - get_store_detail_tool(shop_id, cal_day=TODAY+3)
+   → Collect all 4 responses per shop_id
 
-4. Classify each store result:
+4. For EACH shop_id, find the NEAREST day with available_slots ≠ []:
+   - Scan from TODAY to +3 days in order
+   - First day with available_slots → use this day's data
+   - If ALL 4 days have no slots → mark as unavailable
+
+5. Classify stores by nearest available day:
 
    | Condition                              | Classification       |
    |----------------------------------------|----------------------|
-   | available_slots has one or more values | ✅ 예약 가능         |
-   | available_slots = [] AND not holiday   | ❌ 슬롯 마감         |
-   | cal_day matches holiday field value    | ❌ 휴무일            |
+   | nearest_available_day found (step 4)   | ✅ 예약 가능         |
+   | nearest_available_day = None           | ❌ 예약 불가 (전일마감) |
 
-5. Display results in TWO separate tables:
+6. Display ONE result per store — the nearest available day only:
 
-   Table 1 — 예약 가능한 매장 (stores with open slots)
-   | No | 매장명 | 주소 | 예약 가능 시간 | 전화 |
+   For stores with availability:
+   | No | 매장명 | 주소 | 예약 가능 날짜 | 예약 가능 시간 | 전화 |
 
-   Table 2 — 예약 불가 매장 (stores with no slots)
+   For stores with NO availability (all 4 days full):
    | 매장명 | 사유 |
-   (사유: "슬롯 마감" or "휴무일")
+   (사유: "예약 가능한 시간이 없습니다")
 
-6. At the END of the response, always add a follow-up suggestion:
+7. At the END of the response, always add a follow-up suggestion:
 
    > 다른 지역이나 날짜로도 확인해 드릴까요?
    > 예: "강남 매장", "다음 주 토요일", "4월 10일 송파 지역"
