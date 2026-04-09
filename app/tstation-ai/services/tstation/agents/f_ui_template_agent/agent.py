@@ -6,7 +6,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     list_location_tool,
     list_event_tool,
     list_preview_youtube_tool,
-    datepick_tool,
+    available_dates_tool,
     question_tool,
     bill_service_tool,
     bill_product_tool,
@@ -51,7 +51,7 @@ TEMPLATE TYPES (use ONE that best fits)
 • list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t from /api/store/detail or /api/store/list), todayInstall (src: is_installable from /api/store/detail), tnaDelivery (src: is_tna_delivery from /api/store/detail) (camelCase, no underscore)
 • list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
-• datepick_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null). (camelCase, no underscore)
+• available_dates_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null). IMPORTANT: Include ALL available dates - do NOT truncate or limit the dates array. If source has 10 dates, pass all 10. (camelCase, no underscore)
 • question_tool → "question" - Questions with fields: question, listAnswer[[{{id, label, value}}]] (camelCase, no underscore)
 • bill_service_tool → "billService" - Service bills with fields: carInfo, services[[{{serviceName, quantity, price}}]], storeName, bookingDateTime, visitMethod, totalAmount, actionLink, actionText (camelCase, no underscore)
 • bill_product_tool → "billProduct" - Product bills with fields: carInfo, products[[{{productName, quantity, unitPrice, totalPrice}}]], storeName, bookingDateTime, visitMethod, paymentAmount, actionLink, actionText, cartLink (camelCase, no underscore)
@@ -77,7 +77,7 @@ SELECTION RULES
 • If there are vouchers → use list_voucher_tool
 • etc.
 
-• If items > 7, select 3-7 BEST items based on relevance
+• If items > 5, select 3-5 BEST items based on relevance
 • Prioritize by: rating, discount, compatibility for products; distance for stores
 
 ====================================================
@@ -92,6 +92,54 @@ LANGUAGE
 ====================================================
 
 Always respond in Korean (based on user context).
+
+====================================================
+EXAMPLES (each tool call format)
+====================================================
+
+list_product_tool → {{"items": [
+  {{"imageUrl": "https://example.com/tire1.jpg", "title": "Hankook Ventus S1 Evo3", "tires": "SUV", "comfort": "high", "price": 680000, "rate": 4.7, "totalQuantity": 25}},
+  {{"imageUrl": "https://example.com/tire2.jpg", "title": "Hankook Kinergy GT", "tires": "Sedan", "comfort": "medium", "price": 450000, "rate": 4.3, "totalQuantity": 100}}
+]}}
+
+list_car_tool → {{"items": [
+  {{"licensePlate": "52가1234", "description": "Kia Sorento 2023", "imageUrl": "https://example.com/car1.jpg"}},
+  {{"licensePlate": "30나9876", "description": "Hyundai Genesis 2022", "imageUrl": "https://example.com/car2.jpg"}}
+]}}
+
+list_voucher_tool → {{"items": [
+  {{"nameVoucher": "여름 특별 할인", "discount": "20%", "dateVoucher": "2026-08-31", "downloadLink": null}},
+  {{"nameVoucher": "첫 구매 감사 할인", "discount": "15%", "dateVoucher": "2026-12-31", "downloadLink": null}}
+]}}
+
+list_location_tool → {{"items": [
+  {{"nameAddress": "Hankook Tire 서울 강남점", "distance": "1.2km", "detailAddress": "서울시 강남구 테헤란로 123", "isAllMyT": true, "todayInstall": true, "tnaDelivery": false}},
+  {{"nameAddress": "Hankook Tire 서울 강북점", "distance": "3.5km", "detailAddress": "서울시 강북구 수유동 456", "isAllMyT": false, "todayInstall": false, "tnaDelivery": true}}
+]}}
+
+list_event_tool → {{"items": [
+  {{"eventName": "여름 타이어 세일", "bannerImage": "https://example.com/banner1.jpg", "eventUrl": "/event/summer", "badge": "주유권증정", "period": "2026-06-01 ~ 2026-08-31", "actionLink": "https://tstation.com/event/summer", "actionText": "자세히 보기"}},
+  {{"eventName": "겨울 무료 점검_event", "bannerImage": "https://example.com/banner2.jpg", "eventUrl": "/event/winter", "badge": "무료", "period": "2026-12-01 ~ 2026-12-31", "actionLink": "https://tstation.com/event/winter", "actionText": "신청하기"}}
+]}}
+
+list_preview_youtube_tool → {{"items": [
+  {{"title": "타이어 교체 방법", "thumbnailUrl": "https://img.youtube.com/vi/abc123/hqdefault.jpg", "youtubeUrl": "https://youtube.com/watch?v=abc123", "videoId": "abc123"}},
+  {{"title": "올 시즌 타이어 장점", "thumbnailUrl": "https://img.youtube.com/vi/def456/hqdefault.jpg", "youtubeUrl": "https://youtube.com/watch?v=def456", "videoId": "def456"}}
+]}}
+
+available_dates_tool → {{"dates": [
+  {{"date": "2026년 4월 15일 (수)", "available": true, "availableTimes": [8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "index": 0}},
+  {{"date": "2026년 4월 16일 (목)", "available": true, "availableTimes": [8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "index": 1}},
+  {{"date": "2026년 4월 17일 (금)", "available": false, "availableTimes": [], "index": 2}}
+], "selectedDate": 0}}
+
+question_tool → {{"question": "어떤 서비스를 원하십니까?", "listAnswer": [{{"id": "1", "label": "타이어 교체", "value": "tire_change"}}, {{"id": "2", "label": "정기 점검", "value": "regular_check"}}]}}
+
+bill_service_tool → {{"carInfo": "52가1234 - Kia Sorento", "services": [{{"serviceName": "타이어 교체", "quantity": 4, "price": 200000}}], "storeName": "Hankook Tire 서울점", "bookingDateTime": "2026-04-15 14:00", "visitMethod": "예약", "totalAmount": 800000, "actionLink": "https://tstation.com/book", "actionText": "예약 확인"}}
+
+bill_product_tool → {{"carInfo": "52가1234 - Kia Sorento", "products": [{{"productName": "Hankook Tire SUV", "quantity": 4, "unitPrice": 150000, "totalPrice": 600000}}], "storeName": "Hankook Tire 서울점", "bookingDateTime": "2026-04-15 14:00", "visitMethod": "예약", "paymentAmount": 600000, "actionLink": "https://tstation.com/pay", "actionText": "결제하기", "cartLink": "https://tstation.com/cart"}}
+
+question_create_order_tool → {{"key": "order_type", "question": "주문 유형을 선택하세요", "type": "singleChoice", "listAnswer": [{{"id": "1", "label": "서비스 예약", "value": "service"}}, {{"id": "2", "label": "제품 구매", "value": "product"}}], "required": true}}
 """
 
 
@@ -103,7 +151,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_location_tool": "Store",
         "list_event_tool": "Event",
         "list_preview_youtube_tool": "YouTube",
-        "datepick_tool": "Date Picker",
+        "available_dates_tool": "Date Picker",
         "question_tool": "Question",
         "bill_service_tool": "Service Bill",
         "bill_product_tool": "Product Bill",
@@ -117,7 +165,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_location_tool": "location",
         "list_event_tool": "event",
         "list_preview_youtube_tool": "previewYoutube",
-        "datepick_tool": "datepick",
+        "available_dates_tool": "datepick",
         "question_tool": "question",
         "bill_service_tool": "billService",
         "bill_product_tool": "billProduct",
@@ -134,7 +182,7 @@ class UITemplateSubAgent(BaseAgent):
                 list_location_tool,
                 list_event_tool,
                 list_preview_youtube_tool,
-                datepick_tool,
+                available_dates_tool,
                 question_tool,
                 bill_service_tool,
                 bill_product_tool,
