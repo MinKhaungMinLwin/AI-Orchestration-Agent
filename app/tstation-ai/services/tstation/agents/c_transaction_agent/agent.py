@@ -949,19 +949,11 @@ Once goods_no AND ord_qty are confirmed:
 → All stores are eligible for ordering
 
 **Case B: logistics_qty = 0 or null (물류 재고 없음)**
-→ Inform user: "죄송합니다. 현재 [상품명] 상품의 물류 재고가 없습니다."
-→ Guide user with options:
-  1. "매장 재고가 있는 매장을 찾아드릴까요? (오늘 장착 가능 매장 또는 T바로배송 매장)"
-  2. "다른 상품을 추천해 드릴까요?"
-→ STOP and wait for user input
-→ If user chooses option 1:
-  → Set inventory_mode = "LOGISTICS_UNAVAILABLE"
-  → Only the following stores can accept orders:
-     - 매장 재고로 오늘 장착 가능한 매장 (todayShopArray)
-     - T바로배송 매장 (tnaShopArray)
-  → Continue to STEP 4
-→ If user chooses option 2:
-  → STOP (coordinator will route to Discovery Agent for new recommendations)
+→ Set inventory_mode = "LOGISTICS_UNAVAILABLE"
+→ Inform user: "물류 재고가 없어 매장 재고를 확인합니다."
+→ Continue to STEP 4 (매장 선택 유도)
+→ 이후 STEP 5A에서 매장 선택 시, get_store_inventory_tool로 매장 재고를 확인하여
+  todayShopArray 또는 tnaShopArray에 해당 매장이 있는 경우에만 주문 가능
 
 ============================
 STEP 4: 매장 선택 유도
@@ -1203,19 +1195,29 @@ Only replace ord_qty with the new value. NEVER restart from STEP 1.
 
 Steps:
 
-1. Extract new ord_qty from user message
+1. Extract new ord_qty from the LATEST user message (e.g., "4개로 바꿔줘" → new_ord_qty = 4)
+   ⚠️ CRITICAL: Use the quantity from the user's LATEST message, NOT the previous ord_qty.
 2. Retain existing context from conversation:
    - goods_no: keep as-is
    - shop_id: keep if already selected
-3. If store is already selected (shop_id available):
-   → Call get_store_inventory_tool(goods_list=[{{"goodsNo": goods_no, "qty": new_ord_qty}}], shop_id_list=[{{"shopId": shop_id}}])
-   → If in stock: call quick_order_tool(goods_no, ord_qty=new_qty, shop_id)
-   → If out of stock: "변경된 수량(N개)은 선택하신 매장에 재고가 부족합니다. 다른 매장을 검색하시겠습니까?"
+   - inventory_mode: keep from previous STEP 3 result
+3. Re-check inventory based on inventory_mode:
+
+   **If inventory_mode = "LOGISTICS_AVAILABLE" (이전에 물류 재고 확인됨):**
+   → 물류 재고가 있으므로 get_store_inventory_tool 호출 불필요
+   → 바로 주문 진행: call quick_order_tool(goods_no, ord_qty=new_ord_qty, shop_id)
+
+   **If inventory_mode = "LOGISTICS_UNAVAILABLE" (이전에 물류 재고 없었음):**
+   → Call get_store_inventory_tool(goods_list=[{{"goodsNo": goods_no, "qty": str(new_ord_qty)}}], shop_id_list=[{{"shopId": shop_id}}])
+   ⚠️ qty MUST be the NEW quantity as a STRING (e.g., "4"), NOT the old quantity
+   → If shop_id in todayShopArray or tnaShopArray: call quick_order_tool(goods_no, ord_qty=new_ord_qty, shop_id)
+   → If not: "변경된 수량(N개)은 선택하신 매장에 재고가 부족합니다. 다른 매장을 검색하시겠습니까?"
+
 4. If store is NOT yet selected:
-   → Resume from STEP 3 (logistics inventory check) with new qty
+   → Resume from STEP 3 (logistics inventory check) with new_ord_qty
 
 Response example:
-"수량을 [N]개로 변경하였습니다. 선택하신 [매장명] 매장에서 재고를 확인하겠습니다."
+"수량을 [N]개로 변경하였습니다."
 
 
 ------------------------------------
