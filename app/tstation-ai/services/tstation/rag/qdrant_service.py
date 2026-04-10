@@ -8,12 +8,21 @@ Provides interface for:
 """
 
 import logging
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
+
+# ─────────────────────────────────────────────
+# Collection size cache  (TTL = 5 min)
+# Avoids a Qdrant round-trip on every query
+# just to compute a dynamic fetch_k.
+# ─────────────────────────────────────────────
+_collection_size_cache: dict[str, tuple[int, float]] = {}
+_COLLECTION_CACHE_TTL: float = 300.0
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +123,7 @@ class QdrantService:
 
         try:
             points = []
-            for idx, (doc, vector) in enumerate(zip(documents, vectors)):
-                print(f"Upserting document {idx}: id={doc.get('id', 'N/A')}, vector_length={len(vector)}")
+            for doc, vector in zip(documents, vectors):
                 point = PointStruct(
                     # id=doc.get("id", idx),
                     id=uuid.uuid4(),
@@ -356,23 +364,40 @@ class QdrantService:
             logger.exception(f"Failed to delete collection {collection_name}")
             raise
 
+    def get_collection_size_cached(self, collection_name: str) -> int:
+        """
+        Return collection point count with 5-minute in-process cache.
+
+        Avoids a Qdrant HTTP round-trip on every query just to compute fetch_k.
+        Falls back to a safe default (300) if Qdrant is unreachable.
+        """
+        now = time.monotonic()
+        entry = _collection_size_cache.get(collection_name)
+        if entry is not None:
+            size, inserted_at = entry
+            if now - inserted_at < _COLLECTION_CACHE_TTL:
+                return size
+
+        try:
+            info = self.client.get_collection(collection_name)
+            size = info.points_count or 0
+        except Exception:
+            logger.warning("[QdrantService] Could not fetch collection size, defaulting to 300")
+            size = 300
+
+        _collection_size_cache[collection_name] = (size, now)
+        logger.debug("[QdrantService] collection_size_cached: %s → %d", collection_name, size)
+        return size
+
     def get_collection_stats(self, collection_name: str) -> dict:
         """Get collection statistics."""
         try:
             collection_info = self.client.get_collection(collection_name)
-            print(f"Collection info: {collection_info}")
-            print(f"Collection points count: {collection_info.model_dump()}")
             return {
                 "collection_name": collection_name,
                 "points_count": collection_info.points_count,
-                # "vectors_count": collection_info.vectors_count,
-                # "vectors_count": (
-                #     collection_info.config.params.vectors.size
-                #     if hasattr(collection_info.config.params, "vectors")
-                #     else None
-            # ),
             }
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to get stats for {collection_name}")
             raise
 
