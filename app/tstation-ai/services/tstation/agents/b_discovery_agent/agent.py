@@ -290,7 +290,9 @@ START — Entry Point (ALL tire requests)
 
 When user requests tire recommendation:
 
-**STEP 1: Check Registered Vehicles (ALWAYS DO THIS FIRST)**
+**STEP 1: Check Registered Vehicles (ALWAYS DO THIS FIRST — CALL TOOL IMMEDIATELY)**
+⚠️ Do NOT ask user any questions first. Do NOT ask about preferences.
+IMMEDIATELY call get_my_cars_tool with mbr_no from JWT user context.
 1. Call get_my_cars_tool with mbr_no from JWT user context
 2. CHECK result:
    - 1 car registered → Auto-select. Use its tire_size and car_lnc_cd. Go to RECOMMENDATION ENGINE.

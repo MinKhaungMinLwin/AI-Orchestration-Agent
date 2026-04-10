@@ -145,7 +145,11 @@ class ConversationSlots(BaseModel):
         return slots
 
     def to_prompt_context(self) -> str:
-        """Format slots as a system prompt context string for agent injection."""
+        """Format slots as a system prompt context string for agent injection.
+
+        Only shows confirmed (non-None) slots. Missing slots are NOT listed
+        to avoid the agent trying to collect all of them from the user.
+        """
         label_map = {
             "tire_size": "타이어 사이즈",
             "tire_model": "타이어 모델",
@@ -157,22 +161,19 @@ class ConversationSlots(BaseModel):
         }
 
         confirmed = []
-        missing = []
         for field, label in label_map.items():
             val = getattr(self, field)
             if val is not None:
                 confirmed.append(f"- {label}: {val}")
-            else:
-                missing.append(f"- {label}")
 
-        lines = []
-        if confirmed:
-            lines.append("[확인된 고객 정보 - 이 정보는 다시 묻지 마세요]")
-            lines.extend(confirmed)
-        if missing:
-            lines.append("[미확인 정보 - 필요 시 자연스럽게 확인하세요]")
-            lines.extend(missing)
+        if not confirmed:
+            return ""
 
+        lines = [
+            "[확인된 고객 정보 - 이 정보는 다시 묻지 마세요]",
+            *confirmed,
+            "[위 정보가 없는 항목은 tool을 호출하여 확인하세요. 유저에게 묻지 마세요.]",
+        ]
         return "\n".join(lines)
 
     def has_any(self) -> bool:
