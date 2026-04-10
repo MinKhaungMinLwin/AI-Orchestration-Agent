@@ -9,10 +9,9 @@ from common.brand_mapping import normalize_brand_name
 logger = logging.getLogger(__name__)
 
 # STORE AF
-from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_nearby_stores_api_store_nearby_post import sync_detailed as get_nearby_stores
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync_detailed as get_store_detail
-from common.tstation_be_api_client.hkt_api_client.models import NearbyStoreRequest
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_place_api_store_place_search_get import sync_detailed as search_place
 
 # PRICE AF
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
@@ -259,11 +258,48 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
 # =====================================================
 
 @tool
-def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 20.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False):
+def search_place_tool(query: str, size: int = 10):
+    """
+    위치 명칭 검색 (Kakao 키워드 검색)
+
+    장소명, 건물명, 주소 등을 검색하여 좌표(x, y)를 반환합니다.
+    반환된 좌표는 get_nearby_stores_tool의 user_xpos, user_ypos 파라미터로 사용할 수 있습니다.
+
+    Args:
+        query (str): 검색어 (예: '센텀시티', '강남역', '강남대로 100')
+        size (int): 반환할 최대 결과 수 (기본 10)
+
+    Example Inputs:
+        - {"query": "센텀시티"}
+        - {"query": "강남역"}
+        - {"query": "강남대로 100"}
+
+    Returns:
+        dict: {"status": "success", "data": {"total": N, "items": [{"title": "...", "road_addr": "...", "x": "...", "y": "..."}]}}
+    """
+    logger.info("[TOOL][search_place_tool] Called with: query=%s, size=%s", query, size)
+
+    try:
+        response = search_place(client=get_client(), query=query, size=size)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search place"
+            )
+        logger.info("[TOOL][search_place_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][search_place_tool] Failed")
+        return _error_response(None, str(e), "Failed to search place")
+
+
+@tool
+def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 10.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False):
     """
     Get nearby stores.
 
-    Retrieve stores within specified radius (default 20km) based on customer coordinates,
+    Retrieve stores within specified radius (default 10km) based on customer coordinates,
     including distance (km) from customer location.
 
     Response stores include is_installable field:
@@ -273,7 +309,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
     Args:
         user_xpos (float): Customer current X coordinate (longitude).
         user_ypos (float): Customer current Y coordinate (latitude).
-        radius_km (float): Search radius in km (default 20km).
+        radius_km (float): Search radius in km (default 10km).
         svc_codes (List[str] | None): Service category codes.
             Returns stores that have ANY of the specified services.
             Example: ["101", "102"]
@@ -289,11 +325,17 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
         Response data includes is_installable field per store.
     """
-    body = NearbyStoreRequest(user_xpos=user_xpos, user_ypos=user_ypos, radius_km=radius_km, svc_codes=svc_codes, all_my_t_only=all_my_t_only)
     logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, all_my_t_only=%s", user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only)
 
     try:
-        response = get_nearby_stores(client=get_client(), body=body)
+        response = get_store_list(
+            client=get_client(),
+            xpos=user_xpos,
+            ypos=user_ypos,
+            radius_km=radius_km,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,

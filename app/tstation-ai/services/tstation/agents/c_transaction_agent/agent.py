@@ -6,6 +6,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_my_coupons_tool,
     get_logistics_inventory_tool,
     get_store_inventory_tool,
+    search_place_tool,
     get_nearby_stores_tool,
     get_store_list_tool,
     get_store_detail_tool,
@@ -239,19 +240,59 @@ Output
 Purpose
 Find stores and check availability.
 
+⚠️ STORE SEARCH DECISION RULE:
+
+When user asks for stores, first determine the search type:
+
+A) **지역명/행정구역** (동, 구, 시, 도 단위)
+   Examples: "역삼동", "강남구", "부산", "해운대"
+   → Use get_store_list_tool(region_code=...)
+
+B) **매장명**
+   Examples: "티스테이션 역삼점", "광주역점", "더타이어샵 강남"
+   → Use get_store_list_tool(store_nm=...)
+
+C) **구체적 주소 또는 장소명/건물명** (도로명, 번지, 랜드마크, 역, 건물)
+   Examples: "강남대로 100", "센텀시티", "강남역", "코엑스", "부산센텀시티"
+   → Use search_place_tool first → then get_nearby_stores_tool with coordinates
+
+
+Tool
+search_place_tool
+
+When to use
+
+• user mentions a specific address (도로명, 번지)
+• user mentions a landmark, building, or station name
+• user says "[장소명] 주변 매장", "[주소] 근처 매장"
+
+Inputs
+
+query - search keyword (place name or address)
+size - max results (default 10)
+
+Returns: list of places with title, road_addr, x (longitude), y (latitude)
+
+**After search_place_tool returns:**
+- If 1 result → auto-select, call get_nearby_stores_tool with x, y coordinates
+- If multiple results → show numbered list (title + road_addr), ask user to select
+- If 0 results → say "해당 장소를 찾을 수 없습니다" and suggest trying a different keyword
+
+
 Tool
 get_nearby_stores_tool
 
 When to use
 
-• user asks for nearby stores
-• user asks for stores near location
+• after search_place_tool returns coordinates
+• user provides coordinates directly
+• user asks for stores near their current location
 
 Inputs
 
-user_xpos - customer X coordinate (longitude)
-user_ypos - customer Y coordinate (latitude)
-radius_km - search radius in km (optional, default 20km)
+user_xpos - X coordinate (longitude, from search_place_tool result x)
+user_ypos - Y coordinate (latitude, from search_place_tool result y)
+radius_km - search radius in km (optional, default 10km)
 svc_codes - service codes (optional, e.g., ["101", "102"])
 
 
@@ -260,8 +301,7 @@ get_store_list_tool
 
 When to use
 
-- user searches stores by region
-- user asks for stores in area
+- user searches stores by 지역명/행정구역 (동, 구, 시)
 - user searches for a specific store name (with or without region)
 
 Inputs
@@ -560,13 +600,30 @@ Steps:
    - Display results for ALL stores
   
 ------------------------------------
-Flow 4 — Nearby Stores
+Flow 4 — Nearby Stores (Place/Address Search)
 ------------------------------------
 
-When user asks for nearby stores:
+When user asks for stores near a place, address, or landmark:
 
-1. Call get_nearby_stores_tool with coordinates
+**STEP 1: Get Coordinates**
+- If user provides a place name or address (e.g., "센텀시티 주변", "강남대로 100 근처"):
+  → Call search_place_tool(query="센텀시티") or search_place_tool(query="강남대로 100")
+  → If 1 result: auto-select coordinates (x, y)
+  → If multiple results: show list, ask user to select
+  → If 0 results: suggest alternative keyword
+
+- If user's location coordinates are available from context:
+  → Use directly (skip search_place_tool)
+
+**STEP 2: Search Nearby Stores**
+2. Call get_nearby_stores_tool with coordinates (x → user_xpos, y → user_ypos)
    → Returns list of stores with: shop_id, shop_nm, distance, address, etc.
+
+**STEP 2-1: No Results → Expand Radius**
+If get_nearby_stores_tool returns 0 stores (empty list):
+→ Tell user: "반경 10km 내에 매장이 없습니다. 반경 20km로 확대하여 검색할까요?"
+→ If user agrees: call get_nearby_stores_tool again with radius_km=20
+→ If user declines: end store search flow
 
 2. **MANDATORY: For EACH store returned, call get_store_detail_tool**
    
@@ -1687,6 +1744,7 @@ class TransactionSubAgent(BaseAgent):
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
         # Store
+        "search_place_tool": "Store",
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
@@ -1707,6 +1765,7 @@ class TransactionSubAgent(BaseAgent):
                 get_my_coupons_tool,
                 get_logistics_inventory_tool,
                 get_store_inventory_tool,
+                search_place_tool,
                 get_nearby_stores_tool,
                 get_store_list_tool,
                 get_store_detail_tool,

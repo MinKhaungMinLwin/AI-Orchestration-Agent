@@ -14,6 +14,10 @@ def _get_kwargs(
     *,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    xpos: float | None | Unset = UNSET,
+    ypos: float | None | Unset = UNSET,
+    radius_km: float | Unset = 20.0,
+    svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
@@ -33,6 +37,32 @@ def _get_kwargs(
     else:
         json_store_nm = store_nm
     params["store_nm"] = json_store_nm
+
+    json_xpos: float | None | Unset
+    if isinstance(xpos, Unset):
+        json_xpos = UNSET
+    else:
+        json_xpos = xpos
+    params["xpos"] = json_xpos
+
+    json_ypos: float | None | Unset
+    if isinstance(ypos, Unset):
+        json_ypos = UNSET
+    else:
+        json_ypos = ypos
+    params["ypos"] = json_ypos
+
+    params["radius_km"] = radius_km
+
+    json_svc_codes: list[str] | None | Unset
+    if isinstance(svc_codes, Unset):
+        json_svc_codes = UNSET
+    elif isinstance(svc_codes, list):
+        json_svc_codes = svc_codes
+
+    else:
+        json_svc_codes = svc_codes
+    params["svc_codes"] = json_svc_codes
 
     params["all_my_t_only"] = all_my_t_only
 
@@ -84,16 +114,24 @@ def sync_detailed(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    xpos: float | None | Unset = UNSET,
+    ypos: float | None | Unset = UNSET,
+    radius_km: float | Unset = 20.0,
+    svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
 
-     지역명
+     매장명/지역명 검색 또는 좌표 기반 주변 매장 검색. xpos, ypos 를 입력하면 해당 좌표 주변 매장을 거리순으로 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        xpos (float | None | Unset): X 좌표 (경도, place-search 결과의 x 값)
+        ypos (float | None | Unset): Y 좌표 (위도, place-search 결과의 y 값)
+        radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
+        svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -108,6 +146,10 @@ def sync_detailed(
     kwargs = _get_kwargs(
         region_code=region_code,
         store_nm=store_nm,
+        xpos=xpos,
+        ypos=ypos,
+        radius_km=radius_km,
+        svc_codes=svc_codes,
         all_my_t_only=all_my_t_only,
         limit=limit,
     )
@@ -124,16 +166,24 @@ def sync(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    xpos: float | None | Unset = UNSET,
+    ypos: float | None | Unset = UNSET,
+    radius_km: float | Unset = 20.0,
+    svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
 
-     지역명
+     매장명/지역명 검색 또는 좌표 기반 주변 매장 검색. xpos, ypos 를 입력하면 해당 좌표 주변 매장을 거리순으로 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        xpos (float | None | Unset): X 좌표 (경도, place-search 결과의 x 값)
+        ypos (float | None | Unset): Y 좌표 (위도, place-search 결과의 y 값)
+        radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
+        svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -149,6 +199,10 @@ def sync(
         client=client,
         region_code=region_code,
         store_nm=store_nm,
+        xpos=xpos,
+        ypos=ypos,
+        radius_km=radius_km,
+        svc_codes=svc_codes,
         all_my_t_only=all_my_t_only,
         limit=limit,
     ).parsed
@@ -159,16 +213,24 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    xpos: float | None | Unset = UNSET,
+    ypos: float | None | Unset = UNSET,
+    radius_km: float | Unset = 20.0,
+    svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
 
-     지역명
+     매장명/지역명 검색 또는 좌표 기반 주변 매장 검색. xpos, ypos 를 입력하면 해당 좌표 주변 매장을 거리순으로 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        xpos (float | None | Unset): X 좌표 (경도, place-search 결과의 x 값)
+        ypos (float | None | Unset): Y 좌표 (위도, place-search 결과의 y 값)
+        radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
+        svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -183,6 +245,10 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         region_code=region_code,
         store_nm=store_nm,
+        xpos=xpos,
+        ypos=ypos,
+        radius_km=radius_km,
+        svc_codes=svc_codes,
         all_my_t_only=all_my_t_only,
         limit=limit,
     )
@@ -197,16 +263,24 @@ async def asyncio(
     client: AuthenticatedClient,
     region_code: None | str | Unset = UNSET,
     store_nm: None | str | Unset = UNSET,
+    xpos: float | None | Unset = UNSET,
+    ypos: float | None | Unset = UNSET,
+    radius_km: float | Unset = 20.0,
+    svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
 
-     지역명
+     매장명/지역명 검색 또는 좌표 기반 주변 매장 검색. xpos, ypos 를 입력하면 해당 좌표 주변 매장을 거리순으로 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
         store_nm (None | str | Unset): 매장명 명칭 검색
+        xpos (float | None | Unset): X 좌표 (경도, place-search 결과의 x 값)
+        ypos (float | None | Unset): Y 좌표 (위도, place-search 결과의 y 값)
+        radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
+        svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
@@ -223,6 +297,10 @@ async def asyncio(
             client=client,
             region_code=region_code,
             store_nm=store_nm,
+            xpos=xpos,
+            ypos=ypos,
+            radius_km=radius_km,
+            svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             limit=limit,
         )

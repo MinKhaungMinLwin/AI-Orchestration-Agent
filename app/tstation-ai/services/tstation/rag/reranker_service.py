@@ -122,13 +122,15 @@ class RerankerService:
         return intersection / union if union else 0.0
 
     def _content_overlap(self, query_tokens: set[str], payload: dict) -> float:
-        """Fraction of query tokens found in the FAQ question + content."""
+        """Fraction of query tokens found in the FAQ question + answer text."""
         if not query_tokens:
             return 0.0
 
+        # Payload stores 'question' and 'answer'. The 'content' field was removed
+        # during slim payload indexing to reduce Qdrant request size.
         text_parts = [
             payload.get("question", ""),
-            payload.get("content", ""),
+            payload.get("answer", ""),
         ]
         content_tokens = set()
         for part in text_parts:

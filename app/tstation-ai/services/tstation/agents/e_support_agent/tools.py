@@ -14,6 +14,7 @@ from services.tstation.rag import (
     get_embedding_service,
     get_reranker_service,
 )
+from services.tstation.rag.rag_config import RAGDynamicConfig
 from config.env import settings
 
 logger = logging.getLogger(__name__)
@@ -44,74 +45,69 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
+@tool
+def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: int = 50):
+    """
+    [PRIMARY] Get FAQ list from database API.
 
-# RAG category_lv1 → DB lrcl_cd 매핑 (키워드 기반 추론용)
-_KEYWORD_TO_LRCL = {
-    "배송": "배송/장착", "장착": "배송/장착", "매장": "배송/장착",
-    "주문": "주문/결제", "결제": "주문/결제", "반품": "주문/결제", "환불": "주문/결제", "교환": "주문/결제",
-    "쿠폰": "혜택/프로모션", "할인": "혜택/프로모션", "프로모션": "혜택/프로모션", "이벤트": "혜택/프로모션",
-    "회원": "회원/계정", "가입": "회원/계정", "탈퇴": "회원/계정", "비밀번호": "회원/계정",
-    "워런티": "워런티", "보증": "워런티", "A/S": "워런티",
-    "타이어": "상품/서비스", "경정비": "상품/서비스",
-}
+    Retrieve frequently asked questions from CS_CUST_INQ_MGMT_INFO.
+    Only FAQ data (INQ_TYPE_CD='FAQ') is retrieved. 1:1 inquiry history
+    is excluded for privacy protection.
 
+    Can filter by large category (lrcl_cd) and medium category (mdcl_cd).
 
-def _infer_lrcl_cd(query: str, rag_results: list[dict]) -> str | None:
-    """RAG 결과의 category_lv1 또는 쿼리 키워드로 DB lrcl_cd를 추론한다."""
-    # 1순위: RAG 최상위 결과의 카테고리
-    if rag_results:
-        category = rag_results[0].get("payload", {}).get("metadata", {}).get("category_lv1")
-        if category:
-            return category
+    Args:
+        lrcl_cd (str | None): Large category code filter (LRCL_CD).
+            Supported values:
+                - "C01": 회원/주문/장착 관련 (membership, order, installation)
+                - "C02": 상품/타이어 관련 (product, tire info)
+                - "C03": 매장/서비스 관련 (store, service)
+                - None: search all categories
+        mdcl_cd (str | None): Medium category code filter (MDCL_CD).
+            Known values (use when determinable):
+                - C01 → "C0103" (회원가입/계정), "C0106" (장착일정/예약)
+                - C02 → "C0201" (타이어 상품정보/수명)
+                - C03 → "C0302" (매장서비스/보관)
+                - None: search all medium categories within lrcl_cd
+        limit (int): Number of FAQs to return (default 50, max 200).
 
-    # 2순위: 쿼리 키워드 매칭
-    for keyword, lrcl in _KEYWORD_TO_LRCL.items():
-        if keyword in query:
-            return lrcl
+    Call strategy:
+        Step 1: Call with limit=50 (and lrcl_cd inferred from user question if possible)
+        Step 2: If no relevant result, call with limit=100
+        Step 3: If still no result, call with limit=200 (MAX)
+        Step 4: If still no result after limit=200, fall back to search_faq_rag_tool
 
-    return None
+    Example Inputs:
+        - {"lrcl_cd": "C01", "mdcl_cd": "C0103", "limit": 50}
+        - {"lrcl_cd": "C02", "mdcl_cd": "C0201", "limit": 50}
+        - {"lrcl_cd": "C03", "mdcl_cd": "C0303", "limit": 50}
+        - {"lrcl_cd": None, "mdcl_cd": None, "limit": 50}
 
-
-def _fallback_db_faq(query: str, rag_results: list[dict], top_k: int) -> list[dict]:
-    """RAG 점수가 낮을 때 DB FAQ API로 카테고리 기반 보충 검색."""
-    lrcl_cd = _infer_lrcl_cd(query, rag_results)
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    """
+    logger.info("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
 
     try:
-        response = get_faq(client=get_client(), lrcl_cd=lrcl_cd, limit=top_k)
+        response = get_faq(client=get_client(), lrcl_cd=lrcl_cd, mdcl_cd=mdcl_cd, limit=limit)
         if response.parsed is None:
-            return []
-
-        parsed = response.parsed
-        items = parsed.items if hasattr(parsed, "items") else []
-
-        # RAG에 이미 있는 질문은 중복 제거
-        existing_questions = {
-            r.get("payload", {}).get("question", "") for r in rag_results
-        }
-
-        results = []
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get FAQ"
+            )
+        
+        parsed = _to_dict(response.parsed)
+        # Inject source="db" into each FAQ item
+        items = parsed.get("items", []) if isinstance(parsed, dict) else []
         for item in items:
-            item_dict = _to_dict(item)
-            question = item_dict.get("cust_quest", "")
-            if question in existing_questions:
-                continue
-            results.append({
-                "id": None,
-                "question": question,
-                "answer": item_dict.get("pc_ans_cont", ""),
-                "metadata": {
-                    "category_lv1": item_dict.get("lrcl_cd", ""),
-                    "category_lv2": item_dict.get("mdcl_cd", ""),
-                },
-                "source": "db",
-            })
-
-        return results[:top_k]
-
+            item["source"] = "FAQ DB"
+        logger.info("[TOOL][get_faq_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
-        logger.warning("[TOOL][_fallback_db_faq] DB fallback failed: %s", e)
-        return []
-
+        logger.exception("[TOOL][get_faq_tool] Failed")
+        return _error_response(None, str(e), "Failed to get FAQ")
+    
 @tool
 def search_faq_rag_tool(
     query: str,
@@ -119,10 +115,11 @@ def search_faq_rag_tool(
     score_threshold: float = 0.6,
 ) -> dict:
     """
-    Search FAQs using Retrieval-Augmented Generation (RAG) with multi-vector hybrid search.
+    [FALLBACK] Search FAQs using RAG (semantic vector search).
 
-    Performs semantic search over the FAQ database using named vectors ('question' and 'answer'),
-    fused with Reciprocal Rank Fusion (RRF), then reranks results with keyword-overlap scoring.
+    Use this ONLY when get_faq_tool fails (API error, timeout) or returns
+    no relevant results after limit=200.
+    Do NOT call this as the first step — always try get_faq_tool first.
 
     Args:
         query (str): The user's search query.
@@ -143,14 +140,13 @@ def search_faq_rag_tool(
     try:
         openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
 
-        # 1. Embed the query
+        # 1. Embed query — cached; repeat queries return in <1ms instead of ~200ms API call
         embedding_service = get_embedding_service(
             model=settings.EMBEDDING_MODEL,
             provider=settings.EMBEDDING_PROVIDER,
             api_key=openai_api_key,
         )
-        query_embedding = embedding_service.embed_text(query)
-        logger.debug("[TOOL][search_faq_rag_tool] Embedding dim: %d", len(query_embedding))
+        query_embedding = embedding_service.embed_text_cached(query)
 
         qdrant_service = get_qdrant_service(
             host=settings.QDRANT_HOST,
@@ -158,52 +154,61 @@ def search_faq_rag_tool(
             api_key=settings.QDRANT_API_KEY or None,
         )
 
-        # 2. Multi-vector hybrid search (RRF fusion of question + answer vectors).
-        #    Retrieve top_k + 5 extra candidates for reranker headroom.
-        fetch_k = top_k + 5
+        # 2. Dynamic fetch_k: scales logarithmically with collection size (cached 5 min).
+        #    Prevents both over-fetch (noise) and under-fetch (missing good docs).
+        collection_size = qdrant_service.get_collection_size_cached(settings.QDRANT_COLLECTION_FAQ)
+        fetch_k = RAGDynamicConfig.compute_fetch_k(collection_size=collection_size, final_top_k=top_k)
+        logger.info(
+            "[TOOL][search_faq_rag_tool] collection_size=%d, fetch_k=%d",
+            collection_size, fetch_k,
+        )
+
+        # 3. Multi-vector hybrid search — 2 Qdrant calls run in parallel (ThreadPoolExecutor).
+        #    No hard score_threshold here; adaptive threshold is applied after retrieval.
         try:
             raw_results = qdrant_service.search_multi_vector(
                 collection_name=settings.QDRANT_COLLECTION_FAQ,
                 query_vector=query_embedding,
                 top_k=fetch_k,
-                score_threshold=score_threshold,
+                score_threshold=0.0,
             )
             logger.info("[TOOL][search_faq_rag_tool] Multi-vector search: %d candidates", len(raw_results))
         except Exception:
-            # Fallback to single-vector search for collections without named vectors
             logger.warning("[TOOL][search_faq_rag_tool] Multi-vector failed, falling back to single-vector")
             raw_results = qdrant_service.search(
                 collection_name=settings.QDRANT_COLLECTION_FAQ,
                 query_vector=query_embedding,
                 top_k=fetch_k,
-                score_threshold=score_threshold,
+                score_threshold=None,
             )
 
-        # 3. Rerank candidates with keyword-overlap scoring
+        # 4. Adaptive threshold: detect natural score gap instead of using fixed 0.6.
+        #    score_threshold param from the agent call acts as the absolute floor.
+        retrieval_scores = [r.get("score", 0.0) for r in raw_results]
+        effective_threshold = RAGDynamicConfig.adaptive_threshold(
+            scores=retrieval_scores,
+            base_threshold=score_threshold,
+        )
+        filtered = [r for r in raw_results if r.get("score", 0.0) >= effective_threshold]
+        logger.info(
+            "[TOOL][search_faq_rag_tool] adaptive_threshold=%.3f (base=%.3f) → %d/%d passed",
+            effective_threshold, score_threshold, len(filtered), len(raw_results),
+        )
+
+        # 5. Rerank filtered candidates with keyword-overlap scoring
         reranker = get_reranker_service()
-        reranked = reranker.rerank(query=query, results=raw_results, top_k=top_k)
+        reranked = reranker.rerank(query=query, results=filtered, top_k=top_k)
 
         # 4. Format RAG results
         formatted_results = [
             {
-                "id": r.get("id"),
                 "question": r.get("payload", {}).get("question", ""),
                 "answer": r.get("payload", {}).get("answer", ""),
                 "metadata": r.get("payload", {}).get("metadata", {}),
-                "source": "rag",
+                "source": "FAQ RAG",
             }
             for r in reranked
         ]
-
-        # 5. DB fallback: if RAG best score < 0.7, supplement with DB FAQ
-        best_score = reranked[0].get("score", 0.0) if reranked else 0.0
-        if best_score < 0.7:
-            db_results = _fallback_db_faq(query, reranked, top_k)
-            if db_results:
-                formatted_results.extend(db_results)
-                logger.info(
-                    "[TOOL][search_faq_rag_tool] DB fallback added %d FAQs", len(db_results),
-                )
 
         logger.info(
             "[TOOL][search_faq_rag_tool] Returned %d FAQs (RAG+DB, threshold=%.2f)",
