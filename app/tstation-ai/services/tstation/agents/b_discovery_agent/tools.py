@@ -141,7 +141,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 
 @tool
-def search_product_tool(keyword: str, limit: int = 20, size: str | None = None):
+def search_product_tool(keyword: str, limit: int = 20, size: str | None = None, brand_cd: str = "HK"):
     """
     상품 검색
 
@@ -152,19 +152,28 @@ def search_product_tool(keyword: str, limit: int = 20, size: str | None = None):
         keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         limit (int): 반환할 최대 상품 수 Default: 20.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
+        brand_cd (str): 브랜드 코드. Default: HK.
+            - HK: Hankook 한국타이어
+            - LF: Laufenn 라우펜
+            - MC: Michelin 미쉐린
+            - PI: Pirelli 피렐리
+            - BS: Bridgestone 브리지스톤
+            - CT: Continental 콘티넨탈
+            - GY: Goodyear 굿이어
 
     Example Inputs:
         - {"keyword": "벤투스 S2", "limit": 20, "size": "225/45R17"}
         - {"keyword": "Ventus S2", "limit": 20, "size": "2254517"}
+        - {"keyword": "Pilot Sport", "limit": 20, "brand_cd": "MC"}
         - {"keyword": "s1-evo", "limit": 20}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s", keyword, limit, size)
+    logger.info("[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s", keyword, limit, size, brand_cd)
 
     try:
-        response = search_product(client=get_client(), keyword=keyword, limit=limit, size=size)
+        response = search_product(client=get_client(), keyword=keyword, limit=limit, size=size, brand_cd=brand_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,

@@ -223,14 +223,31 @@ When to use
 Inputs
 
 keyword - search keyword (required)
-  Examples: "벤투스 S2", "s1-evo", "ventus"
+  Examples: "벤투스 S2", "s1-evo", "ventus", "Pilot Sport", "Cinturato"
 limit - max results (optional, default 20)
 size - tire size filter (optional)
   Format: "225/45R17", "2254517", "205/55R16", etc.
-  Examples: 
+  Examples:
     - Pass size="225/45R17" to filter by specific tire size
     - Pass size="2254517" in short format
     - Omit size to search by name only
+brand_cd - brand code (optional, default "HK")
+  - HK: Hankook 한국타이어 (default)
+  - LF: Laufenn 라우펜
+  - MC: Michelin 미쉐린
+  - PI: Pirelli 피렐리
+  - BS: Bridgestone 브리지스톤
+  - CT: Continental 콘티넨탈
+  - GY: Goodyear 굿이어
+
+⚠️ BRAND DETECTION: When user mentions a non-Hankook brand or product name, set brand_cd accordingly:
+  - "미쉐린 파일럿 스포츠" → brand_cd="MC", keyword="Pilot Sport"
+  - "피렐리 친투라토" → brand_cd="PI", keyword="Cinturato"
+  - "브리지스톤 투란자" → brand_cd="BS", keyword="Turanza"
+  - "콘티넨탈 프리미엄 컨택트" → brand_cd="CT", keyword="Premium Contact"
+  - "굿이어 이피션트그립" → brand_cd="GY", keyword="EfficientGrip"
+  - "라우펜" → brand_cd="LF"
+  - If no brand mentioned → default brand_cd="HK"
 
 Outputs
 
