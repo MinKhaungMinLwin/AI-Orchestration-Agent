@@ -560,9 +560,12 @@ Steps:
 
 1. **STEP 1: Get tire size**
    - **If tire_size is already confirmed in [확인된 고객 정보]** → Use that tire_size. Do NOT call get_user_vehicles_tool or get_my_cars_tool again.
-   - **If tire_size is NOT confirmed** → Call get_my_cars_tool(mbr_no=...) or get_user_vehicles_tool(car_no=car_no, owner_nm=owner_nm)
-   - Extract: tire_size from response
-   - If no tire size found → Ask user: "타이어 사이즈를 확인 할 수 없습니다. 직접 사이즈를 입력해 주시겠어요?"
+   - **If tire_size is NOT confirmed** → Call get_my_cars_tool(mbr_no=...) and check result:
+     - 1 car registered → Auto-select. Extract tire_size_fr. Continue to STEP 2.
+     - Multiple cars registered → Show numbered list with car_nm and tire_size_fr.
+       Ask: "어떤 차량 기준으로 주문을 진행할까요?" → STOP and wait for user selection.
+       After selection → extract tire_size_fr from the selected item. Continue to STEP 2.
+     - 0 cars registered → Ask user: "타이어 사이즈를 확인 할 수 없습니다. 직접 사이즈를 입력해 주시겠어요?" → STOP.
 
 2. **STEP 2: Search product with name + size**
    - Call search_product_tool(keyword="Ventus S2 AS", size=tire_size, limit=5)
