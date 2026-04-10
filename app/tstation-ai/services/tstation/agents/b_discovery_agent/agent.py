@@ -387,7 +387,10 @@ RECOMMENDATION ENGINE (Shared)
 • Only call tool again if user changes vehicle/size OR asks for new search
 
 **STEP 3: Get Product Details**
-5. Call get_product_description_tool for the #1 BEST product only
+5. From the get_products_recommendations_tool result items, pick the FIRST item (index 0) and use its goods_no.
+   Call get_product_description_tool(goods_no=items[0].goods_no)
+   ⚠️ CRITICAL: Use the goods_no of the first item from the recommendation result.
+   Do NOT pick a different goods_no. Do NOT hallucinate a goods_no.
 6. Extract: rating (review_count, rating_avg), reviews, slogan, key features
 
 **STEP 4: Display Recommendations**
