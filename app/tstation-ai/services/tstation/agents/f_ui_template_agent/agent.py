@@ -49,7 +49,7 @@ TEMPLATE TYPES (use ONE that best fits)
 • list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
 • available_dates_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null). IMPORTANT: Include ALL available dates - do NOT truncate or limit the dates array. If source has 10 dates, pass all 10. (camelCase, no underscore)
-• preorder_tool → "preorder" - Pre-order card with fields:
+• preorder_tool → "preOrder" - Pre-order card with fields:
   - orderInfo[[{{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, visitMethod? (Visit in Person | Use Pickup), paymentAmount?}}]]
   - recommendActions (dict): Recommend action with {{question (str), listActions (list[str])}}
   - isReadyToOrder (bool): True if ready for quick_order (carInfo + product + quantity + storeName)
@@ -157,7 +157,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_event_tool": "event",
         "list_preview_youtube_tool": "previewYoutube",
         "available_dates_tool": "datepick",
-        "preorder_tool": "preorder",
+        "preorder_tool": "preOrder",
     }
 
     def __init__(self, model):

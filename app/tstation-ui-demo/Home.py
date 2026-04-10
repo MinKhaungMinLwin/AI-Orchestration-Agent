@@ -326,7 +326,7 @@ def render_template_expander(template: str, data: dict):
                     st.markdown(f"🔗 {item.get('eventUrl', '')}")
                 if item.get("actionLink") and item.get("actionText"):
                     st.markdown(f"[{item.get('actionText', 'Action')}]({item.get('actionLink')})")
-    elif template == "preorder":
+    elif template == "preOrder":
         order_info = data.get("orderInfo", {})
         recommend_actions = data.get("recommendActions", [])
         is_ready_to_order = data.get("isReadyToOrder", False)
