@@ -24,12 +24,11 @@ from .message_create import MessageCreate
 from .message_response import MessageResponse
 from .my_coupon_item import MyCouponItem
 from .my_coupon_response import MyCouponResponse
-from .nearby_store_item import NearbyStoreItem
-from .nearby_store_request import NearbyStoreRequest
-from .nearby_store_response import NearbyStoreResponse
 from .order_delivery_response import OrderDeliveryResponse
 from .order_list_item import OrderListItem
 from .order_list_response import OrderListResponse
+from .place_search_item import PlaceSearchItem
+from .place_search_response import PlaceSearchResponse
 from .price_response import PriceResponse
 from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
@@ -58,8 +57,6 @@ from .store_list_response import StoreListResponse
 from .tire_spec import TireSpec
 from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
-from .verify_owner_request import VerifyOwnerRequest
-from .verify_owner_response import VerifyOwnerResponse
 
 __all__ = (
     "AvailableCouponItem",
@@ -86,12 +83,11 @@ __all__ = (
     "MessageResponse",
     "MyCouponItem",
     "MyCouponResponse",
-    "NearbyStoreItem",
-    "NearbyStoreRequest",
-    "NearbyStoreResponse",
     "OrderDeliveryResponse",
     "OrderListItem",
     "OrderListResponse",
+    "PlaceSearchItem",
+    "PlaceSearchResponse",
     "PriceResponse",
     "ProductDescResponse",
     "ProductImage",
@@ -120,6 +116,4 @@ __all__ = (
     "TireSpec",
     "ValidationError",
     "ValidationErrorContext",
-    "VerifyOwnerRequest",
-    "VerifyOwnerResponse",
 )
