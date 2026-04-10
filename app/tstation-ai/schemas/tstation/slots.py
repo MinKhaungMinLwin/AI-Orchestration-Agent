@@ -42,8 +42,10 @@ class ConversationSlots(BaseModel):
 
         - Only non-None new values are applied.
         - If a value changes, dependent slots are reset to None.
+        - Tracks which fields were reset by dependency for protection.
         """
         merged = self.model_copy()
+        reset_fields = set(getattr(merged, "_reset_fields", set()))
 
         for field, new_val in new_slots.model_dump().items():
             if new_val is None:
@@ -55,6 +57,37 @@ class ConversationSlots(BaseModel):
                 for dep in self.DEPENDENT_RESETS.get(field, []):
                     logger.info(f"[SLOTS] {field} changed ({old_val} -> {new_val}), resetting {dep}")
                     setattr(merged, dep, None)
+                    reset_fields.add(dep)
+
+            setattr(merged, field, new_val)
+
+        # Store reset fields for merge_fill_only to reference
+        object.__setattr__(merged, "_reset_fields", reset_fields)
+        return merged
+
+    def merge_fill_only(self, new_slots: "ConversationSlots") -> "ConversationSlots":
+        """Merge new slots into existing slots, but ONLY fill None fields.
+
+        - Does NOT overwrite existing non-None values.
+        - Does NOT fill fields that were reset by dependency in a prior merge step.
+        Used for LLM-extracted slots to prevent overwriting explicit user values.
+        """
+        merged = self.model_copy()
+        reset_fields = getattr(merged, "_reset_fields", set())
+
+        for field, new_val in new_slots.model_dump().items():
+            if new_val is None:
+                continue
+            old_val = getattr(merged, field)
+
+            # Skip if already has a value
+            if old_val is not None:
+                continue
+
+            # Skip if this field was reset by dependency (protect reset)
+            if field in reset_fields:
+                logger.info(f"[SLOTS] Skipping LLM fill for {field} (was dependency-reset)")
+                continue
 
             setattr(merged, field, new_val)
 
