@@ -148,7 +148,7 @@ def decide_next_action(
 
 
 class MultiAgentDomain(BaseModel):
-    """Router result that supports multiple domains (multi-intent) and slot extraction."""
+    """Router result that supports multiple domains (multi-intent)."""
 
     class Domain(str, Enum):
         LEADING = "leading"
@@ -162,6 +162,7 @@ class MultiAgentDomain(BaseModel):
     )
 
     # Slot extraction fields (LLM-based, extracted from current + previous messages)
+    # Optional — if LLM fails to include these, domain classification still succeeds
     tire_model: Optional[str] = Field(default=None, description="Tire model name mentioned by user (e.g. '벤투스 S2', 'Ventus S1 evo3', 'Dynapro HPX')")
     shop_name: Optional[str] = Field(default=None, description="Store name mentioned by user (e.g. '한남점', '강남점')")
     car_model: Optional[str] = Field(default=None, description="Car model mentioned by user (e.g. '쏘나타', 'BMW 5시리즈', '아반떼')")
@@ -507,10 +508,7 @@ class StreamingMultiAgentCoordinator:
             model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
         )
 
-        structured_model = llm.with_structured_output(
-            MultiAgentDomain,
-            strict=True,
-        )
+        structured_model = llm.with_structured_output(MultiAgentDomain)
 
         try:
             system_msg = SystemMessage(content=prompt_router_multi())
@@ -967,41 +965,52 @@ class TStationChatServiceV2:
         logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
+        # Wrapped in try/except so slot failures never block the main chat flow
         from schemas.tstation.slots import ConversationSlots
         from services.tstation.chat_history_service import get_chat_history_service
 
-        chat_history_svc = get_chat_history_service()
+        domains = None
+        slot_context = None
 
-        # 1) Load existing slots from Redis
-        existing_slots = chat_history_svc.get_slots(request.session_id)
-        logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+        try:
+            chat_history_svc = get_chat_history_service()
 
-        # 2) Extract regex-based slots from the LATEST user message only
-        last_user_text = ""
-        for msg in reversed(request.messages):
-            if msg.get("role") == "user":
-                last_user_text = msg.get("content", "")
-                break
-        regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
+            # 1) Load existing slots from Redis
+            existing_slots = chat_history_svc.get_slots(request.session_id)
+            logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
-        # 3) Classify domains + extract LLM-based slots (tire_model, shop_name, car_model)
-        domains, router_result = _coordinator.classify_multi_intent(messages)
-        llm_slots = ConversationSlots(
-            tire_model=router_result.tire_model,
-            shop_name=router_result.shop_name,
-            car_model=router_result.car_model,
-        )
+            # 2) Extract regex-based slots from the LATEST user message only
+            last_user_text = ""
+            for msg in reversed(request.messages):
+                if msg.get("role") == "user":
+                    last_user_text = msg.get("content", "")
+                    break
+            regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
 
-        # 4) Merge: existing → regex (full merge with dependency reset)
-        #          → LLM (fill only: fills blanks, does not overwrite, respects resets)
-        merged_slots = existing_slots.merge(regex_slots).merge_fill_only(llm_slots)
-        logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
+            # 3) Classify domains + extract LLM-based slots (tire_model, shop_name, car_model)
+            domains, router_result = _coordinator.classify_multi_intent(messages)
+            llm_slots = ConversationSlots(
+                tire_model=router_result.tire_model,
+                shop_name=router_result.shop_name,
+                car_model=router_result.car_model,
+            )
 
-        # 5) Save merged slots to Redis
-        chat_history_svc.save_slots(request.session_id, merged_slots)
+            # 4) Merge: existing → regex (full merge with dependency reset)
+            #          → LLM (fill only: fills blanks, does not overwrite, respects resets)
+            merged_slots = existing_slots.merge(regex_slots).merge_fill_only(llm_slots)
+            logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
-        # 6) Build slot context string for agent injection
-        slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
+            # 5) Save merged slots to Redis
+            chat_history_svc.save_slots(request.session_id, merged_slots)
+
+            # 6) Build slot context string for agent injection
+            slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
+
+        except Exception as e:
+            logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
+            # domains may have been set before the error; if not, coordinator will classify
+            domains = domains
+            slot_context = None
 
         # STREAM MODE
         if request.stream:
