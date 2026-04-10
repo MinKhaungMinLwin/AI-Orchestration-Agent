@@ -9,8 +9,6 @@ from langchain.tools import tool
 logger = logging.getLogger(__name__)
 
 # Product Compatibility
-from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.vehicle_verify_owner_api_vehicle_verify_owner_post import sync_detailed as post_vehicle_verify_owner
-from common.tstation_be_api_client.hkt_api_client.models import VerifyOwnerRequest
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
@@ -40,7 +38,6 @@ def get_client() -> AuthenticatedClient:
 DOMAIN_TOOL_MAP = {
     "discovery": {
         # Product Compatibility
-        "vehicle_verify_owner",
         "check_compatibility",
         "search_product",
         "get_user_vehicles",
@@ -103,43 +100,6 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 
 def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
-
-
-@tool
-def post_vehicle_verify_owner_tool(car_no: str):
-    """
-    Verify vehicle ownership.
-
-    This API verifies whether the user is the registered owner of a vehicle
-    based on the provided request information. Input is wrapped in VerifyOwnerRequest model.
-
-    Args:
-        car_no (str): Vehicle registration number (wrapping into VerifyOwnerRequest body).
-
-    Example Inputs:
-        - {"car_no": "33가3333"}
-        - {"car_no": "11가0000"}
-        - {"car_no": "29조3344"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
-    """
-    logger.info("[TOOL][post_vehicle_verify_owner_tool] Called with: car_no=%s", car_no)
-
-    try:
-        body = VerifyOwnerRequest(car_no=car_no)
-        response = post_vehicle_verify_owner(client=get_client(), body=body)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to verify vehicle ownership"
-            )
-        logger.info("[TOOL][post_vehicle_verify_owner_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][post_vehicle_verify_owner_tool] Failed")
-        return _error_response(None, str(e), "Failed to verify vehicle ownership")
 
 
 @tool
