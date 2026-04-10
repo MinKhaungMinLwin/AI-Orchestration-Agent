@@ -161,12 +161,6 @@ class MultiAgentDomain(BaseModel):
         description="List of domains detected in the request, ordered by priority"
     )
 
-    # Slot extraction fields (LLM-based, extracted from current + previous messages)
-    # Optional — if LLM fails to include these, domain classification still succeeds
-    tire_model: Optional[str] = Field(default=None, description="Tire model name mentioned by user (e.g. '벤투스 S2', 'Ventus S1 evo3', 'Dynapro HPX')")
-    shop_name: Optional[str] = Field(default=None, description="Store name mentioned by user (e.g. '한남점', '강남점')")
-    car_model: Optional[str] = Field(default=None, description="Car model mentioned by user (e.g. '쏘나타', 'BMW 5시리즈', '아반떼')")
-
     def get_agents(self):
         """Return list of agents based on detected domains."""
         agent_map = {
@@ -460,25 +454,6 @@ KEY PRINCIPLES:
 - When multiple intents present, return ALL relevant domains in flow order
 
 Korean vehicle numbers follow patterns: 12가3456, 123가1234
-
-====================================================
-SLOT EXTRACTION (from current + previous messages)
-====================================================
-
-In addition to domain classification, extract the following information
-from the ENTIRE conversation (current message AND previous messages).
-
-Extract these fields:
-- tire_model: Tire product name/model (e.g. "벤투스 S2", "Ventus S1 evo3", "Dynapro HPX", "키네르기 EX")
-- shop_name: Store name (e.g. "한남점", "강남점", "더타이어샵 강남")
-- car_model: Car model (e.g. "쏘나타", "BMW 5시리즈", "아반떼", "K5")
-
-Rules:
-- Look at ALL messages in the conversation, not just the current one
-- If the user mentioned a tire model 3 turns ago but not now, still extract it
-- If the user explicitly changes a value (e.g. "아까 벤투스 S2라고 했는데 키네르기로 바꿀게"), use the NEW value
-- Return null for fields not mentioned anywhere in the conversation
-- Extract the value as the user expressed it (Korean or English)
 """
 
 
@@ -493,12 +468,8 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
 
-    def classify_multi_intent(self, messages: list) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain]:
-        """Classify user message into one or more domains and extract slots.
-
-        Returns:
-            Tuple of (domains list, full MultiAgentDomain result with slot fields).
-        """
+    def classify_multi_intent(self, messages: list) -> list[MultiAgentDomain.Domain]:
+        """Classify user message into one or more domains."""
         from langchain_litellm import ChatLiteLLM
         from langchain_core.messages import SystemMessage
 
@@ -508,7 +479,10 @@ class StreamingMultiAgentCoordinator:
             model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
         )
 
-        structured_model = llm.with_structured_output(MultiAgentDomain)
+        structured_model = llm.with_structured_output(
+            MultiAgentDomain,
+            strict=True,
+        )
 
         try:
             system_msg = SystemMessage(content=prompt_router_multi())
@@ -516,16 +490,11 @@ class StreamingMultiAgentCoordinator:
 
             result: MultiAgentDomain = structured_model.invoke(all_messages)
             logger.info(f"[MULTI-DOMAIN] Classification result: {result}")
-            domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
-            return domains, result
+            return result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
 
         except Exception as e:
             logger.exception(f"[MULTI-DOMAIN] Classification failed: {e}")
-            fallback = MultiAgentDomain(
-                reason=f"Classification failed: {str(e)[:100]}",
-                domains=[MultiAgentDomain.Domain.LEADING],
-            )
-            return [MultiAgentDomain.Domain.LEADING], fallback
+            return [MultiAgentDomain.Domain.LEADING]
 
     def _build_context_message(
         self,
@@ -624,7 +593,7 @@ class StreamingMultiAgentCoordinator:
         """
         # Classify if domains not provided
         if domains is None:
-            domains, _ = self.classify_multi_intent(messages)
+            domains = self.classify_multi_intent(messages)
 
         if not domains:
             domains = [MultiAgentDomain.Domain.LEADING]
@@ -987,30 +956,22 @@ class TStationChatServiceV2:
                     break
             regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
 
-            # 3) Classify domains + extract LLM-based slots (tire_model, shop_name, car_model)
-            domains, router_result = _coordinator.classify_multi_intent(messages)
-            llm_slots = ConversationSlots(
-                tire_model=router_result.tire_model,
-                shop_name=router_result.shop_name,
-                car_model=router_result.car_model,
-            )
-
-            # 4) Merge: existing → regex (full merge with dependency reset)
-            #          → LLM (fill only: fills blanks, does not overwrite, respects resets)
-            merged_slots = existing_slots.merge(regex_slots).merge_fill_only(llm_slots)
+            # 3) Merge: existing → regex (full merge with dependency reset)
+            merged_slots = existing_slots.merge(regex_slots)
             logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
-            # 5) Save merged slots to Redis
+            # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)
 
-            # 6) Build slot context string for agent injection
+            # 5) Build slot context string for agent injection
             slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
-            # domains may have been set before the error; if not, coordinator will classify
-            domains = domains
             slot_context = None
+
+        # Domain classification (separate from slot processing — must not fail)
+        domains = _coordinator.classify_multi_intent(messages)
 
         # STREAM MODE
         if request.stream:
