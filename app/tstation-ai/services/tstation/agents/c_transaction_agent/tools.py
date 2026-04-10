@@ -295,11 +295,11 @@ def search_place_tool(query: str, size: int = 10):
 
 
 @tool
-def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 20.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False):
+def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 10.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False):
     """
     Get nearby stores.
 
-    Retrieve stores within specified radius (default 20km) based on customer coordinates,
+    Retrieve stores within specified radius (default 10km) based on customer coordinates,
     including distance (km) from customer location.
 
     Response stores include is_installable field:
@@ -309,7 +309,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
     Args:
         user_xpos (float): Customer current X coordinate (longitude).
         user_ypos (float): Customer current Y coordinate (latitude).
-        radius_km (float): Search radius in km (default 20km).
+        radius_km (float): Search radius in km (default 10km).
         svc_codes (List[str] | None): Service category codes.
             Returns stores that have ANY of the specified services.
             Example: ["101", "102"]

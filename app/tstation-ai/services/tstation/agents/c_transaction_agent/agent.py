@@ -292,7 +292,7 @@ Inputs
 
 user_xpos - X coordinate (longitude, from search_place_tool result x)
 user_ypos - Y coordinate (latitude, from search_place_tool result y)
-radius_km - search radius in km (optional, default 20km)
+radius_km - search radius in km (optional, default 10km)
 svc_codes - service codes (optional, e.g., ["101", "102"])
 
 
@@ -618,6 +618,12 @@ When user asks for stores near a place, address, or landmark:
 **STEP 2: Search Nearby Stores**
 2. Call get_nearby_stores_tool with coordinates (x → user_xpos, y → user_ypos)
    → Returns list of stores with: shop_id, shop_nm, distance, address, etc.
+
+**STEP 2-1: No Results → Expand Radius**
+If get_nearby_stores_tool returns 0 stores (empty list):
+→ Tell user: "반경 10km 내에 매장이 없습니다. 반경 20km로 확대하여 검색할까요?"
+→ If user agrees: call get_nearby_stores_tool again with radius_km=20
+→ If user declines: end store search flow
 
 2. **MANDATORY: For EACH store returned, call get_store_detail_tool**
    
