@@ -29,6 +29,7 @@ class StoreListItem:
         shop_biz_end_wday (None | str | Unset): 영업 종료 요일 (예: 금요일)
         shop_sat_strt_time (None | str | Unset): 토요일 영업 시작 시간
         shop_sat_end_time (None | str | Unset): 토요일 영업 종료 시간
+        distance_km (float | None | Unset): 좌표 기준 거리 (km), 좌표 검색 시에만 반환
     """
 
     shop_id: str
@@ -45,6 +46,7 @@ class StoreListItem:
     shop_biz_end_wday: None | str | Unset = UNSET
     shop_sat_strt_time: None | str | Unset = UNSET
     shop_sat_end_time: None | str | Unset = UNSET
+    distance_km: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,6 +122,12 @@ class StoreListItem:
         else:
             shop_sat_end_time = self.shop_sat_end_time
 
+        distance_km: float | None | Unset
+        if isinstance(self.distance_km, Unset):
+            distance_km = UNSET
+        else:
+            distance_km = self.distance_km
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -153,6 +161,8 @@ class StoreListItem:
             field_dict["shop_sat_strt_time"] = shop_sat_strt_time
         if shop_sat_end_time is not UNSET:
             field_dict["shop_sat_end_time"] = shop_sat_end_time
+        if distance_km is not UNSET:
+            field_dict["distance_km"] = distance_km
 
         return field_dict
 
@@ -264,6 +274,15 @@ class StoreListItem:
 
         shop_sat_end_time = _parse_shop_sat_end_time(d.pop("shop_sat_end_time", UNSET))
 
+        def _parse_distance_km(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        distance_km = _parse_distance_km(d.pop("distance_km", UNSET))
+
         store_list_item = cls(
             shop_id=shop_id,
             shop_nm=shop_nm,
@@ -279,6 +298,7 @@ class StoreListItem:
             shop_biz_end_wday=shop_biz_end_wday,
             shop_sat_strt_time=shop_sat_strt_time,
             shop_sat_end_time=shop_sat_end_time,
+            distance_km=distance_km,
         )
 
         store_list_item.additional_properties = d
