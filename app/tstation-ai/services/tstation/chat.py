@@ -1189,7 +1189,7 @@ class TStationChatServiceV2:
                         qc_chunks.append(chunk)
                     qc_result = "".join(qc_chunks).strip()
 
-                    if qc_result == "PASS":
+                    if qc_result.strip().upper() == "PASS":
                         # Draft is correct — use original draft directly
                         final_qc_text = draft_response
                         logger.info("[QC_AGENT] PASS — draft is factually correct")
