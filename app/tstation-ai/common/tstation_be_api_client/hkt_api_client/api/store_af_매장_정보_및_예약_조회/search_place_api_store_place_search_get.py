@@ -6,35 +6,38 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
-from ...models.nearby_store_request import NearbyStoreRequest
-from ...models.nearby_store_response import NearbyStoreResponse
-from ...types import Response
+from ...models.place_search_response import PlaceSearchResponse
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     *,
-    body: NearbyStoreRequest,
+    query: str,
+    size: int | Unset = 10,
 ) -> dict[str, Any]:
-    headers: dict[str, Any] = {}
+
+    params: dict[str, Any] = {}
+
+    params["query"] = query
+
+    params["size"] = size
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
-        "method": "post",
-        "url": "/api/store/nearby",
+        "method": "get",
+        "url": "/api/store/place-search",
+        "params": params,
     }
 
-    _kwargs["json"] = body.to_dict()
-
-    headers["Content-Type"] = "application/json"
-
-    _kwargs["headers"] = headers
     return _kwargs
 
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> HTTPValidationError | NearbyStoreResponse | None:
+) -> HTTPValidationError | PlaceSearchResponse | None:
     if response.status_code == 200:
-        response_200 = NearbyStoreResponse.from_dict(response.json())
+        response_200 = PlaceSearchResponse.from_dict(response.json())
 
         return response_200
 
@@ -51,7 +54,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[HTTPValidationError | NearbyStoreResponse]:
+) -> Response[HTTPValidationError | PlaceSearchResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,25 +66,28 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> Response[HTTPValidationError | NearbyStoreResponse]:
-    """주변 매장 목록 조회
+    query: str,
+    size: int | Unset = 10,
+) -> Response[HTTPValidationError | PlaceSearchResponse]:
+    """위치 명칭 검색
 
-     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
+     Kakao 키워드 검색 API를 이용하여 위치 명칭(건물명, 장소명 등)을 검색하고 좌표를 반환합니다.
 
     Args:
-        body (NearbyStoreRequest):
+        query (str): 검색어 (예: 부산센텀시티, 강남역)
+        size (int | Unset): 반환할 최대 결과 수 Default: 10.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | NearbyStoreResponse]
+        Response[HTTPValidationError | PlaceSearchResponse]
     """
 
     kwargs = _get_kwargs(
-        body=body,
+        query=query,
+        size=size,
     )
 
     response = client.get_httpx_client().request(
@@ -94,51 +100,57 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> HTTPValidationError | NearbyStoreResponse | None:
-    """주변 매장 목록 조회
+    query: str,
+    size: int | Unset = 10,
+) -> HTTPValidationError | PlaceSearchResponse | None:
+    """위치 명칭 검색
 
-     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
+     Kakao 키워드 검색 API를 이용하여 위치 명칭(건물명, 장소명 등)을 검색하고 좌표를 반환합니다.
 
     Args:
-        body (NearbyStoreRequest):
+        query (str): 검색어 (예: 부산센텀시티, 강남역)
+        size (int | Unset): 반환할 최대 결과 수 Default: 10.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | NearbyStoreResponse
+        HTTPValidationError | PlaceSearchResponse
     """
 
     return sync_detailed(
         client=client,
-        body=body,
+        query=query,
+        size=size,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> Response[HTTPValidationError | NearbyStoreResponse]:
-    """주변 매장 목록 조회
+    query: str,
+    size: int | Unset = 10,
+) -> Response[HTTPValidationError | PlaceSearchResponse]:
+    """위치 명칭 검색
 
-     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
+     Kakao 키워드 검색 API를 이용하여 위치 명칭(건물명, 장소명 등)을 검색하고 좌표를 반환합니다.
 
     Args:
-        body (NearbyStoreRequest):
+        query (str): 검색어 (예: 부산센텀시티, 강남역)
+        size (int | Unset): 반환할 최대 결과 수 Default: 10.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | NearbyStoreResponse]
+        Response[HTTPValidationError | PlaceSearchResponse]
     """
 
     kwargs = _get_kwargs(
-        body=body,
+        query=query,
+        size=size,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -149,26 +161,29 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    body: NearbyStoreRequest,
-) -> HTTPValidationError | NearbyStoreResponse | None:
-    """주변 매장 목록 조회
+    query: str,
+    size: int | Unset = 10,
+) -> HTTPValidationError | PlaceSearchResponse | None:
+    """위치 명칭 검색
 
-     고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.
+     Kakao 키워드 검색 API를 이용하여 위치 명칭(건물명, 장소명 등)을 검색하고 좌표를 반환합니다.
 
     Args:
-        body (NearbyStoreRequest):
+        query (str): 검색어 (예: 부산센텀시티, 강남역)
+        size (int | Unset): 반환할 최대 결과 수 Default: 10.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | NearbyStoreResponse
+        HTTPValidationError | PlaceSearchResponse
     """
 
     return (
         await asyncio_detailed(
             client=client,
-            body=body,
+            query=query,
+            size=size,
         )
     ).parsed

@@ -8,9 +8,20 @@ Supports multiple embedding models:
 
 import logging
 import os
-from typing import Optional, Union
+import time
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────
+# In-process embedding cache (per-worker, not shared across pods)
+# Key:   "{model}:{text}"   Value: (vector, inserted_monotonic)
+# TTL:   1 hour — query embeddings don't change within a session
+# Max:   2000 entries — prevents unbounded memory growth
+# ─────────────────────────────────────────────────────────────
+_embed_cache: dict[str, tuple[list[float], float]] = {}
+_EMBED_CACHE_TTL: float = 3600.0
+_EMBED_CACHE_MAX: int = 2000
 
 
 class EmbeddingService:
@@ -87,16 +98,42 @@ class EmbeddingService:
         logger.info(f"Initialized {provider} embedding service with model {model}")
 
     def embed_text(self, text: str) -> list[float]:
-        """
-        Generate embedding for a single text.
-
-        Args:
-            text: Text to embed
-
-        Returns:
-            Embedding vector (list of floats)
-        """
+        """Generate embedding for a single text (no cache)."""
         return self.embed_texts([text])[0]
+
+    def embed_text_cached(self, text: str) -> list[float]:
+        """
+        Generate embedding with in-process TTL cache.
+
+        Cache hit  → returns stored vector in <1ms (vs 120–350ms API call).
+        Cache miss → calls embed_text(), stores result.
+        Cache key  → "{model}:{text}" so different models never collide.
+        Eviction   → LRU-lite: when cache exceeds _EMBED_CACHE_MAX, oldest
+                     half is dropped (simple, no overhead).
+        """
+        cache_key = f"{self.model}:{text}"
+        now = time.monotonic()
+
+        entry = _embed_cache.get(cache_key)
+        if entry is not None:
+            vector, inserted_at = entry
+            if now - inserted_at < _EMBED_CACHE_TTL:
+                logger.debug("[EmbeddingService] cache HIT  (len=%d)", len(text))
+                return vector
+            del _embed_cache[cache_key]  # expired
+
+        vector = self.embed_text(text)
+
+        # Evict oldest half when full
+        if len(_embed_cache) >= _EMBED_CACHE_MAX:
+            sorted_keys = sorted(_embed_cache, key=lambda k: _embed_cache[k][1])
+            for old_key in sorted_keys[: _EMBED_CACHE_MAX // 2]:
+                del _embed_cache[old_key]
+            logger.debug("[EmbeddingService] cache evicted %d entries", _EMBED_CACHE_MAX // 2)
+
+        _embed_cache[cache_key] = (vector, now)
+        logger.debug("[EmbeddingService] cache MISS (len=%d)", len(text))
+        return vector
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """

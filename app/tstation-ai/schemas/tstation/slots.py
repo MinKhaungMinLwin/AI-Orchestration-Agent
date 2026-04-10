@@ -65,20 +65,40 @@ class ConversationSlots(BaseModel):
         object.__setattr__(merged, "_reset_fields", reset_fields)
         return merged
 
-    def merge_fill_only(self, new_slots: "ConversationSlots") -> "ConversationSlots":
+    def merge_fill_only(
+        self,
+        new_slots: "ConversationSlots",
+        overwrite_fields: set[str] | None = None,
+    ) -> "ConversationSlots":
         """Merge new slots into existing slots, but ONLY fill None fields.
 
         - Does NOT overwrite existing non-None values.
         - Does NOT fill fields that were reset by dependency in a prior merge step.
+        - Fields in overwrite_fields may overwrite if they are explicitly re-stated
+          in the latest user turn.
         Used for LLM-extracted slots to prevent overwriting explicit user values.
         """
         merged = self.model_copy()
         reset_fields = getattr(merged, "_reset_fields", set())
+        overwrite_fields = overwrite_fields or set()
 
         for field, new_val in new_slots.model_dump().items():
             if new_val is None:
                 continue
             old_val = getattr(merged, field)
+
+            if field in overwrite_fields:
+                if old_val is not None and old_val != new_val:
+                    for dep in self.DEPENDENT_RESETS.get(field, []):
+                        logger.info(
+                            f"[SLOTS] {field} explicitly changed in latest turn "
+                            f"({old_val} -> {new_val}), resetting {dep}"
+                        )
+                        setattr(merged, dep, None)
+                        reset_fields.add(dep)
+
+                setattr(merged, field, new_val)
+                continue
 
             # Skip if already has a value
             if old_val is not None:
@@ -91,6 +111,7 @@ class ConversationSlots(BaseModel):
 
             setattr(merged, field, new_val)
 
+        object.__setattr__(merged, "_reset_fields", reset_fields)
         return merged
 
     @classmethod

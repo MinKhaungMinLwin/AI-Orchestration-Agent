@@ -127,30 +127,34 @@ When vehicle information is available, send car_lnc_cd or tire_size:
 
 
 Tool
-get_user_vehicles_tool
+get_my_cars_tool (★ HIGHEST PRIORITY — always try this first)
 
 When to use
 
-• user asks to view registered vehicles
+• FIRST tool to call for ANY vehicle-related request
+• user asks about "my car", "my vehicle", "내 차"
+• user asks for tire recommendations (need vehicle info)
+• user asks for compatibility check
+
+**PRIORITY RULE:**
+- Always call this FIRST using mbr_no from JWT user context
+- If result has 1 car → auto-select, use its tire_size and car_lnc_cd
+- If result has multiple cars → show numbered list, ask user to select
+- If result has 0 cars → guide user to enter car number or search by car model
+
+
+Tool
+get_user_vehicles_tool (FALLBACK — only when get_my_cars_tool returns 0 cars)
+
+When to use
+
+• user's registered car list is empty (get_my_cars_tool returned 0 cars)
+• user provides a vehicle number that belongs to someone else (not their own registration)
 
 Inputs
 
 car_no - vehicle registration number (required)
 owner_nm - owner name (required)
-
-
-
-Tool
-get_my_cars_tool
-
-When to use
-
-• user asks to view their registered vehicles (by member number)
-• user says "my cars", "xe của tôi", "내 차 목록"
-
-**PRIORITY RULE:**
-- If user provides mbr_no → use that (highest priority)
-- If no user input → use mbr_no from user information (JWT)
 
 Inputs
 
@@ -286,31 +290,35 @@ START — Entry Point (ALL tire requests)
 
 When user requests tire recommendation:
 
-**STEP 1: Check Vehicle Information**
-1. CHECK: Does user EXPLICITLY reference their own registered vehicle?
-   - Examples: "my car", "my vehicle", "my tires", "check my car", "what tires for my car"
-   - YES (user references their own car) → Go to STEP 2 (Vehicle Verification Path)
-   - NO (user only mentions car model name like "Sonata" or "Grandeur" without "my") → Go to STEP 3 (No Vehicle Path)
+**STEP 1: Check Registered Vehicles (ALWAYS DO THIS FIRST)**
+1. Call get_my_cars_tool with mbr_no from JWT user context
+2. CHECK result:
+   - 1 car registered → Auto-select. Use its tire_size and car_lnc_cd. Go to RECOMMENDATION ENGINE.
+   - Multiple cars registered → Show numbered list with car_nm and tire_size_fr.
+     Ask: "어떤 차량 기준으로 도와드릴까요?" Wait for user selection.
+     After selection → extract car_lnc_cd from the selected item. Go to RECOMMENDATION ENGINE.
+   - 0 cars registered → Go to STEP 2 (No Registered Vehicle Path)
 
-CRITICAL: The vehicle_number in user context (e.g., "29조3344") is ONLY used when user explicitly asks about their own car. If user says "recommend Sonata tires" without saying "my car", treat it as general car model search, NOT as referencing their registered vehicle.
+**STEP 2: No Registered Vehicle Path**
+Guide user with: "등록된 차량이 없습니다. 차량번호를 입력하시거나, 차량 모델명으로 검색해 드릴까요?"
 
-**STEP 2: Vehicle Verification Path**
-1. CHECK: Is owner_name provided?
-   - NO → Ask user for owner_name, wait for input
-   - YES → Continue
-2. Call get_user_vehicles_tool with car_no and owner_nm
-3. Result: Vehicle info + Tire size + car_lnc_cd
-4. Go to RECOMMENDATION ENGINE
+**Option A: User provides car_no + owner_nm**
+1. Call get_user_vehicles_tool with car_no and owner_nm (Kazen API)
+2. Result: Vehicle info + Tire size + car_lnc_cd
+3. Go to RECOMMENDATION ENGINE
 
-**STEP 3: No Vehicle Path**
-When user mentions a car model name (e.g., 'Sonata', 'Grandeur', 'Avante', 'BMW'):
+**Option B: User mentions car model name** (e.g., 'Sonata', 'Grandeur', 'BMW')
 → AUTOMATICALLY call search_car_model_tool with that keyword
 → Do NOT ask permission, just CALL THE TOOL
 
-**Option A: Tire Size Input** (only if user doesn't mention any car model)
+**Option C: Tire Size Input** (only if user doesn't mention any car model)
 1. Ask user to input tire size
 2. Normalize format (e.g., "245/45R18")
 3. Go to RECOMMENDATION ENGINE (using tire_size)
+
+CRITICAL: If user says "recommend Sonata tires" without saying "my car",
+still call get_my_cars_tool FIRST. If they have a Sonata registered, use that.
+If not, then fall through to search_car_model_tool.
 
 **After search_car_model_tool returns:**
 1. Display vehicle candidates in numbered list (each item has car_lnc_cd and car_nm)
@@ -1070,7 +1078,6 @@ class DiscoverySubAgent(BaseAgent):
         super().__init__(
             model=model,
             tools=[
-                # post_vehicle_verify_owner_tool,
                 check_compatibility_tool,
                 search_product_tool,
                 get_user_vehicles_tool,
