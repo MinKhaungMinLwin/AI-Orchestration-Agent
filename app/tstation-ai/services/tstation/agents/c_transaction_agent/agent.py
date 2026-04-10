@@ -927,10 +927,10 @@ Check if quantity is available from:
 - Previous agent context (ord_qty from tool results)
 - User explicitly mentioned quantity in message
 
-**If quantity is NOT provided or unclear:**
-→ Default to ord_qty = 2 (do NOT ask user)
-→ Proceed to STEP 3 with ord_qty = 2
-→ At the end of the response, mention: "수량은 2개 기준으로 조회했습니다. 다른 수량을 원하시면 말씀해 주세요."
+**If quantity is NOT provided or unclear or is 0:**
+→ Ask user: "몇 개 주문하시겠습니까? (일반적으로 4개 = 4바퀴 기준)"
+→ STOP and wait for user input
+→ Do NOT proceed with ord_qty = 0
 
 **If quantity IS provided:**
 → Continue to STEP 3
@@ -949,12 +949,19 @@ Once goods_no AND ord_qty are confirmed:
 → All stores are eligible for ordering
 
 **Case B: logistics_qty = 0 or null (물류 재고 없음)**
-→ Set inventory_mode = "LOGISTICS_UNAVAILABLE"
-→ Only the following stores can accept orders:
-   - 매장 재고로 오늘 장착 가능한 매장 (todayShopArray)
-   - T바로배송 매장 (tnaShopArray)
-
-→ Continue to STEP 4
+→ Inform user: "죄송합니다. 현재 [상품명] 상품의 물류 재고가 없습니다."
+→ Guide user with options:
+  1. "매장 재고가 있는 매장을 찾아드릴까요? (오늘 장착 가능 매장 또는 T바로배송 매장)"
+  2. "다른 상품을 추천해 드릴까요?"
+→ STOP and wait for user input
+→ If user chooses option 1:
+  → Set inventory_mode = "LOGISTICS_UNAVAILABLE"
+  → Only the following stores can accept orders:
+     - 매장 재고로 오늘 장착 가능한 매장 (todayShopArray)
+     - T바로배송 매장 (tnaShopArray)
+  → Continue to STEP 4
+→ If user chooses option 2:
+  → STOP (coordinator will route to Discovery Agent for new recommendations)
 
 ============================
 STEP 4: 매장 선택 유도
