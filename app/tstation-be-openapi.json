@@ -5,53 +5,6 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/api/store/nearby": {
-      "post": {
-        "tags": [
-          "Store AF - 매장 정보 및 예약 조회"
-        ],
-        "summary": "주변 매장 목록 조회",
-        "description": "고객 좌표 기준으로 지정 반경(기본 20km) 내 가까운 매장 목록과 거리(km)를 반환합니다.",
-        "operationId": "get_nearby_stores_api_store_nearby_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NearbyStoreRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NearbyStoreResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
     "/api/store/detail": {
       "get": {
         "tags": [
@@ -120,7 +73,7 @@
           "Store AF - 매장 정보 및 예약 조회"
         ],
         "summary": "매장 목록 조회",
-        "description": "지역명",
+        "description": "매장 목록 조회 및 좌표 기반 주변 매장 검색",
         "operationId": "get_store_list_api_store_list_get",
         "security": [
           {
@@ -132,63 +85,50 @@
             "name": "region_code",
             "in": "query",
             "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "지역 검색어",
-              "title": "Region Code"
-            },
+            "schema": { "anyOf": [{ "type": "string" }, { "type": "null" }], "description": "지역 검색어", "title": "Region Code" },
             "description": "지역 검색어"
           },
           {
             "name": "store_nm",
             "in": "query",
             "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "매장명 명칭 검색",
-              "title": "Store Nm"
-            },
+            "schema": { "anyOf": [{ "type": "string" }, { "type": "null" }], "description": "매장명 명칭 검색", "title": "Store Nm" },
             "description": "매장명 명칭 검색"
-          },
-          {
-            "name": "all_my_t_only",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "True 이면 all my T 매장만 조회",
-              "default": false,
-              "title": "All My T Only"
-            },
-            "description": "True 이면 all my T 매장만 조회"
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "description": "반환할 최대 매장 수",
-              "default": 20,
-              "title": "Limit"
-            },
+            "schema": { "type": "integer", "maximum": 100, "minimum": 1, "description": "반환할 최대 매장 수", "default": 20, "title": "Limit" },
             "description": "반환할 최대 매장 수"
+          },
+          {
+            "name": "xpos",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "description": "X coordinate (longitude)", "title": "Xpos" },
+            "description": "X coordinate (longitude)"
+          },
+          {
+            "name": "ypos",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "description": "Y coordinate (latitude)", "title": "Ypos" },
+            "description": "Y coordinate (latitude)"
+          },
+          {
+            "name": "radius_km",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "maximum": 100, "default": 20, "description": "search radius (km)", "title": "Radius Km" },
+            "description": "search radius (km)"
+          },
+          {
+            "name": "svc_codes",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "description": "service type codes filter", "title": "Svc Codes" },
+            "description": "service type codes filter"
           }
         ],
         "responses": {
@@ -209,6 +149,49 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/store/place-search": {
+      "get": {
+        "tags": ["Store AF - 매장 정보 및 예약 조회"],
+        "summary": "Kakao keyword search for locations",
+        "description": "Search location names to return coordinates.",
+        "operationId": "place_search_api_store_place_search_get",
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "description": "Search keyword", "title": "Query" },
+            "description": "Search keyword"
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "maximum": 45, "default": 10, "description": "Number of results", "title": "Size" },
+            "description": "Number of results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
               }
             }
           }
