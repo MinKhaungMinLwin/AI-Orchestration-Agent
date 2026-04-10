@@ -519,18 +519,33 @@ class StreamingMultiAgentCoordinator:
         }
 
     @staticmethod
-    def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict):
-        """Persist goods_no and shop_id from successful tool results to slots."""
+    def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict, tool_input: dict | None = None):
+        """Persist goods_no, shop_id, and tire_size from successful tool results/inputs to slots."""
         from schemas.tstation.slots import ConversationSlots
         from services.tstation.chat_history_service import get_chat_history_service
 
-        # Map tool names to the slot fields they can provide
+        # Map tool names to the slot fields they can provide (from output)
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
             "get_store_list_tool": ["shop_id"],
             "get_nearby_stores_tool": ["shop_id"],
             "get_store_inventory_tool": ["shop_id"],
         }
+
+        # Extract tire_size from tool INPUT when recommendation tool is called
+        # This captures the confirmed tire_size that the LLM used for recommendations
+        if tool_name == "get_products_recommendations_tool" and tool_input:
+            input_tire_size = tool_input.get("tire_size")
+            if input_tire_size:
+                try:
+                    svc = get_chat_history_service()
+                    current_slots = svc.get_slots(session_id)
+                    new_slots = ConversationSlots(tire_size=input_tire_size)
+                    updated = current_slots.merge(new_slots)
+                    svc.save_slots(session_id, updated)
+                    logger.info(f"[SLOTS] tire_size saved from {tool_name} input: {input_tire_size}")
+                except Exception as e:
+                    logger.warning(f"[SLOTS] Failed to save tire_size from tool input: {e}")
 
         fields = tool_slot_extractors.get(tool_name)
         if not fields:
@@ -702,9 +717,11 @@ class StreamingMultiAgentCoordinator:
                                 "data": parsed
                             })
 
-                            # Persist tool-derived goods_no and shop_id to slots
+                            # Persist tool-derived goods_no, shop_id, and tire_size to slots
                             if session_id and isinstance(parsed, dict):
-                                self._save_tool_derived_slots(session_id, event.get("tool", ""), parsed)
+                                self._save_tool_derived_slots(
+                                    session_id, event.get("tool", ""), parsed, event.get("input", {})
+                                )
 
                         except (json.JSONDecodeError, TypeError):
                             accumulated_tool_data.append({
