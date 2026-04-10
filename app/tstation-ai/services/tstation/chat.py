@@ -81,6 +81,14 @@ def prompt_router() -> str:
     - Transaction Agent asks user to select quantity → STOP (wait for user input)
     - Transaction Agent asks user to choose store vs cart → STOP (wait for user input)
 
+⚠️ PRE-ORDER PREVIEW FLOW RULES:
+    - Transaction Agent shows pre-order preview (Flow 5.5) → STOP (wait for user confirmation)
+    - User confirms order ("바로 주문", "주문할게") → CONTINUE → TRANSACTION (quick_order_tool)
+    - User selects from recommendActions → STOP (wait for user input, Transaction handles update)
+    - User says "장바구니로" / "나중에" → STOP (Transaction handles save_to_cart_tool)
+    - User says "예약 날짜 없이 진행" → STOP (Transaction handles isReadyToAddToCart flow)
+    - Pre-order preview with missing bookingDateTime → recommendActions shown → STOP
+
     KEY PRINCIPLE: If agent says it will search but has no tools to search → HANDOVER NEEDED.
 
     ⚠️ CRITICAL RULE — DISCOVERY → TRANSACTION DETECTION:
@@ -381,6 +389,58 @@ EXAMPLE QUERIES → FLOW:
     → DISCOVERY
     (search_youtube_video_tool → Display video list)
 
+32. "주문 확인해주세요" / "주문 정보 다시 보여줘"
+    "Check my order" / "Show order info again"
+    → TRANSACTION
+    (Pre-order preview → Order confirmation → quick_order_tool)
+
+33. "결제 금액 확인したい"
+    "Check payment amount"
+    → TRANSACTION
+    (Pre-order preview → paymentAmount calculation)
+
+34. "예약 날짜 선택해줘" / "날짜 추천받아서 예약할게"
+    "Select booking date for me" / "Book based on recommended date"
+    → TRANSACTION
+    (Pre-order preview with recommendActions → User selects action → quick_order_tool)
+
+35. "장바구니로 저장할게" / "나중에 주문할게"
+    "Save to cart" / "Order later"
+    → TRANSACTION
+    (Pre-order preview isReadyToAddToCart=true → save_to_cart_tool)
+
+36. "바로 주문할게" / "지금 주문할게"
+    "Order now" / "I'll order now"
+    → TRANSACTION
+    (Pre-order preview isReadyToOrder=true → quick_order_tool)
+
+37. "예약날짜 없이 주문 진행해줘" / "매장만 선택할게"
+    "Proceed without booking date" / "Just select store"
+    → TRANSACTION
+    (Pre-order preview isReadyToOrder=false → isReadyToAddToCart=true → save_to_cart_tool)
+
+38. "방문 방법 선택해줘" / "哪种访问方式好?"
+    "Which visit method to choose?" / "Which visit method is better?"
+    → TRANSACTION
+    (Pre-order preview with recommendActions → visitMethod selection)
+
+====================================================
+PRE-ORDER PREVIEW FLOW RULES
+====================================================
+
+After user selects store path (Step 5A) or cart path (Step 5B), BEFORE calling API:
+→ Transaction Agent displays pre-order preview (markdown table)
+→ User reviews: carInfo, product, quantity, storeName, bookingDateTime, visitMethod, paymentAmount
+→ isReadyToOrder: user confirms all info → quick_order_tool
+→ isReadyToAddToCart: missing critical info → save_to_cart_tool
+→ recommendActions: prompts for missing info with suggested Korean phrases
+
+Flow detection:
+- User confirms order → TRANSACTION (quick_order_tool)
+- User selects from recommendActions → TRANSACTION (update orderInfo → re-show preview)
+- User says "장바구니로" / "나중에" → TRANSACTION (save_to_cart_tool)
+- User changes mind mid-flow → same agent handles path switch
+
 ====================================================
 DECISION RULES
 ====================================================
@@ -397,7 +457,10 @@ TRANSACTION if user wants:
 - "장바구니에 담아줘", "장바구니 저장" (save to cart)
 - Select quantity, select store for order
 - Book store visit/reservation with specific date/time
-Examples: "G000000314254 가격 얼마야?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "G000000314254 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345"
+- **Pre-order confirmation** ("주문 확인", "바로 주문", "예약 날짜 선택")
+- **Cart save** ("장바구니로 저장", "나중에 주문할게")
+- **Visit method selection** ("방문 방법", "어떻게 가지러 오지")
+Examples: "G000000314254 가격 얼마야?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "G000000314254 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345", "주문 확인해주세요", "바로 주문할게", "장바구니로 저장할게"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")

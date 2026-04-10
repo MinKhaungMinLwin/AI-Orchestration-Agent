@@ -177,175 +177,37 @@ def available_dates_tool(
         "selectedDate": selectedDate,
     })
 
-
 @tool
-def question_tool(
-    question: Annotated[str, "Question text"],
-    listAnswer: Annotated[list[dict], "List of answers. Each: id (str), label (str), value (str)"]
+def preorder_tool(
+    orderInfo: Annotated[dict, "Order info. Each field is optional: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str), visitMethod (str), paymentAmount (float)"],
+    recommendActions: Annotated[dict, "Recommend action: question (str), listActions (list[str])"],
+    isReadyToOrder: Annotated[bool, "True if all required info is available for quick_order (carInfo + product + quantity + storeName)"],
+    isReadyToAddToCart: Annotated[bool, "True if all required info is available for save_to_cart (carInfo + product + quantity)"]
 ) -> dict:
-    """Render question card.
+    """Render pre-order card with order info and recommend actions.
 
     Args:
-        question: Question text. Rule: required, non-empty string.
-        listAnswer: List of answer options. Rule: required, list of answer objects.
-
-    Field Details:
-        - question (str): Question content. Rule: required, non-empty string.
-        - listAnswer (list[dict]): List of answers, each containing:
-            - id (str): Answer ID. Rule: required, unique string.
-            - label (str): Display text. Rule: required, non-empty string.
-            - value (str): Logic value. Rule: required, non-empty string.
-
-    Returns:
-        {"status": "success", "http_status": 200, "data": {"question": ..., "listAnswer": ...}}
-    """
-    return _success_response(200, {
-        "question": question,
-        "listAnswer": listAnswer,
-    })
-
-
-@tool
-def bill_service_tool(
-    carInfo: Annotated[str, "Car information"],
-    services: Annotated[list[dict], "List of services. Each: serviceName (str), quantity (int), price (int)"],
-    storeName: Annotated[str, "Store name"],
-    bookingDateTime: Annotated[str, "Booking date and time"],
-    visitMethod: Annotated[str, "Visit method"],
-    totalAmount: Annotated[int, "Total amount"],
-    actionLink: Annotated[str | None, "Action link"] = None,
-    actionText: Annotated[str | None, "Action button text"] = None
-) -> dict:
-    """Render service bill card.
-
-    Args:
-        carInfo: Car information. Rule: required, non-empty string (e.g., "52가1234 - Kia Sorento").
-        services: List of services. Rule: required, list of service objects.
-        storeName: Store/branch name. Rule: required, non-empty string.
-        bookingDateTime: Booking date and time. Rule: required, string format.
-        visitMethod: Visit method. Rule: required, string (e.g., "直接訪問", "예약").
-        totalAmount: Total amount in KRW. Rule: required, 0 <= totalAmount.
-        actionLink: Action button link. Rule: optional, valid URL string.
-        actionText: Action button text. Rule: optional, non-empty string.
-
-    Field Details:
-        - carInfo (str): Car information. Rule: required.
-        - services (list[dict]): List of services, each containing:
-            - serviceName (str): Service name. Rule: required, non-empty string.
-            - quantity (int): Quantity. Rule: required, 1 <= quantity.
-            - price (int): Unit price in KRW. Rule: required, 0 <= price.
-        - storeName (str): Store name. Rule: required.
-        - bookingDateTime (str): Booking datetime. Rule: required.
-        - visitMethod (str): Visit method. Rule: required.
-        - totalAmount (int): Total amount. Rule: required, 0 <= totalAmount.
-        - actionLink (str): Action link. Rule: optional.
-        - actionText (str): Button text. Rule: optional.
+        orderInfo: Order information containing available fields:
+            - carInfo (str): Car information.
+            - product (str): Product name.
+            - quantity (int): Order quantity.
+            - storeName (str): Store name.
+            - bookingDateTime (str): Booking date and time.
+            - visitMethod (str): Visit method (e.g., "Visit in Person").
+            - paymentAmount (float): Payment amount.
+            All fields are optional - only include fields that have values.
+        recommendActions: Recommend action containing:
+            - question (str): Question text.
+            - listActions (list[str]): List of action labels.
+        isReadyToOrder: True if all required info for quick_order (carInfo + product + quantity + storeName).
+        isReadyToAddToCart: True if all required info for save_to_cart (carInfo + product + quantity).
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"carInfo": ..., "services": ..., ...}}
+        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "recommendActions": ..., "isReadyToOrder": ..., "isReadyToAddToCart": ...}}
     """
     return _success_response(200, {
-        "carInfo": carInfo,
-        "services": services,
-        "storeName": storeName,
-        "bookingDateTime": bookingDateTime,
-        "visitMethod": visitMethod,
-        "totalAmount": totalAmount,
-        "actionLink": actionLink,
-        "actionText": actionText,
-    })
-
-
-@tool
-def bill_product_tool(
-    carInfo: Annotated[str, "Car information"],
-    products: Annotated[list[dict], "List of products. Each: productName (str), quantity (int), unitPrice (int), totalPrice (int)"],
-    storeName: Annotated[str, "Store name"],
-    bookingDateTime: Annotated[str, "Booking date and time"],
-    visitMethod: Annotated[str, "Visit method"],
-    paymentAmount: Annotated[int, "Payment amount"],
-    actionLink: Annotated[str | None, "Action link"] = None,
-    actionText: Annotated[str | None, "Action button text"] = None,
-    cartLink: Annotated[str | None, "Cart link"] = None
-) -> dict:
-    """Render product bill card.
-
-    Args:
-        carInfo: Car information. Rule: required, non-empty string.
-        products: List of products. Rule: required, list of product objects.
-        storeName: Store/branch name. Rule: required, non-empty string.
-        bookingDateTime: Booking date and time. Rule: required, string format.
-        visitMethod: Visit method. Rule: required, string.
-        paymentAmount: Payment amount in KRW. Rule: required, 0 <= paymentAmount.
-        actionLink: Primary action link. Rule: optional, valid URL string.
-        actionText: Primary action button text. Rule: optional, non-empty string.
-        cartLink: View cart link. Rule: optional, valid URL string.
-
-    Field Details:
-        - carInfo (str): Car information. Rule: required.
-        - products (list[dict]): List of products, each containing:
-            - productName (str): Product name. Rule: required, non-empty string.
-            - quantity (int): Quantity. Rule: required, 1 <= quantity.
-            - unitPrice (int): Unit price in KRW. Rule: required, 0 <= unitPrice.
-            - totalPrice (int): Total price in KRW. Rule: required, 0 <= totalPrice.
-        - storeName (str): Store name. Rule: required.
-        - bookingDateTime (str): Booking datetime. Rule: required.
-        - visitMethod (str): Visit method. Rule: required.
-        - paymentAmount (int): Payment amount. Rule: required, 0 <= paymentAmount.
-        - actionLink (str): Action link. Rule: optional.
-        - actionText (str): Button text. Rule: optional.
-        - cartLink (str): Cart link. Rule: optional.
-
-    Returns:
-        {"status": "success", "http_status": 200, "data": {"carInfo": ..., "products": ..., ...}}
-    """
-    return _success_response(200, {
-        "carInfo": carInfo,
-        "products": products,
-        "storeName": storeName,
-        "bookingDateTime": bookingDateTime,
-        "visitMethod": visitMethod,
-        "paymentAmount": paymentAmount,
-        "actionLink": actionLink,
-        "actionText": actionText,
-        "cartLink": cartLink,
-    })
-
-
-@tool
-def question_create_order_tool(
-    key: Annotated[str, "Question key"],
-    question: Annotated[str, "Question text"],
-    type: Annotated[str, "Question type: singleChoice, multipleChoice, text, date, time"],
-    listAnswer: Annotated[list[dict], "List of answers. Each: id (str), label (str), value (str)"],
-    required: Annotated[bool, "Whether answer is required"] = False
-) -> dict:
-    """Render order creation question card.
-
-    Args:
-        key: Unique question identifier. Rule: required, unique string.
-        question: Question text. Rule: required, non-empty string.
-        type: Question type. Rule: required, one of: "singleChoice", "multipleChoice", "text", "date", "time".
-        listAnswer: List of answer options. Rule: optional (required if type is choice), list of answer objects.
-        required: Whether answer is required. Rule: optional, boolean, default false.
-
-    Field Details:
-        - key (str): Question key. Rule: required, unique identifier.
-        - question (str): Question content. Rule: required.
-        - type (str): Question type. Rule: required, enum: "singleChoice" | "multipleChoice" | "text" | "date" | "time".
-        - listAnswer (list[dict]): List of answers, each containing:
-            - id (str): Answer ID. Rule: required, unique string.
-            - label (str): Display text. Rule: required, non-empty string.
-            - value (str): Logic value. Rule: required, non-empty string.
-        - required (bool): Whether required. Rule: optional, default false.
-
-    Returns:
-        {"status": "success", "http_status": 200, "data": {"key": ..., "question": ..., "type": ..., "listAnswer": ..., "required": ...}}
-    """
-    return _success_response(200, {
-        "key": key,
-        "question": question,
-        "type": type,
-        "listAnswer": listAnswer,
-        "required": required,
+        "orderInfo": orderInfo,
+        "recommendActions": recommendActions,
+        "isReadyToOrder": isReadyToOrder,
+        "isReadyToAddToCart": isReadyToAddToCart,
     })

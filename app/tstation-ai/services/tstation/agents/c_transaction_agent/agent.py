@@ -1007,6 +1007,65 @@ If user skips store selection (option 2) or says "장바구니", "나중에", et
 다시 시도해 주세요.
 
 ============================
+STEP 5.5: PRE-ORDER PREVIEW (UI TEMPLATE)
+============================
+
+**IMPORTANT: After user selects a path (5A or 5B), BEFORE calling the API (quick_order_tool or save_to_cart_tool), ALWAYS display a pre-order preview for user recheck.**
+
+Build orderInfo from previous steps:
+- carInfo: Car name with carNo in format "carName (carNo)" (e.g., "뉴 제타(6세대) 2.0 TDI A/T (29조3344)")
+- product: Product name with goodsNo in format "productName (goodsNo)" (e.g., "Ventus S2 AS (G000000314254)")
+- quantity: Confirmed quantity (int)
+- storeName: Store name with shopId in format "storeName (shopId)" (e.g., "티스테이션 센텀점 (C01306)")
+- bookingDateTime: Booking date/time (null if not yet available)
+- visitMethod: "Visit in Person" or "Use Pickup" (null if not selected)
+- paymentAmount: Calculate from get_final_price_tool result:
+  - Get extra_fvr_sale_prc (discounted price per unit) and wage_today_prc (labor cost per unit)
+  - paymentAmount = quantity × (extra_fvr_sale_prc + wage_today_prc)
+  - Example: quantity=4, extra_fvr_sale_prc=150000, wage_today_prc=20000 → paymentAmount=680000
+  - Set to null if price not yet fetched
+
+**Check isReadyToOrder:**
+- TRUE: Enough info for order (carInfo + product + quantity + storeName)
+- FALSE: Missing info → create recommendActions to ask user
+
+**Check isReadyToAddToCart:**
+- TRUE: carInfo + product + quantity + storeName (NO bookingDateTime needed)
+- FALSE: missing any of carInfo/product/quantity/storeName
+
+**recommendActions:**
+- Recommend action with {{question (str), listActions (list[str])}}
+- listActions should be natural phrases user would actually say/type in Korean
+- Example: {{"question": "예약 날짜를 선택하세요", "listActions": ["내일 날짜로 예약해주세요", "모레 날짜로 예약해주세요"]}}
+- Prioritize the MOST IMPORTANT missing fields only
+- Priority order: bookingDateTime (most important) → visitMethod
+- Do NOT ask about paymentAmount (can be null, not blocking)
+- Only one recommendAction per preview
+
+**After showing pre-order preview:**
+- User CONFIRMS (isReadyToOrder=true) → Call API (quick_order_tool or save_to_cart_tool)
+- User answers recommendActions → Update orderInfo → Re-check isReadyToOrder → Show pre-order preview again
+
+**NOTE: Pre-order preview is UI TEMPLATE - not a tool call. Display as markdown table for user to check. State clearly if ready to order or not.**
+
+Example pre-order preview (markdown table):
+```
+### Order Info
+
+| Field | Value | Status |
+|-------|-------|--------|
+| Car | 52가1234 - Kia Sorento | ✅ |
+| Product | Hankook Tire SUV | ✅ |
+| Quantity | 4개 | ✅ |
+| Store | Hankook Tire 서울점 | ✅ |
+| Booking Date | - | ❌ Need to select |
+| Visit Method | - | ❌ Need to select |
+| Payment | - | ✅ |
+
+Ready to order: NO (missing Booking Date and Visit Method)
+```
+
+============================
 ⚠️ CRITICAL RULES FOR FLOW 6
 ============================
 

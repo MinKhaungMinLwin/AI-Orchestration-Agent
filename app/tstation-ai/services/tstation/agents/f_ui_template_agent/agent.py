@@ -7,10 +7,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     list_event_tool,
     list_preview_youtube_tool,
     available_dates_tool,
-    question_tool,
-    bill_service_tool,
-    bill_product_tool,
-    question_create_order_tool,
+    preorder_tool,
 )
 from common.curr_time import get_current_time
 
@@ -52,10 +49,13 @@ TEMPLATE TYPES (use ONE that best fits)
 • list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
 • available_dates_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null). IMPORTANT: Include ALL available dates - do NOT truncate or limit the dates array. If source has 10 dates, pass all 10. (camelCase, no underscore)
-• question_tool → "question" - Questions with fields: question, listAnswer[[{{id, label, value}}]] (camelCase, no underscore)
-• bill_service_tool → "billService" - Service bills with fields: carInfo, services[[{{serviceName, quantity, price}}]], storeName, bookingDateTime, visitMethod, totalAmount, actionLink, actionText (camelCase, no underscore)
-• bill_product_tool → "billProduct" - Product bills with fields: carInfo, products[[{{productName, quantity, unitPrice, totalPrice}}]], storeName, bookingDateTime, visitMethod, paymentAmount, actionLink, actionText, cartLink (camelCase, no underscore)
-• question_create_order_tool → "questionCreateOrder" - Order questions with fields: key, question, type, listAnswer[[{{id, label, value}}]], required (camelCase, no underscore)
+• preorder_tool → "preorder" - Pre-order card with fields:
+  - orderInfo[[{{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, visitMethod? (Visit in Person | Use Pickup), paymentAmount?}}]]
+  - recommendActions (dict): Recommend action with {{question (str), listActions (list[str])}}
+  - isReadyToOrder (bool): True if ready for quick_order (carInfo + product + quantity + storeName)
+  - isReadyToAddToCart (bool): True if ready for save_to_cart (carInfo + product + quantity)
+  IMPORTANT: All fields always present - if no value, set to null
+  (camelCase, no underscore)
 
 ====================================================
 KEY RULE: ALL FIELD NAMES USE CAMELCASE (NO UNDERSCORES)
@@ -133,13 +133,7 @@ available_dates_tool → {{"dates": [
   {{"date": "2026년 4월 17일 (금)", "available": false, "availableTimes": [], "index": 2}}
 ], "selectedDate": 0}}
 
-question_tool → {{"question": "어떤 서비스를 원하십니까?", "listAnswer": [{{"id": "1", "label": "타이어 교체", "value": "tire_change"}}, {{"id": "2", "label": "정기 점검", "value": "regular_check"}}]}}
-
-bill_service_tool → {{"carInfo": "52가1234 - Kia Sorento", "services": [{{"serviceName": "타이어 교체", "quantity": 4, "price": 200000}}], "storeName": "Hankook Tire 서울점", "bookingDateTime": "2026-04-15 14:00", "visitMethod": "예약", "totalAmount": 800000, "actionLink": "https://tstation.com/book", "actionText": "예약 확인"}}
-
-bill_product_tool → {{"carInfo": "52가1234 - Kia Sorento", "products": [{{"productName": "Hankook Tire SUV", "quantity": 4, "unitPrice": 150000, "totalPrice": 600000}}], "storeName": "Hankook Tire 서울점", "bookingDateTime": "2026-04-15 14:00", "visitMethod": "예약", "paymentAmount": 600000, "actionLink": "https://tstation.com/pay", "actionText": "결제하기", "cartLink": "https://tstation.com/cart"}}
-
-question_create_order_tool → {{"key": "order_type", "question": "주문 유형을 선택하세요", "type": "singleChoice", "listAnswer": [{{"id": "1", "label": "서비스 예약", "value": "service"}}, {{"id": "2", "label": "제품 구매", "value": "product"}}], "required": true}}
+preorder_tool → {{"orderInfo": {{"carInfo": "뉴 제타(6세대) 2.0 TDI A/T (29조3344)", "product": "Ventus S2 AS (G000000314254)", "quantity": 2, "storeName": "티스테이션 센텀점 (C01306)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true}}
 """
 
 
@@ -152,10 +146,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_event_tool": "Event",
         "list_preview_youtube_tool": "YouTube",
         "available_dates_tool": "Date Picker",
-        "question_tool": "Question",
-        "bill_service_tool": "Service Bill",
-        "bill_product_tool": "Product Bill",
-        "question_create_order_tool": "Order Confirm",
+        "preorder_tool": "Pre-Order",
     }
 
     TOOL_TO_TEMPLATE_MAP = {
@@ -166,10 +157,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_event_tool": "event",
         "list_preview_youtube_tool": "previewYoutube",
         "available_dates_tool": "datepick",
-        "question_tool": "question",
-        "bill_service_tool": "billService",
-        "bill_product_tool": "billProduct",
-        "question_create_order_tool": "questionCreateOrder",
+        "preorder_tool": "preorder",
     }
 
     def __init__(self, model):
@@ -183,10 +171,7 @@ class UITemplateSubAgent(BaseAgent):
                 list_event_tool,
                 list_preview_youtube_tool,
                 available_dates_tool,
-                question_tool,
-                bill_service_tool,
-                bill_product_tool,
-                question_create_order_tool,
+                preorder_tool,
             ],
             system_prompt=UI_TEMPLATE_AGENT_PROMPT,
             name="UI Template Agent",

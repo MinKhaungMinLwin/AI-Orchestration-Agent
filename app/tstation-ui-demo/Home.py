@@ -326,6 +326,41 @@ def render_template_expander(template: str, data: dict):
                     st.markdown(f"🔗 {item.get('eventUrl', '')}")
                 if item.get("actionLink") and item.get("actionText"):
                     st.markdown(f"[{item.get('actionText', 'Action')}]({item.get('actionLink')})")
+    elif template == "preorder":
+        order_info = data.get("orderInfo", {})
+        recommend_actions = data.get("recommendActions", [])
+        is_ready_to_order = data.get("isReadyToOrder", False)
+        is_ready_to_add_to_cart = data.get("isReadyToAddToCart", False)
+
+        with st.expander("📋 Pre-Order Preview", expanded=True):
+            st.markdown("### Order Info")
+            # Build status table
+            fields = [
+                ("Car", order_info.get("carInfo")),
+                ("Product", order_info.get("product")),
+                ("Quantity", order_info.get("quantity")),
+                ("Store", order_info.get("storeName")),
+                ("Booking Date", order_info.get("bookingDateTime")),
+                ("Visit Method", order_info.get("visitMethod")),
+                ("Payment", order_info.get("paymentAmount")),
+            ]
+            for field_name, field_value in fields:
+                if field_value is not None and field_value != "":
+                    st.markdown(f"✅ **{field_name}:** {field_value}")
+                else:
+                    st.markdown(f"❌ **{field_name}:** -")
+
+            st.markdown("---")
+            st.markdown(f"**Ready to Add to Cart:** {'✅ Yes' if is_ready_to_add_to_cart else '❌ No'}")
+            st.markdown(f"**Ready to Order:** {'✅ Yes' if is_ready_to_order else '❌ No'}")
+
+            # Show recommend actions
+            if recommend_actions:
+                st.markdown("---")
+                st.markdown("### Recommend Actions")
+                st.markdown(f"**{recommend_actions.get('question', '')}**")
+                for action in recommend_actions.get("listActions", []):
+                    st.markdown(f"- {action}")
     elif template == "questionCreateOrder":
         with st.expander("❓ Create Order", expanded=True):
             st.markdown(f"**Key:** {data.get('key', '')}")
