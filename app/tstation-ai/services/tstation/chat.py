@@ -24,7 +24,7 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.agent import invoke_qc
+from services.tstation.agents.g_qc_agent.agent import stream_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data
 
 logger = logging.getLogger(__name__)
@@ -909,11 +909,12 @@ class StreamingMultiAgentCoordinator:
 import re
 
 _FACTUAL_CLAIM_PATTERN = re.compile(
-    r'\d{1,3}(?:,\d{3})*\s*원'   # 가격 패턴 (e.g. 150,000원, 15000원)
-    r'|goods_no'                   # 상품 ID
-    r'|shop(?:Seq|_id|Id)'         # 매장 ID
-    r'|재고|할인|%\s*할인'          # 재고/할인
-    r'|G\d{9,}',                   # goods_no 형식 (e.g. G000000314254)
+    r'\d{1,3}(?:,\d{3})*\s*원'      # 가격 (e.g. 150,000원)
+    r'|G\d{9,}'                      # goods_no (e.g. G000000314254)
+    r'|shop(?:Seq|_id|Id)'           # 매장 ID
+    r'|재고|할인|%\s*할인'            # 재고/할인
+    r'|\d{3}/\d{2,3}[a-zA-Z]+\d{2}'  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
+    r'|점\b',                         # 매장명 (~점)
     re.IGNORECASE,
 )
 
@@ -1176,23 +1177,46 @@ class TStationChatServiceV2:
         # - No tool data and no factual claims (greetings, FAQ): skip QC
         if draft_response.strip():
             source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
-            needs_qc = bool(source_data_chunks) or _has_factual_claims(draft_response)
+            needs_qc = _has_factual_claims(draft_response)
 
             if needs_qc:
                 yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
 
                 final_qc_text = ""
                 try:
-                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str).strip()
+                    qc_stream = stream_qc(QC_LLM, user_query, draft_response, source_data_str)
+                    buffer = ""
+                    is_pass = None  # None = undecided, True = PASS, False = correction
 
-                    if qc_result.upper() == "PASS":
+                    for chunk in qc_stream:
+                        if is_pass is None:
+                            # Buffering phase: collect first ~10 chars to detect PASS
+                            buffer += chunk
+                            if len(buffer.strip()) >= 4:
+                                if buffer.strip().upper() == "PASS":
+                                    is_pass = True
+                                    break
+                                else:
+                                    is_pass = False
+                                    # Flush buffer as first correction tokens
+                                    yield f"data: {json.dumps({'type': 'token', 'content': buffer}, ensure_ascii=False)}\n\n"
+                                    final_qc_text = buffer
+                        else:
+                            # Streaming phase: correction mode
+                            yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+                            final_qc_text += chunk
+
+                    # Handle edge case: buffer never reached 4 chars
+                    if is_pass is None:
+                        is_pass = buffer.strip().upper() == "PASS"
+
+                    if is_pass:
                         final_qc_text = draft_response
+                        yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
                         logger.info("[QC_AGENT] PASS — draft is factually correct")
                     else:
-                        final_qc_text = qc_result
                         logger.info("[QC_AGENT] Corrected draft response")
 
-                    yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
                 except Exception as e:
                     logger.exception(f"[QC_AGENT] Failed: {e}")
                     final_qc_text = draft_response  # fallback
