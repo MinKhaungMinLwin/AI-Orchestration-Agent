@@ -962,7 +962,9 @@ class TStationChatServiceV2:
             # Only expose safe fields to LLM (name, car info, member id)
             # Other JWT fields (user_type, affiliate_yn, tokens, etc.) are kept internal for API auth only
             # NOTE: user_id in JWT = mbr_no (member number) — needed for get_my_cars_tool
-            safe_fields = {"mbr_nm", "car_no", "car_model", "car_lnc_cd", "location", "user_id"}
+            # car_no, car_model, car_lnc_cd removed — vehicle info should come from get_my_cars_tool
+            # to avoid auto-selecting one car when multiple are registered
+            safe_fields = {"mbr_nm", "location", "user_id"}
             user_info_lines = []
             for k, v in user_info.items():
                 if k in safe_fields:
