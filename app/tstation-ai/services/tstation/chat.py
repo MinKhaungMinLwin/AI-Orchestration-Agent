@@ -24,7 +24,7 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.agent import stream_qc
+from services.tstation.agents.g_qc_agent.agent import invoke_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data
 
 logger = logging.getLogger(__name__)
@@ -1183,18 +1183,12 @@ class TStationChatServiceV2:
 
                 final_qc_text = ""
                 try:
-                    # Collect QC response first (don't stream yet — check for PASS)
-                    qc_chunks = []
-                    for chunk in stream_qc(QC_LLM, user_query, draft_response, source_data_str):
-                        qc_chunks.append(chunk)
-                    qc_result = "".join(qc_chunks).strip()
+                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str).strip()
 
-                    if qc_result.strip().upper() == "PASS":
-                        # Draft is correct — use original draft directly
+                    if qc_result.upper() == "PASS":
                         final_qc_text = draft_response
                         logger.info("[QC_AGENT] PASS — draft is factually correct")
                     else:
-                        # QC returned corrected response
                         final_qc_text = qc_result
                         logger.info("[QC_AGENT] Corrected draft response")
 
