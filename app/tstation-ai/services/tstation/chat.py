@@ -1183,12 +1183,25 @@ class TStationChatServiceV2:
 
                 final_qc_text = ""
                 try:
+                    # Collect QC response first (don't stream yet — check for PASS)
+                    qc_chunks = []
                     for chunk in stream_qc(QC_LLM, user_query, draft_response, source_data_str):
-                        final_qc_text += chunk
-                        yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+                        qc_chunks.append(chunk)
+                    qc_result = "".join(qc_chunks).strip()
+
+                    if qc_result == "PASS":
+                        # Draft is correct — use original draft directly
+                        final_qc_text = draft_response
+                        logger.info("[QC_AGENT] PASS — draft is factually correct")
+                    else:
+                        # QC returned corrected response
+                        final_qc_text = qc_result
+                        logger.info("[QC_AGENT] Corrected draft response")
+
+                    yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
                 except Exception as e:
                     logger.exception(f"[QC_AGENT] Failed: {e}")
-                    final_qc_text = draft_response # fallback
+                    final_qc_text = draft_response  # fallback
                     yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
 
                 # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
