@@ -551,11 +551,66 @@ class StreamingMultiAgentCoordinator:
             "content": f"[Context from previous steps]\n" + "\n".join(parts)
         }
 
+    @staticmethod
+    def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict):
+        """Persist goods_no and shop_id from successful tool results to slots."""
+        from schemas.tstation.slots import ConversationSlots
+        from services.tstation.chat_history_service import get_chat_history_service
+
+        # Map tool names to the slot fields they can provide
+        tool_slot_extractors = {
+            "search_product_tool": ["goods_no"],
+            "get_store_list_tool": ["shop_id"],
+            "get_nearby_stores_tool": ["shop_id"],
+            "get_store_inventory_tool": ["shop_id"],
+        }
+
+        fields = tool_slot_extractors.get(tool_name)
+        if not fields:
+            return
+
+        # Extract values from tool result data
+        tool_slots = {}
+        data = parsed_data.get("data", parsed_data)
+
+        # Handle list results (e.g., search results) — only auto-fill if exactly 1 item
+        if isinstance(data, dict) and "items" in data:
+            items = data["items"]
+            if isinstance(items, list) and len(items) == 1:
+                data = items[0]
+            else:
+                return  # Multiple or no results — don't auto-fill
+        elif isinstance(data, dict) and "stores" in data:
+            stores = data["stores"]
+            if isinstance(stores, list) and len(stores) == 1:
+                data = stores[0]
+            else:
+                return
+
+        for field in fields:
+            val = data.get(field) if isinstance(data, dict) else None
+            if val:
+                tool_slots[field] = val
+
+        if not tool_slots:
+            return
+
+        try:
+            svc = get_chat_history_service()
+            current_slots = svc.get_slots(session_id)
+            new_slots = ConversationSlots(**tool_slots)
+            updated = current_slots.merge(new_slots)
+            svc.save_slots(session_id, updated)
+            logger.info(f"[SLOTS] Tool-derived slots saved from {tool_name}: {tool_slots}")
+        except Exception as e:
+            logger.warning(f"[SLOTS] Failed to save tool-derived slots: {e}")
+
     def stream(
         self,
         messages: list[dict],
         domains: list[MultiAgentDomain.Domain] | None = None,
         slot_context: str | None = None,
+        session_id: str | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -564,6 +619,7 @@ class StreamingMultiAgentCoordinator:
             messages: Original user messages
             domains: Pre-classified domains (optional, will classify if not provided)
             slot_context: Formatted slot context string to inject into agent messages
+            session_id: Session ID for persisting tool-derived slots (goods_no, shop_id)
 
         Yields:
             Stream events from all agents in sequence
@@ -678,6 +734,11 @@ class StreamingMultiAgentCoordinator:
                                 "tool": event.get("tool", ""),
                                 "data": parsed
                             })
+
+                            # Persist tool-derived goods_no and shop_id to slots
+                            if session_id and isinstance(parsed, dict):
+                                self._save_tool_derived_slots(session_id, event.get("tool", ""), parsed)
+
                         except (json.JSONDecodeError, TypeError):
                             accumulated_tool_data.append({
                                 "tool": event.get("tool", ""),
@@ -915,11 +976,13 @@ class TStationChatServiceV2:
         existing_slots = chat_history_svc.get_slots(request.session_id)
         logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
-        # 2) Extract regex-based slots from user messages
-        user_text = " ".join(
-            msg.get("content", "") for msg in request.messages if msg.get("role") == "user"
-        )
-        regex_slots = ConversationSlots.extract_from_user_text(user_text)
+        # 2) Extract regex-based slots from the LATEST user message only
+        last_user_text = ""
+        for msg in reversed(request.messages):
+            if msg.get("role") == "user":
+                last_user_text = msg.get("content", "")
+                break
+        regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
 
         # 3) Classify domains + extract LLM-based slots (tire_model, shop_name, car_model)
         domains, router_result = _coordinator.classify_multi_intent(messages)
@@ -929,8 +992,9 @@ class TStationChatServiceV2:
             car_model=router_result.car_model,
         )
 
-        # 4) Merge: existing → regex → LLM (later values override earlier)
-        merged_slots = existing_slots.merge(regex_slots).merge(llm_slots)
+        # 4) Merge: existing → regex (full merge with dependency reset)
+        #          → LLM (fill only: fills blanks, does not overwrite, respects resets)
+        merged_slots = existing_slots.merge(regex_slots).merge_fill_only(llm_slots)
         logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
         # 5) Save merged slots to Redis
@@ -942,7 +1006,7 @@ class TStationChatServiceV2:
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
-                TStationChatServiceV2._stream_response_multi(messages, domains, slot_context),
+                TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -956,7 +1020,7 @@ class TStationChatServiceV2:
             final_content = ""
             last_message_content = ""
 
-            for event_str in TStationChatServiceV2._stream_response_multi(messages, domains, slot_context):
+            for event_str in TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
                     if json_str and json_str != "[DONE]":
@@ -994,6 +1058,7 @@ class TStationChatServiceV2:
         messages: list[dict],
         domains: list[MultiAgentDomain.Domain] | None = None,
         slot_context: str | None = None,
+        session_id: str | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
 
@@ -1010,7 +1075,7 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
-        for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context):
+        for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id):
             event_type = event.get("type")
             
             # --- INTERCEPT TOKENS (Draft Response) ---
