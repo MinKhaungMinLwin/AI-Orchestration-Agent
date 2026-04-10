@@ -14,6 +14,7 @@ def _get_kwargs(
     *,
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
+    brand_cd: str | Unset = "HK",
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -32,6 +33,8 @@ def _get_kwargs(
     else:
         json_size = size
     params["size"] = json_size
+
+    params["brand_cd"] = brand_cd
 
     params["limit"] = limit
 
@@ -81,6 +84,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
+    brand_cd: str | Unset = "HK",
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
@@ -91,6 +95,8 @@ def sync_detailed(
     Args:
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
+        brand_cd (str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈,
+            GY=굿이어) Default: 'HK'.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -104,6 +110,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         keyword=keyword,
         size=size,
+        brand_cd=brand_cd,
         limit=limit,
     )
 
@@ -119,6 +126,7 @@ def sync(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
+    brand_cd: str | Unset = "HK",
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
@@ -129,6 +137,8 @@ def sync(
     Args:
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
+        brand_cd (str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈,
+            GY=굿이어) Default: 'HK'.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -143,6 +153,7 @@ def sync(
         client=client,
         keyword=keyword,
         size=size,
+        brand_cd=brand_cd,
         limit=limit,
     ).parsed
 
@@ -152,6 +163,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
+    brand_cd: str | Unset = "HK",
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
@@ -162,6 +174,8 @@ async def asyncio_detailed(
     Args:
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
+        brand_cd (str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈,
+            GY=굿이어) Default: 'HK'.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -175,6 +189,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         keyword=keyword,
         size=size,
+        brand_cd=brand_cd,
         limit=limit,
     )
 
@@ -188,6 +203,7 @@ async def asyncio(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
+    brand_cd: str | Unset = "HK",
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
@@ -198,6 +214,8 @@ async def asyncio(
     Args:
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
+        brand_cd (str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈,
+            GY=굿이어) Default: 'HK'.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -213,6 +231,7 @@ async def asyncio(
             client=client,
             keyword=keyword,
             size=size,
+            brand_cd=brand_cd,
             limit=limit,
         )
     ).parsed
