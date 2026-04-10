@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Iterator
+from typing import Iterator, Optional
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -156,7 +156,7 @@ def decide_next_action(
 
 
 class MultiAgentDomain(BaseModel):
-    """Router result that supports multiple domains (multi-intent)."""
+    """Router result that supports multiple domains (multi-intent) and slot extraction."""
 
     class Domain(str, Enum):
         LEADING = "leading"
@@ -168,6 +168,11 @@ class MultiAgentDomain(BaseModel):
     domains: list[Domain] = Field(
         description="List of domains detected in the request, ordered by priority"
     )
+
+    # Slot extraction fields (LLM-based, extracted from current + previous messages)
+    tire_model: Optional[str] = Field(default=None, description="Tire model name mentioned by user (e.g. '벤투스 S2', 'Ventus S1 evo3', 'Dynapro HPX')")
+    shop_name: Optional[str] = Field(default=None, description="Store name mentioned by user (e.g. '한남점', '강남점')")
+    car_model: Optional[str] = Field(default=None, description="Car model mentioned by user (e.g. '쏘나타', 'BMW 5시리즈', '아반떼')")
 
     def get_agents(self):
         """Return list of agents based on detected domains."""
@@ -517,6 +522,25 @@ KEY PRINCIPLES:
 - When multiple intents present, return ALL relevant domains in flow order
 
 Korean vehicle numbers follow patterns: 12가3456, 123가1234
+
+====================================================
+SLOT EXTRACTION (from current + previous messages)
+====================================================
+
+In addition to domain classification, extract the following information
+from the ENTIRE conversation (current message AND previous messages).
+
+Extract these fields:
+- tire_model: Tire product name/model (e.g. "벤투스 S2", "Ventus S1 evo3", "Dynapro HPX", "키네르기 EX")
+- shop_name: Store name (e.g. "한남점", "강남점", "더타이어샵 강남")
+- car_model: Car model (e.g. "쏘나타", "BMW 5시리즈", "아반떼", "K5")
+
+Rules:
+- Look at ALL messages in the conversation, not just the current one
+- If the user mentioned a tire model 3 turns ago but not now, still extract it
+- If the user explicitly changes a value (e.g. "아까 벤투스 S2라고 했는데 키네르기로 바꿀게"), use the NEW value
+- Return null for fields not mentioned anywhere in the conversation
+- Extract the value as the user expressed it (Korean or English)
 """
 
 
@@ -531,8 +555,12 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
 
-    def classify_multi_intent(self, messages: list) -> list[MultiAgentDomain.Domain]:
-        """Classify user message into one or more domains."""
+    def classify_multi_intent(self, messages: list) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain]:
+        """Classify user message into one or more domains and extract slots.
+
+        Returns:
+            Tuple of (domains list, full MultiAgentDomain result with slot fields).
+        """
         from langchain_litellm import ChatLiteLLM
         from langchain_core.messages import SystemMessage
 
@@ -553,11 +581,16 @@ class StreamingMultiAgentCoordinator:
 
             result: MultiAgentDomain = structured_model.invoke(all_messages)
             logger.info(f"[MULTI-DOMAIN] Classification result: {result}")
-            return result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            return domains, result
 
         except Exception as e:
             logger.exception(f"[MULTI-DOMAIN] Classification failed: {e}")
-            return [MultiAgentDomain.Domain.LEADING]
+            fallback = MultiAgentDomain(
+                reason=f"Classification failed: {str(e)[:100]}",
+                domains=[MultiAgentDomain.Domain.LEADING],
+            )
+            return [MultiAgentDomain.Domain.LEADING], fallback
 
     def _build_context_message(
         self,
@@ -581,10 +614,66 @@ class StreamingMultiAgentCoordinator:
             "content": f"[Context from previous steps]\n" + "\n".join(parts)
         }
 
+    @staticmethod
+    def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict):
+        """Persist goods_no and shop_id from successful tool results to slots."""
+        from schemas.tstation.slots import ConversationSlots
+        from services.tstation.chat_history_service import get_chat_history_service
+
+        # Map tool names to the slot fields they can provide
+        tool_slot_extractors = {
+            "search_product_tool": ["goods_no"],
+            "get_store_list_tool": ["shop_id"],
+            "get_nearby_stores_tool": ["shop_id"],
+            "get_store_inventory_tool": ["shop_id"],
+        }
+
+        fields = tool_slot_extractors.get(tool_name)
+        if not fields:
+            return
+
+        # Extract values from tool result data
+        tool_slots = {}
+        data = parsed_data.get("data", parsed_data)
+
+        # Handle list results (e.g., search results) — only auto-fill if exactly 1 item
+        if isinstance(data, dict) and "items" in data:
+            items = data["items"]
+            if isinstance(items, list) and len(items) == 1:
+                data = items[0]
+            else:
+                return  # Multiple or no results — don't auto-fill
+        elif isinstance(data, dict) and "stores" in data:
+            stores = data["stores"]
+            if isinstance(stores, list) and len(stores) == 1:
+                data = stores[0]
+            else:
+                return
+
+        for field in fields:
+            val = data.get(field) if isinstance(data, dict) else None
+            if val:
+                tool_slots[field] = val
+
+        if not tool_slots:
+            return
+
+        try:
+            svc = get_chat_history_service()
+            current_slots = svc.get_slots(session_id)
+            new_slots = ConversationSlots(**tool_slots)
+            updated = current_slots.merge(new_slots)
+            svc.save_slots(session_id, updated)
+            logger.info(f"[SLOTS] Tool-derived slots saved from {tool_name}: {tool_slots}")
+        except Exception as e:
+            logger.warning(f"[SLOTS] Failed to save tool-derived slots: {e}")
+
     def stream(
         self,
         messages: list[dict],
         domains: list[MultiAgentDomain.Domain] | None = None,
+        slot_context: str | None = None,
+        session_id: str | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -592,13 +681,15 @@ class StreamingMultiAgentCoordinator:
         Args:
             messages: Original user messages
             domains: Pre-classified domains (optional, will classify if not provided)
+            slot_context: Formatted slot context string to inject into agent messages
+            session_id: Session ID for persisting tool-derived slots (goods_no, shop_id)
 
         Yields:
             Stream events from all agents in sequence
         """
         # Classify if domains not provided
         if domains is None:
-            domains = self.classify_multi_intent(messages)
+            domains, _ = self.classify_multi_intent(messages)
 
         if not domains:
             domains = [MultiAgentDomain.Domain.LEADING]
@@ -633,6 +724,13 @@ class StreamingMultiAgentCoordinator:
                         })
                         logger.info(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
+
+            # Inject slot context for agent to reference confirmed customer information
+            if slot_context:
+                enriched_messages.append({
+                    "role": "system",
+                    "content": slot_context,
+                })
 
             # Append accumulated tool data for next agent (so they can use results like goods_no)
             if accumulated_tool_data:
@@ -699,6 +797,11 @@ class StreamingMultiAgentCoordinator:
                                 "tool": event.get("tool", ""),
                                 "data": parsed
                             })
+
+                            # Persist tool-derived goods_no and shop_id to slots
+                            if session_id and isinstance(parsed, dict):
+                                self._save_tool_derived_slots(session_id, event.get("tool", ""), parsed)
+
                         except (json.JSONDecodeError, TypeError):
                             accumulated_tool_data.append({
                                 "tool": event.get("tool", ""),
@@ -926,10 +1029,47 @@ class TStationChatServiceV2:
         messages = TStationChatServiceV2._build_messages_with_user_info(request)
         logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
+        # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
+        from schemas.tstation.slots import ConversationSlots
+        from services.tstation.chat_history_service import get_chat_history_service
+
+        chat_history_svc = get_chat_history_service()
+
+        # 1) Load existing slots from Redis
+        existing_slots = chat_history_svc.get_slots(request.session_id)
+        logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+
+        # 2) Extract regex-based slots from the LATEST user message only
+        last_user_text = ""
+        for msg in reversed(request.messages):
+            if msg.get("role") == "user":
+                last_user_text = msg.get("content", "")
+                break
+        regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
+
+        # 3) Classify domains + extract LLM-based slots (tire_model, shop_name, car_model)
+        domains, router_result = _coordinator.classify_multi_intent(messages)
+        llm_slots = ConversationSlots(
+            tire_model=router_result.tire_model,
+            shop_name=router_result.shop_name,
+            car_model=router_result.car_model,
+        )
+
+        # 4) Merge: existing → regex (full merge with dependency reset)
+        #          → LLM (fill only: fills blanks, does not overwrite, respects resets)
+        merged_slots = existing_slots.merge(regex_slots).merge_fill_only(llm_slots)
+        logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
+
+        # 5) Save merged slots to Redis
+        chat_history_svc.save_slots(request.session_id, merged_slots)
+
+        # 6) Build slot context string for agent injection
+        slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
+
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
-                TStationChatServiceV2._stream_response_multi(messages),
+                TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -941,25 +1081,25 @@ class TStationChatServiceV2:
         # NON STREAM MODE
         try:
             final_content = ""
-            last_message_content = "" # NEW: Track the last message event
-            
-            for event_str in TStationChatServiceV2._stream_response_multi(messages):
+            last_message_content = ""
+
+            for event_str in TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
                     if json_str and json_str != "[DONE]":
                         event = json.loads(json_str)
-                        
+
                         if event.get("type") == "token":
                             final_content += event.get("content", "")
                         elif event.get("type") == "message":
-                            last_message_content = event.get("content", "") # Capture it
-                            
+                            last_message_content = event.get("content", "")
+
             # SAFETY NET: Fallback to message content if no tokens were emitted
             if not final_content and last_message_content:
                 final_content = last_message_content
-                
+
             return TStationChatResponse(content=final_content)
-            
+
         except ValueError as e:
             logger.warning(f"User Error: {e}")
             raise ValueError(e)
@@ -977,9 +1117,14 @@ class TStationChatServiceV2:
         yield "data: [DONE]\n\n"
 
     @staticmethod
-    def _stream_response_multi(messages: list[dict]):
+    def _stream_response_multi(
+        messages: list[dict],
+        domains: list[MultiAgentDomain.Domain] | None = None,
+        slot_context: str | None = None,
+        session_id: str | None = None,
+    ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
-        
+
         draft_response = ""
         source_data_chunks = []
         original_message_events = [] # Hold message events to sync history
@@ -993,7 +1138,7 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
-        for event in _coordinator.stream(messages):
+        for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id):
             event_type = event.get("type")
             
             # --- INTERCEPT TOKENS (Draft Response) ---
