@@ -296,7 +296,6 @@ async def get_user_info(user: dict = Security(get_api_key)):
 
     - Response:
         - user_id (str): User ID
-        - car_no (str): Car number
         - user_type (str): User type
         - affiliate_yn (str): Affiliate flag
         - issued_at (str): Token issued timestamp
