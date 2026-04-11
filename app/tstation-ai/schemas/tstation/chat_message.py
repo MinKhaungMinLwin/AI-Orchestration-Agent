@@ -77,7 +77,6 @@ class UserInfoResponse(BaseModel):
     """User info extracted from JWT token."""
     user_id: str = Field(..., description="User ID")
     user_type: Optional[str] = Field(default=None, description="User type (member/non-member)")
-    car_no: Optional[str] = Field(default=None, description="Vehicle number")
     mbr_nm: Optional[str] = Field(default=None, description="Member name")
     affiliate_yn: Optional[str] = Field(default=None, description="Affiliate status (Y/N)")
     issued_at: Optional[str] = Field(default=None, description="Token issued time")

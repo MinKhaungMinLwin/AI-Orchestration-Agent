@@ -36,7 +36,6 @@ def get_user_info_from_token(token: str, secret: Optional[str] = None) -> Option
     JWT fields:
     - user_id: Member number
     - user_type: Member type (10: member, 20: non-member)
-    - car_no: Vehicle number (only if exists)
     - mbr_nm: Member name (only if exists)
     - affiliate_yn: Affiliate status (Y, N)
     - entr_no: Affiliate company number (only if affiliated)
@@ -52,10 +51,11 @@ def get_user_info_from_token(token: str, secret: Optional[str] = None) -> Option
     user_type_display = "member" if user_type == "10" else "non-member" if user_type == "20" else user_type
 
     # Extract user info fields
+    # car_no excluded — vehicle info should come from get_my_cars_tool
+    # to avoid auto-selecting one car when multiple are registered
     user_info = {
         "user_id": payload.get("user_id"),
         "user_type": user_type_display,
-        "car_no": payload.get("car_no"),
         "mbr_nm": payload.get("mbr_nm"),
         "affiliate_yn": payload.get("affiliate_yn"),
         "entr_no": payload.get("entr_no"),

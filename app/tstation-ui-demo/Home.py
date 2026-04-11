@@ -36,8 +36,6 @@ if st.session_state.get("tstation_logged_in") and st.session_state.get("access_t
         st.sidebar.markdown(f"**User ID:** {user_info.get('user_id', 'N/A')}")
         if user_info.get("mbr_nm"):
             st.sidebar.markdown(f"**Name:** {user_info['mbr_nm']}")
-        if user_info.get("car_no"):
-            st.sidebar.markdown(f"**Car:** {user_info['car_no']}")
 
     # Location input
     st.sidebar.markdown("---")
