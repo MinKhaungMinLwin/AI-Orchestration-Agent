@@ -607,6 +607,21 @@ class StreamingMultiAgentCoordinator:
             "get_store_inventory_tool": ["shop_id"],
         }
 
+        # When user searches for a different car model, reset tire_size and goods_no
+        # so the previous vehicle's tire_size doesn't persist
+        if tool_name == "search_car_model_tool":
+            try:
+                svc = get_chat_history_service()
+                current_slots = svc.get_slots(session_id)
+                if current_slots.tire_size is not None or current_slots.goods_no is not None:
+                    new_slots = current_slots.model_copy()
+                    new_slots.tire_size = None
+                    new_slots.goods_no = None
+                    svc.save_slots(session_id, new_slots)
+                    logger.info("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
+            except Exception as e:
+                logger.warning(f"[SLOTS] Failed to reset slots on car model search: {e}")
+
         # Extract tire_size from tool INPUT when recommendation tool is called
         # This captures the confirmed tire_size that the LLM used for recommendations
         if tool_name == "get_products_recommendations_tool" and tool_input:
@@ -907,6 +922,24 @@ class StreamingMultiAgentCoordinator:
 
 
 import re
+
+_FALLBACK_RESPONSE = "죄송합니다. 해당 요청을 처리할 수 없습니다. 타이어 추천, 가격 조회, 매장 검색 등 다른 질문을 해주세요."
+
+_INTERNAL_JARGON_PATTERN = re.compile(
+    r"No tool data retrieved|tool data|source data",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_response(text: str) -> str:
+    """Replace internal jargon with user-friendly fallback if response has no useful content."""
+    stripped = text.strip()
+    if not stripped:
+        return _FALLBACK_RESPONSE
+    if _INTERNAL_JARGON_PATTERN.search(stripped) and len(stripped) < 100:
+        return _FALLBACK_RESPONSE
+    return text
+
 
 _FACTUAL_CLAIM_PATTERN = re.compile(
     r'\d{1,3}(?:,\d{3})*\s*원'      # 가격 (e.g. 150,000원)
@@ -1224,6 +1257,9 @@ class TStationChatServiceV2:
                     final_qc_text = draft_response  # fallback
                     yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
 
+                # Sanitize: replace internal jargon with user-friendly fallback
+                final_qc_text = _sanitize_response(final_qc_text)
+
                 # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
                 if original_message_events:
                     final_msg_event = original_message_events[-1]
@@ -1231,6 +1267,7 @@ class TStationChatServiceV2:
                     yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
             else:
                 # No factual claims (greetings, FAQ): skip QC, pass draft directly
+                draft_response = _sanitize_response(draft_response)
                 yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
                 if original_message_events:
                     final_msg_event = original_message_events[-1]
