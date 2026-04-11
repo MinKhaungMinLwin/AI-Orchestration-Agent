@@ -24,6 +24,7 @@ class ConversationSlots(BaseModel):
         "tire_size": ["goods_no"],
         "goods_no": ["tire_model", "tire_size"],
         "shop_name": ["shop_id"],
+        "car_model": ["tire_size", "goods_no"],
     }
 
     # Regex patterns for extracting slots from user messages
