@@ -13,6 +13,7 @@ If the draft has errors → respond with ONLY the corrected full response.
 CHECK THESE ONLY:
 - prices, discount %, product names, goods_no, shop_id, store names, tire sizes, stock status
 - vehicle list completeness: if Source Data contains multiple vehicles, draft MUST show ALL of them. Never omit any vehicle.
+- tire_size consistency: the tire_size mentioned in the draft MUST match the tire_size in the Tool Input. If Tool Input shows tire_size="235/55R19" but draft says "225/40R18", that is an error — fix it to match the Input.
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
 - If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다. 해당 요청을 처리할 수 없습니다. 타이어 추천, 가격 조회, 매장 검색 등 다른 질문을 해주세요."

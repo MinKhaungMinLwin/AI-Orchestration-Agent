@@ -1190,11 +1190,17 @@ class TStationChatServiceV2:
             # --- COLLECT SOURCE DATA (Tools Only = True Ground Truth) ---
             if event_type == "tool":
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                tool_name = event.get("tool", "Unknown")
+                input_data = event.get("input", {})
                 output_data = event.get("output", "")
+                source_parts = []
+                if input_data:
+                    source_parts.append(f"Input: {json.dumps(input_data, ensure_ascii=False)}")
                 if output_data:
-                    tool_name = event.get("tool", "Unknown")
                     filtered = filter_source_data(tool_name, output_data)
-                    source_data_chunks.append(f"Tool [{tool_name}]:\n{filtered}")
+                    source_parts.append(f"Output: {filtered}")
+                if source_parts:
+                    source_data_chunks.append(f"Tool [{tool_name}]:\n" + "\n".join(source_parts))
                 continue
                 
             # --- INTERCEPT EARLY DONE EVENT ---
