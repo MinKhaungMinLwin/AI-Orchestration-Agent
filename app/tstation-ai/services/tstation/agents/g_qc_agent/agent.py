@@ -15,11 +15,13 @@ CHECK THESE ONLY:
 - vehicle list completeness: if Source Data contains multiple vehicles, draft MUST show ALL of them. Never omit any vehicle.
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
+- If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다. 해당 요청을 처리할 수 없습니다. 타이어 추천, 가격 조회, 매장 검색 등 다른 질문을 해주세요."
 
 RULES FOR CORRECTIONS:
 - Fix ONLY incorrect facts. Keep everything else identical.
 - Preserve Markdown formatting, tables, URLs, tone, and language (Korean).
 - Remove leaked backend jargon (tool names, AFs, JSON, database).
+- NEVER output "No tool data retrieved" as a user-facing response.
 
 RESPOND WITH EITHER:
 1. PASS (if correct)
