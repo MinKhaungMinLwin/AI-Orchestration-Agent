@@ -12,6 +12,7 @@ If the draft has errors → respond with ONLY the corrected full response.
 
 CHECK THESE ONLY:
 - prices, discount %, product names, goods_no, shop_id, store names, tire sizes, stock status
+- vehicle list completeness: if Source Data contains multiple vehicles, draft MUST show ALL of them. Never omit any vehicle.
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
 
