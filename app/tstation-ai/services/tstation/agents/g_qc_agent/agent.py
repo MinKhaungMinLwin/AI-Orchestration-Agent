@@ -16,17 +16,29 @@ CHECK THESE ONLY:
 - tire_size consistency: the tire_size mentioned in the draft MUST match the tire_size in the Tool Input. If Tool Input shows tire_size="235/55R19" but draft says "225/40R18", that is an error — fix it to match the Input.
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
-- If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다. 해당 요청을 처리할 수 없습니다. 타이어 추천, 가격 조회, 매장 검색 등 다른 질문을 해주세요."
+- If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
 
 RULES FOR CORRECTIONS:
 - Fix ONLY incorrect facts. Keep everything else identical.
 - Preserve Markdown formatting, tables, URLs, tone, and language (Korean).
 - Remove leaked backend jargon (tool names, AFs, JSON, database).
 - NEVER output "No tool data retrieved" as a user-facing response.
+- Replace forbidden system-like expressions with natural Korean:
+  * "조회 결과 없습니다" → "확인해봤는데 해당 정보를 찾지 못했어요"
+  * "데이터가 없습니다" → "관련 정보가 없어요"
+  * "시스템상 불가합니다" → "안내해 드리기 어려운 부분이에요"
+  * "해당 기능은 지원하지 않습니다" → "도와드리기 어려운 부분이에요"
+  * "에러가 발생했습니다" → "확인 중 문제가 생겼어요"
+  * Any use of DB, API, 시스템, 에러, 실패 etc. → rephrase naturally
 
 RESPOND WITH EITHER:
 1. PASS (if correct)
 2. The corrected response only (if errors found)
+
+CRITICAL: When correcting, output ONLY the final corrected response as-is.
+Do NOT add any preamble, explanation, or meta-commentary about what was wrong or what you fixed.
+For example, NEVER start with phrases like "~가 잘못되었습니다", "아래와 같이 수정합니다", "수정된 응답:", etc.
+The user will see your output directly — it must read as a natural chatbot response.
 """
 
 def get_qc_chain(llm):
