@@ -729,7 +729,13 @@ class StreamingMultiAgentCoordinator:
                         })
                         enriched_messages.append({
                             "role": "user",
-                            "content": "Continue with next step"
+                            "content": (
+                                "Based on the previous agent's findings above, produce a SINGLE unified response for the user. "
+                                "Include key findings from the previous agent (e.g., compatibility results, product info) and "
+                                "seamlessly add your own results (e.g., pricing, inventory, store info). "
+                                "Do NOT repeat introductory greetings or offer intermediate choices that are already resolved. "
+                                "The response must read as ONE coherent answer, not two separate answers concatenated together."
+                            )
                         })
                         logger.info(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
@@ -1167,6 +1173,7 @@ class TStationChatServiceV2:
         source_data_chunks = []
         original_message_events = [] # Hold message events to sync history
         coordinator_done_event = None # Hold the premature [DONE] event
+        agent_count = 0  # Track how many agents have started
 
         user_query = ""
         for msg in reversed(messages):
@@ -1210,6 +1217,20 @@ class TStationChatServiceV2:
             if event_type == "sub-agent" and event.get("agent") == "[DONE]":
                 coordinator_done_event = event
                 continue
+
+            # --- RESET DRAFT when a new sub-agent starts (multi-agent chaining) ---
+            # The second agent receives the first agent's context and produces a unified response,
+            # so we only need the last agent's output for QC.
+            if (
+                event_type == "sub-agent"
+                and event.get("status") == "start"
+                and event.get("agent", "") != "[UI TEMPLATE AGENT]"
+            ):
+                agent_count += 1
+                if agent_count > 1 and draft_response.strip():
+                    logger.info(f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response")
+                    draft_response = ""
+                    original_message_events = []
 
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
