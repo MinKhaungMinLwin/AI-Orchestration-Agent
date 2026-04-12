@@ -923,7 +923,10 @@ class StreamingMultiAgentCoordinator:
 
 import re
 
-_FALLBACK_RESPONSE = "죄송합니다. 해당 요청을 처리할 수 없습니다. 타이어 추천, 가격 조회, 매장 검색 등 다른 질문을 해주세요."
+_FALLBACK_RESPONSE = (
+    "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n"
+    "타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
+)
 
 _INTERNAL_JARGON_PATTERN = re.compile(
     r"No tool data retrieved|tool data|source data",
