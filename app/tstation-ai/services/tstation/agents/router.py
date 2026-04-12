@@ -140,7 +140,8 @@ class AgentDomain(BaseModel):
         - Request for human agent / 1:1 inquiry
         - Write/save 1:1 inquiry with AI-summarized content
         - "1:1 문의 작성", "상담원 연결", "이 문제를 1:1로 저장하고 싶어요"
-        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요"
+        - **Customer complaints, frustration, anger** (e.g., "뭐 이런 서비스가", "제대로 해", "상담 이딴식으로", "엉망이야", aggressive/angry tone)
+        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "짜증나", "다른 상담원 연결해줘"
 
         LEADING if:
         - Just greeting ("hello", "hi", "xin chào", "안녕하세요")
