@@ -1237,13 +1237,12 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         # 2. RUN THE STRICT QC AGENT
-        # - Tool data exists: verify draft against source data
-        # - No tool data but draft has factual claims: QC catches hallucinations
-        #   (prompt rule: "Source Data is empty → draft MUST NOT claim prices/stock/store details")
-        # - No tool data and no factual claims (greetings, FAQ): skip QC
+        # - Tool data exists AND draft has factual claims: verify against source data
+        # - No tool data (no tools called): skip QC — nothing to fact-check
+        # - No factual claims (greetings, FAQ): skip QC
         if draft_response.strip():
             source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
-            needs_qc = _has_factual_claims(draft_response)
+            needs_qc = bool(source_data_chunks) and _has_factual_claims(draft_response)
 
             if needs_qc:
                 yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
