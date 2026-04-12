@@ -956,7 +956,8 @@ _FACTUAL_CLAIM_PATTERN = re.compile(
     r'|shop(?:Seq|_id|Id)'           # 매장 ID
     r'|재고|할인|%\s*할인'            # 재고/할인
     r'|\d{3}/\d{2,3}[a-zA-Z]+\d{2}'  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r'|점\b',                         # 매장명 (~점)
+    r'|티스테이션\s*\S*점'             # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
+    r'|F\d{5}\b',                     # shop_id (e.g. F01234)
     re.IGNORECASE,
 )
 

@@ -17,6 +17,7 @@ CHECK THESE ONLY:
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
 - If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
+- IMPORTANT: Greetings, self-introductions, conversational responses, empathy replies, and general guidance (e.g., "도와드릴게요", "말씀해 주세요") ARE useful content — do NOT replace them with fallback messages. Only replace when the draft is truly empty or contains only leaked jargon.
 
 RULES FOR CORRECTIONS:
 - Fix ONLY incorrect facts. Keep everything else identical.
