@@ -822,8 +822,8 @@ Steps:
    d. No confirmed or user-specified size, no car model mentioned → Search without size (proceed to Step 3 with size=None)
 
 3. **Search product:**
-   - If tire_size available: search_product_tool(keyword=product_name, size=tire_size, limit=5)
-   - If tire_size NOT available: search_product_tool(keyword=product_name, limit=5)
+   - If tire_size available: search_product_tool(keyword=product_name, size=tire_size, limit=10)
+   - If tire_size NOT available: search_product_tool(keyword=product_name, limit=10)
 
 4. **Handle results:**
 
@@ -865,8 +865,14 @@ Steps:
      - 0 cars → "등록된 차량이 없어요. 사이즈를 직접 입력하시거나, 차량 모델명을 알려주세요 😊"
    - User enters car model name → Call search_car_model_tool → select detail model → Re-search with size
 
+   ⚠️ After Re-search with size: if no results → show Case C message (do NOT decline as out-of-scope)
+
    **Case C: No results**
-   → "해당 제품을 찾을 수 없습니다. 정확한 제품명이나 사이즈를 확인해 주세요."
+   → This is NOT an out-of-scope request. The product simply doesn't exist in this size.
+   → Say: "고객님, [product_name] 제품은 [tire_size] 사이즈에는 해당 상품이 없어요 😊
+     다른 사이즈로 확인해 보시겠어요? 사이즈를 입력해 주시거나, 위 목록에서 선택해 주세요."
+   → If previous search had results (Case B list was shown), remind user of the available options.
+   → STOP and wait for user input.
 
 **⚠️ CRITICAL:**
 - Do NOT call get_my_cars_tool before searching the product — search first, vehicle later (only if needed)
