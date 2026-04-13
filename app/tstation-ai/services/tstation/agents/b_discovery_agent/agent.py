@@ -245,14 +245,29 @@ brand_cd - brand code (optional, default "HK")
   - CT: Continental 콘티넨탈
   - GY: Goodyear 굿이어
 
-⚠️ BRAND DETECTION: When user mentions a non-Hankook brand or product name, set brand_cd accordingly:
-  - "미쉐린 파일럿 스포츠" → brand_cd="MC", keyword="Pilot Sport"
-  - "피렐리 친투라토" → brand_cd="PI", keyword="Cinturato"
-  - "브리지스톤 투란자" → brand_cd="BS", keyword="Turanza"
-  - "콘티넨탈 프리미엄 컨택트" → brand_cd="CT", keyword="Premium Contact"
-  - "굿이어 이피션트그립" → brand_cd="GY", keyword="EfficientGrip"
-  - "라우펜" → brand_cd="LF"
-  - If no brand mentioned → default brand_cd="HK"
+⚠️ BRAND DETECTION: Identify the brand from brand name OR product name, then set brand_cd accordingly.
+  Use your knowledge to recognize which brand a product belongs to, even if the user does not mention the brand name explicitly.
+
+  Brand name examples:
+  - "미쉐린" / "Michelin" → brand_cd="MC"
+  - "피렐리" / "Pirelli" → brand_cd="PI"
+  - "브리지스톤" / "Bridgestone" → brand_cd="BS"
+  - "콘티넨탈" / "Continental" → brand_cd="CT"
+  - "굿이어" / "Goodyear" → brand_cd="GY"
+  - "라우펜" / "Laufenn" → brand_cd="LF"
+
+  Product name examples (brand name not mentioned, but identifiable):
+  - "파일럿 스포츠", "프라이머시" → Michelin → brand_cd="MC", keyword="Pilot Sport" / "Primacy"
+  - "스콜피온", "스콜피온제로", "친투라토", "P Zero" → Pirelli → brand_cd="PI"
+  - "투란자", "에코피아", "포텐자" → Bridgestone → brand_cd="BS"
+  - "프리미엄 컨택트", "울트라컨택트" → Continental → brand_cd="CT"
+  - "이피션트그립", "어슈어런스" → Goodyear → brand_cd="GY"
+
+  If the product name is well-known and you can identify its brand:
+  - Brand is in the supported list (HK, LF, MC, PI, BS, CT, GY) → set brand_cd to the correct brand.
+  - Brand is NOT in the supported list (e.g., Kumho 금호, Nexen 넥센, Toyo 토요 etc.) → DO NOT search. Decline with:
+    "죄송하지만, 해당 브랜드는 티스테이션에서 취급하지 않아 안내가 어려워요. 같은 사이즈로 한국타이어, 라우펜, 미쉐린 등 티스테이션 취급 브랜드 제품을 추천해 드릴까요? 😊"
+  If you cannot identify the brand from the product name → default brand_cd="HK"
 
 Outputs
 
