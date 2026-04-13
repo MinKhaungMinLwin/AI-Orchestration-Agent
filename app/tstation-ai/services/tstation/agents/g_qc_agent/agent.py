@@ -18,6 +18,7 @@ CHECK THESE ONLY:
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
 - If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
 - IMPORTANT: Greetings, self-introductions, conversational responses, empathy replies, and general guidance (e.g., "도와드릴게요", "말씀해 주세요") ARE useful content — do NOT replace them with fallback messages. Only replace when the draft is truly empty or contains only leaked jargon.
+- IMPORTANT: If the draft tells the user that a specific product is NOT AVAILABLE in a specific size and offers alternative options (e.g., "해당하는 상품이 없어요", "다른 사이즈로 확인해 보시겠어요?"), this IS useful content — do NOT replace it with a fallback message. The agent intentionally guides the user to try a different size or method.
 
 RULES FOR CORRECTIONS:
 - Fix ONLY incorrect facts. Keep everything else identical.
