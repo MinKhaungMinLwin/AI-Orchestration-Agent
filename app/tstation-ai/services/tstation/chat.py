@@ -254,6 +254,17 @@ EXAMPLE QUERIES → FLOW:
      → DISCOVERY → TRANSACTION
      (Product Name Search → Price)
 
+8.3. "스콜피온제로 2755519 재고있어?"
+     "Is Scorpion Zero 275/55R19 in stock?"
+     → DISCOVERY → TRANSACTION
+     (Product Name + Size Search → goods_no Resolution → Logistics Inventory Check)
+     ⚠️ goods_no NOT known → DISCOVERY first, NOT TRANSACTION alone
+
+8.4. "벤투스 S2 재고 확인해줘"
+     "Check Ventus S2 stock"
+     → DISCOVERY → TRANSACTION
+     (Product Name Search → goods_no Resolution → Logistics Inventory Check)
+
 9. "추천 타이어 중 강남점 재고 알려줘"
    "Show Gangnam store stock for recommended tires"
    → DISCOVERY → TRANSACTION

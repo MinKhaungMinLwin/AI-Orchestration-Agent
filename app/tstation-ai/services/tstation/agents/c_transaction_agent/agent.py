@@ -487,7 +487,25 @@ Flow 2 — General Stock Check
 
 When user asks if product is in stock:
 
-1. Call get_logistics_inventory_tool
+**STEP 1: Find goods_no**
+Extract goods_no from:
+- Previous Discovery Agent tool results (HIGHEST PRIORITY — use immediately)
+- Previous Discovery Agent message containing goods_no
+- User explicitly provided goods_no (e.g., "G000000314254")
+- Conversation context from earlier messages
+
+⚠️ If goods_no is available → IMMEDIATELY proceed to STEP 2.
+
+If goods_no is NOT available:
+→ If user provided a product name (not just tire size) in the current message:
+  → Say: "상품 번호를 확인하기 위해 상품을 검색하겠습니다."
+  → STOP (coordinator will route to Discovery Agent to search the product)
+→ Otherwise:
+  → Say: "재고 확인을 위해 제품명 또는 타이어 사이즈를 알려주세요."
+  → STOP and wait for user input.
+
+**STEP 2: Check logistics inventory**
+1. Call get_logistics_inventory_tool(goods_no=...)
 2. If stock > 0: Tell user it's available
 3. If stock = 0: Tell user it's out of stock
 4. Ask if they want to check specific store availability
@@ -510,8 +528,12 @@ Extract goods_no from:
 → IMMEDIATELY proceed to STEP 2 — do NOT ask user for goods_no
 
 If goods_no is NOT available from any source:
-→ Say: "매장 재고 확인을 위해 상품 검색이 필요합니다. 제품명과 타이어 사이즈를 알려주세요."
-→ STOP and wait for user input (coordinator will route to Discovery)
+→ If user provided a product name (not just tire size) in the current message:
+  → Say: "상품 번호를 확인하기 위해 상품을 검색하겠습니다."
+  → STOP (coordinator will route to Discovery Agent to search the product)
+→ Otherwise:
+  → Say: "매장 재고 확인을 위해 제품명 또는 타이어 사이즈를 알려주세요."
+  → STOP and wait for user input.
 
 **STEP 2: Find qty**
 Extract qty from:
