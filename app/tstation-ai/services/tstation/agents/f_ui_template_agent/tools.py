@@ -14,11 +14,13 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 
 @tool
 def list_car_tool(
-    items: Annotated[list[dict], "List of cars. Each: licensePlate (str), description (str), imageUrl (str)"]
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List of cars. Each: licensePlate (str), description (str), imageUrl (str)"],
 ) -> dict:
     """Render car list cards.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of car objects.
 
     Field Details:
@@ -27,18 +29,20 @@ def list_car_tool(
         - imageUrl (str): URL of car image. Rule: required, valid URL string.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"listCar": items}}
+        {"status": "success", "http_status": 200, "data": {"listCar": items, "assistantResponse": assistant_response}}
     """
-    return _success_response(200, {"listCar": items})
+    return _success_response(200, {"listCar": items, "assistantResponse": assistant_response})
 
 
 @tool
 def list_product_tool(
-    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int)"]
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int)"],
 ) -> dict:
     """Render product list cards.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of product objects.
 
     Field Details:
@@ -51,18 +55,20 @@ def list_product_tool(
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"products": items}}
+        {"status": "success", "http_status": 200, "data": {"products": items, "assistantResponse": assistant_response}}
     """
-    return _success_response(200, {"products": items})
+    return _success_response(200, {"products": items, "assistantResponse": assistant_response})
 
 
 @tool
 def list_voucher_tool(
-    items: Annotated[list[dict], "List of vouchers. Each: nameVoucher (str), discount (str), dateVoucher (str), downloadLink (str)"]
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List of vouchers. Each: nameVoucher (str), discount (str), dateVoucher (str), downloadLink (str)"],
 ) -> dict:
     """Render voucher list cards.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of voucher objects.
 
     Field Details:
@@ -72,28 +78,28 @@ def list_voucher_tool(
         - downloadLink (str): Link to download voucher. Rule: optional, valid URL string. If BE returns null, mock the link.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"vouchers": items}}
+        {"status": "success", "http_status": 200, "data": {"vouchers": items, "assistantResponse": assistant_response}}
     """
 
-    # Static myCouponLink injected into each voucher
     _MY_COUPON_LINK = {
         "pc": "https://wwwqa.tstation.com/mypage/tstation/coupon/couponList",
         "mobile": "https://mqa.tstation.com/coupon/myCouponList",
     }
 
-    # Inject static myCouponLink into each item
     for item in items:
         item["myCouponLink"] = _MY_COUPON_LINK
-    return _success_response(200, {"vouchers": items})
+    return _success_response(200, {"vouchers": items, "assistantResponse": assistant_response})
 
 
 @tool
 def list_location_tool(
-    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), isAllMyT (bool), todayInstall (bool), tnaDelivery (bool)"]
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), isAllMyT (bool), todayInstall (bool), tnaDelivery (bool)"],
 ) -> dict:
     """Render location list cards.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of location/store objects.
 
     Field Details:
@@ -105,18 +111,20 @@ def list_location_tool(
         - tnaDelivery (bool): T-NA Delivery badge (src: is_tna_delivery from /api/store/detail). Rule: optional, default false.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"locations": items}}
+        {"status": "success", "http_status": 200, "data": {"locations": items, "assistantResponse": assistant_response}}
     """
-    return _success_response(200, {"locations": items})
+    return _success_response(200, {"locations": items, "assistantResponse": assistant_response})
 
 
 @tool
 def list_event_tool(
-    items: Annotated[list[dict], "List of events. Each: eventName (str), bannerImage (str), eventUrl (str), badge (str), period (str), actionLink (str), actionText (str)"]
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List of events. Each: eventName (str), bannerImage (str), eventUrl (str), badge (str), period (str), actionLink (str), actionText (str)"],
 ) -> dict:
     """Render event list cards.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of event objects.
 
     Field Details:
@@ -129,18 +137,20 @@ def list_event_tool(
         - actionText (str): Action button text. Rule: optional, non-empty string (e.g., "자세히 보기").
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"events": items}}
+        {"status": "success", "http_status": 200, "data": {"events": items, "assistantResponse": assistant_response}}
     """
-    return _success_response(200, {"events": items})
+    return _success_response(200, {"events": items, "assistantResponse": assistant_response})
 
 
 @tool
 def list_preview_youtube_tool(
-    items: Annotated[list[dict], "List of videos. Each: title (str), thumbnailUrl (str), youtubeUrl (str), videoId (str)"]
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List of videos. Each: title (str), thumbnailUrl (str), youtubeUrl (str), videoId (str)"],
 ) -> dict:
     """Render YouTube video preview cards.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of YouTube video objects.
 
     Field Details:
@@ -150,19 +160,21 @@ def list_preview_youtube_tool(
         - videoId (str): YouTube video ID. Rule: optional, string (e.g., "dQw4w9WgXcQ").
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"items": items}}
+        {"status": "success", "http_status": 200, "data": {"items": items, "assistantResponse": assistant_response}}
     """
-    return _success_response(200, {"items": items})
+    return _success_response(200, {"items": items, "assistantResponse": assistant_response})
 
 
 @tool
 def available_dates_tool(
+    assistant_response: Annotated[str, "Message text to display with template"],
     dates: Annotated[list[dict], "List of date entries. Each: date (str '2026년 4월 9일 (화)'), available (bool), availableTimes (list[int 8-22]), index (int 0-based position in sorted order)"],
-    selectedDate: Annotated[int | None, "Selected date index in dates list (0-based)"] = None
+    selectedDate: Annotated[int | None, "Selected date index in dates list (0-based)"] = None,
 ) -> dict:
     """Render available dates with time slots for booking (calendar month view).
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         dates: List of date entries. Each entry contains:
             - index: int - 0-based position in sorted order (0 = earliest date).
             - date: str in format "2026년 4월 9일 (화)" (year년 month월 day일 (weekday)).
@@ -171,15 +183,18 @@ def available_dates_tool(
         selectedDate: Selected date index. Rule: optional, int index (0-based).
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"dates": ..., "selectedDate": ...}}
+        {"status": "success", "http_status": 200, "data": {"dates": ..., "selectedDate": ..., "assistantResponse": ...}}
     """
     return _success_response(200, {
         "dates": dates,
         "selectedDate": selectedDate,
+        "assistantResponse": assistant_response,
     })
+
 
 @tool
 def preorder_tool(
+    assistant_response: Annotated[str, "Message text to display with template"],
     orderInfo: Annotated[dict, "Order info. Each field is optional: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str), visitMethod (str), paymentAmount (float)"],
     recommendActions: Annotated[dict, "Recommend action: question (str), listActions (list[str])"],
     isReadyToOrder: Annotated[bool, "True if all required info is available for quick_order (carInfo + product + quantity + storeName)"],
@@ -188,6 +203,7 @@ def preorder_tool(
     """Render pre-order card with order info and recommend actions.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         orderInfo: Order information containing available fields:
             - carInfo (str): Car information.
             - product (str): Product name.
@@ -196,7 +212,6 @@ def preorder_tool(
             - bookingDateTime (str): Booking date and time.
             - visitMethod (str): Visit method (e.g., "Visit in Person").
             - paymentAmount (float): Payment amount.
-            All fields are optional - only include fields that have values.
         recommendActions: Recommend action containing:
             - question (str): Question text.
             - listActions (list[str]): List of action labels.
@@ -204,16 +219,15 @@ def preorder_tool(
         isReadyToAddToCart: True if all required info for save_to_cart (carInfo + product + quantity).
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "recommendActions": ..., "isReadyToOrder": ..., "isReadyToAddToCart": ...}}
+        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "recommendActions": ..., "isReadyToOrder": ..., "isReadyToAddToCart": ..., "assistantResponse": ...}}
     """
     return _success_response(200, {
         "orderInfo": orderInfo,
         "recommendActions": recommendActions,
         "isReadyToOrder": isReadyToOrder,
         "isReadyToAddToCart": isReadyToAddToCart,
+        "assistantResponse": assistant_response,
     })
-
-
 
 
 class OrderCompleteType(str, Enum):
@@ -223,6 +237,7 @@ class OrderCompleteType(str, Enum):
 
 @tool
 def order_complete_tool(
+    assistant_response: Annotated[str, "Message text to display with template"],
     orderInfo: Annotated[dict, "Order info: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str | None), visitMethod (str | None), paymentAmount (float | None)"],
     is_success: Annotated[bool, "True if order/cart succeeded, False if failed"],
     type: Annotated[OrderCompleteType, "Type: cart or order"],
@@ -232,6 +247,7 @@ def order_complete_tool(
     """Render order completion card.
 
     Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         orderInfo: Order info containing: carInfo, product, quantity, storeName, bookingDateTime, visitMethod, paymentAmount
         is_success: True if order/cart succeeded, False if failed
         type: Order type - cart or order
@@ -239,7 +255,7 @@ def order_complete_tool(
         data: Data from quick_order_tool. When output[status] is true, data is output.data.data, {} when is_success is False.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "isSuccess": ..., "type": ..., "message": ..., "data": ...}}
+        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "isSuccess": ..., "type": ..., "message": ..., "data": ..., "assistantResponse": ...}}
     """
     return _success_response(200, {
         "orderInfo": orderInfo,
@@ -247,4 +263,5 @@ def order_complete_tool(
         "type": type.value,
         "message": message,
         "data": data if is_success else {},
+        "assistantResponse": assistant_response,
     })
