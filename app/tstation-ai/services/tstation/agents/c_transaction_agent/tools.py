@@ -295,7 +295,7 @@ def search_place_tool(query: str, size: int = 10):
 
 
 @tool
-def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 10.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False):
+def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 10.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
     """
     Get nearby stores.
 
@@ -315,17 +315,22 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             Example: ["101", "102"]
         all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
             Default: False.
+        chl_sct_cd (str | None): Channel section code for shop type filtering.
+            F = T'Station (티스테이션)
+            S = The Tire Shop (더타이어샵)
+            C = HK SHOP
+            Default: None (all shop types).
 
     Example Inputs:
         - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "svc_codes": ["101", "102"]}
-        - {"user_xpos": 126.9780, "user_ypos": 37.5665, "radius_km": 20, "svc_codes": ["101"]}
-        - {"user_xpos": 103.8198, "user_ypos": 1.3521, "radius_km": 20, "svc_codes": []}
+        - {"user_xpos": 126.9780, "user_ypos": 37.5665, "radius_km": 20, "chl_sct_cd": "F"}
+        - {"user_xpos": 103.8198, "user_ypos": 1.3521, "radius_km": 20, "chl_sct_cd": "S"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
         Response data includes is_installable field per store.
     """
-    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, all_my_t_only=%s", user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only)
+    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, all_my_t_only=%s, chl_sct_cd=%s", user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, chl_sct_cd)
 
     try:
         response = get_store_list(
@@ -335,6 +340,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             radius_km=radius_km,
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
+            chl_sct_cd=chl_sct_cd,
         )
         if response.parsed is None:
             return _error_response(
@@ -350,7 +356,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 
 
 @tool
-def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20, all_my_t_only: bool = False):
+def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
     """
     Get store list by region and/or store name.
 
@@ -375,6 +381,13 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     해당 매장 결과에는 is_all_my_t 필드가 포함됩니다.
     is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그를 표시하세요.
 
+    ⚠️ 매장 타입 필터 규칙 (chl_sct_cd):
+    사용자가 특정 매장 타입을 언급하면 chl_sct_cd 를 설정하세요:
+    - "티스테이션", "t'station", "T'Station", "티스테" → chl_sct_cd="F"
+    - "더타이어샵", "the tire shop", "The Tire Shop", "타이어샵" → chl_sct_cd="S"
+    - "HK샵", "HK SHOP", "HK shop", "에이치케이샵" → chl_sct_cd="C"
+    일반 매장 검색(특정 타입 미언급)은 chl_sct_cd=None (기본값, 전체 매장).
+
     Response stores include is_installable field:
     - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
     - is_installable=false: 매장은 온라인 쇼핑 장착 불가
@@ -388,6 +401,11 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         limit (int): Maximum number of stores to return (default 20).
         all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
             Default: False.
+        chl_sct_cd (str | None): Channel section code for shop type filtering.
+            F = T'Station (티스테이션)
+            S = The Tire Shop (더타이어샵)
+            C = HK SHOP
+            Default: None (all shop types).
 
     Example Inputs:
         # User says "강남에 티스테 찾아줘" → pass BOTH
@@ -405,6 +423,12 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         # User says "all my T 매장" → all_my_t_only=True
         - {"region_code": None, "store_nm": None, "limit": 20, "all_my_t_only": True}
 
+        # User says "내주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
+        - {"region_code": None, "store_nm": None, "limit": 20, "chl_sct_cd": "F"}
+
+        # User says "강남 더타이어샵 매장" → region + chl_sct_cd
+        - {"region_code": "강남", "store_nm": None, "limit": 20, "chl_sct_cd": "S"}
+
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
         Response data includes is_installable field per store.
@@ -413,16 +437,10 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     # if store_nm:
     #     store_nm = normalize_brand_name(store_nm)
 
-    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, all_my_t_only=%s", region_code, store_nm, limit, all_my_t_only)
+    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, all_my_t_only=%s, chl_sct_cd=%s", region_code, store_nm, limit, all_my_t_only, chl_sct_cd)
 
     try:
-        # kwargs = {"limit": limit}
-        # if region_code is not None:
-        #     kwargs["region_code"] = region_code
-        # if store_nm is not None:
-        #     kwargs["store_nm"] = store_nm
-        # response = get_store_list(client=get_client(), **kwargs)
-        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit, all_my_t_only=all_my_t_only)
+        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit, all_my_t_only=all_my_t_only, chl_sct_cd=chl_sct_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
