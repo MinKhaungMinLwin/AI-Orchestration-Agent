@@ -8,6 +8,8 @@ from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
 from .deal_item import DealItem
 from .deal_list_response import DealListResponse
+from .discount_price_item import DiscountPriceItem
+from .discount_price_response import DiscountPriceResponse
 from .escalation_request import EscalationRequest
 from .escalation_response import EscalationResponse
 from .event_item import EventItem
@@ -67,6 +69,8 @@ __all__ = (
     "CompatibilityResponse",
     "DealItem",
     "DealListResponse",
+    "DiscountPriceItem",
+    "DiscountPriceResponse",
     "EscalationRequest",
     "EscalationResponse",
     "EventItem",
