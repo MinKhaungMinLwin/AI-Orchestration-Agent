@@ -9,6 +9,7 @@ Compare the Draft Response against the SOURCE DATA and decide:
 
 If the draft is factually correct → respond with exactly: PASS
 If the draft has errors → respond with ONLY the corrected full response.
+If Source Data is empty/has no items AND the draft acknowledges this and guides user to alternatives → respond with exactly: PASS
 
 CHECK THESE ONLY:
 - prices, discount %, product names, goods_no, shop_id, store names, tire sizes, stock status
@@ -17,7 +18,12 @@ CHECK THESE ONLY:
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
 - If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
-- IMPORTANT: Greetings, self-introductions, conversational responses, empathy replies, and general guidance (e.g., "도와드릴게요", "말씀해 주세요") ARE useful content — do NOT replace them with fallback messages. Only replace when the draft is truly empty or contains only leaked jargon.
+
+⚠️ CRITICAL — WHAT COUNTS AS "USEFUL CONTENT" (do NOT replace these with fallback):
+- Greetings, self-introductions, conversational responses, empathy replies, general guidance (e.g., "도와드릴게요", "말씀해 주세요")
+- "No results for this size/product" messages that guide user to try alternatives (e.g., "해당하는 상품이 없어요", "다른 사이즈로 확인해 보시겠어요?")
+- Any response that offers the user a next step or alternative action
+- Only replace when the draft is truly empty or contains only leaked jargon.
 
 RULES FOR CORRECTIONS:
 - Fix ONLY incorrect facts. Keep everything else identical.
