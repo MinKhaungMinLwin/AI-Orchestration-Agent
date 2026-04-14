@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Annotated, Any
 
 from langchain.tools import tool
@@ -210,4 +211,40 @@ def preorder_tool(
         "recommendActions": recommendActions,
         "isReadyToOrder": isReadyToOrder,
         "isReadyToAddToCart": isReadyToAddToCart,
+    })
+
+
+
+
+class OrderCompleteType(str, Enum):
+    CART = "cart"
+    ORDER = "order"
+
+
+@tool
+def order_complete_tool(
+    orderInfo: Annotated[dict, "Order info: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str | None), visitMethod (str | None), paymentAmount (float | None)"],
+    is_success: Annotated[bool, "True if order/cart succeeded, False if failed"],
+    type: Annotated[OrderCompleteType, "Type: cart or order"],
+    message: Annotated[str | None, "Error message when is_success is False"],
+    data: Annotated[dict, "From quick_order_tool output.data.data when status=success, null when fail."]
+) -> dict:
+    """Render order completion card.
+
+    Args:
+        orderInfo: Order info containing: carInfo, product, quantity, storeName, bookingDateTime, visitMethod, paymentAmount
+        is_success: True if order/cart succeeded, False if failed
+        type: Order type - cart or order
+        message: Error message when is_success is False (null when success)
+        data: Data from quick_order_tool. When output[status] is true, data is output.data.data, {} when is_success is False.
+
+    Returns:
+        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "isSuccess": ..., "type": ..., "message": ..., "data": ...}}
+    """
+    return _success_response(200, {
+        "orderInfo": orderInfo,
+        "isSuccess": is_success,
+        "type": type.value,
+        "message": message,
+        "data": data if is_success else {},
     })

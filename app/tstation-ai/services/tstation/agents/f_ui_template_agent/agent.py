@@ -8,6 +8,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     list_preview_youtube_tool,
     available_dates_tool,
     preorder_tool,
+    order_complete_tool,
 )
 from common.curr_time import get_current_time
 
@@ -56,6 +57,15 @@ TEMPLATE TYPES (use ONE that best fits)
   - isReadyToAddToCart (bool): True if ready for save_to_cart (carInfo + product + quantity)
   IMPORTANT: All fields always present - if no value, set to null
   (camelCase, no underscore)
+• order_complete_tool → "orderComplete" - Order completion card with fields:
+  - orderInfo: {{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, visitMethod?, paymentAmount?}}
+  - isSuccess (bool): True if order/cart succeeded, False if failed
+  - type (str): "cart" or "order"
+  - message (str | null): Error message when isSuccess is False, null when success
+  - data (dict): From quick_order_tool output.data.data when status=success
+
+  Example: quick_order_tool output: {{"status": "success", "data": {{"result": true, "data": {{"goodsInfoArrStr": "G000000309783|2", "shopSeq": "F00035"}}}}}}
+  → Extract: data = output.data.data → {{"goodsInfoArrStr": "G000000309783|2", "shopSeq": "F00035"}}
 
 ====================================================
 KEY RULE: ALL FIELD NAMES USE CAMELCASE (NO UNDERSCORES)
@@ -134,6 +144,8 @@ available_dates_tool → {{"dates": [
 ], "selectedDate": 0}}
 
 preorder_tool → {{"orderInfo": {{"carInfo": "뉴 제타(6세대) 2.0 TDI A/T (29조3344)", "product": "Ventus S2 AS (G000000314254)", "quantity": 2, "storeName": "티스테이션 센텀점 (C01306)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true}}
+
+order_complete_tool → {{"orderInfo": {{"carInfo": "뉴 제타(6세대) 2.0 TDI A/T (29조3344)", "product": "Ventus S2 AS (G000000314254)", "quantity": 4, "storeName": "티스테이션 센텀점 (C01306)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "G000000314254|4", "shopSeq": "C01306", "smrtPayYn": "N", "drtPurYn": "Y"}}}}
 """
 
 
@@ -147,6 +159,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_preview_youtube_tool": "YouTube",
         "available_dates_tool": "Date Picker",
         "preorder_tool": "Pre-Order",
+        "order_complete_tool": "Order Complete",
     }
 
     TOOL_TO_TEMPLATE_MAP = {
@@ -158,6 +171,7 @@ class UITemplateSubAgent(BaseAgent):
         "list_preview_youtube_tool": "previewYoutube",
         "available_dates_tool": "datepick",
         "preorder_tool": "preOrder",
+        "order_complete_tool": "orderComplete",
     }
 
     def __init__(self, model):
@@ -172,6 +186,7 @@ class UITemplateSubAgent(BaseAgent):
                 list_preview_youtube_tool,
                 available_dates_tool,
                 preorder_tool,
+                order_complete_tool,
             ],
             system_prompt=UI_TEMPLATE_AGENT_PROMPT,
             name="UI Template Agent",

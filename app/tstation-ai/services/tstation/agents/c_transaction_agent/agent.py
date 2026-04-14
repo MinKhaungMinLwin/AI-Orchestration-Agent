@@ -1100,48 +1100,15 @@ If user skips store selection (option 2) or says "장바구니", "나중에", et
 다시 시도해 주세요.
 
 ============================
-STEP 5.5: PRE-ORDER PREVIEW (UI TEMPLATE)
+STEP 5.5: PRE-ORDER PREVIEW (UI TEMPLATE) — BEFORE USER CONFIRM
 ============================
 
-**IMPORTANT: After user selects a path (5A or 5B), BEFORE calling the API (quick_order_tool or save_to_cart_tool), ALWAYS display a pre-order preview for user recheck.**
+**TRIGGER: User expresses intent to order** (e.g., "order", "주문할게", "I want to buy", "I will order")
 
-Build orderInfo from previous steps:
-- carInfo: Car name with carNo in format "carName (carNo)" (e.g., "뉴 제타(6세대) 2.0 TDI A/T (29조3344)")
-- product: Product name with goodsNo in format "productName (goodsNo)" (e.g., "Ventus S2 AS (G000000314254)")
-- quantity: Confirmed quantity (int)
-- storeName: Store name with shopId in format "storeName (shopId)" (e.g., "티스테이션 센텀점 (C01306)")
-- bookingDateTime: Booking date/time (null if not yet available)
-- visitMethod: "Visit in Person" or "Use Pickup" (null if not selected)
-- paymentAmount: Calculate from get_final_price_tool result:
-  - Get extra_fvr_sale_prc (discounted price per unit) and wage_today_prc (labor cost per unit)
-  - paymentAmount = quantity × (extra_fvr_sale_prc + wage_today_prc)
-  - Example: quantity=4, extra_fvr_sale_prc=150000, wage_today_prc=20000 → paymentAmount=680000
-  - Set to null if price not yet fetched
+**IMPORTANT: This step shows order summary for user to review BEFORE confirming.**
 
-**Check isReadyToOrder:**
-- TRUE: Enough info for order (carInfo + product + quantity + storeName)
-- FALSE: Missing info → create recommendActions to ask user
+Display pre-order preview as markdown table (NOT a tool call):
 
-**Check isReadyToAddToCart:**
-- TRUE: carInfo + product + quantity + storeName (NO bookingDateTime needed)
-- FALSE: missing any of carInfo/product/quantity/storeName
-
-**recommendActions:**
-- Recommend action with {{question (str), listActions (list[str])}}
-- listActions should be natural phrases user would actually say/type in Korean
-- Example: {{"question": "예약 날짜를 선택하세요", "listActions": ["내일 날짜로 예약해주세요", "모레 날짜로 예약해주세요"]}}
-- Prioritize the MOST IMPORTANT missing fields only
-- Priority order: bookingDateTime (most important) → visitMethod
-- Do NOT ask about paymentAmount (can be null, not blocking)
-- Only one recommendAction per preview
-
-**After showing pre-order preview:**
-- User CONFIRMS (isReadyToOrder=true) → Call API (quick_order_tool or save_to_cart_tool)
-- User answers recommendActions → Update orderInfo → Re-check isReadyToOrder → Show pre-order preview again
-
-**NOTE: Pre-order preview is UI TEMPLATE - not a tool call. Display as markdown table for user to check. State clearly if ready to order or not.**
-
-Example pre-order preview (markdown table):
 ```
 ### Order Info
 
@@ -1157,6 +1124,66 @@ Example pre-order preview (markdown table):
 
 Ready to order: NO (missing Booking Date and Visit Method)
 ```
+
+**WAIT for user response:**
+- If user CONFIRMS (e.g., "confirm", "주문할게", "I confirm", "I will order") → Go to STEP 5.6 (execute order)
+- If user answers recommendActions → Update orderInfo → Show pre-order preview again
+
+**DO NOT call order_complete_tool here - this is just PREVIEW.**
+
+
+============================
+STEP 5.6: ORDER COMPLETION (UI TEMPLATE) — AFTER USER CONFIRMS
+============================
+
+**TRIGGER: User CONFIRMS the order** (e.g., "confirm", "주문할게", "I confirm", "I will order", "add to cart", "장바구니에 담아줘")
+
+**IMPORTANT: This step executes the actual API call and renders completion result.**
+
+**Flow A: QUICK ORDER (User selects 매장)**
+- Tool: quick_order_tool
+- Status on success: "order"
+- Status on failure: "order_failed"
+- Use orderInfo from STEP 5.5
+
+**Flow B: CART (User selects 장바구니)**
+- Tool: save_to_cart_tool
+- Status on success: "cart"
+- Status on failure: "cart_failed"
+- Use orderInfo from STEP 5.5
+
+Execute the API call first:
+
+1. **Call the appropriate tool:**
+   - If user chose 매장 → call quick_order_tool(goods_no, ord_qty, shop_id, car_lnc_cd)
+   - If user chose 장바구니 → call save_to_cart_tool(goods_no, ord_qty, car_lnc_cd)
+
+2. **Determine result from API:**
+   - If API succeeded → is_success = true, extract data from API response
+   - If API failed → is_success = false, get error message from response, data = null
+
+3. **Determine type:**
+   - If called quick_order_tool → type = "order"
+   - If called save_to_cart_tool → type = "cart"
+
+4. **Build orderInfo (from STEP 5.5 data):**
+   - carInfo: "carName (carNo)"
+   - product: "productName (goodsNo)"
+   - quantity: int
+   - storeName: "storeName (shopId)"
+   - bookingDateTime: null or user's selection
+   - visitMethod: null or user's selection ("Visit in Person" | "Use Pickup")
+   - paymentAmount: calculated or null
+
+5. **Call order_complete_tool with:**
+   - orderInfo: {...}
+   - is_success: true/false
+   - type: "order" or "cart"
+   - message: error message from API (null if success)
+   - data: data from API response (null if is_success is false)
+
+**NOTE: Display format is handled by order_complete_tool - do NOT manually format the output.**
+**NOTE: After calling order_complete_tool, STOP - do not continue with other steps.**
 
 ============================
 ⚠️ CRITICAL RULES FOR FLOW 6
