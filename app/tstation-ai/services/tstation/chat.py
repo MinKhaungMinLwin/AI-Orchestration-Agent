@@ -25,7 +25,7 @@ from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
 from services.tstation.agents.g_qc_agent.agent import stream_qc
-from services.tstation.agents.g_qc_agent.source_filter import filter_source_data
+from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 
 logger = logging.getLogger(__name__)
 
@@ -695,6 +695,7 @@ class StreamingMultiAgentCoordinator:
         domains: list[MultiAgentDomain.Domain] | None = None,
         slot_context: str | None = None,
         session_id: str | None = None,
+        tool_context: str | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -704,6 +705,7 @@ class StreamingMultiAgentCoordinator:
             domains: Pre-classified domains (optional, will classify if not provided)
             slot_context: Formatted slot context string to inject into agent messages
             session_id: Session ID for persisting tool-derived slots (goods_no, shop_id)
+            tool_context: Formatted tool results from previous turn for context preservation
 
         Yields:
             Stream events from all agents in sequence
@@ -737,6 +739,13 @@ class StreamingMultiAgentCoordinator:
                 enriched_messages.append({
                     "role": "system",
                     "content": slot_context,
+                })
+
+            # 1.5. tool_context from previous turn (structured tool results)
+            if tool_context:
+                enriched_messages.append({
+                    "role": "system",
+                    "content": tool_context,
                 })
 
             # 2. Original messages (already contains user_context from _build_messages_with_user_info)
@@ -1102,6 +1111,59 @@ class TStationChatServiceV2:
         return messages
 
     @staticmethod
+    def _format_tool_context(tool_data: list[dict]) -> str:
+        """Format structured tool results as a system prompt for conversation context."""
+        # Tool name → Korean label for readability
+        tool_labels = {
+            "get_products_recommendations_tool": "타이어 추천 결과",
+            "search_product_tool": "상품 검색 결과",
+            "get_nearby_stores_tool": "근처 매장 목록",
+            "get_store_list_tool": "매장 검색 결과",
+            "get_store_inventory_tool": "매장 재고 현황",
+            "get_orders_of_user_tool": "주문 내역",
+            "check_compatibility_tool": "호환 사이즈 조회",
+            "get_final_price_tool": "가격 조회",
+            "get_product_description_tool": "상품 상세",
+        }
+
+        lines = [
+            "[이전 대화에서 조회한 데이터 — 고객이 이 내용을 참조할 수 있습니다]",
+            "아래 데이터는 직전 턴에서 tool로 조회한 실제 결과입니다.",
+            "고객이 '18인치', '첫번째', '가장 저렴한 것' 등으로 참조하면 이 데이터에서 정확히 매칭하세요.",
+            "",
+        ]
+
+        for item in tool_data:
+            tool_name = item.get("tool", "")
+            label = tool_labels.get(tool_name, tool_name)
+            tool_input = item.get("input", {})
+            data = item.get("data")
+
+            header = f"• {label}"
+            if tool_input:
+                input_str = ", ".join(f"{k}={v}" for k, v in tool_input.items())
+                header += f" (조회 조건: {input_str})"
+            lines.append(header)
+
+            if isinstance(data, list):
+                for i, row in enumerate(data, 1):
+                    if isinstance(row, dict):
+                        if row.get("_truncated"):
+                            lines.append(f"  ... {row['_truncated']}")
+                        else:
+                            row_str = " | ".join(f"{k}: {v}" for k, v in row.items())
+                            lines.append(f"  {i}. {row_str}")
+                    else:
+                        lines.append(f"  {i}. {row}")
+            elif isinstance(data, dict):
+                row_str = " | ".join(f"{k}: {v}" for k, v in data.items())
+                lines.append(f"  {row_str}")
+
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
     def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -1154,6 +1216,7 @@ class TStationChatServiceV2:
 
         domains = None
         slot_context = None
+        tool_context = None
 
         try:
             chat_history_svc = get_chat_history_service()
@@ -1180,6 +1243,12 @@ class TStationChatServiceV2:
             # 5) Build slot context string for agent injection
             slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
 
+            # 6) Load tool context from previous turn
+            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+            if prev_tool_data:
+                tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
+                logger.info(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results from previous turn")
+
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
             slot_context = None
@@ -1190,7 +1259,7 @@ class TStationChatServiceV2:
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
-                TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id),
+                TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id, tool_context),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1204,7 +1273,7 @@ class TStationChatServiceV2:
             final_content = ""
             last_message_content = ""
 
-            for event_str in TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id):
+            for event_str in TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id, tool_context):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
                     if json_str and json_str != "[DONE]":
@@ -1243,11 +1312,13 @@ class TStationChatServiceV2:
         domains: list[MultiAgentDomain.Domain] | None = None,
         slot_context: str | None = None,
         session_id: str | None = None,
+        tool_context: str | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
 
         draft_response = ""
         source_data_chunks = []
+        tool_context_items = []  # Structured tool results for context preservation
         original_message_events = [] # Hold message events to sync history
         coordinator_done_event = None # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
@@ -1260,7 +1331,7 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
-        for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id):
+        for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id, tool_context=tool_context):
             event_type = event.get("type")
             
             # --- INTERCEPT TOKENS (Draft Response) ---
@@ -1288,6 +1359,13 @@ class TStationChatServiceV2:
                     source_parts.append(f"Output: {filtered}")
                 if source_parts:
                     source_data_chunks.append(f"Tool [{tool_name}]:\n" + "\n".join(source_parts))
+
+                # Collect structured tool results for context preservation
+                if output_data:
+                    ctx_item = filter_for_context(tool_name, output_data, input_data)
+                    if ctx_item:
+                        tool_context_items.append(ctx_item)
+
                 continue
                 
             # --- INTERCEPT EARLY DONE EVENT ---
@@ -1403,7 +1481,15 @@ class TStationChatServiceV2:
                 if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
                     yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
 
-        # 4. FINALIZE THE STREAM
+        # 4. PERSIST TOOL CONTEXT for next turn (only overwrite when new tool results exist)
+        if session_id and tool_context_items:
+            try:
+                from services.tstation.chat_history_service import get_chat_history_service
+                get_chat_history_service().save_tool_context(session_id, tool_context_items)
+            except Exception as e:
+                logger.warning(f"[TOOL_CTX] Failed to save tool context: {e}")
+
+        # 5. FINALIZE THE STREAM
         if coordinator_done_event:
             yield f"data: {json.dumps(coordinator_done_event, ensure_ascii=False)}\n\n"
 
