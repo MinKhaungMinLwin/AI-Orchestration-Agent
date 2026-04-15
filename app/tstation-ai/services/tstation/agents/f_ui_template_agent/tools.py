@@ -234,49 +234,37 @@ def preorder_tool(
 
 @tool
 def qna_complete_tool(
-    url: Annotated[str, "MUST be copied verbatim from transfer_to_qna_tool result data.url — do NOT generate, modify, or append any query params to this URL"],
-    cnslType: Annotated[str, "Inquiry type label (e.g., '반품/교환/환불', '주문/결제/배송', '상품문의') — map from transfer_to_qna_tool data.cnsl_clss_seq"],
-    title: Annotated[str, "Inquiry title — copy from transfer_to_qna_tool data.inq_tit_nm (max 100 chars)"],
-    summary: Annotated[str, "Inquiry summary for display only — copy from transfer_to_qna_tool data.ai_summary (truncate to 200 chars for display)"],
-    # details: Annotated[dict, "Display-only key-value pairs for user to verify. Keys in Korean. Extracted from conversation context — NOT encoded into URL. E.g., refund: {'상품명': '...', '환불 사유': '...'}, delivery: {'주문번호': '...', '상품명': '...', '배송 현황': '...'}, member: {'문의 유형': '계정 관련'}"],
-    isMobile: Annotated[bool, "Copy from transfer_to_qna_tool data.isMobile"],
-    assistantResponse: Annotated[str, "Message text to display with template"]
+    redictLink: Annotated[dict, "MUST be copied verbatim from transfer_to_qna_tool result `redictLink` — contains {pc: str, mobile: str}. Do NOT generate or modify these URLs."],
+    cnslType: Annotated[str, "Inquiry type label (e.g., '반품/교환/환불', '주문/결제/배송', '상품문의') — map from transfer_to_qna_tool result `cnsl_clss_seq`"],
+    title: Annotated[str, "Inquiry title — copy from transfer_to_qna_tool result `inq_tit_nm` (max 100 chars)"],
+    summary: Annotated[str, "Inquiry summary for display — copy from transfer_to_qna_tool result `ai_summary` (truncate to 200 chars)"],
+    assistantResponse: Annotated[str, "Concise Korean message for the user (e.g., '1:1 문의 페이지로 이동합니다. 내용을 확인하고 제출해 주세요.')"],
 ) -> dict:
-    """Render 1:1 inquiry redirect card showing inquiry details and a redirect link.
+    """Render 1:1 inquiry redirect card with PC and mobile links.
 
     CRITICAL RULES:
-    - url MUST be copied VERBATIM from transfer_to_qna_tool result data.url
-    - Do NOT generate a URL, do NOT append query params (no orderNo, no type, etc.)
-    - The URL is already encoded with cnsl_clss_seq + inq_tit_nm + ai_summary by the tool
-    - details dict is for DISPLAY ONLY — shown to the user to verify the inquiry contents
+    - redictLink MUST be copied VERBATIM from transfer_to_qna_tool result `redictLink`
+    - Do NOT generate URLs, do NOT append query params (no orderNo, no type, etc.)
+    - The URLs are already AES-encoded with cnsl_clss_seq + inq_tit_nm + ai_summary
 
     Args:
-        url: Verbatim URL from transfer_to_qna_tool data.url (already AES-encoded)
-        cnslType: Inquiry type label mapped from cnsl_clss_seq in transfer_to_qna_tool data:
+        redictLink: From transfer_to_qna_tool result `redictLink` — {{"pc": "...", "mobile": "..."}}
+        cnslType: Inquiry type label mapped from transfer_to_qna_tool result `cnsl_clss_seq`:
             10002 → "상품문의", 10006 → "주문/결제/배송", 10010 → "반품/교환/환불",
             10013 → "제공서비스/이벤트/혜택", 10017 → "회원", 10019 → "기타",
             10025 → "가맹점제휴문의", 10034 → "이력서접수"
-        title: From transfer_to_qna_tool data.inq_tit_nm
-        summary: From transfer_to_qna_tool data.ai_summary (display only, max 200 chars)
-        details: Display-only key-value pairs extracted from conversation — for user to verify.
-            Include only fields relevant to inquiry type:
-            - 반품/교환/환불 → {상품명, 환불 사유}
-            - 주문/결제/배송 → {주문번호?, 상품명?, 배송 현황?}
-            - 상품문의 → {상품명?, 문의 내용?}
-            - 제공서비스/이벤트/혜택 → {서비스명?, 혜택 내용?}
-            - 회원 → {문의 유형?}
-            - 기타 → {문의 내용?}
-        isMobile: From transfer_to_qna_tool data.isMobile
+        title: From transfer_to_qna_tool result `inq_tit_nm`
+        summary: From transfer_to_qna_tool result `ai_summary` (display only, max 200 chars)
+        assistantResponse: Short Korean message to show alongside the card
 
     Returns:
-        {{"status": "success", "http_status": 200, "data": {{"assistantResponse": ..., "url": ..., "cnslType": ..., "title": ..., "summary": ..., "details": ..., "isMobile": ...}}}}
+        {{"status": "success", "http_status": 200, "data": {{"assistantResponse": ..., "redictLink": {{"pc": ..., "mobile": ...}}, "cnslType": ..., "title": ..., "summary": ...}}}}
     """
     return _success_response(200, {
-        "url": url,
+        "redictLink": redictLink,
         "cnslType": cnslType,
         "title": title,
         "summary": summary,
-        "isMobile": isMobile,
         "assistantResponse": assistantResponse,
     })
 

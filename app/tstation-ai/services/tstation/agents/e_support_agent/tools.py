@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any
 
-from common.qna_payload import make_qna_payload_url
+from common.qna_payload import make_qna_payload_urls
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync_detailed as get_faq
@@ -319,24 +319,23 @@ def transfer_to_qna_tool(
     )
 
     try:
-        url = make_qna_payload_url(
+        redict_link = make_qna_payload_urls(
             cnsl_clss_seq=cnsl_clss_seq,
             inq_tit_nm=inq_tit_nm,
             ai_summary=ai_summary,
-            is_mobile=is_mobile,
         )
-        logger.info(f"[TOOL][transfer_to_qna_tool] Generated URL: {url}")
+        logger.info(f"[TOOL][transfer_to_qna_tool] Generated URLs: pc={redict_link['pc']}, mobile={redict_link['mobile']}")
+        device_url = redict_link["mobile"] if is_mobile else redict_link["pc"]
         device = "모바일" if is_mobile else "PC"
         response_text = (
             f"✅ **1:1 문의 작성 페이지로 이동합니다**\n\n"
-            f"📱 [{device}에서 열기]({url})\n\n"
+            f"📱 [{device}에서 열기]({device_url})\n\n"
             f"> 요청이 자동으로 등록되지 않습니다. 위 링크를 클릭하여 문의 내용을 확인하고 제출해주세요."
         )
         return {
             "status": "success",
             "response": response_text,
-            "url": url,
-            "isMobile": is_mobile,
+            "redictLink": redict_link,
             "cnsl_clss_seq": cnsl_clss_seq,
             "inq_tit_nm": inq_tit_nm,
             "ai_summary": ai_summary,
