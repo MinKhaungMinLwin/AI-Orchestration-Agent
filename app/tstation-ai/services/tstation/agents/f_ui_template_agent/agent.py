@@ -9,6 +9,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     available_dates_tool,
     preorder_tool,
     order_complete_tool,
+    qna_complete_tool,
 )
 from common.curr_time import get_current_time
 
@@ -68,6 +69,31 @@ TEMPLATE TYPES (use ONE that best fits)
   Example: quick_order_tool output: {{"status": "success", "data": {{"result": true, "data": {{"goodsInfoArrStr": "G000000309783|2", "shopSeq": "F00035"}}}}}}
   → Extract: data = output.data.data → {{"goodsInfoArrStr": "G000000309783|2", "shopSeq": "F00035"}}
 
+• qna_complete_tool → "qnaComplete" - 1:1 inquiry redirect card. Use when transfer_to_qna_tool was called and data.url is available.
+
+  ⚠️ URL RULE (CRITICAL): Copy transfer_to_qna_tool result `url` field VERBATIM — do NOT generate
+  a URL, do NOT append any query parameters (orderNo, type, etc.). The URL is already AES-encoded
+  with cnsl_clss_seq + inq_tit_nm + ai_summary by the support agent's tool call.
+
+  Fields:
+  - url (str): VERBATIM copy of transfer_to_qna_tool result `url` field — no modifications allowed
+  - cnslType (str): Inquiry type label — map from transfer_to_qna_tool result `cnsl_clss_seq`:
+    10002→"상품문의", 10006→"주문/결제/배송", 10010→"반품/교환/환불",
+    10013→"제공서비스/이벤트/혜택", 10017→"회원", 10019→"기타",
+    10025→"가맹점제휴문의", 10034→"이력서접수"
+  - title (str): From transfer_to_qna_tool result `inq_tit_nm` field
+  - summary (str): From transfer_to_qna_tool result `ai_summary` field (truncate to 200 chars for display)
+  - details (dict): DISPLAY-ONLY key-value pairs in Korean — for user to verify inquiry contents.
+    NOT encoded into the URL. Extracted from conversation history (only fields with known values):
+    * 반품/교환/환불 → {{"상품명": "...", "환불 사유": "..."}}
+    * 주문/결제/배송 → {{"주문번호": "...", "상품명": "...", "배송 현황": "..."}}
+    * 상품문의 → {{"상품명": "...", "문의 내용": "..."}}
+    * 제공서비스/이벤트/혜택 → {{"서비스명": "...", "혜택 내용": "..."}}
+    * 회원 → {{"문의 유형": "..."}}
+    * 기타 → {{"문의 내용": "..."}}
+  - isMobile (bool): From transfer_to_qna_tool result `isMobile` field
+  (camelCase, no underscore)
+
 ====================================================
 KEY RULE: ALL FIELD NAMES USE CAMELCASE (NO UNDERSCORES)
 ====================================================
@@ -83,6 +109,7 @@ SELECTION RULES
 ====================================================
 
 • Choose the template type that matches the MOST IMPORTANT data in the messages
+• If transfer_to_qna_tool data is present with a URL → use qna_complete_tool (HIGHEST PRIORITY — always render this when URL exists)
 • If there are products → use list_product_tool
 • If there are store locations → use list_location_tool
 • If there are vouchers → use list_voucher_tool
@@ -156,6 +183,10 @@ available_dates_tool → {{"assistantResponse": "고객님, 예약 가능한 날
 preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": "뉴 제타(6세대) 2.0 TDI A/T (29조3344)", "product": "Ventus S2 AS (G000000314254)", "quantity": 2, "storeName": "티스테이션 센텀점 (C01306)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true}}
 
 order_complete_tool → {{"assistantResponse": "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요. 배송지와 결제 수단을 입력하면 최종 주문이 완료됩니다.", "orderInfo": {{"carInfo": "뉴 제타(6세대) 2.0 TDI A/T (29조3344)", "product": "Ventus S2 AS (G000000314254)", "quantity": 4, "storeName": "티스테이션 센텀점 (C01306)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "G000000314254|4", "shopSeq": "C01306", "smrtPayYn": "N", "drtPurYn": "Y"}}}}
+
+qna_complete_tool (반품/교환/환불 example) → {{"assistantResponse": "문의가 접수되었습니다. 빠른 시일 내에 답변 드리겠습니다.", "url": "https://tstation.com/qna?data=aGVs...", "cnslType": "반품/교환/환불", "title": "타이어 환불 문의", "summary": "구매한 Ventus S1 Evo3 타이어 환불 요청. 장착 후 이상 발견.", "isMobile": false}}
+
+qna_complete_tool (주문/결제/배송 example) → {{"assistantResponse": "문의가 접수되었습니다. 빠른 시일 내에 답변 드리겠습니다.", "url": "https://tstation.com/qna?data=xyz...", "cnslType": "주문/결제/배송", "title": "배송 지연 문의", "summary": "주문한 타이어 배송이 예정일 이후에도 미도착.", "isMobile": false}}
 """
 
 
@@ -170,6 +201,7 @@ class UITemplateSubAgent(BaseAgent):
         "available_dates_tool": "Date Picker",
         "preorder_tool": "Pre-Order",
         "order_complete_tool": "Order Complete",
+        "qna_complete_tool": "1:1 Inquiry",
     }
 
     TOOL_TO_TEMPLATE_MAP = {
@@ -182,6 +214,7 @@ class UITemplateSubAgent(BaseAgent):
         "available_dates_tool": "datepick",
         "preorder_tool": "preOrder",
         "order_complete_tool": "orderComplete",
+        "qna_complete_tool": "qnaComplete",
     }
 
     def __init__(self, model):
@@ -197,6 +230,7 @@ class UITemplateSubAgent(BaseAgent):
                 available_dates_tool,
                 preorder_tool,
                 order_complete_tool,
+                qna_complete_tool,
             ],
             system_prompt=UI_TEMPLATE_AGENT_PROMPT,
             name="UI Template Agent",
