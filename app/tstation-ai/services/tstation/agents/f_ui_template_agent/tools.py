@@ -16,12 +16,16 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 def list_car_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of cars. Each: licensePlate (str), description (str), imageUrl (str)"],
+    metadata: Annotated[list[dict], "List of metadata objects. Each: carNo (str, required), carLncCd (str, optional). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render car list cards.
 
     Args:
         assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of car objects.
+        metadata: List of metadata objects with car IDs. Each contains:
+            - carNo (str): Car registration number (from car_no field in domain agent output).
+            - carLncCd (str, optional): Car launch code (from car_lnc_cd field).
 
     Field Details:
         - licensePlate (str): Car license plate number. Rule: required, non-empty string.
@@ -29,21 +33,24 @@ def list_car_tool(
         - imageUrl (str): URL of car image. Rule: required, valid URL string.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"listCar": items, "assistantResponse": assistant_response}}
+        {"status": "success", "http_status": 200, "data": {"listCar": items, "assistantResponse": assistant_response, "metadata": metadata}}
     """
-    return _success_response(200, {"listCar": items, "assistantResponse": assistant_response})
+    return _success_response(200, {"listCar": items, "assistantResponse": assistant_response, "metadata": metadata})
 
 
 @tool
 def list_product_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int)"],
+    metadata: Annotated[list[dict], "List of metadata objects. Each: goodsId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render product list cards.
 
     Args:
         assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of product objects.
+        metadata: List of metadata objects with product IDs. Each contains:
+            - goodsId (str): Product number (from goods_no field in domain agent output).
 
     Field Details:
         - imageUrl (str): URL of product image. Rule: required, valid URL string.
@@ -55,21 +62,24 @@ def list_product_tool(
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"products": items, "assistantResponse": assistant_response}}
+        {"status": "success", "http_status": 200, "data": {"products": items, "assistantResponse": assistant_response, "metadata": metadata}}
     """
-    return _success_response(200, {"products": items, "assistantResponse": assistant_response})
+    return _success_response(200, {"products": items, "assistantResponse": assistant_response, "metadata": metadata})
 
 
 @tool
 def list_voucher_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of vouchers. Each: nameVoucher (str), discount (str), dateVoucher (str), downloadLink (str)"],
+    metadata: Annotated[list[dict], "List of metadata objects. Each: couponId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render voucher list cards.
 
     Args:
         assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of voucher objects.
+        metadata: List of metadata objects with coupon IDs. Each contains:
+            - couponId (str): Coupon ID (from cpn_no field in domain agent output).
 
     Field Details:
         - nameVoucher (str): Voucher name (source: cpn_nm). Rule: required, non-empty string.
@@ -78,7 +88,7 @@ def list_voucher_tool(
         - downloadLink (str): Link to download voucher. Rule: optional, valid URL string. If BE returns null, mock the link.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"vouchers": items, "assistantResponse": assistant_response}}
+        {"status": "success", "http_status": 200, "data": {"vouchers": items, "assistantResponse": assistant_response, "metadata": metadata}}
     """
 
     _MY_COUPON_LINK = {
@@ -86,21 +96,25 @@ def list_voucher_tool(
         "mobile": "https://mqa.tstation.com/coupon/myCouponList",
     }
 
-    for item in items:
+    for item, meta in zip(items, metadata):
         item["myCouponLink"] = _MY_COUPON_LINK
-    return _success_response(200, {"vouchers": items, "assistantResponse": assistant_response})
+        item["metadata"] = meta
+    return _success_response(200, {"vouchers": items, "assistantResponse": assistant_response, "metadata": metadata})
 
 
 @tool
 def list_location_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), isAllMyT (bool), todayInstall (bool), tnaDelivery (bool)"],
+    metadata: Annotated[list[dict], "List of metadata objects. Each: shopId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render location list cards.
 
     Args:
         assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of location/store objects.
+        metadata: List of metadata objects with store IDs. Each contains:
+            - shopId (str): Store ID (from shop_id field in domain agent output).
 
     Field Details:
         - nameAddress (str): Location/store name (src: shop_nm). Rule: required, non-empty string.
@@ -111,21 +125,24 @@ def list_location_tool(
         - tnaDelivery (bool): T-NA Delivery badge (src: is_tna_delivery from /api/store/detail). Rule: optional, default false.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"locations": items, "assistantResponse": assistant_response}}
+        {"status": "success", "http_status": 200, "data": {"locations": items, "assistantResponse": assistant_response, "metadata": metadata}}
     """
-    return _success_response(200, {"locations": items, "assistantResponse": assistant_response})
+    return _success_response(200, {"locations": items, "assistantResponse": assistant_response, "metadata": metadata})
 
 
 @tool
 def list_event_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of events. Each: eventName (str), bannerImage (str), eventUrl (str), badge (str), period (str), actionLink (str), actionText (str)"],
+    metadata: Annotated[list[dict], "List of metadata objects. Each: eventId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render event list cards.
 
     Args:
         assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
         items: List of event objects.
+        metadata: List of metadata objects with event IDs. Each contains:
+            - eventId (str): Event ID (from evt_no field in domain agent output).
 
     Field Details:
         - eventName (str): Event name (src: evt_nm). Rule: required, non-empty string.
@@ -137,9 +154,9 @@ def list_event_tool(
         - actionText (str): Action button text. Rule: optional, non-empty string (e.g., "자세히 보기").
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"events": items, "assistantResponse": assistant_response}}
+        {"status": "success", "http_status": 200, "data": {"events": items, "assistantResponse": assistant_response, "metadata": metadata}}
     """
-    return _success_response(200, {"events": items, "assistantResponse": assistant_response})
+    return _success_response(200, {"events": items, "assistantResponse": assistant_response, "metadata": metadata})
 
 
 @tool
@@ -169,6 +186,7 @@ def list_preview_youtube_tool(
 def available_dates_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     dates: Annotated[list[dict], "List of date entries. Each: date (str '2026년 4월 9일 (화)'), available (bool), availableTimes (list[int 8-22]), index (int 0-based position in sorted order)"],
+    metadata: Annotated[dict, "Metadata object: shopId (str, required). Rule: REQUIRED — must be provided."],
     selectedDate: Annotated[int | None, "Selected date index in dates list (0-based)"] = None,
 ) -> dict:
     """Render available dates with time slots for booking (calendar month view).
@@ -180,15 +198,18 @@ def available_dates_tool(
             - date: str in format "2026년 4월 9일 (화)" (year년 month월 day일 (weekday)).
             - available: bool - whether date can be selected.
             - availableTimes: list[int 8-22] - available hours. Empty = fully booked.
+        metadata: Metadata object containing:
+            - shopId (str): Store ID (from shop_id field in domain agent output).
         selectedDate: Selected date index. Rule: optional, int index (0-based).
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"dates": ..., "selectedDate": ..., "assistantResponse": ...}}
+        {"status": "success", "http_status": 200, "data": {"dates": ..., "selectedDate": ..., "assistantResponse": ..., "metadata": ...}}
     """
     return _success_response(200, {
         "dates": dates,
         "selectedDate": selectedDate,
         "assistantResponse": assistant_response,
+        "metadata": metadata,
     })
 
 
@@ -198,7 +219,8 @@ def preorder_tool(
     orderInfo: Annotated[dict, "Order info. Each field is optional: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str), visitMethod (str), paymentAmount (float)"],
     recommendActions: Annotated[dict, "Recommend action: question (str), listActions (list[str])"],
     isReadyToOrder: Annotated[bool, "True if all required info is available for quick_order (carInfo + product + quantity + storeName)"],
-    isReadyToAddToCart: Annotated[bool, "True if all required info is available for save_to_cart (carInfo + product + quantity)"]
+    isReadyToAddToCart: Annotated[bool, "True if all required info is available for save_to_cart (carInfo + product + quantity)"],
+    metadata: Annotated[dict, "Metadata object with raw IDs: goodsId (str, optional), shopId (str, optional), carNo (str, optional), carLncCd (str, optional). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render pre-order card with order info and recommend actions.
 
@@ -217,9 +239,14 @@ def preorder_tool(
             - listActions (list[str]): List of action labels.
         isReadyToOrder: True if all required info for quick_order (carInfo + product + quantity + storeName).
         isReadyToAddToCart: True if all required info for save_to_cart (carInfo + product + quantity).
+        metadata: Raw IDs extracted from domain agent outputs:
+            - goodsId (str, optional): Product number (goods_no).
+            - shopId (str, optional): Store ID (shop_id).
+            - carNo (str, optional): Car registration number (car_no).
+            - carLncCd (str, optional): Car launch code (car_lnc_cd).
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "recommendActions": ..., "isReadyToOrder": ..., "isReadyToAddToCart": ..., "assistantResponse": ...}}
+        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "recommendActions": ..., "isReadyToOrder": ..., "isReadyToAddToCart": ..., "assistantResponse": ..., "metadata": ...}}
     """
     return _success_response(200, {
         "orderInfo": orderInfo,
@@ -227,6 +254,7 @@ def preorder_tool(
         "isReadyToOrder": isReadyToOrder,
         "isReadyToAddToCart": isReadyToAddToCart,
         "assistantResponse": assistant_response,
+        "metadata": metadata,
     })
 
 
@@ -281,7 +309,8 @@ def order_complete_tool(
     is_success: Annotated[bool, "True if order/cart succeeded, False if failed"],
     type: Annotated[OrderCompleteType, "Type: cart or order"],
     message: Annotated[str | None, "Error message when is_success is False"],
-    data: Annotated[dict, "From quick_order_tool output.data.data when status=success, null when fail."]
+    data: Annotated[dict, "From quick_order_tool output.data.data when status=success, null when fail."],
+    metadata: Annotated[dict, "Metadata object with raw IDs: ordNo (str, optional), goodsId (str, optional), shopId (str, optional). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render order completion card.
 
@@ -292,9 +321,13 @@ def order_complete_tool(
         type: Order type - cart or order
         message: Error message when is_success is False (null when success)
         data: Data from quick_order_tool. When output[status] is true, data is output.data.data, {} when is_success is False.
+        metadata: Raw IDs from order response:
+            - ordNo (str, optional): Order number (ord_no).
+            - goodsId (str, optional): Product number (goods_no).
+            - shopId (str, optional): Store ID (shop_id).
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "isSuccess": ..., "type": ..., "message": ..., "data": ..., "assistantResponse": ...}}
+        {"status": "success", "http_status": 200, "data": {"orderInfo": ..., "isSuccess": ..., "type": ..., "message": ..., "data": ..., "assistantResponse": ..., "metadata": ...}}
     """
     return _success_response(200, {
         "orderInfo": orderInfo,
@@ -303,4 +336,5 @@ def order_complete_tool(
         "message": message,
         "data": data if is_success else {},
         "assistantResponse": assistant_response,
+        "metadata": metadata,
     })
