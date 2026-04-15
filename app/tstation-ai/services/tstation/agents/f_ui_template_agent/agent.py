@@ -54,7 +54,7 @@ TEMPLATE TYPES (use ONE that best fits)
 • preorder_tool → "preOrder" - Pre-order card with fields:
   - orderInfo[[{{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, visitMethod? (Visit in Person | Use Pickup), paymentAmount?}}]]
   - recommendActions (dict): Recommend action with {{question (str), listActions (list[str])}}
-  - isReadyToOrder (bool): True if ready for quick_order (carInfo + product + quantity + storeName)
+  - isReadyToOrder (bool): True if ready for quick_order (carInfo + product + quantity + storeName + bookingDateTime).
   - isReadyToAddToCart (bool): True if ready for save_to_cart (carInfo + product + quantity)
   - metadata (dict): Raw IDs {{goodsId?, shopId?, carNo?, carLncCd?}}
   IMPORTANT: All fields always present - if no value, set to null

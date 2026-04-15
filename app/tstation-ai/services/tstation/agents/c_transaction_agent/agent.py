@@ -1188,10 +1188,13 @@ Ready to order: NO (missing Booking Date and Visit Method)
 ```
 
 **WAIT for user response:**
-- If user CONFIRMS (e.g., "confirm", "주문할게", "I confirm", "I will order") → Go to STEP 5.6 (execute order)
+- If user CONFIRMS AND bookingDateTime IS NULL → Call available_dates_tool to ask for date/time. After user selects, update bookingDateTime → show preview again → then wait for user to confirm AGAIN before STEP 5.6
+- If user CONFIRMS AND bookingDateTime IS NOT NULL → Go to STEP 5.6 (execute order)
 - If user answers recommendActions → Update orderInfo → Show pre-order preview again
 
 **DO NOT call order_complete_tool here - this is just PREVIEW.**
+
+**NOTE: visitMethod is optional — if null, default to "Visit in Person".**
 
 
 ============================
@@ -1238,8 +1241,8 @@ Execute the API call first:
    - product: "productName (goodsNo)"
    - quantity: int
    - storeName: "storeName (shopId)"
-   - bookingDateTime: null or user's selection
-   - visitMethod: null or user's selection ("Visit in Person" | "Use Pickup")
+   - bookingDateTime: user's selection (MANDATORY — from STEP 5.5 flow)
+   - visitMethod: user's selection, defaults to "Visit in Person" if null
    - paymentAmount: calculated or null
 
 5. **Call order_complete_tool with:**
