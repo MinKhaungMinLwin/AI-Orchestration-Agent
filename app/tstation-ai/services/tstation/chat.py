@@ -1242,6 +1242,22 @@ class TStationChatServiceV2:
                 coordinator_done_event = event
                 continue
 
+            # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
+            if event_type == "data":
+                event_data = event.get("data", {})
+                if isinstance(event_data, dict) and event_data.get("assistantResponse"):
+                    assistant_response = event_data["assistantResponse"]
+                    assistant_msg_event = {
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": "[UI TEMPLATE AGENT]",
+                    }
+                    original_message_events.append(assistant_msg_event)
+                    logger.info(f"[COORDINATOR] Captured assistantResponse from UI Template: {assistant_response[:50]}...")
+                # Pass through data event to frontend
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                continue
+
             # --- RESET DRAFT when a new sub-agent starts (multi-agent chaining) ---
             # The second agent receives the first agent's context and produces a unified response,
             # so we only need the last agent's output for QC.
