@@ -261,19 +261,50 @@ class ChatHistoryService:
         session_user_id = self.redis.hget(meta_key, "user_id")
         return session_user_id == user_id
 
-    def save_tool_context(self, session_id: str, tool_data: list[dict]) -> None:
-        """Save structured tool results from the latest turn for context preservation.
+    # Max accumulated tool results to keep (prevents unbounded growth)
+    _MAX_TOOL_CONTEXT_ITEMS = 20
 
-        Overwrites previous turn's data so only the most recent tool results are kept.
+    def save_tool_context(self, session_id: str, tool_data: list[dict]) -> None:
+        """Append structured tool results to accumulated context.
+
+        New results are appended to the front (most recent first).
+        Deduplicates by (tool, input) key — newer results replace older ones.
+        Keeps at most _MAX_TOOL_CONTEXT_ITEMS entries.
         """
         key = f"chat:tool_ctx:{session_id}"
-        self.redis.set(key, json.dumps(tool_data, ensure_ascii=False))
-        # Expire after 2 hours (same as typical session lifetime)
+
+        # Load existing
+        existing = self.get_tool_context(session_id)
+
+        # Dedup by (tool, full_input): newer results replace older ones for the same query.
+        # Uses _dedup_input (full params including PII) for accurate dedup,
+        # while "input" (PII-filtered) is what gets injected into the prompt.
+        def _dedup_key(item: dict) -> str:
+            dedup_input = item.get("_dedup_input", item.get("input", {}))
+            return json.dumps(
+                {"tool": item.get("tool", ""), "input": dedup_input},
+                sort_keys=True, ensure_ascii=False,
+            )
+
+        seen = set()
+        merged = []
+        # New items first (reversed so last tool call = most recent), then existing
+        for item in list(reversed(tool_data)) + existing:
+            dk = _dedup_key(item)
+            if dk not in seen:
+                seen.add(dk)
+                merged.append(item)
+
+        # Trim to max
+        merged = merged[:self._MAX_TOOL_CONTEXT_ITEMS]
+
+        self.redis.set(key, json.dumps(merged, ensure_ascii=False))
         self.redis.expire(key, 7200)
-        logger.info(f"[TOOL_CTX] Saved {len(tool_data)} tool results for session {session_id}")
+        logger.info(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
+                     f"= {len(merged)} total tool results for session {session_id}")
 
     def get_tool_context(self, session_id: str) -> list[dict]:
-        """Load structured tool results from the previous turn."""
+        """Load accumulated structured tool results."""
         key = f"chat:tool_ctx:{session_id}"
         raw = self.redis.get(key)
         if raw:

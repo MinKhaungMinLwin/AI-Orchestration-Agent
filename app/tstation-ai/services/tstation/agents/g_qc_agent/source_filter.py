@@ -105,18 +105,41 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
 _CONTEXT_MAX_ITEMS = 10
 
 # Whitelist for tool input fields safe to persist into prompt context.
-# Excludes personal data (car_no, owner_nm, mbr_no, user_id, access_token, etc.)
+# Excludes PII: car_no, owner_nm, mbr_no, user_id, user_xpos, user_ypos, access_token
 _SAFE_INPUT_FIELDS = {
-    "tire_size", "goods_no", "keyword", "shop_id", "shop_nm",
-    "xpos", "ypos", "limit", "sort", "category", "brand",
-    "car_model", "car_year", "car_grade", "car_engine",
-    "rim_size", "ord_no",
+    # product/search
+    "tire_size", "goods_no", "keyword", "limit", "size", "brand", "brand_cd",
+    "rcmd_type", "entr_yn", "entr_no", "car_lnc_cd",
+    # store
+    "shop_id", "shop_nm", "store_nm", "region_code",
+    "radius_km", "svc_codes", "all_my_t_only", "chl_sct_cd",
+    # vehicle (non-PII)
+    "car_model", "car_year", "car_grade", "car_engine", "rim_size",
+    # order/price
+    "ord_no", "member_type", "sort", "category",
+    # inventory
+    "goods_list", "shop_id_list",
 }
 
 
 def _filter_input(tool_input: dict) -> dict:
-    """Keep only safe, non-PII fields from tool input."""
+    """Keep only safe, non-PII fields from tool input (for prompt display)."""
     return {k: v for k, v in tool_input.items() if v is not None and k in _SAFE_INPUT_FIELDS}
+
+
+def _dedup_input(tool_input: dict) -> dict:
+    """Build dedup-safe input: safe fields as-is, PII fields as stable hashes."""
+    import hashlib
+    result = {}
+    for k, v in tool_input.items():
+        if v is None:
+            continue
+        if k in _SAFE_INPUT_FIELDS:
+            result[k] = v
+        else:
+            # Hash PII values so dedup works without storing raw PII
+            result[k] = hashlib.sha256(str(v).encode()).hexdigest()[:12]
+    return result
 
 
 def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None = None) -> dict | None:
@@ -159,6 +182,7 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
             result = {"tool": tool_name, "data": filtered_items}
             if tool_input:
                 result["input"] = _filter_input(tool_input)
+                result["_dedup_input"] = _dedup_input(tool_input)
             return result
 
     # Single-object tools (price, product description, etc.)
@@ -174,6 +198,7 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
                 result = {"tool": tool_name, "data": compact}
                 if tool_input:
                     result["input"] = _filter_input(tool_input)
+                    result["_dedup_input"] = _dedup_input(tool_input)
                 return result
 
     return None

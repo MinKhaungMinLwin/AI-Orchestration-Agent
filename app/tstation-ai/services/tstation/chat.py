@@ -1112,8 +1112,11 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _format_tool_context(tool_data: list[dict]) -> str:
-        """Format structured tool results as a system prompt for conversation context."""
-        # Tool name → Korean label for readability
+        """Format accumulated structured tool results as a system prompt for conversation context.
+
+        Results are ordered most-recent-first. Each entry shows the tool label,
+        query conditions, and the structured data rows.
+        """
         tool_labels = {
             "get_products_recommendations_tool": "타이어 추천 결과",
             "search_product_tool": "상품 검색 결과",
@@ -1127,19 +1130,23 @@ class TStationChatServiceV2:
         }
 
         lines = [
-            "[이전 대화에서 조회한 데이터 — 고객이 이 내용을 참조할 수 있습니다]",
-            "아래 데이터는 직전 턴에서 tool로 조회한 실제 결과입니다.",
-            "고객이 '18인치', '첫번째', '가장 저렴한 것' 등으로 참조하면 이 데이터에서 정확히 매칭하세요.",
+            "[대화 중 조회한 데이터 — 고객이 이 내용을 참조할 수 있습니다]",
+            "아래는 이번 대화에서 tool로 조회한 실제 결과입니다 (최신순).",
+            "고객이 '18인치', '아까 19인치', '첫번째', '가장 저렴한 것' 등으로 참조하면",
+            "아래 데이터에서 해당 조건에 정확히 매칭되는 항목을 찾아 응답하세요.",
+            "절대로 아래 데이터에 없는 상품/매장/가격을 만들어내지 마세요.",
             "",
         ]
 
-        for item in tool_data:
+        for idx, item in enumerate(tool_data):
             tool_name = item.get("tool", "")
             label = tool_labels.get(tool_name, tool_name)
             tool_input = item.get("input", {})
             data = item.get("data")
 
-            header = f"• {label}"
+            # Mark recency
+            recency = "최신" if idx == 0 else f"{idx + 1}번째 전"
+            header = f"• [{recency}] {label}"
             if tool_input:
                 input_str = ", ".join(f"{k}={v}" for k, v in tool_input.items())
                 header += f" (조회 조건: {input_str})"
@@ -1243,11 +1250,14 @@ class TStationChatServiceV2:
             # 5) Build slot context string for agent injection
             slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
 
-            # 6) Load tool context from previous turn
+            # 6) Load accumulated tool context
             prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
             if prev_tool_data:
                 tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
-                logger.info(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results from previous turn")
+                # Cap tool context to avoid consuming too much of the context window
+                if len(tool_context) > 8000:
+                    tool_context = tool_context[:8000] + "\n... (일부 생략)"
+                logger.info(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results ({len(tool_context)} chars)")
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
