@@ -306,7 +306,12 @@ def transfer_to_qna_tool(
         is_mobile (bool): Use mobile URL if True.
 
     Returns:
-        str: Markdown with link to QnA page or error message.
+        dict with keys:
+            - status: "success" or "error"
+            - response: Markdown string to display to the user verbatim (includes clickable link)
+            - url: The generated inquiry page URL (used by UI template agent)
+            - isMobile, cnsl_clss_seq, inq_tit_nm, ai_summary: metadata for UI template rendering
+        ⚠️ Always output the `response` field verbatim as your reply to the user.
     """
     logger.info(
         "[TOOL][transfer_to_qna_tool] Called with: cnsl_clss_seq=%s, inq_tit_nm=%s, ai_summary=%s, is_mobile=%s",
@@ -321,17 +326,21 @@ def transfer_to_qna_tool(
             is_mobile=is_mobile,
         )
         logger.info(f"[TOOL][transfer_to_qna_tool] Generated URL: {url}")
+        device = "모바일" if is_mobile else "PC"
+        response_text = (
+            f"✅ **1:1 문의 작성 페이지로 이동합니다**\n\n"
+            f"📱 [{device}에서 열기]({url})\n\n"
+            f"> 요청이 자동으로 등록되지 않습니다. 위 링크를 클릭하여 문의 내용을 확인하고 제출해주세요."
+        )
         return {
             "status": "success",
-            "http_status": 200,
-            "data": {
-                "url": url,
-                "isMobile": is_mobile,
-                "cnsl_clss_seq": cnsl_clss_seq,
-                "inq_tit_nm": inq_tit_nm,
-                "ai_summary": ai_summary,
-            },
+            "response": response_text,
+            "url": url,
+            "isMobile": is_mobile,
+            "cnsl_clss_seq": cnsl_clss_seq,
+            "inq_tit_nm": inq_tit_nm,
+            "ai_summary": ai_summary,
         }
     except Exception as e:
         logger.exception("[TOOL][transfer_to_qna_tool] Failed")
-        return {"status": "error", "http_status": None, "reason": str(e), "message": "Failed to generate 1:1 inquiry URL"}
+        return {"status": "error", "response": f"❌ **오류 발생**: {str(e)}\n\n> 다시 시도하시거나 고객센터로 직접 문의해주세요."}

@@ -111,9 +111,9 @@ TOOL 3: transfer_to_qna_tool
   * 상품문의: product name, specific question details
   * 회원: account issue type
 - Detect if user is on mobile and set is_mobile=True accordingly
-- ⚠️ AFTER CALLING: Do NOT output the URL or link text in your response.
-  Simply say: "1:1 문의 페이지를 준비했습니다. 잠시 후 양식이 표시됩니다 😊"
-  The UI template will automatically render the inquiry card with the link and all details.
+- ⚠️ AFTER CALLING: Output the `response` field from the tool result VERBATIM as your reply.
+  Do NOT rephrase, summarize, or add extra text around it — the response already contains
+  the formatted link for the user to click.
 
 ====================================================
 SEARCH AND ANSWER FLOW

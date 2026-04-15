@@ -238,8 +238,9 @@ def qna_complete_tool(
     cnslType: Annotated[str, "Inquiry type label (e.g., '반품/교환/환불', '주문/결제/배송', '상품문의') — map from transfer_to_qna_tool data.cnsl_clss_seq"],
     title: Annotated[str, "Inquiry title — copy from transfer_to_qna_tool data.inq_tit_nm (max 100 chars)"],
     summary: Annotated[str, "Inquiry summary for display only — copy from transfer_to_qna_tool data.ai_summary (truncate to 200 chars for display)"],
-    details: Annotated[dict, "Display-only key-value pairs for user to verify. Keys in Korean. Extracted from conversation context — NOT encoded into URL. E.g., refund: {'상품명': '...', '환불 사유': '...'}, delivery: {'주문번호': '...', '상품명': '...', '배송 현황': '...'}, member: {'문의 유형': '계정 관련'}"],
+    # details: Annotated[dict, "Display-only key-value pairs for user to verify. Keys in Korean. Extracted from conversation context — NOT encoded into URL. E.g., refund: {'상품명': '...', '환불 사유': '...'}, delivery: {'주문번호': '...', '상품명': '...', '배송 현황': '...'}, member: {'문의 유형': '계정 관련'}"],
     isMobile: Annotated[bool, "Copy from transfer_to_qna_tool data.isMobile"],
+    assistantResponse: Annotated[str, "Message text to display with template"]
 ) -> dict:
     """Render 1:1 inquiry redirect card showing inquiry details and a redirect link.
 
@@ -268,15 +269,15 @@ def qna_complete_tool(
         isMobile: From transfer_to_qna_tool data.isMobile
 
     Returns:
-        {{"status": "success", "http_status": 200, "data": {{"url": ..., "cnslType": ..., "title": ..., "summary": ..., "details": ..., "isMobile": ...}}}}
+        {{"status": "success", "http_status": 200, "data": {{"assistantResponse": ..., "url": ..., "cnslType": ..., "title": ..., "summary": ..., "details": ..., "isMobile": ...}}}}
     """
     return _success_response(200, {
         "url": url,
         "cnslType": cnslType,
         "title": title,
         "summary": summary,
-        "details": details,
         "isMobile": isMobile,
+        "assistantResponse": assistantResponse,
     })
 
 
