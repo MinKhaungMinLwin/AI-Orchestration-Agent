@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     AI_MODEL: str
     AI_MODEL_REASONING: str
     AI_QC_MODEL: str
+    AI_QC_ENABLED: bool = True
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str
