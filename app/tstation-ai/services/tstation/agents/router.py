@@ -10,32 +10,35 @@ from pydantic import BaseModel, Field
 from langchain_litellm import ChatLiteLLM
 
 LLM = ChatLiteLLM(
-    # openai_api_key=settings.OPENAI_API_KEY,
-    # model="gpt-5.4",
-    # model="bedrock/arn:aws:bedrock:ap-northeast-2:763865062538:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0",
     api_base=settings.AI_GATEWAY_BASE_URL,
     api_key=settings.AI_GATEWAY_API_KEY,
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
     streaming=True,
 )
 
+REASONING_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_REASONING}",
+    streaming=True,
+)
+
 ### Multi-Agent Router
 # Leading Agent
 from services.tstation.agents.a_leading_agent.agent import LeadingAgent
-leading_agent = LeadingAgent(LLM)
+leading_agent = LeadingAgent(REASONING_LLM)
 # Discovery Agent
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
-# Discovery Agent
-discovery_subagent = DiscoverySubAgent(LLM)
+discovery_subagent = DiscoverySubAgent(REASONING_LLM)
 # Transaction Agent (merged PRICING + ORDER)
 from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
-transaction_subagent = TransactionSubAgent(LLM)
+transaction_subagent = TransactionSubAgent(REASONING_LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
-support_subagent = SupportSubAgent(LLM)
+support_subagent = SupportSubAgent(REASONING_LLM)
 
-# UI Template Agent
+# UI Template Agent (uses AI_MODEL for fast template rendering)
 from services.tstation.agents.f_ui_template_agent.agent import UITemplateSubAgent
 ui_template_subagent = UITemplateSubAgent(LLM)
 

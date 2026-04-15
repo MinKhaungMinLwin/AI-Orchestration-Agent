@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     AI_GATEWAY_BASE_URL: str
     AI_GATEWAY_API_KEY: str
     AI_MODEL: str
+    AI_MODEL_REASONING: str
     AI_QC_MODEL: str
     # External AI Providers
     UPSTAGE_API_KEY: str
