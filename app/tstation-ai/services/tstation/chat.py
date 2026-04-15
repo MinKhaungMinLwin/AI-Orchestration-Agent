@@ -993,6 +993,38 @@ def _has_factual_claims(text: str) -> bool:
 _coordinator = StreamingMultiAgentCoordinator()
 
 
+def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
+    """Append template_data from Redis to assistant messages."""
+    if not session_id:
+        return messages
+
+    try:
+        from services.tstation.chat_history_service import get_chat_history_service
+        redis_messages = get_chat_history_service().get_history(session_id)
+
+        # content -> template_data map
+        template_map = {
+            msg["content"]: msg["template_data"]
+            for msg in redis_messages
+            if msg.get("role") == "assistant" and msg.get("template_data") and msg.get("content")
+        }
+
+        if not template_map:
+            return messages
+
+        # Append template_data to matching assistant messages
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg["content"] in template_map:
+                template_str = json.dumps(template_map[msg["content"]], ensure_ascii=False)
+                msg["content"] += f"\n\n[이전 선택된 상품 데이터]\n{template_str}"
+
+        return messages
+
+    except Exception as e:
+        logger.warning(f"[TEMPLATE_DATA] Failed: {e}")
+        return messages
+
+
 class TStationChatServiceV2:
     """V2 Chat service with multi-agent streaming support."""
 
@@ -1091,7 +1123,21 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
-        messages = TStationChatServiceV2._build_messages_with_user_info(request)
+        # Step 1: Enrich messages with template_data from Redis history
+        enriched_messages = _enrich_messages_with_template_data(
+            [dict(msg) for msg in request.messages],
+            request.session_id,
+        )
+        # Step 2: Build messages with user info
+        request_with_enriched = TStationChatRequest(
+            messages=enriched_messages,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            access_token=request.access_token,
+            stream=request.stream,
+            user_info=request.user_info,
+        )
+        messages = TStationChatServiceV2._build_messages_with_user_info(request_with_enriched)
         logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
