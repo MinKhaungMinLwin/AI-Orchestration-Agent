@@ -39,28 +39,12 @@ def _url_encode_value(value: str) -> str:
     return quote(value, safe="")
 
 
-def make_qna_payload_url(
-        cnsl_clss_seq: str | None = None,
-        inq_tit_nm: str | None = None,
-        ai_summary: str | None = None,
-        is_mobile: bool = False,
+def _build_payload(
+        cnsl_clss_seq: str | None,
+        inq_tit_nm: str | None,
+        ai_summary: str | None,
 ) -> str:
-    """
-    Create encrypted QnA write URL with payload parameter.
-
-    Args:
-        cnsl_clss_seq: Consultation type code (e.g., "10006").
-                       If not provided, AI will select automatically.
-        inq_tit_nm: Inquiry title (max 100 chars).
-        ai_summary: Inquiry content (max 1000 chars).
-        is_mobile: Use mobile URL if True.
-
-    Returns:
-        Full URL with encrypted payload, e.g.:
-        https://wwwqa.tstation.com/customer-service/qna.do?mode=write&payload=...
-    """
-    base_url = QnA_WRITE_URL_MOBILE if is_mobile else QnA_WRITE_URL_PC
-
+    """Encrypt inquiry fields into a URL-safe Base64 payload string."""
     parts: list[str] = []
     if cnsl_clss_seq:
         parts.append(f"cnslClssSeq={cnsl_clss_seq}")
@@ -77,6 +61,25 @@ def make_qna_payload_url(
     encrypted = cipher.encrypt(padded)
 
     b64 = binascii.b2a_base64(encrypted).decode().rstrip("\n")
-    payload = b64.replace("+", "-").replace("/", "_").rstrip("=")
+    return b64.replace("+", "-").replace("/", "_").rstrip("=")
 
-    return f"{base_url}?mode=write&payload={payload}"
+
+
+
+def make_qna_payload_urls(
+        cnsl_clss_seq: str | None = None,
+        inq_tit_nm: str | None = None,
+        ai_summary: str | None = None,
+) -> dict[str, str]:
+    """
+    Create encrypted QnA write URLs for both PC and mobile.
+
+    Returns:
+        {"pc": "<PC URL>", "mobile": "<mobile URL>"}
+    """
+    payload = _build_payload(cnsl_clss_seq, inq_tit_nm, ai_summary)
+
+    return {
+        "pc": f"{QnA_WRITE_URL_PC}?mode=write&payload={payload}",
+        "mobile": f"{QnA_WRITE_URL_MOBILE}?mode=write&payload={payload}",
+    }
