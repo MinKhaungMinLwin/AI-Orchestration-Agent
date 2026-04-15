@@ -621,6 +621,12 @@ Steps:
 3. Display results in store table format (100% Korean)
    - For stores with is_all_my_t=true, show "[all my T]" tag next to store name
 
+**⚠️ VISIT INTENT TRIGGER (KISS):**
+If user expresses visit intent in the same message (e.g., "방문할게", "visiting", "찜아갈게", "I'll visit"):
+→ After getting store results, AUTOMATICALLY proceed to Flow 5 (Store Reservation)
+→ Do NOT ask user to select or confirm store — use the first match automatically
+→ Call get_store_detail_tool to get reservation slots, then display availability
+
 **Important:**
 - If region_code is provided as "부산" → use it as-is, never guess variants
 - 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 전달

@@ -471,7 +471,8 @@ TRANSACTION if user wants:
 - **Pre-order confirmation** ("주문 확인", "바로 주문", "예약 날짜 선택")
 - **Cart save** ("장바구니로 저장", "나중에 주문할게")
 - **Visit method selection** ("방문 방법", "어떻게 가지러 오지")
-Examples: "{{goods_no}} 가격 얼마야?", "Is {{goods_no}} in stock?", "Show me stores near Gangnam", "{{goods_no}} 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345", "주문 확인해주세요", "바로 주문할게", "장바구니로 저장할게"
+- **Express store visit intent** (e.g., "방문할게", "visiting", "찜아갈게", "I'll visit [store]")
+Examples: "{{goods_no}} 가격 얼마야?", "Is {{goods_no}} in stock?", "Show me stores near Gangnam", "{{goods_no}} 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345", "주문 확인해주세요", "바로 주문할게", "장바구니로 저장할게", "I'll visit [store name]", "방문할게요", "[매장명] 방문"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
