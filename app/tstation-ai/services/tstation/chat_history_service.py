@@ -242,9 +242,10 @@ class ChatHistoryService:
         tmpl_key = _get_template_messages_key(session_id)
         messages_deleted = self.redis.zcard(tmpl_key)
 
-        # Delete all keys
+        # Delete all keys (including tool context)
         messages_key = _get_messages_key(session_id)
-        self.redis.delete(messages_key, meta_key, tmpl_key)
+        tool_ctx_key = f"chat:tool_ctx:{session_id}"
+        self.redis.delete(messages_key, meta_key, tmpl_key, tool_ctx_key)
 
         # Remove from user's session set
         if user_id:
@@ -259,6 +260,28 @@ class ChatHistoryService:
         meta_key = _get_meta_key(session_id)
         session_user_id = self.redis.hget(meta_key, "user_id")
         return session_user_id == user_id
+
+    def save_tool_context(self, session_id: str, tool_data: list[dict]) -> None:
+        """Save structured tool results from the latest turn for context preservation.
+
+        Overwrites previous turn's data so only the most recent tool results are kept.
+        """
+        key = f"chat:tool_ctx:{session_id}"
+        self.redis.set(key, json.dumps(tool_data, ensure_ascii=False))
+        # Expire after 2 hours (same as typical session lifetime)
+        self.redis.expire(key, 7200)
+        logger.info(f"[TOOL_CTX] Saved {len(tool_data)} tool results for session {session_id}")
+
+    def get_tool_context(self, session_id: str) -> list[dict]:
+        """Load structured tool results from the previous turn."""
+        key = f"chat:tool_ctx:{session_id}"
+        raw = self.redis.get(key)
+        if raw:
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"[TOOL_CTX] Failed to parse tool context for session {session_id}")
+        return []
 
     def save_slots(self, session_id: str, slots: ConversationSlots) -> None:
         """Save conversation slots to session metadata."""

@@ -65,6 +65,120 @@ def _filter_drop(data: dict, drop_keys: set[str]) -> dict:
     return {k: v for k, v in data.items() if k not in drop_keys}
 
 
+# --- Context filter rules (for conversation context preservation) ---
+# Keeps more fields than QC filter to maintain conversational references.
+_CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
+    "get_products_recommendations_tool": {
+        "list_key": "items",
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1",
+            "extra_fvr_sale_prc", "extra_fvr_sale_per",
+            "tot_scr", "t_comfort", "t_silence", "t_life_span",
+        },
+    },
+    "search_product_tool": {
+        "list_key": "items",
+        "keep": {"goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc"},
+    },
+    "get_nearby_stores_tool": {
+        "list_key": "stores",
+        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "tel_no"},
+    },
+    "get_store_list_tool": {
+        "list_key": "stores",
+        "keep": {"shop_id", "shop_nm", "addr_base", "tel_no"},
+    },
+    "get_store_inventory_tool": {
+        "list_key": "items",
+        "keep": {"goods_no", "goods_nm", "tire_size_1", "stock_qty"},
+    },
+    "get_orders_of_user_tool": {
+        "list_key": "orders",
+        "keep": {"ord_no", "goods_nm", "ord_qty", "ord_stat_nm", "sys_reg_dtime"},
+    },
+    "check_compatibility_tool": {
+        "list_key": "tire_sizes",
+        "keep": {"tire_size", "rim_size", "is_oem"},
+    },
+}
+
+_CONTEXT_MAX_ITEMS = 10
+
+# Whitelist for tool input fields safe to persist into prompt context.
+# Excludes personal data (car_no, owner_nm, mbr_no, user_id, access_token, etc.)
+_SAFE_INPUT_FIELDS = {
+    "tire_size", "goods_no", "keyword", "shop_id", "shop_nm",
+    "xpos", "ypos", "limit", "sort", "category", "brand",
+    "car_model", "car_year", "car_grade", "car_engine",
+    "rim_size", "ord_no",
+}
+
+
+def _filter_input(tool_input: dict) -> dict:
+    """Keep only safe, non-PII fields from tool input."""
+    return {k: v for k, v in tool_input.items() if v is not None and k in _SAFE_INPUT_FIELDS}
+
+
+def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None = None) -> dict | None:
+    """Filter tool output for conversation context preservation.
+
+    Returns a compact dict with tool name, input summary, and filtered output.
+    Returns None if the tool has no context-relevant data.
+    """
+    try:
+        data = json.loads(raw_output) if isinstance(raw_output, str) else raw_output
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    inner = data.get("data", data)
+
+    # Skip error responses
+    if data.get("status") == "error":
+        return None
+
+    # Tools with specific list filtering
+    if tool_name in _CONTEXT_LIST_RULES:
+        rule = _CONTEXT_LIST_RULES[tool_name]
+        list_key = rule["list_key"]
+        keep = rule["keep"]
+
+        items = None
+        if isinstance(inner, dict) and list_key in inner and isinstance(inner[list_key], list):
+            items = inner[list_key]
+        elif isinstance(inner, dict):
+            for k, v in inner.items():
+                if isinstance(v, list) and v and isinstance(v[0], dict):
+                    items = v
+                    break
+
+        if items:
+            filtered_items = _filter_list(items, keep)
+            result = {"tool": tool_name, "data": filtered_items}
+            if tool_input:
+                result["input"] = _filter_input(tool_input)
+            return result
+
+    # Single-object tools (price, product description, etc.)
+    if tool_name in ("get_final_price_tool", "get_product_description_tool"):
+        if isinstance(inner, dict):
+            # Keep key pricing/product fields
+            compact = {}
+            for k in ("goods_no", "goods_nm", "tire_size_1", "sale_prc", "extra_fvr_sale_prc",
+                       "rating_avg", "review_count", "slogan"):
+                if k in inner and inner[k] is not None:
+                    compact[k] = inner[k]
+            if compact:
+                result = {"tool": tool_name, "data": compact}
+                if tool_input:
+                    result["input"] = _filter_input(tool_input)
+                return result
+
+    return None
+
+
 def filter_source_data(tool_name: str, raw_output: str) -> str:
     """Filter tool output JSON, keeping only QC-relevant fields.
 
