@@ -728,9 +728,21 @@ class StreamingMultiAgentCoordinator:
                 continue
 
             # Build enriched messages with context from previous agents
-            enriched_messages = list(messages)
+            # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context LAST
+            enriched_messages = []
 
-            # Append previous agent's assistant message if exists
+            # 1. slot_context FIRST
+            if slot_context:
+                enriched_messages.append({
+                    "role": "system",
+                    "content": slot_context,
+                })
+
+            # 2. Original messages (already contains user_context from _build_messages_with_user_info)
+            #    These messages have current_user_msg at the LAST position
+            enriched_messages.extend(list(messages))
+
+            # 3. Append accumulated_context AFTER current_user_msg (for handover agents)
             if accumulated_context:
                 for prev_domain, content in accumulated_context.items():
                     if content and content.strip():
@@ -751,14 +763,7 @@ class StreamingMultiAgentCoordinator:
                         logger.info(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
 
-            # Inject slot context for agent to reference confirmed customer information
-            if slot_context:
-                enriched_messages.append({
-                    "role": "system",
-                    "content": slot_context,
-                })
-
-            # Append accumulated tool data for next agent (so they can use results like goods_no)
+            # 4. Append accumulated_tool_data LAST (for UI Template Agent)
             if accumulated_tool_data:
                 # Extract ord_qty from user messages when chaining to Transaction Agent
                 if domain == MultiAgentDomain.Domain.TRANSACTION:
@@ -789,7 +794,7 @@ class StreamingMultiAgentCoordinator:
                 logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
 
             domain_key = domain.value
-            logger.info(f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)[:1000]}")
+            logger.info(f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}")
 
             # Yield agent start event
             yield {
@@ -877,8 +882,20 @@ class StreamingMultiAgentCoordinator:
             logger.info(f"[COORDINATOR] Running UI Template Agent with {len(accumulated_tool_data)} tool outputs")
 
             # Build context for UI Template Agent
-            ui_messages = list(messages)
-            # Append accumulated context
+            # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context | accumulated_tool_data LAST
+            ui_messages = []
+
+            # 1. slot_context FIRST
+            if slot_context:
+                ui_messages.append({
+                    "role": "system",
+                    "content": slot_context,
+                })
+
+            # 2. Original messages (already contains user_context)
+            ui_messages.extend(list(messages))
+
+            # 3. Append accumulated context
             for prev_domain, content in accumulated_context.items():
                 if content and content.strip():
                     ui_messages.append({
@@ -891,23 +908,19 @@ class StreamingMultiAgentCoordinator:
                     })
                     break
 
-            # Append tool data summary
+            # 4. Append tool data summary LAST
             tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
             ui_messages.append({
-                "role": "system",
+                "role": "assistant",
                 "content": f"[Accumulated tool data for UI rendering]\n{tool_summary}"
             })
-            # Build chat history for context
-            chat_history = "\n".join([
-                f"{msg.get('role', 'user')}: {msg.get('content', '')}"
-                for msg in messages
-                if msg.get("role") in ("user", "assistant") and msg.get("content")
-            ])
-
             ui_messages.append({
                 "role": "user",
-                "content": f"[Chat History]\n{chat_history}\n\nRender this data as UI templates using the appropriate tools. Format each item as a UI template event."
+                "content": "Help me generate Template UI"
             })
+
+            # Log UI Template Agent messages
+            logger.info(f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}")
 
             # Yield UI Template Agent start event
             yield {
@@ -985,68 +998,67 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _build_messages_with_user_info(request: TStationChatRequest) -> list[dict]:
-        """Build messages with user info injected as system context for all agents."""
-        import copy
-        messages = copy.deepcopy(request.messages)
+        """Build messages with user info injected before current user message."""
+        messages = [dict(msg) for msg in request.messages]
 
+        # Remove duplicate "hi" from frontend
+        if len(messages) >= 2 and messages[-2].get("role") == "user" and messages[-2].get("content") == "hi":
+            messages.pop(-2)
+
+        # Merge user info: JWT + UI (UI overrides)
         user_info = None
         if request.access_token:
             user_info = get_user_info_from_token(request.access_token)
-
-        # Merge user_info from UI (overrides JWT fields if overlap)
         if request.user_info:
-            if user_info is None:
-                user_info = {}
-            user_info = {**user_info, **request.user_info}
+            user_info = {**(user_info or {}), **request.user_info}
 
-        # get user info with mbr_nm
-        # Always add language instruction to last user message
-        if messages and messages[-1].get("role") == "user":
-            # Remove duplicate "hi" message if exists (frontend sends both "hi" and "# Respond in Korean language\nhi")
-            if len(messages) >= 2 and messages[-2].get("role") == "user" and messages[-2].get("content") == "hi":
-                messages.pop(-2)
-
-            messages[-1]["content"] = (
-                f"# Respond in Korean language\n"
-                f"{messages[-1]['content']}"
-            )
-
-        # If user info available, inject as system message at beginning
+        # Build USER CONTEXT message if user_info available
+        user_context_msg = None
         if user_info:
-            # Only expose safe fields to LLM (name, car info, member id)
-            # Other JWT fields (user_type, affiliate_yn, tokens, etc.) are kept internal for API auth only
-            # NOTE: user_id in JWT = mbr_no (member number) — needed for get_my_cars_tool
-            # car_no, car_model, car_lnc_cd removed — vehicle info should come from get_my_cars_tool
-            # to avoid auto-selecting one car when multiple are registered
             safe_fields = {"mbr_nm", "location", "user_id"}
-            user_info_lines = []
+            lines = []
             for k, v in user_info.items():
-                if k in safe_fields:
-                    if k == "location" and isinstance(v, dict):
-                        user_info_lines.append(f"xpos: {v.get('xpos')}, ypos: {v.get('ypos')}")
-                    elif k == "user_id":
-                        # Map user_id (JWT) to mbr_no for agents — this is the member number used by get_my_cars_tool
-                        user_info_lines.append(f"mbr_no: {v}")
-                    else:
-                        user_info_lines.append(f"{k}: {v}")
+                if k not in safe_fields:
+                    continue
+                if k == "location" and isinstance(v, dict):
+                    lines.append(f"xpos: {v.get('xpos')}, ypos: {v.get('ypos')}")
+                elif k == "user_id":
+                    lines.append(f"mbr_no: {v}")
+                else:
+                    lines.append(f"{k}: {v}")
 
-            user_context = "\n".join(user_info_lines)
+            if lines:
+                user_context_msg = {
+                    "role": "user",
+                    "content": (
+                        "## USER CONTEXT INFORMATION (Always Available)\n"
+                        f"{chr(10).join(lines)}\n\n"
+                        "## INSTRUCTIONS FOR AGENTS:\n"
+                        "🔹 Always prioritize data provided directly by the user\n"
+                        "🔹 If no direct data is provided, reference the personal data below\n"
+                        "🔹 NEVER expose internal identifiers in responses\n"
+                    ),
+                }
 
-            user_context_message = {
-                "role": "user",
-                "content": (
-                    f"## USER CONTEXT INFORMATION (Always Available)\n"
-                    f"{user_context}\n\n"
-                    f"## INSTRUCTIONS FOR AGENTS:\n"
-                    f"🔹 Always prioritize data provided directly by the user\n"
-                    f"🔹 If no direct data is provided, reference the personal data below\n"
-                    f"🔹 NEVER expose internal identifiers (user_id, user_type, affiliate_yn, tokens, etc.) in responses\n"
-                )
-            }
+        # Find last user message index and insert user_context before it
+        last_user_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                last_user_idx = i
+                break
 
-            # Insert user context message after history, before current user message
-            # Result: [history..., USER_CONTEXT, current with prefix]
-            messages.insert(len(request.messages) - 1, user_context_message)
+        if last_user_idx == -1:
+            return messages
+
+        # Insert user_context before last user message
+        if user_context_msg:
+            messages.insert(last_user_idx, user_context_msg)
+            last_user_idx += 1
+
+        # Add Korean prefix to the current user message (now at last_user_idx)
+        messages[last_user_idx]["content"] = (
+            f"# Respond in Korean language\n{messages[last_user_idx]['content']}"
+        )
 
         return messages
 

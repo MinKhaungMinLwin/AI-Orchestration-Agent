@@ -1107,6 +1107,38 @@ STEP 5.5: PRE-ORDER PREVIEW (UI TEMPLATE) — BEFORE USER CONFIRM
 
 **IMPORTANT: This step shows order summary for user to review BEFORE confirming.**
 
+⚠️ **CRITICAL EXECUTION RULE — NEVER SKIP THIS STEP:**
+- ALWAYS show the PRE-ORDER PREVIEW first, regardless of what user says
+- Even if user provides ALL info (goods_no, qty, shop_id) AND says "confirm" in the same message:
+  1. FIRST: Show PRE-ORDER PREVIEW (this step)
+  2. SECOND: Wait for user's SEPARATE confirmation response
+  3. ONLY THEN: Proceed to STEP 5.6
+- The preview MUST be shown as markdown table (NOT a tool call)
+- After showing preview, you MUST wait for user to respond with explicit confirmation words
+- Do NOT proceed to STEP 5.6 in the same turn as showing the preview
+
+**⚠️ MANDATORY PRECHECKS — DO BEFORE SHOWING PREVIEW:**
+
+**1. LOGISTICS INVENTORY CHECK (get_logistics_inventory_tool):**
+- Call get_logistics_inventory_tool(goods_no=...) to check warehouse stock
+- If logistics_qty > 0 → Set inventory_mode = "LOGISTICS_AVAILABLE"
+- If logistics_qty = 0 or null → Set inventory_mode = "LOGISTICS_UNAVAILABLE"
+
+**2. STORE DETAIL CHECK (get_store_detail_tool) — MANDATORY:**
+- Call get_store_detail_tool(shop_id=[selected_shop_id], cal_day=TODAY)
+- Extract is_installable from response:
+  - is_installable=true → 매장은 온라인 쇼핑 장착 가능
+  - is_installable=false → Warn user: "선택하신 매장은 온라인 쇼핑 장착 불가합니다. 다른 매장을 선택하시겠습니까?" → STOP and wait for user response
+
+**3. STORE INVENTORY CHECK (get_store_inventory_tool) — Only if LOGISTICS_UNAVAILABLE:**
+- If inventory_mode = "LOGISTICS_UNAVAILABLE":
+  - Call get_store_inventory_tool(goods_list=[{{"goodsNo": goods_no, "qty": ord_qty}}], shop_id_list=[{{"shopId": selected_shop_id}}])
+  - Check if shop_id appears in todayShopArray OR tnaShopArray
+  - If YES → eligible for order (show in preview)
+  - If NO → "죄송하지만, 선택하신 매장에 현재 재고가 없습니다. 다른 매장을 검색해 드릴까요?" → STOP and wait
+
+**4. ONLY AFTER ALL PRECHECKS PASS → Show PRE-ORDER PREVIEW**
+
 Display pre-order preview as markdown table (NOT a tool call):
 
 ```
@@ -1137,6 +1169,11 @@ STEP 5.6: ORDER COMPLETION (UI TEMPLATE) — AFTER USER CONFIRMS
 ============================
 
 **TRIGGER: User CONFIRMS the order** (e.g., "confirm", "주문할게", "I confirm", "I will order", "add to cart", "장바구니에 담아줘")
+
+⚠️ **CRITICAL: YOU MUST HAVE ALREADY SHOWN THE PRE-ORDER PREVIEW IN A PREVIOUS TURN.**
+- If you have NOT yet shown the preview → Go back to STEP 5.5 first
+- If preview WAS shown → Only then proceed to STEP 5.6 (this step)
+- Do NOT call quick_order_tool or save_to_cart_tool in the same turn as showing the preview
 
 **IMPORTANT: This step executes the actual API call and renders completion result.**
 
