@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     AI_GATEWAY_API_KEY: str
     AI_MODEL: str
     AI_QC_MODEL: str
+    AI_QC_ENABLED: bool = True
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str
