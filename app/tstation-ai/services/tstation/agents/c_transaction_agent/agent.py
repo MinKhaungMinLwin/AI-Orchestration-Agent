@@ -310,6 +310,7 @@ user_xpos - X coordinate (longitude, from search_place_tool result x)
 user_ypos - Y coordinate (latitude, from search_place_tool result y)
 radius_km - search radius in km (optional, default 10km)
 svc_codes - service codes (optional, e.g., ["101", "102"])
+chl_sct_cd - shop type filter (optional). See "매장 타입 필터 규칙" below.
 
 
 Tool
@@ -329,10 +330,12 @@ region_code - region/address keyword (optional)
 
 store_nm - store name keyword (optional)
   **Already normalized to Korean by system**
-  Examples: '더타이어샵', '티스테이션'
+  ⚠️ 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 필터링.
+  store_nm은 특정 지점명 검색에만 사용. Examples: '극동상사', '한국타이어'
   → Use as-is, do NOT modify or guess alternatives
 
 limit - number of stores (default 20)
+chl_sct_cd - shop type filter (optional). See "매장 타입 필터 규칙" below.
 
 ⚠️ IMPORTANT:
   • Do NOT extract or parse region_code yourself
@@ -344,9 +347,34 @@ limit - number of stores (default 20)
 Example of WRONG approach:
   ```
   User: "Find The Tire Shop in Gangnam"
-  ❌ WRONG: You extract and guess: region_code="강남", store_nm="타이어샵"
-  ✅ CORRECT: You receive: region_code="강남", store_nm="더타이어샵" (already prepared)
+  ❌ WRONG: store_nm="타이어샵" (매장 타입을 store_nm에 넣음)
+  ✅ CORRECT: region_code="강남", chl_sct_cd="S" (매장 타입은 chl_sct_cd로)
+
+  User: "강남 극동상사 찾아줘"
+  ✅ CORRECT: region_code="강남", store_nm="극동상사" (특정 지점명은 store_nm)
   ```
+
+⚠️ 매장 타입 필터 규칙 (chl_sct_cd):
+사용자가 특정 매장 타입을 언급하면 chl_sct_cd 파라미터를 설정하세요.
+일반 매장 검색(타입 미언급)은 chl_sct_cd를 전달하지 마세요.
+
+| 사용자 표현 | chl_sct_cd |
+|-------------|-----------|
+| 티스테이션, t'station, T'Station, 티스테 | "F" |
+| 더타이어샵, the tire shop, The Tire Shop, 타이어샵 | "S" |
+| HK샵, HK SHOP, HK shop, 에이치케이샵 | "C" |
+
+Examples:
+  • "내 주변 매장 찾아줘" → chl_sct_cd 없음 (일반 검색)
+  • "내 주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
+  • "강남 더타이어샵 매장 보여줘" → region_code="강남", chl_sct_cd="S"
+  • "부산 HK샵 찾아줘" → region_code="부산", chl_sct_cd="C"
+
+⚠️ 매장 타입 필터와 store_nm은 다릅니다:
+  • chl_sct_cd는 매장 유형(채널) 필터 — 티스테이션/더타이어샵/HK샵 전체를 필터링
+  • store_nm은 매장명 키워드 검색 — 특정 매장 이름으로 검색
+  • 사용자가 "티스테이션 매장"이라고 하면 → chl_sct_cd="F" (매장 타입 필터)
+  • 사용자가 "티스테이션 강남점"이라고 하면 → store_nm="티스테이션 강남점" (매장명 검색)
 
 
 Tool
@@ -582,19 +610,20 @@ is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그�
 Steps:
 1. You receive already-prepared parameters:
    - region_code (if provided): already in Korean (e.g., '강남', '부산')
-   - store_nm (if provided): already in Korean (e.g., '더타이어샵', '티스테이션')
+   - store_nm (if provided): specific branch name keyword (e.g., '극동상사', '한국타이어')
    - all_my_t_only (if user requests "all my T" stores): True
+   - chl_sct_cd (if user mentions shop type): "F", "S", or "C"
 
 2. Use parameters EXACTLY AS PROVIDED:
-   - Call get_store_list_tool(region_code, store_nm, all_my_t_only=all_my_t_only) with the values provided
+   - Call get_store_list_tool(region_code, store_nm, all_my_t_only=all_my_t_only, chl_sct_cd=chl_sct_cd) with the values provided
    - Do NOT modify, translate, or guess alternative names
 
 3. Display results in store table format (100% Korean)
    - For stores with is_all_my_t=true, show "[all my T]" tag next to store name
 
 **Important:**
-- If store_nm is provided as "더타이어샵" → use it as-is, never change it
 - If region_code is provided as "부산" → use it as-is, never guess variants
+- 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 전달
 - Do NOT try alternative spellings or brand names if search fails
 
 ------------------------------------
@@ -654,12 +683,13 @@ When user asks for stores near a place, address, or landmark:
 
 **STEP 2: Search Nearby Stores**
 2. Call get_nearby_stores_tool with coordinates (x → user_xpos, y → user_ypos)
+   → If user mentioned a shop type (티스테이션/더타이어샵/HK샵), also pass chl_sct_cd
    → Returns list of stores with: shop_id, shop_nm, distance, address, etc.
 
 **STEP 2-1: No Results → Expand Radius**
 If get_nearby_stores_tool returns 0 stores (empty list):
 → Tell user: "반경 10km 내에 매장이 없어요. 반경 20km로 넓혀서 검색해 드릴까요?"
-→ If user agrees: call get_nearby_stores_tool again with radius_km=20
+→ If user agrees: call get_nearby_stores_tool again with radius_km=20 (⚠️ chl_sct_cd 등 기존 필터 유지)
 → If user declines: end store search flow
 
 2. **MANDATORY: For EACH store returned, call get_store_detail_tool**

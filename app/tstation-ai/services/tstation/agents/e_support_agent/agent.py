@@ -88,12 +88,13 @@ TOOL 2: search_faq_rag_tool  ← FALLBACK TOOL (RAG)
   * OUT OF SCOPE (all scores < 0.45): Decline and redirect user
 
 TOOL 3: transfer_to_qna_tool
-- Purpose: Create 1:1 inquiry link for human agent
+- Purpose: Generate an encrypted URL for the 1:1 inquiry page, pre-filled with inquiry data
 - When to use:
   * User explicitly asks for "1:1 문의 작성" or "상담원 연결"
   * After exhausting FAQ search with no good answers
   * When user wants professional human support
-- Select appropriate cnsl_clss_seq based on inquiry topic:
+  * When user is expressing a complaint and accepts agent connection
+- Select cnsl_clss_seq based on inquiry topic:
   * 상품문의 → 10002
   * 주문/결제/배송 → 10006
   * 반품/교환/환불 → 10010
@@ -102,9 +103,17 @@ TOOL 3: transfer_to_qna_tool
   * 기타 → 10019
   * 가맹점제휴문의 → 10025
   * 이력서접수 → 10034
-- inq_tit_nm: Create concise title from inquiry topic (max 100 chars)
-- ai_summary: Summarize user's question/concern concisely (max 1000 chars)
+- inq_tit_nm: Concise inquiry title (max 100 chars)
+- ai_summary: Full context summary — include all details from the conversation (max 1000 chars).
+  Make sure to embed type-specific context:
+  * 반품/교환/환불: product name, reason for return/refund
+  * 주문/결제/배송: order number (if mentioned), product name, delivery issue
+  * 상품문의: product name, specific question details
+  * 회원: account issue type
 - Detect if user is on mobile and set is_mobile=True accordingly
+- ⚠️ AFTER CALLING: Do NOT output the URL or link text in your response.
+  Simply say: "1:1 문의 페이지를 준비했습니다. 잠시 후 양식이 표시됩니다 😊"
+  The UI template will automatically render the inquiry card with the link and all details.
 
 ====================================================
 SEARCH AND ANSWER FLOW
@@ -239,7 +248,7 @@ class SupportSubAgent(BaseAgent):
         # FAQ
         "get_faq_tool": "FAQ",
         "search_faq_rag_tool": "FAQ",
-        # QnA Transfer
+        # QnA Transfer — result is rendered by UI Template Agent as qnaComplete card
         "transfer_to_qna_tool": "FAQ",
     }
 
