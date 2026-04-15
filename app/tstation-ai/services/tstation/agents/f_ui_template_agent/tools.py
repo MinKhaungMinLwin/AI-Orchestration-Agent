@@ -234,7 +234,7 @@ def preorder_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     orderInfo: Annotated[dict, "Order info. Each field is optional: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str), visitMethod (str), paymentAmount (float)"],
     recommendActions: Annotated[dict, "Recommend action: question (str), listActions (list[str])"],
-    isReadyToOrder: Annotated[bool, "True if all required info is available for quick_order (carInfo + product + quantity + storeName)"],
+    isReadyToOrder: Annotated[bool, "True if all required info is available for quick_order (carInfo + product + quantity + storeName + bookingDateTime)."],
     isReadyToAddToCart: Annotated[bool, "True if all required info is available for save_to_cart (carInfo + product + quantity)"],
     metadata: Annotated[dict, "Metadata object with raw IDs: goodsId (str, optional), shopId (str, optional), carNo (str, optional), carLncCd (str, optional). Rule: REQUIRED — must be provided."],
 ) -> dict:
