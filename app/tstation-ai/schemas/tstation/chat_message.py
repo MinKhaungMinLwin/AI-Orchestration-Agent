@@ -64,6 +64,7 @@ class MessageResponse(BaseModel):
     content: str = Field(..., description="Message content")
     status: str = Field(default="completed", description="Message status")
     created_at: str = Field(..., description="Created timestamp")
+    template_data: Optional[dict] = Field(default=None, description="UI template data for assistant messages")
 
 
 class ChatHistoryResponse(BaseModel):

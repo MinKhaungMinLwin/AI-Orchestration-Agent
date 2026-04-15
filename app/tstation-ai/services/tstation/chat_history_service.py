@@ -1,7 +1,7 @@
 """
 Chat History Service - Redis-based conversation management.
 
-Uses langchain_community RedisChatMessageHistory for message persistence.
+Stores messages as JSON in sorted sets (chat:tmpl:{session_id}).
 Session management per user_id from JWT token.
 Slot persistence per session for conversation context tracking.
 """
@@ -14,7 +14,6 @@ from typing import List, Optional
 from schemas.tstation.slots import ConversationSlots
 
 import redis
-from langchain_community.chat_message_histories import RedisChatMessageHistory
 
 from common.jwt_utils import decode_jwt, get_user_info_from_token
 from config.env import settings
@@ -45,6 +44,8 @@ def get_redis_client() -> redis.Redis:
 SESSION_SET_KEY = "chat:user:{user_id}:sessions"
 MESSAGES_KEY = "chat:messages:{session_id}"
 META_KEY = "chat:meta:{session_id}"
+# Custom messages with template_data (sorted set)
+TEMPLATE_MESSAGES_KEY = "chat:tmpl:{session_id}"
 
 
 def _get_session_set_key(user_id: str) -> str:
@@ -60,6 +61,11 @@ def _get_messages_key(session_id: str) -> str:
 def _get_meta_key(session_id: str) -> str:
     """Get Redis key for session metadata."""
     return META_KEY.format(session_id=session_id)
+
+
+def _get_template_messages_key(session_id: str) -> str:
+    """Get Redis key for template messages (sorted set for messages with template_data)."""
+    return TEMPLATE_MESSAGES_KEY.format(session_id=session_id)
 
 
 class ChatHistoryService:
@@ -131,56 +137,69 @@ class ChatHistoryService:
         logger.warning(f"[CHAT_HISTORY] Session {session_id} not found for user {user_id}")
         return self.create_session_id(user_id)
 
-    def save_message(self, session_id: str, role: str, content: str) -> str:
-        """Save message to Redis and update metadata."""
+    def save_message(self, session_id: str, role: str, content: str, template_data: Optional[dict] = None) -> str:
+        """Save message to Redis as JSON in sorted set.
+
+        Args:
+            session_id: Session ID
+            role: "user" or "assistant"
+            content: Message content
+            template_data: Optional UI template data (default None)
+        """
         msg_id = str(uuid.uuid4())
-
-        # Save to RedisChatMessageHistory
-        chat_history = RedisChatMessageHistory(
-            session_id=session_id,
-            url=settings.REDIS_CONVERSATION_MANAGEMENT_URL,
-            key_prefix="chat:messages",
-        )
-
-        # Convert role to langchain format
-        if role == "user":
-            chat_history.add_user_message(content)
-        elif role == "assistant":
-            chat_history.add_ai_message(content)
+        now = datetime.now().isoformat()
+        msg_json = json.dumps({
+            "msg_id": msg_id,
+            "role": role,
+            "content": content,
+            "template_data": template_data,
+            "created_at": now,
+        })
+        # Score = timestamp for ordering
+        score = datetime.now().timestamp()
+        self.redis.zadd(_get_template_messages_key(session_id), {msg_json: score})
 
         # Update metadata
         meta_key = _get_meta_key(session_id)
         self.redis.hset(meta_key, mapping={
-            "updated_at": datetime.now().isoformat(),
-            "last_message": content[:100],  # Truncate for preview
+            "updated_at": now,
+            "last_message": content[:100],
         })
 
-        logger.info(f"[CHAT_HISTORY] Saved {role} message to session {session_id}")
+        logger.info(f"[CHAT_HISTORY] Saved {role} message to session {session_id}" +
+                  (f" with template_data" if template_data is not None else ""))
         return msg_id
 
     def get_history(self, session_id: str) -> List[dict]:
-        """Get all messages for a session."""
-        chat_history = RedisChatMessageHistory(
-            session_id=session_id,
-            url=settings.REDIS_CONVERSATION_MANAGEMENT_URL,
-            key_prefix="chat:messages",
-        )
-
+        """Get all messages for a session from sorted set."""
         messages = []
-        for msg in chat_history.messages:
-            # Map langchain role to api role: human -> user, ai -> assistant
-            role_map = {"human": "user", "ai": "assistant"}
-            role = role_map.get(msg.type, msg.type)
 
-            messages.append({
-                "msg_id": str(uuid.uuid4()),
-                "session_id": session_id,
-                "role": role,
-                "content": msg.content,
-                "status": "completed",
-                "created_at": msg.additional_kwargs.get("created_at", datetime.now().isoformat())
-                if hasattr(msg, "additional_kwargs") else datetime.now().isoformat(),
-            })
+        # Get messages from custom template sorted set
+        tmpl_key = _get_template_messages_key(session_id)
+        tmpl_raw = self.redis.zrange(tmpl_key, 0, -1)
+        for raw in tmpl_raw:
+            try:
+                data = json.loads(raw)
+                messages.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": data.get("role", "assistant"),
+                    "content": data.get("content", ""),
+                    "status": "completed",
+                    "template_data": data.get("template_data"),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+            except json.JSONDecodeError:
+                logger.warning(f"[CHAT_HISTORY] Failed to parse message: {raw[:100]}")
+                continue
+
+        # Sort by created_at timestamp
+        def get_timestamp(msg):
+            try:
+                return datetime.fromisoformat(msg["created_at"]).timestamp()
+            except (ValueError, KeyError):
+                return 0
+        messages.sort(key=get_timestamp)
 
         return messages
 
@@ -219,23 +238,13 @@ class ChatHistoryService:
 
         user_id = meta.get("user_id")
 
-        # Delete messages
+        # Get count from sorted set before delete
+        tmpl_key = _get_template_messages_key(session_id)
+        messages_deleted = self.redis.zcard(tmpl_key)
+
+        # Delete all keys
         messages_key = _get_messages_key(session_id)
-        messages_deleted = 0
-
-        # Get count before delete
-        chat_history = RedisChatMessageHistory(
-            session_id=session_id,
-            url=settings.REDIS_CONVERSATION_MANAGEMENT_URL,
-            key_prefix="chat:messages",
-        )
-        messages_deleted = len(chat_history.messages)
-
-        # Clear the chat history
-        chat_history.clear()
-
-        # Delete metadata
-        self.redis.delete(meta_key)
+        self.redis.delete(messages_key, meta_key, tmpl_key)
 
         # Remove from user's session set
         if user_id:

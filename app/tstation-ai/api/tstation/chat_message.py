@@ -133,6 +133,8 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     from services.tstation.chat import TStationChatServiceV2
 
     full_assistant_content = ""
+    assistant_response_ui = None  # Priority: assistantResponse from UI Template Agent
+    template_data = None  # Captured from UI Template Agent data events
 
     # Stream from chat service
     stream_response = TStationChatServiceV2.chat(chat_request)
@@ -160,19 +162,35 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
             except json.JSONDecodeError:
                 continue
 
-            # When we receive a message event with assistant content, save it
+            # Priority: Capture assistantResponse from UI Template Agent (JSON data event)
+            if event.get("type") == "data":
+                event_data = event.get("data", {})
+                # assistantResponse may be inside data object or at top level
+                if event.get("assistantResponse"):
+                    assistant_response_ui = event["assistantResponse"]
+                elif event_data.get("assistantResponse"):
+                    assistant_response_ui = event_data["assistantResponse"]
+                if assistant_response_ui:
+                    logger.info(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
+                # template_data = full event (KISS)
+                template_data = event
+                logger.info(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
+
+            # When we receive a message event with assistant content, accumulate it
             if event.get("type") == "message" and event.get("content"):
                 content = event.get("content", "")
                 if content:
                     full_assistant_content += content
-                    # Save assistant message incrementally or wait until done?
-                    # For now, we'll save when stream completes
 
             yield chunk
 
     # Save assistant message after stream completes
-    if full_assistant_content:
-        service.save_message(session_id, "assistant", full_assistant_content)
+    # Priority: Use assistantResponse from UI Template Agent if available
+    message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
+    if message_to_save:
+        service.save_message(session_id, "assistant", message_to_save, template_data=template_data)
+        logger.info(f"[CHAT_MESSAGE] Saved assistant message" +
+                  (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
 
     yield "data: [DONE]\n\n"
 
