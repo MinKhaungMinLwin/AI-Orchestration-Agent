@@ -94,7 +94,7 @@ class AgentDomain(BaseModel):
         DECISION RULES:
 
         TRANSACTION if user wants:
-        - "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "G000000314254 가격")
+        - "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "{{goods_no}} 가격" - format: G + 12 digits)
         - "In stock?", "available?" for specific product at specific store
         - Check logistics stock (warehouse availability)
         - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
@@ -109,13 +109,13 @@ class AgentDomain(BaseModel):
         - Select store for order
         - Coupon inquiry ("쿠폰 조회", "내 쿠폰", "받을 수 있는 쿠폰")
         Examples:
-        - "G000000314254 가격 얼마야?" (goods_no known → TRANSACTION)
-        - "Is G000000314254 in stock?"
+        - "{{goods_no}} 가격 얼마야?" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
+        - "Is {{goods_no}} in stock?" (e.g., "G012345678901")
         - "Show me stores near Gangnam"
         - "Show me nearby All My T stores"
         - "All My T 매장 찾아줘"
         - "올마이티 매장 검색"
-        - "G000000314254 4개 주문할게" (goods_no known → TRANSACTION)
+        - "{{goods_no}} 4개 주문할게" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
         - "Book installation at 2pm"
         - "Track my order 12345"
         - "장바구니에 담아줘"
@@ -129,10 +129,10 @@ class AgentDomain(BaseModel):
         - Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
         - Product specifications, features, technology
         - **Price for product by NAME (goods_no NOT known)** → DISCOVERY first to find goods_no
-        Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격"
+        Examples: "Find tires called Ventus", "What tires fit my car {{vehicle_number}}?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격"
 
         ⚠️ CRITICAL DISTINCTION for price queries:
-        - "G000000314254 가격" → goods_no KNOWN → TRANSACTION only
+        - "{{goods_no}} 가격" (e.g., "G012345678901") → goods_no KNOWN → TRANSACTION only
         - "Dynapro HPX 가격" → goods_no NOT known, product NAME only → DISCOVERY (to find goods_no first)
         - "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY
 
@@ -164,5 +164,5 @@ class AgentDomain(BaseModel):
         - "warranty, return, maintenance" → SUPPORT
         - "find stores" → TRANSACTION
 
-        Korean vehicle numbers follow patterns: 12가3456, 123가1234
+        Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
         """)

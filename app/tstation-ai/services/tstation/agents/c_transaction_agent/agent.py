@@ -438,7 +438,7 @@ Inputs
 goods_no - product number (required)
 ord_qty - quantity (required)
 shop_id - store ID from get_store_list_tool or get_nearby_stores_tool results (required)
-  e.g., "C01306", "B01018", "F00015"
+  e.g., "{{shop_id}}" (format: C/B/F + 5 digits)
 car_lnc_cd - vehicle launch code (optional)
 
 ⚠️ IMPORTANT: shop_id MUST come from store tool results (get_store_list_tool or get_nearby_stores_tool).
@@ -489,7 +489,7 @@ When user asks for pricing:
 Extract goods_no from:
 - Previous Discovery Agent tool results (HIGHEST PRIORITY — use immediately)
 - Previous Discovery Agent message containing goods_no
-- User explicitly provided goods_no (e.g., "G000000314254")
+- User explicitly provided goods_no (e.g., "{{goods_no}}" - format: G + 12 digits)
 - Conversation context from earlier messages
 
 ⚠️ If goods_no is available from Discovery Agent context:
@@ -519,7 +519,7 @@ When user asks if product is in stock:
 Extract goods_no from:
 - Previous Discovery Agent tool results (HIGHEST PRIORITY — use immediately)
 - Previous Discovery Agent message containing goods_no
-- User explicitly provided goods_no (e.g., "G000000314254")
+- User explicitly provided goods_no (e.g., "{{goods_no}}" - format: G + 12 digits)
 - Conversation context from earlier messages
 
 ⚠️ If goods_no is available → IMMEDIATELY proceed to STEP 2.
@@ -549,7 +549,7 @@ When user asks about product availability at store(s), or asks to find stores th
 Extract goods_no from:
 - Previous Discovery Agent tool results (HIGHEST PRIORITY — use immediately)
 - Previous Discovery Agent message containing goods_no
-- User explicitly provided goods_no (e.g., "G000000314254")
+- User explicitly provided goods_no (e.g., "{{goods_no}}" - format: G + 12 digits)
 - Conversation context from earlier messages
 
 ⚠️ If goods_no is available from Discovery Agent context:
@@ -855,8 +855,8 @@ Apply defaults immediately, execute the flow, THEN suggest alternatives at the e
   • Display ONLY the nearest available day + its time slots
   • If ALL 4 days have no slots → show "예약 가능한 시간이 없습니다"
 
-Example: "F00098 매장 예약 가능한 시간" (no date)
-  → Call get_store_detail_tool(F00098, TODAY), (F00098, +1d), (F00098, +2d), (F00098, +3d) in parallel
+Example: "{{shop_id}} 매장 예약 가능한 시간" (no date) (e.g., "F00123")
+  → Call get_store_detail_tool({{shop_id}}, TODAY), ({{shop_id}}, +1d), ({{shop_id}}, +2d), ({{shop_id}}, +3d) in parallel
   → If TODAY=no slots, +1=no slots, +2=[09:00,10:00], +3=[14:00]
   → Show ONLY +2 day with [09:00, 10:00]
 
@@ -959,7 +959,7 @@ STEP 1: 제품 코드(goods_no) 확보
 
 Extract goods_no from:
 1. Previous agent tool results (system message with goods_no)
-2. User explicitly provided goods_no (e.g., "G000000314254")
+2. User explicitly provided goods_no (e.g., "{{goods_no}}")
 3. Previous Discovery Agent message context
 
 If goods_no is NOT available:
@@ -1176,7 +1176,7 @@ Display pre-order preview as markdown table (NOT a tool call):
 
 | Field | Value | Status |
 |-------|-------|--------|
-| Car | 52가1234 - Kia Sorento | ✅ |
+| Car | {{vehicle_number}} - Kia Sorento | ✅ |
 | Product | Hankook Tire SUV | ✅ |
 | Quantity | 4개 | ✅ |
 | Store | Hankook Tire 서울점 | ✅ |
@@ -1533,7 +1533,7 @@ Priority for finding goods_no:
    → If ord_qty is available → proceed to Flow 6 STEP 3 (매장 선택 유도)
    → If ord_qty is NOT available → proceed to Flow 6 STEP 2 (수량 확인)
 
-2. **User explicitly provided goods_no** (e.g., "G000000314254")
+2. **User explicitly provided goods_no** (e.g., "{{goods_no}}")
    → Use it directly
    → Check for ord_qty → if missing, ask user
 
@@ -1582,7 +1582,7 @@ Priority order:
 ❌ NEVER:
    - Use shop_id recalled from conversation history text
    - Use shop_id inferred from store name patterns
-   - Use shop_id from prompt examples (e.g., "F00019", "B01018" are illustrations only)
+   - Use shop_id from prompt examples (e.g., "{{shop_id}}" are illustrations only)
    - Skip get_store_list_tool because you "think you know" the shop_id
 
 ✅ CORRECT — Even when store was already looked up before:
@@ -1592,8 +1592,8 @@ Priority order:
    → Call get_store_detail_tool(shop_id=[from tool], cal_day=...)
 
 ✅ CORRECT — Only exception:
-   User: "shop_id F00098 매장 예약 가능 시간 알려줘"
-   → Use F00098 directly (user explicitly provided it)
+   User: "shop_id {{shop_id}} 매장 예약 가능 시간 알려줘"
+   → Use {{shop_id}} directly (user explicitly provided it)
 
 ---
 

@@ -617,8 +617,8 @@ Steps:
     → Display candidates in a table:
       | No | 상품명 | 사이즈 | 상품번호 |
       |----|--------|--------|----------|
-      | 1  | Ventus S2 AS | 225/45R17 | G000000309783 |
-      | 2  | Ventus S2 EV | 225/45R17 | G000000309784 |
+      | 1  | Ventus S2 AS | 225/45R17 | {{goods_no}} |
+      | 2  | Ventus S2 EV | 225/45R17 | {{goods_no}} |
     → Ask user: "어떤 상품으로 주문하시겠습니까? (번호 입력)"
     → After user selects → Go to Case A
 
@@ -1135,7 +1135,7 @@ When displaying Order Confirmation (Flow 8)
 |------|------|
 | 상품명 | Ventus S2 AS |
 | 사이즈 | 225/45R17 |
-| 상품번호 | G000000309783 |
+| 상품번호 | {{goods_no}} |
 | 수량 | 4개 |
 
 (After user confirms → just say the confirmation, coordinator will pass context)

@@ -345,8 +345,8 @@ EXAMPLE QUERIES → FLOW:
     → TRANSACTION
     (Cart Save - goods_no and qty must be in context)
 
-25. "G000000314254 4개 주문할게"
-    "Order 4 of G000000314254"
+25. "{{goods_no}} 4개 주문할게"
+    "Order 4 of {{goods_no}}" (e.g., "G012345678901")
     → TRANSACTION
     (goods_no known → Quantity confirmed → Store or Cart)
 
@@ -457,7 +457,7 @@ DECISION RULES
 ====================================================
 
 TRANSACTION if user wants:
-- "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "G000000314254 가격")
+- "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "{{goods_no}} 가격" - format: G + 12 digits)
 - "In stock?", "available?" for specific product at specific store
 - Check logistics stock (warehouse availability)
 - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
@@ -471,7 +471,7 @@ TRANSACTION if user wants:
 - **Pre-order confirmation** ("주문 확인", "바로 주문", "예약 날짜 선택")
 - **Cart save** ("장바구니로 저장", "나중에 주문할게")
 - **Visit method selection** ("방문 방법", "어떻게 가지러 오지")
-Examples: "G000000314254 가격 얼마야?", "Is G000000314254 in stock?", "Show me stores near Gangnam", "G000000314254 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345", "주문 확인해주세요", "바로 주문할게", "장바구니로 저장할게"
+Examples: "{{goods_no}} 가격 얼마야?", "Is {{goods_no}} in stock?", "Show me stores near Gangnam", "{{goods_no}} 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345", "주문 확인해주세요", "바로 주문할게", "장바구니로 저장할게"
 
 DISCOVERY if user wants:
 - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
@@ -481,10 +481,10 @@ DISCOVERY if user wants:
 - **Price for product by NAME (goods_no NOT known)** → DISCOVERY to find goods_no
 - View user's registered vehicles (list my cars, my vehicle list)
 - **Event/Deal information** ("이벤트 알려줘", "기획전 정보", "현재 진행중인 이벤트")
-Examples: "Find tires called Ventus", "What tires fit my car 12가3456?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles", "이벤트 알려줘", "기획전 정보"
+Examples: "Find tires called Ventus", "What tires fit my car {{vehicle_number}}?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles", "이벤트 알려줘", "기획전 정보"
 
 ⚠️ CRITICAL DISTINCTION for price queries:
-- "G000000314254 가격" → goods_no KNOWN → TRANSACTION only
+- "{{goods_no}} 가격" (e.g., "G012345678901") → goods_no KNOWN → TRANSACTION only
 - "Dynapro HPX 가격" → goods_no NOT known → DISCOVERY, TRANSACTION
 - "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY, TRANSACTION
 
@@ -539,7 +539,7 @@ and the user replies with a short answer (number like "1", "2번", or a name lik
 → If the previous assistant was in TRANSACTION (e.g., store selection):
   → Classify as TRANSACTION
 
-Korean vehicle numbers follow patterns: 12가3456, 123가1234
+Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
 """
 
 

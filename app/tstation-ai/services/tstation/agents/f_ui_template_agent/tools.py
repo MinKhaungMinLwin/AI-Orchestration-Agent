@@ -41,7 +41,7 @@ def list_car_tool(
 @tool
 def list_product_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
-    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int)"],
+    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int), description (str)"],
     metadata: Annotated[list[dict], "List of metadata objects. Each: goodsId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render product list cards.
@@ -60,6 +60,13 @@ def list_product_tool(
         - price (int): Product price in KRW. Rule: required, 0 <= price.
         - rate (float): Rating score. Rule: required, 0 <= rate <= 5.
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
+        - description (str): Comprehensive product info in markdown format. Include ALL available from product data:
+            • pc_prod_remark_desc: Key features (주요 특장점)
+            • pc_prod_tech_desc: Technology description (기술력 설명)
+            • slogan: Product slogan
+            • rating: review count and average rating
+            • Any other available fields
+            Format as readable markdown with sections.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"products": items, "assistantResponse": assistant_response, "metadata": metadata}}
@@ -105,7 +112,7 @@ def list_voucher_tool(
 @tool
 def list_location_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
-    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), isAllMyT (bool), todayInstall (bool), tnaDelivery (bool)"],
+    items: Annotated[list[dict], "List of locations. Each: nameAddress (str), distance (str), detailAddress (str), isAllMyT (bool), todayInstall (bool), tnaDelivery (bool), description (str)"],
     metadata: Annotated[list[dict], "List of metadata objects. Each: shopId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render location list cards.
@@ -123,6 +130,15 @@ def list_location_tool(
         - isAllMyT (bool): All My T badge (src: is_all_my_t from /api/store/detail or /api/store/list). Rule: optional, default false.
         - todayInstall (bool): Today Install badge (src: is_installable from /api/store/detail). Rule: optional, default false.
         - tnaDelivery (bool): T-NA Delivery badge (src: is_tna_delivery from /api/store/detail). Rule: optional, default false.
+        - description (str): Comprehensive store info in markdown format. Include ALL available from store data:
+            • Business hours: shop_biz_strt_wday~shop_biz_end_wday, shop_biz_strt_time~shop_biz_end_time
+            • Saturday hours: shop_sat_strt_time~shop_sat_end_time
+            • Holiday closed: holiday
+            • Phone: tel_no
+            • Services: is_installable, is_tna_delivery, is_all_my_t
+            • Address: addr_base+addr_dtl or road_addr_base+road_addr_dtl
+            • Available slots: available_slots (if available)
+            Format as readable markdown.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"locations": items, "assistantResponse": assistant_response, "metadata": metadata}}

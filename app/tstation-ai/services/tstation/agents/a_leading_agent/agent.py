@@ -106,7 +106,7 @@ Typical user intents:
 • “Explain this tire”
 • “Compare these tires”
 • “Will this tire fit my vehicle?”
-• “My car number is 12가3456”
+• “My car number is {{vehicle_number}}” (e.g., “12가3456”)
 
 ----------------------------------------------------
 
