@@ -1327,7 +1327,7 @@ class TStationChatServiceV2:
         # - No factual claims (greetings, FAQ): skip QC
         if draft_response.strip():
             source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
-            needs_qc = bool(source_data_chunks) and _has_factual_claims(draft_response)
+            needs_qc = settings.AI_QC_ENABLED and bool(source_data_chunks) and _has_factual_claims(draft_response)
 
             if needs_qc:
                 yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
