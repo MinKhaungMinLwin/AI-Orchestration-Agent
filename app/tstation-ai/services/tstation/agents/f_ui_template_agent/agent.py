@@ -39,7 +39,6 @@ RULES (STRICT):
 • Do NOT call a tool if the data is empty or null - skip that template type
 • Tools are for FORMATTING data only - never for storing data
 • Do NOT generate any text tokens - only call ONE tool
-• ALWAYS include assistant_response field - generate a concise Korean message that summarizes the data for the user (e.g., "서울 강남점에서 사용 가능한 Ventus S1 Evo3 2개 제품입니다.")
 
 ====================================================
 TEMPLATE TYPES (use ONE that best fits)
