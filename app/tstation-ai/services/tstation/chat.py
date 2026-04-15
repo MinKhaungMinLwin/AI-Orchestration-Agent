@@ -879,7 +879,13 @@ class StreamingMultiAgentCoordinator:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
         # Run UI Template Agent with accumulated data
-        if accumulated_tool_data:
+        # Only trigger when QnA tool was called OR non-support (FAQ) tools produced data
+        _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
+        _has_non_support_data = any(
+            item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
+            for item in accumulated_tool_data
+        )
+        if accumulated_tool_data and (_has_qna or _has_non_support_data):
             logger.info(f"[COORDINATOR] Running UI Template Agent with {len(accumulated_tool_data)} tool outputs")
 
             # Build context for UI Template Agent
