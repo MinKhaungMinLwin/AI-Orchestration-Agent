@@ -831,6 +831,8 @@ class StreamingMultiAgentCoordinator:
             Stream events from all agents in sequence
         """
         # Classify if domains not provided
+        # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
+        original_messages = list(messages)
         if domains is None:
             domains, routing_result = self.classify_multi_intent(messages)
             messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
@@ -1029,8 +1031,9 @@ class StreamingMultiAgentCoordinator:
                     "content": slot_context,
                 })
 
-            # 2. Original messages (already contains user_context)
-            ui_messages.extend(list(messages))
+            # 2. Original messages WITHOUT conversation context injection
+            # (avoid confusing UI Template Agent with routing next_action instructions)
+            ui_messages.extend(original_messages)
 
             # 3. Append accumulated context
             for prev_domain, content in accumulated_context.items():
@@ -1046,10 +1049,17 @@ class StreamingMultiAgentCoordinator:
                     break
 
             # 4. Append tool data summary LAST
+            # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
+            # The actual data is at item["data"]["data"] (nested inside API response wrapper)
             tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
             ui_messages.append({
                 "role": "assistant",
-                "content": f"[Accumulated tool data for UI rendering]\n{tool_summary}"
+                "content": (
+                    "[Accumulated tool data for UI rendering]\n"
+                    "Note: Each item has structure {\"tool\": \"...\", \"data\": {\"status\": \"...\", \"data\": {ACTUAL_DATA}}}.\n"
+                    "Extract ACTUAL_DATA from item[\"data\"][\"data\"] for template rendering.\n\n"
+                    f"{tool_summary}"
+                )
             })
             ui_messages.append({
                 "role": "user",

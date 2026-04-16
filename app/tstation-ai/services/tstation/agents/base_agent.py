@@ -104,7 +104,11 @@ class BaseAgent(ABC):
         Use this when you want to format tool outputs as UI templates directly.
         """
         import json
+        import logging
+        logger = logging.getLogger(__name__)
         agent = self._build_agent()
+
+        tool_called = False
 
         for mode, chunk in agent.stream(
             {"messages": messages},
@@ -114,22 +118,31 @@ class BaseAgent(ABC):
                 for node, update in chunk.items():
                     message = update["messages"][-1]
                     if isinstance(message, ToolMessage):
+                        tool_called = True
                         template_name = self.TOOL_TO_TEMPLATE_MAP.get(message.name)
-                        if template_name:
-                            # Parse tool output (message.content is JSON string)
-                            try:
-                                tool_output = json.loads(message.content)
-                                tool_data = tool_output.get("data", {})
-                            except (json.JSONDecodeError, TypeError):
-                                tool_data = {}
+                        if not template_name:
+                            logger.warning(f"[UI_TEMPLATE] Tool {message.name} has no template mapping")
+                            continue
+                        # Parse tool output (message.content is JSON string)
+                        try:
+                            tool_output = json.loads(message.content)
+                            tool_data = tool_output.get("data", {})
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(f"[UI_TEMPLATE] Failed to parse tool output for {message.name}")
+                            tool_data = {}
 
-                            # Skip if tool_data is null or empty
-                            if not tool_data:
-                                continue
+                        # Skip if tool_data is null or empty
+                        if not tool_data:
+                            logger.warning(f"[UI_TEMPLATE] Empty tool_data for {message.name}, skipping")
+                            continue
 
-                            # Yield data event with tool's actual output data
-                            yield {
-                                "type": "data",
-                                "template": template_name,
-                                "data": tool_data,
-                            }
+                        # Yield data event with tool's actual output data
+                        yield {
+                            "type": "data",
+                            "template": template_name,
+                            "data": tool_data,
+                        }
+
+
+        if not tool_called:
+            logger.warning("[UI_TEMPLATE] Agent generated no tool calls — templates not rendered")
