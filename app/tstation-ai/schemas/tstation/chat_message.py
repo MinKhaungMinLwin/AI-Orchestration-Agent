@@ -96,3 +96,20 @@ class DeleteSessionResponse(BaseModel):
     success: bool = Field(..., description="Delete success flag")
     session_id: str = Field(..., description="Deleted session ID")
     messages_deleted: int = Field(default=0, description="Number of messages deleted")
+
+
+class AppendMessageRequest(BaseModel):
+    """Request to append a message to chat history."""
+    session_id: str = Field(..., description="Session ID")
+    content: str = Field(..., description="Message content")
+    role: str = Field(default="user", description="Role (user/assistant)")
+    template_data: Optional[dict] = Field(default=None, description="Optional template data for assistant messages")
+
+
+class AppendMessageResponse(BaseModel):
+    """Response after appending a message."""
+    success: bool = Field(..., description="Append success flag")
+    session_id: str = Field(..., description="Session ID")
+    msg_id: str = Field(..., description="Created message ID")
+    role: str = Field(..., description="Message role")
+    created_at: str = Field(..., description="Created timestamp")
