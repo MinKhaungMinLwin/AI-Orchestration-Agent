@@ -330,7 +330,7 @@ region_code - region/address keyword (optional)
 
 store_nm - store name keyword (optional)
   **Already normalized to Korean by system**
-  ⚠️ 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 필터링.
+  ⚠️ 매장 타입명(티스테이션, 더타이어샵)은 store_nm이 아닌 chl_sct_cd로 필터링.
   store_nm은 특정 지점명 검색에만 사용. Examples: '극동상사', '한국타이어'
   → Use as-is, do NOT modify or guess alternatives
 
@@ -362,16 +362,14 @@ Example of WRONG approach:
 |-------------|-----------|
 | 티스테이션, t'station, T'Station, 티스테 | "F" |
 | 더타이어샵, the tire shop, The Tire Shop, 타이어샵 | "S" |
-| HK샵, HK SHOP, HK shop, 에이치케이샵 | "C" |
 
 Examples:
   • "내 주변 매장 찾아줘" → chl_sct_cd 없음 (일반 검색)
   • "내 주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
   • "강남 더타이어샵 매장 보여줘" → region_code="강남", chl_sct_cd="S"
-  • "부산 HK샵 찾아줘" → region_code="부산", chl_sct_cd="C"
 
 ⚠️ 매장 타입 필터와 store_nm은 다릅니다:
-  • chl_sct_cd는 매장 유형(채널) 필터 — 티스테이션/더타이어샵/HK샵 전체를 필터링
+  • chl_sct_cd는 매장 유형(채널) 필터 — 티스테이션/더타이어샵 전체를 필터링
   • store_nm은 매장명 키워드 검색 — 특정 매장 이름으로 검색
   • 사용자가 "티스테이션 매장"이라고 하면 → chl_sct_cd="F" (매장 타입 필터)
   • 사용자가 "티스테이션 강남점"이라고 하면 → store_nm="티스테이션 강남점" (매장명 검색)
@@ -579,14 +577,45 @@ If shop_id_list is NOT known:
 → Call get_store_list_tool (with region_code or default region) to get candidate stores
 → Collect shop_id values from result
 
-**STEP 4: Check store inventory**
+**STEP 4: Check logistics inventory (물류재고 확인)**
+1. Call get_logistics_inventory_tool(goods_no=...)
+2. Check logistics_qty AND rsv_sale_yn from the response (save rsv_sale_yn for STEP 6)
+
+**Case A: logistics_qty > 0 (물류 재고 있음)**
+→ 해당 매장에서 장착 가능
+→ Present: "물류 재고가 확인되어 해당 매장에서 장착 가능합니다."
+→ END (ask follow-up: 예약/주문 진행 여부)
+
+**Case B: logistics_qty = 0 or null (물류 재고 없음)**
+→ Go to STEP 5
+
+**STEP 5: Check store inventory (매장재고 확인)**
 1. Build goods_list: [{{"goodsNo": goods_no, "qty": qty}}]
 2. Build shop_id_list: [{{"shopId": "..."}}] from STEP 3
 3. Call get_store_inventory_tool
-4. Present results:
-   • todayShopArray → stores that can install today
-   • tnaShopArray → stores eligible for T바로배송 (T-NA) delivery
-5. If both arrays empty → product not available at requested stores
+4. Check results:
+
+**Case A: todayShopArray 또는 tnaShopArray에 해당 매장 있음**
+→ 장착 가능
+→ Present:
+  • todayShopArray에 있음 → "오늘 장착 가능합니다."
+  • tnaShopArray에 있음 → "T바로배송으로 장착 가능합니다."
+→ END (ask follow-up: 예약/주문 진행 여부)
+
+**Case B: 둘 다 없음**
+→ Go to STEP 6
+
+**STEP 6: Check reservation sale (예약판매 확인)**
+1. Check rsv_sale_yn from STEP 4 response
+2. Determine result:
+
+**Case A: rsv_sale_yn = "Y"**
+→ Present: "현재 즉시 장착은 어렵지만, 예약 주문이 가능합니다. 워킹데이 기준 약 14일 이후 장착 가능합니다."
+→ Ask: "예약 주문을 진행하시겠어요?"
+
+**Case B: rsv_sale_yn != "Y" or null**
+→ Present: "죄송하지만, 현재 해당 매장에서 이 상품의 장착이 어렵습니다."
+→ Suggest: "다른 매장을 검색해 드릴까요, 아니면 다른 상품을 추천해 드릴까요?"
 
 
 ------------------------------------
@@ -612,7 +641,7 @@ Steps:
    - region_code (if provided): already in Korean (e.g., '강남', '부산')
    - store_nm (if provided): specific branch name keyword (e.g., '극동상사', '한국타이어')
    - all_my_t_only (if user requests "all my T" stores): True
-   - chl_sct_cd (if user mentions shop type): "F", "S", or "C"
+   - chl_sct_cd (if user mentions shop type): "F" or "S"
 
 2. Use parameters EXACTLY AS PROVIDED:
    - Call get_store_list_tool(region_code, store_nm, all_my_t_only=all_my_t_only, chl_sct_cd=chl_sct_cd) with the values provided
@@ -629,7 +658,7 @@ If user expresses visit intent in the same message (e.g., "방문할게", "visit
 
 **Important:**
 - If region_code is provided as "부산" → use it as-is, never guess variants
-- 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 전달
+- 매장 타입명(티스테이션, 더타이어샵)은 store_nm이 아닌 chl_sct_cd로 전달
 - Do NOT try alternative spellings or brand names if search fails
 
 ------------------------------------
@@ -689,7 +718,7 @@ When user asks for stores near a place, address, or landmark:
 
 **STEP 2: Search Nearby Stores**
 2. Call get_nearby_stores_tool with coordinates (x → user_xpos, y → user_ypos)
-   → If user mentioned a shop type (티스테이션/더타이어샵/HK샵), also pass chl_sct_cd
+   → If user mentioned a shop type (티스테이션/더타이어샵), also pass chl_sct_cd
    → Returns list of stores with: shop_id, shop_nm, distance, address, etc.
 
 **STEP 2-1: No Results → Expand Radius**
