@@ -2,9 +2,9 @@ from common.curr_time import get_current_time
 from services.tstation.agents.base_agent import BaseAgent
 
 
-SYSTEM_PROMPT = f"""
+SYSTEM_PROMPT_TEMPLATE = """
 Current Time Information:
-{get_current_time()}
+{current_time}
 
 ---
 
@@ -417,11 +417,15 @@ discover, validate, and purchase tires.
 """
 
 
+def get_system_prompt():
+    return SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+
+
 class LeadingAgent(BaseAgent):
     def __init__(self, llm):
         super().__init__(
             model=llm,
             tools=None,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=get_system_prompt,
             name="Leading Agent",
         )

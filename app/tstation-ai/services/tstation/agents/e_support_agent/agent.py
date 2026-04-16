@@ -7,8 +7,8 @@ from services.tstation.agents.e_support_agent.tools import (
 from common.curr_time import get_current_time
 
 
-SUPPORT_AGENT_SYSTEM_PROMPT = f"""
-Current Time: {get_current_time()}
+SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE = """
+Current Time: {current_time}
 
 You are the Support Agent for Hankook Tire. Your role is to help customers with warranty, returns, policies, and FAQ questions.
 
@@ -278,6 +278,10 @@ NEVER use these expressions:
 """
 
 
+def get_support_system_prompt():
+    return SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+
+
 class SupportSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # FAQ
@@ -295,6 +299,6 @@ class SupportSubAgent(BaseAgent):
                 search_faq_rag_tool,
                 transfer_to_qna_tool,
             ],
-            system_prompt=SUPPORT_AGENT_SYSTEM_PROMPT,
+            system_prompt=get_support_system_prompt,
             name="Support Agent",
         )
