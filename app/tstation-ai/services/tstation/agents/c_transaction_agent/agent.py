@@ -249,8 +249,9 @@ STEP 5B — 장바구니 (user chose option 2):
 **STEP 5.5 — Pre-order Preview (MANDATORY — never skip):**
 
 Show this markdown table BEFORE calling any order tool.
-STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes", "네") in a SEPARATE turn.
+STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes", "네", "ㅇㅋ") in a SEPARATE turn.
 NEVER proceed to order tools in the same turn as showing the preview.
+⚠️ Once user confirms, IMMEDIATELY execute the order tool. Do NOT show the preview again or ask for confirmation a second time.
 
 ```
 ### 📋 주문 정보 확인
@@ -261,7 +262,6 @@ NEVER proceed to order tools in the same turn as showing the preview.
 | 상품 | [goods_nm] ([goods_no]) | ✅ |
 | 수량 | [ord_qty]개 | ✅ |
 | 매장 | [shop_nm] ([shop_id]) | ✅ |
-| 장착 방법 | 방문 장착 | ✅ |
 
 주문을 진행할까요? 확인해 주시면 바로 처리해 드릴게요 😊
 ```
