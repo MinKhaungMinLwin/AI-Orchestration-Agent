@@ -1,24 +1,30 @@
 from http import HTTPStatus
-from typing import Any, cast
-from urllib.parse import quote
+from typing import Any
 
 import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.car_model_group_response import CarModelGroupResponse
 from ...models.http_validation_error import HTTPValidationError
-from ...types import Response
+from ...types import UNSET, Response
 
 
 def _get_kwargs(
-    session_id: str,
+    *,
+    keyword: str,
 ) -> dict[str, Any]:
 
+    params: dict[str, Any] = {}
+
+    params["keyword"] = keyword
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+
     _kwargs: dict[str, Any] = {
-        "method": "delete",
-        "url": "/api/messages/{session_id}".format(
-            session_id=quote(str(session_id), safe=""),
-        ),
+        "method": "get",
+        "url": "/api/vehicle/models",
+        "params": params,
     }
 
     return _kwargs
@@ -26,10 +32,11 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | HTTPValidationError | None:
-    if response.status_code == 204:
-        response_204 = cast(Any, None)
-        return response_204
+) -> CarModelGroupResponse | HTTPValidationError | None:
+    if response.status_code == 200:
+        response_200 = CarModelGroupResponse.from_dict(response.json())
+
+        return response_200
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -44,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | HTTPValidationError]:
+) -> Response[CarModelGroupResponse | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -54,27 +61,27 @@ def _build_response(
 
 
 def sync_detailed(
-    session_id: str,
     *,
     client: AuthenticatedClient,
-) -> Response[Any | HTTPValidationError]:
-    """세션 메시지 이력 삭제
+    keyword: str,
+) -> Response[CarModelGroupResponse | HTTPValidationError]:
+    """차종 모델 그룹 검색 (1단계)
 
-     session_id에 해당하는 모든 메시지를 삭제합니다.
+     차량 모델명 키워드로 CAR_MODEL_DET 그룹별 요약을 반환합니다. 각 그룹에 연식 범위(year_from~year_to)와 트림 수(trim_count)가 포함됩니다.
 
     Args:
-        session_id (str):
+        keyword (str): 검색할 차량 모델명 키워드 (예: 'K7', '소나타')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | HTTPValidationError]
+        Response[CarModelGroupResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        session_id=session_id,
+        keyword=keyword,
     )
 
     response = client.get_httpx_client().request(
@@ -85,53 +92,53 @@ def sync_detailed(
 
 
 def sync(
-    session_id: str,
     *,
     client: AuthenticatedClient,
-) -> Any | HTTPValidationError | None:
-    """세션 메시지 이력 삭제
+    keyword: str,
+) -> CarModelGroupResponse | HTTPValidationError | None:
+    """차종 모델 그룹 검색 (1단계)
 
-     session_id에 해당하는 모든 메시지를 삭제합니다.
+     차량 모델명 키워드로 CAR_MODEL_DET 그룹별 요약을 반환합니다. 각 그룹에 연식 범위(year_from~year_to)와 트림 수(trim_count)가 포함됩니다.
 
     Args:
-        session_id (str):
+        keyword (str): 검색할 차량 모델명 키워드 (예: 'K7', '소나타')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | HTTPValidationError
+        CarModelGroupResponse | HTTPValidationError
     """
 
     return sync_detailed(
-        session_id=session_id,
         client=client,
+        keyword=keyword,
     ).parsed
 
 
 async def asyncio_detailed(
-    session_id: str,
     *,
     client: AuthenticatedClient,
-) -> Response[Any | HTTPValidationError]:
-    """세션 메시지 이력 삭제
+    keyword: str,
+) -> Response[CarModelGroupResponse | HTTPValidationError]:
+    """차종 모델 그룹 검색 (1단계)
 
-     session_id에 해당하는 모든 메시지를 삭제합니다.
+     차량 모델명 키워드로 CAR_MODEL_DET 그룹별 요약을 반환합니다. 각 그룹에 연식 범위(year_from~year_to)와 트림 수(trim_count)가 포함됩니다.
 
     Args:
-        session_id (str):
+        keyword (str): 검색할 차량 모델명 키워드 (예: 'K7', '소나타')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | HTTPValidationError]
+        Response[CarModelGroupResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        session_id=session_id,
+        keyword=keyword,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -140,28 +147,28 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    session_id: str,
     *,
     client: AuthenticatedClient,
-) -> Any | HTTPValidationError | None:
-    """세션 메시지 이력 삭제
+    keyword: str,
+) -> CarModelGroupResponse | HTTPValidationError | None:
+    """차종 모델 그룹 검색 (1단계)
 
-     session_id에 해당하는 모든 메시지를 삭제합니다.
+     차량 모델명 키워드로 CAR_MODEL_DET 그룹별 요약을 반환합니다. 각 그룹에 연식 범위(year_from~year_to)와 트림 수(trim_count)가 포함됩니다.
 
     Args:
-        session_id (str):
+        keyword (str): 검색할 차량 모델명 키워드 (예: 'K7', '소나타')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | HTTPValidationError
+        CarModelGroupResponse | HTTPValidationError
     """
 
     return (
         await asyncio_detailed(
-            session_id=session_id,
             client=client,
+            keyword=keyword,
         )
     ).parsed

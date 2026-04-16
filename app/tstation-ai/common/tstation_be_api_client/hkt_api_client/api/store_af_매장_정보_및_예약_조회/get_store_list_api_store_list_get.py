@@ -142,7 +142,7 @@ def sync_detailed(
         radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
         svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
-        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP
+        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -197,7 +197,7 @@ def sync(
         radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
         svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
-        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP
+        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -247,7 +247,7 @@ async def asyncio_detailed(
         radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
         svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
-        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP
+        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -300,7 +300,7 @@ async def asyncio(
         radius_km (float | Unset): 좌표 검색 반경 (km), 기본값 20km Default: 20.0.
         svc_codes (list[str] | None | Unset): 서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
-        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP
+        chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:

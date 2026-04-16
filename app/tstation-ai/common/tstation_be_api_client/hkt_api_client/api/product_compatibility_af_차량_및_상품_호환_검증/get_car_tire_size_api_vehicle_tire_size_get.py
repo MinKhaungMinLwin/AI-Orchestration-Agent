@@ -5,38 +5,38 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.car_tire_size_response import CarTireSizeResponse
 from ...models.http_validation_error import HTTPValidationError
-from ...models.message_create import MessageCreate
-from ...models.message_response import MessageResponse
-from ...types import Response
+from ...types import UNSET, Response
 
 
 def _get_kwargs(
     *,
-    body: MessageCreate,
+    car_lnc_cd: str,
 ) -> dict[str, Any]:
-    headers: dict[str, Any] = {}
+
+    params: dict[str, Any] = {}
+
+    params["car_lnc_cd"] = car_lnc_cd
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
-        "method": "post",
-        "url": "/api/messages",
+        "method": "get",
+        "url": "/api/vehicle/tire-size",
+        "params": params,
     }
 
-    _kwargs["json"] = body.to_dict()
-
-    headers["Content-Type"] = "application/json"
-
-    _kwargs["headers"] = headers
     return _kwargs
 
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> HTTPValidationError | MessageResponse | None:
-    if response.status_code == 201:
-        response_201 = MessageResponse.from_dict(response.json())
+) -> CarTireSizeResponse | HTTPValidationError | None:
+    if response.status_code == 200:
+        response_200 = CarTireSizeResponse.from_dict(response.json())
 
-        return response_201
+        return response_200
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -51,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[HTTPValidationError | MessageResponse]:
+) -> Response[CarTireSizeResponse | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,26 +63,25 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    body: MessageCreate,
-) -> Response[HTTPValidationError | MessageResponse]:
-    """새 메시지 저장 및 어시스턴트 응답 처리
+    car_lnc_cd: str,
+) -> Response[CarTireSizeResponse | HTTPValidationError]:
+    """차량 타이어 사이즈 조회 (3단계)
 
-     사용자 메시지를 status='received'로 저장합니다. 이후 Agent/LLM 호출 결과를 어시스턴트 메시지로 status='completed'와 함께 삽입합니다. LLM
-    호출 실패 시 사용자 메시지 status를 'failed'로 업데이트합니다.
+     CAR_LNC_CD로 해당 차량의 전륜/후륜 타이어 사이즈를 반환합니다.
 
     Args:
-        body (MessageCreate):
+        car_lnc_cd (str): 차량 출시 코드
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | MessageResponse]
+        Response[CarTireSizeResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        body=body,
+        car_lnc_cd=car_lnc_cd,
     )
 
     response = client.get_httpx_client().request(
@@ -95,53 +94,51 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    body: MessageCreate,
-) -> HTTPValidationError | MessageResponse | None:
-    """새 메시지 저장 및 어시스턴트 응답 처리
+    car_lnc_cd: str,
+) -> CarTireSizeResponse | HTTPValidationError | None:
+    """차량 타이어 사이즈 조회 (3단계)
 
-     사용자 메시지를 status='received'로 저장합니다. 이후 Agent/LLM 호출 결과를 어시스턴트 메시지로 status='completed'와 함께 삽입합니다. LLM
-    호출 실패 시 사용자 메시지 status를 'failed'로 업데이트합니다.
+     CAR_LNC_CD로 해당 차량의 전륜/후륜 타이어 사이즈를 반환합니다.
 
     Args:
-        body (MessageCreate):
+        car_lnc_cd (str): 차량 출시 코드
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | MessageResponse
+        CarTireSizeResponse | HTTPValidationError
     """
 
     return sync_detailed(
         client=client,
-        body=body,
+        car_lnc_cd=car_lnc_cd,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    body: MessageCreate,
-) -> Response[HTTPValidationError | MessageResponse]:
-    """새 메시지 저장 및 어시스턴트 응답 처리
+    car_lnc_cd: str,
+) -> Response[CarTireSizeResponse | HTTPValidationError]:
+    """차량 타이어 사이즈 조회 (3단계)
 
-     사용자 메시지를 status='received'로 저장합니다. 이후 Agent/LLM 호출 결과를 어시스턴트 메시지로 status='completed'와 함께 삽입합니다. LLM
-    호출 실패 시 사용자 메시지 status를 'failed'로 업데이트합니다.
+     CAR_LNC_CD로 해당 차량의 전륜/후륜 타이어 사이즈를 반환합니다.
 
     Args:
-        body (MessageCreate):
+        car_lnc_cd (str): 차량 출시 코드
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | MessageResponse]
+        Response[CarTireSizeResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        body=body,
+        car_lnc_cd=car_lnc_cd,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -152,27 +149,26 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    body: MessageCreate,
-) -> HTTPValidationError | MessageResponse | None:
-    """새 메시지 저장 및 어시스턴트 응답 처리
+    car_lnc_cd: str,
+) -> CarTireSizeResponse | HTTPValidationError | None:
+    """차량 타이어 사이즈 조회 (3단계)
 
-     사용자 메시지를 status='received'로 저장합니다. 이후 Agent/LLM 호출 결과를 어시스턴트 메시지로 status='completed'와 함께 삽입합니다. LLM
-    호출 실패 시 사용자 메시지 status를 'failed'로 업데이트합니다.
+     CAR_LNC_CD로 해당 차량의 전륜/후륜 타이어 사이즈를 반환합니다.
 
     Args:
-        body (MessageCreate):
+        car_lnc_cd (str): 차량 출시 코드
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | MessageResponse
+        CarTireSizeResponse | HTTPValidationError
     """
 
     return (
         await asyncio_detailed(
             client=client,
-            body=body,
+            car_lnc_cd=car_lnc_cd,
         )
     ).parsed

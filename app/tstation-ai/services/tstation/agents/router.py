@@ -128,6 +128,7 @@ class AgentDomain(BaseModel):
         - Recommend tires (vehicle-specific or general)
         - Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
         - Product specifications, features, technology
+        - Search car model by name to get trims/tire size (e.g., "K7 타이어", "소나타 연식별 사이즈")
         - **Price for product by NAME (goods_no NOT known)** → DISCOVERY first to find goods_no
         Examples: "Find tires called Ventus", "What tires fit my car {{vehicle_number}}?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격"
 

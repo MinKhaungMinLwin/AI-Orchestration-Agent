@@ -61,10 +61,10 @@ def list_product_tool(
         - rate (float): Rating score. Rule: required, 0 <= rate <= 5.
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
         - description (str): Comprehensive product info in markdown format. Include ALL available from product data:
-            • pc_prod_remark_desc: Key features (주요 특장점)
-            • pc_prod_tech_desc: Technology description (기술력 설명)
-            • slogan: Product slogan
-            • rating: review count and average rating
+            • pc_prod_remark_desc: 주요 특장점
+            • pc_prod_tech_desc: 기술력 설명
+            • slogan: 슬로건
+            • rating: 리뷰 수 및 평균 평점
             • Any other available fields
             Format as readable markdown with sections.
 
@@ -131,13 +131,13 @@ def list_location_tool(
         - todayInstall (bool): Today Install badge (src: is_installable from /api/store/detail). Rule: optional, default false.
         - tnaDelivery (bool): T-NA Delivery badge (src: is_tna_delivery from /api/store/detail). Rule: optional, default false.
         - description (str): Comprehensive store info in markdown format. Include ALL available from store data:
-            • Business hours: shop_biz_strt_wday~shop_biz_end_wday, shop_biz_strt_time~shop_biz_end_time
-            • Saturday hours: shop_sat_strt_time~shop_sat_end_time
-            • Holiday closed: holiday
-            • Phone: tel_no
-            • Services: is_installable, is_tna_delivery, is_all_my_t
-            • Address: addr_base+addr_dtl or road_addr_base+road_addr_dtl
-            • Available slots: available_slots (if available)
+            • 영업시간: shop_biz_strt_wday~shop_biz_end_wday, shop_biz_strt_time~shop_biz_end_time
+            • 토요일: shop_sat_strt_time~shop_sat_end_time
+            • 휴무일: holiday
+            • 전화: tel_no
+            • 매장유형: is_installable, is_tna_delivery, is_all_my_t
+            • 주소: addr_base+addr_dtl or road_addr_base+road_addr_dtl
+            • 예약가능시간: available_slots (if available)
             Format as readable markdown.
 
     Returns:

@@ -5,25 +5,25 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.car_trim_response import CarTrimResponse
 from ...models.http_validation_error import HTTPValidationError
-from ...models.review_response import ReviewResponse
 from ...types import UNSET, Response
 
 
 def _get_kwargs(
     *,
-    goods_no: str,
+    car_model_det: str,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["goods_no"] = goods_no
+    params["car_model_det"] = car_model_det
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/api/product/reviews",
+        "url": "/api/vehicle/trims",
         "params": params,
     }
 
@@ -32,9 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> HTTPValidationError | ReviewResponse | None:
+) -> CarTrimResponse | HTTPValidationError | None:
     if response.status_code == 200:
-        response_200 = ReviewResponse.from_dict(response.json())
+        response_200 = CarTrimResponse.from_dict(response.json())
 
         return response_200
 
@@ -51,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[HTTPValidationError | ReviewResponse]:
+) -> Response[CarTrimResponse | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,25 +63,25 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> Response[HTTPValidationError | ReviewResponse]:
-    """상품 리뷰 조회
+    car_model_det: str,
+) -> Response[CarTrimResponse | HTTPValidationError]:
+    """차종 트림 목록 조회 (2단계)
 
-     상품 번호(goods_no)로 해당 상품의 리뷰 목록과 평점 정보(리뷰 수, 평균 평점)를 반환합니다.
+     CAR_MODEL_DET로 해당 모델의 세부 트림(연식/차량명/출시코드) 목록을 반환합니다.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000314254)
+        car_model_det (str): 차량 상세 모델명 (예: '더 뉴 K7(VG)')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | ReviewResponse]
+        Response[CarTrimResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        goods_no=goods_no,
+        car_model_det=car_model_det,
     )
 
     response = client.get_httpx_client().request(
@@ -94,51 +94,51 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> HTTPValidationError | ReviewResponse | None:
-    """상품 리뷰 조회
+    car_model_det: str,
+) -> CarTrimResponse | HTTPValidationError | None:
+    """차종 트림 목록 조회 (2단계)
 
-     상품 번호(goods_no)로 해당 상품의 리뷰 목록과 평점 정보(리뷰 수, 평균 평점)를 반환합니다.
+     CAR_MODEL_DET로 해당 모델의 세부 트림(연식/차량명/출시코드) 목록을 반환합니다.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000314254)
+        car_model_det (str): 차량 상세 모델명 (예: '더 뉴 K7(VG)')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | ReviewResponse
+        CarTrimResponse | HTTPValidationError
     """
 
     return sync_detailed(
         client=client,
-        goods_no=goods_no,
+        car_model_det=car_model_det,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> Response[HTTPValidationError | ReviewResponse]:
-    """상품 리뷰 조회
+    car_model_det: str,
+) -> Response[CarTrimResponse | HTTPValidationError]:
+    """차종 트림 목록 조회 (2단계)
 
-     상품 번호(goods_no)로 해당 상품의 리뷰 목록과 평점 정보(리뷰 수, 평균 평점)를 반환합니다.
+     CAR_MODEL_DET로 해당 모델의 세부 트림(연식/차량명/출시코드) 목록을 반환합니다.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000314254)
+        car_model_det (str): 차량 상세 모델명 (예: '더 뉴 K7(VG)')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[HTTPValidationError | ReviewResponse]
+        Response[CarTrimResponse | HTTPValidationError]
     """
 
     kwargs = _get_kwargs(
-        goods_no=goods_no,
+        car_model_det=car_model_det,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -149,26 +149,26 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
-) -> HTTPValidationError | ReviewResponse | None:
-    """상품 리뷰 조회
+    car_model_det: str,
+) -> CarTrimResponse | HTTPValidationError | None:
+    """차종 트림 목록 조회 (2단계)
 
-     상품 번호(goods_no)로 해당 상품의 리뷰 목록과 평점 정보(리뷰 수, 평균 평점)를 반환합니다.
+     CAR_MODEL_DET로 해당 모델의 세부 트림(연식/차량명/출시코드) 목록을 반환합니다.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000314254)
+        car_model_det (str): 차량 상세 모델명 (예: '더 뉴 K7(VG)')
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        HTTPValidationError | ReviewResponse
+        CarTrimResponse | HTTPValidationError
     """
 
     return (
         await asyncio_detailed(
             client=client,
-            goods_no=goods_no,
+            car_model_det=car_model_det,
         )
     ).parsed

@@ -2,8 +2,13 @@
 
 from .available_coupon_item import AvailableCouponItem
 from .available_coupon_response import AvailableCouponResponse
+from .car_model_group import CarModelGroup
+from .car_model_group_response import CarModelGroupResponse
 from .car_model_search_item import CarModelSearchItem
 from .car_model_search_response import CarModelSearchResponse
+from .car_tire_size_response import CarTireSizeResponse
+from .car_trim_item import CarTrimItem
+from .car_trim_response import CarTrimResponse
 from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
 from .deal_item import DealItem
@@ -36,15 +41,11 @@ from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
 from .product_search_item import ProductSearchItem
 from .product_search_response import ProductSearchResponse
-from .quick_order_request import QuickOrderRequest
-from .quick_order_response import QuickOrderResponse
 from .rcmd_goods_item import RcmdGoodsItem
 from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
-from .review_data import ReviewData
 from .review_item import ReviewItem
 from .review_rating import ReviewRating
-from .review_response import ReviewResponse
 from .session_info import SessionInfo
 from .session_list_response import SessionListResponse
 from .set_order_form_ai_request import SetOrderFormAIRequest
@@ -63,8 +64,13 @@ from .validation_error_context import ValidationErrorContext
 __all__ = (
     "AvailableCouponItem",
     "AvailableCouponResponse",
+    "CarModelGroup",
+    "CarModelGroupResponse",
     "CarModelSearchItem",
     "CarModelSearchResponse",
+    "CarTireSizeResponse",
+    "CarTrimItem",
+    "CarTrimResponse",
     "ChatHistoryResponse",
     "CompatibilityResponse",
     "DealItem",
@@ -97,15 +103,11 @@ __all__ = (
     "ProductImage",
     "ProductSearchItem",
     "ProductSearchResponse",
-    "QuickOrderRequest",
-    "QuickOrderResponse",
     "RcmdGoodsItem",
     "RcmdType",
     "RecommendationResponse",
-    "ReviewData",
     "ReviewItem",
     "ReviewRating",
-    "ReviewResponse",
     "SessionInfo",
     "SessionListResponse",
     "SetOrderFormAIRequest",

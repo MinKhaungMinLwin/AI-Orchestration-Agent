@@ -245,11 +245,11 @@ def escalate_tool(
         summary (str | None): Conversation summary (URL encoded).
 
     Example Inputs:
-        - {"mbr_no": "M200012931", "inq_type_cd": "ORDER", "msg_count": 3, "summary": "Customer wants to cancel order"}
-        - {"mbr_no": "M200012932", "inq_type_cd": "DELIVERY", "msg_count": 2, "summary": "Package delayed"}
-        - {"mbr_no": "M200012933", "inq_type_cd": "CLAIM", "msg_count": 5, "summary": "Product damaged on delivery"}
-        - {"mbr_no": "M200012934", "inq_type_cd": "MEMBERSHIP", "msg_count": 1, "summary": "Membership upgrade request"}
-        - {"mbr_no": "M200012935", "inq_type_cd": "OTHER", "msg_count": 4, "summary": "General inquiry about products"}
+        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "ORDER", "msg_count": 3, "summary": "Customer wants to cancel order"}
+        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "DELIVERY", "msg_count": 2, "summary": "Package delayed"}
+        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "CLAIM", "msg_count": 5, "summary": "Product damaged on delivery"}
+        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "MEMBERSHIP", "msg_count": 1, "summary": "Membership upgrade request"}
+        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "OTHER", "msg_count": 4, "summary": "General inquiry about products"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}

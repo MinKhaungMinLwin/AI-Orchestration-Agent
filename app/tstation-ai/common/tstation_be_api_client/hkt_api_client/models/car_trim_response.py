@@ -7,30 +7,38 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 if TYPE_CHECKING:
-    from ..models.review_data import ReviewData
+    from ..models.car_trim_item import CarTrimItem
 
 
-T = TypeVar("T", bound="ReviewResponse")
+T = TypeVar("T", bound="CarTrimResponse")
 
 
 @_attrs_define
-class ReviewResponse:
+class CarTrimResponse:
     """
     Attributes:
-        data (ReviewData):
+        car_model_det (str): 차량 상세 모델명
+        items (list[CarTrimItem]):
     """
 
-    data: ReviewData
+    car_model_det: str
+    items: list[CarTrimItem]
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        data = self.data.to_dict()
+        car_model_det = self.car_model_det
+
+        items = []
+        for items_item_data in self.items:
+            items_item = items_item_data.to_dict()
+            items.append(items_item)
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "data": data,
+                "car_model_det": car_model_det,
+                "items": items,
             }
         )
 
@@ -38,17 +46,25 @@ class ReviewResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.review_data import ReviewData
+        from ..models.car_trim_item import CarTrimItem
 
         d = dict(src_dict)
-        data = ReviewData.from_dict(d.pop("data"))
+        car_model_det = d.pop("car_model_det")
 
-        review_response = cls(
-            data=data,
+        items = []
+        _items = d.pop("items")
+        for items_item_data in _items:
+            items_item = CarTrimItem.from_dict(items_item_data)
+
+            items.append(items_item)
+
+        car_trim_response = cls(
+            car_model_det=car_model_det,
+            items=items,
         )
 
-        review_response.additional_properties = d
-        return review_response
+        car_trim_response.additional_properties = d
+        return car_trim_response
 
     @property
     def additional_keys(self) -> list[str]:
