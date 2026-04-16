@@ -29,6 +29,8 @@ from schemas.tstation.chat_message import (
     UserInfoResponse,
     ValidateTokenResponse,
     DeleteSessionResponse,
+    AppendMessageRequest,
+    AppendMessageResponse,
 )
 from services.tstation.chat_history_service import get_chat_history_service
 from services.tstation.chat import TStationChatServiceV2
@@ -255,6 +257,61 @@ async def get_history(
         session_id=session_id,
         total=len(messages),
         messages=[MessageResponse(**msg) for msg in messages],
+    )
+
+
+@router.post("/append", dependencies=[Depends(get_api_key)], response_model=AppendMessageResponse)
+async def append_message(
+    request: AppendMessageRequest,
+    user: dict = Security(get_api_key),
+):
+    """
+    Append a message to chat history (without AI processing).
+
+    Parameters:
+
+    - Header:
+        - Authorization (str): Bearer JWT token for authentication
+
+    - Request:
+        - session_id (str): Session ID
+        - content (str): Message content
+        - role (str): "user" or "assistant" (default "user")
+        - template_data (dict): Optional template data for assistant messages
+
+    - Response:
+        - success (bool): Append success flag
+        - session_id (str): Session ID
+        - msg_id (str): Created message ID
+        - role (str): Message role
+        - created_at (str): Created timestamp
+    """
+    user_id = user.get("user_id")
+
+    service = get_chat_history_service()
+
+    # Verify session exists for this user
+    if not service.session_exists(request.session_id, user_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Validate role
+    if request.role not in ("user", "assistant"):
+        raise HTTPException(status_code=400, detail="Role must be 'user' or 'assistant'")
+
+    # Append message (saved at end due to timestamp score)
+    msg_id = service.save_message(
+        session_id=request.session_id,
+        role=request.role,
+        content=request.content,
+        template_data=request.template_data,
+    )
+
+    return AppendMessageResponse(
+        success=True,
+        session_id=request.session_id,
+        msg_id=msg_id,
+        role=request.role,
+        created_at=get_current_time(),
     )
 
 
