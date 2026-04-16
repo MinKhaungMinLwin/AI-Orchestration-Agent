@@ -354,3 +354,43 @@ def order_complete_tool(
         "assistantResponse": assistant_response,
         "metadata": metadata,
     })
+
+
+@tool
+def cheapest_product_tool(
+    assistant_response: Annotated[str, "Message text to display with template"],
+    items: Annotated[list[dict], "List with single cheapest product. Each: title (str), originalPrice (int), quantity (int), totalDiscount (int), productDiscount (int), couponDiscount (int), finalPrice (int)"],
+    metadata: Annotated[list[dict], "List of metadata objects. Each: goodsId (str, required)."],
+) -> dict:
+    """Render cheapest product / price comparison card.
+
+    Used when compare_discount_tool is called - shows ONLY the cheapest product.
+    Displays price breakdown: original price, discounts, and final price.
+
+    Args:
+        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
+        items: List with single cheapest product. Each contains:
+            - title (str): Product name (e.g., "Ventus S2 AS")
+            - originalPrice (int): Original price per unit (sale_prc)
+            - quantity (int): Quantity (e.g., 4 for 4 tires)
+            - totalDiscount (int): Total discount amount (total_discount)
+            - productDiscount (int): Product discount per unit (product_discount)
+            - couponDiscount (int): Coupon discount per unit (coupon_discount)
+            - finalPrice (int): Final price per unit after all discounts (final_unit_price)
+        metadata: List of metadata objects with product IDs.
+
+    Example item:
+        {
+            "title": "Ventus S2 AS",
+            "originalPrice": 521000,
+            "quantity": 4,
+            "totalDiscount": 22000,
+            "productDiscount": 13000,
+            "couponDiscount": 9000,
+            "finalPrice": 499000
+        }
+
+    Returns:
+        {"status": "success", "http_status": 200, "data": {"cheapestProduct": items, "assistantResponse": assistant_response, "metadata": metadata}}
+    """
+    return _success_response(200, {"cheapestProduct": items, "assistantResponse": assistant_response, "metadata": metadata})

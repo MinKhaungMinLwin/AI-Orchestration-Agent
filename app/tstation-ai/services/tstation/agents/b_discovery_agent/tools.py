@@ -26,6 +26,9 @@ from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_events_api_events_get import sync_detailed as get_events
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
 
+# Price
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
+
 # Member Car Info
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
 
@@ -472,6 +475,57 @@ def get_deals_tool():
     except Exception as e:
         logger.exception("[TOOL][get_deals_tool] Failed")
         return _error_response(None, str(e), "Failed to get deals")
+
+
+@tool
+def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
+    """Compare discount prices across multiple products.
+
+    Input multiple product numbers and quantity to compare:
+    - Regular price (sale_prc)
+    - Product discount (product_discount)
+    - Coupon discount (coupon_discount)
+    - Final unit price (final_unit_price)
+    - Total final price (final_price)
+    - Cheapest product number (cheapest_goods_no)
+
+    JWT token's affiliate_yn value automatically distinguishes general/affiliate members.
+    Returns cheapest_goods_no to identify the lowest-priced product.
+
+    Use this when:
+    - User wants to compare prices between two or more products
+    - User asks "which is cheaper", "price comparison", "비교" (compare)
+    - User has multiple product numbers and wants to find the best deal
+    - User asks for "cheapest", "가장 저렴한", "가장 싼" product
+
+    Args:
+        goods_no_list (list[str]): List of product numbers (e.g., ['G000000314254', 'G000000312692']).
+            Supports 2 or more products for comparison.
+        quantity (int): Quantity (minimum 1, default 1). Use 4 for full tire set.
+
+    Example Inputs:
+        - {"goods_no_list": ["G000000314254", "G000000312692"], "quantity": 4}
+        - {"goods_no_list": ["G000000313165", "G000000309860", "G000000313073"], "quantity": 2}
+        - {"goods_no_list": ["G000000314254", "G000000312692"], "quantity": 1}
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    """
+    logger.info("[TOOL][compare_discount_tool] Called with: goods_no_list=%s, quantity=%s", goods_no_list, quantity)
+
+    try:
+        response = get_discount_compare(client=get_client(), goods_no_list=goods_no_list, quantity=quantity)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to compare discount prices"
+            )
+        logger.info("[TOOL][compare_discount_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][compare_discount_tool] Failed")
+        return _error_response(None, str(e), "Failed to compare discount prices")
 
 
 # Add this new tool for YouTube video search related to hankook tire and tstation tv. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.

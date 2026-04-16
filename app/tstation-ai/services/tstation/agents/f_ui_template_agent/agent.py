@@ -10,6 +10,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     preorder_tool,
     order_complete_tool,
     qna_complete_tool,
+    cheapest_product_tool,
 )
 from common.curr_time import get_current_time
 
@@ -87,6 +88,21 @@ TEMPLATE TYPES (use ONE that best fits)
   - assistantResponse (str): Short Korean message (e.g., "1:1 문의 페이지로 이동합니다. 내용을 확인하고 제출해 주세요.")
   (camelCase, no underscore)
 
+• cheapest_product_tool → "cheapestProduct" - Cheapest product price card. Use when compare_discount_tool was called.
+
+  Data mapping from compare_discount_tool output:
+  - title: Product name from goods_no (find in previous agent messages)
+  - originalPrice: sale_prc (per unit, multiply by quantity for total)
+  - quantity: from compare_discount_tool input or context (e.g., 4 for 4 tires)
+  - totalDiscount: total_discount (per unit)
+  - productDiscount: product_discount (per unit)
+  - couponDiscount: coupon_discount (per unit)
+  - finalPrice: final_unit_price (per unit)
+
+  IMPORTANT: Show ONLY the cheapest product (items array with 1 item).
+  Extract goods_no from compare_discount_tool response items array for metadata.
+  (camelCase, no underscore)
+
 ====================================================
 KEY RULE: ALL FIELD NAMES USE CAMELCASE (NO UNDERSCORES)
 ====================================================
@@ -149,6 +165,13 @@ order_complete_tool:
   1. Find quick_order_tool or save_to_cart_tool response in conversation
   2. Look for ord_no (order number), goods_no (goodsId), shop_id (shopId)
   3. Build: metadata = {{ordNo: "O100017122", goodsId: $goods_no, shopId: $shop_id}}
+
+cheapest_product_tool:
+  1. Find compare_discount_tool response in conversation
+  2. Look for items array with goods_no, sale_prc, product_discount, coupon_discount, total_discount, final_unit_price
+  3. Find cheapest_goods_no in response - this is the product to show
+  4. Build: metadata = [{{goodsId: $cheapest_goods_no}}]
+  5. Show ONLY 1 item (the cheapest product)
 
 ALIGNMENT RULE:
 - metadata array MUST have same length as items array
@@ -287,6 +310,7 @@ class UITemplateSubAgent(BaseAgent):
         "preorder_tool": "Pre-Order",
         "order_complete_tool": "Order Complete",
         "qna_complete_tool": "1:1 Inquiry",
+        "cheapest_product_tool": "Cheapest Product",
     }
 
     TOOL_TO_TEMPLATE_MAP = {
@@ -300,6 +324,7 @@ class UITemplateSubAgent(BaseAgent):
         "preorder_tool": "preOrder",
         "order_complete_tool": "orderComplete",
         "qna_complete_tool": "qnaComplete",
+        "cheapest_product_tool": "cheapestProduct",
     }
 
     def __init__(self, model):
@@ -316,6 +341,7 @@ class UITemplateSubAgent(BaseAgent):
                 preorder_tool,
                 order_complete_tool,
                 qna_complete_tool,
+                cheapest_product_tool,
             ],
             system_prompt=UI_TEMPLATE_AGENT_PROMPT,
             name="UI Template Agent",

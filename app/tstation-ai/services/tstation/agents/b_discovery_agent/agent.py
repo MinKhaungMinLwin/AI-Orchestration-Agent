@@ -12,6 +12,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
+from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from common.curr_time import get_current_time
 
 
@@ -692,6 +693,44 @@ Steps:
 
 
 ###############################
+3️⃣ PRICE COMPARISON (CHEAPEST PRODUCT)
+###############################
+
+Tool
+compare_discount_tool
+
+When to use
+
+• user asks for "cheapest", "가장 저렴한", "가장 싼" product
+• user asks for price comparison between multiple products
+• user says "둘 중 어느 게 더 싸?", "가격 비교해줘"
+• After showing product recommendations, user wants to see which is the best deal
+
+IMPORTANT: This tool requires goods_no_list (list of product numbers).
+Get the product numbers from previous tool results (get_products_recommendations_tool or search_product_tool).
+
+Inputs
+
+goods_no_list - list of product numbers (e.g., ['G000000314254', 'G000000312692'])
+quantity - quantity (default 1, typically 4 for full tire set)
+
+⚠️ If user says "cheapest" without specifying quantity, default to 4 (4개).
+
+Outputs
+
+Returns:
+• quantity: number of items
+• items[]: list with goods_no, sale_prc, product_discount, coupon_discount, total_discount, final_unit_price, total_product_price
+• cheapest_goods_no: the product with lowest final price
+
+After getting results:
+→ Identify cheapest_goods_no from the response
+→ Show the cheapest product to user
+→ Handover to UI Template Agent with compare_discount_tool result
+→ UI Template Agent will use cheapest_product_tool to render the price card
+
+
+###############################
 4️⃣ PRODUCT INFORMATION & REVIEWS
 ###############################
 
@@ -1312,6 +1351,8 @@ class DiscoverySubAgent(BaseAgent):
         # Event/Deal
         "get_events_tool": "Price",
         "get_deals_tool": "Price",
+        # Price Comparison
+        "compare_discount_tool": "Price Comparison",
     }
 
     def __init__(self, model):
@@ -1328,6 +1369,7 @@ class DiscoverySubAgent(BaseAgent):
                 search_youtube_video_tool,
                 get_events_tool,
                 get_deals_tool,
+                compare_discount_tool,
             ],
             system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
             name="Discovery Agent",
