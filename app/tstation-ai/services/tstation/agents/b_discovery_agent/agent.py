@@ -16,9 +16,9 @@ from services.tstation.agents.b_discovery_agent.tools import compare_discount_to
 from common.curr_time import get_current_time
 
 
-DISCOVERY_AGENT_SYSTEM_PROMPT = f"""
+DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 Current Time Information:
-{get_current_time()}
+{current_time}
 
 ---
 
@@ -1334,6 +1334,10 @@ Never mention internal tools.
 """
 
 
+def get_discovery_system_prompt():
+    return DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+
+
 class DiscoverySubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Product Compatibility
@@ -1371,6 +1375,6 @@ class DiscoverySubAgent(BaseAgent):
                 get_deals_tool,
                 compare_discount_tool,
             ],
-            system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
+            system_prompt=get_discovery_system_prompt,
             name="Discovery Agent",
         )

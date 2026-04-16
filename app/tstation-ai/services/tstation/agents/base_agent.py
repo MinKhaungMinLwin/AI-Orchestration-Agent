@@ -1,4 +1,5 @@
 from abc import ABC
+from collections.abc import Callable
 from typing import TypeVar
 import json
 
@@ -15,18 +16,25 @@ class BaseAgent(ABC):
     TOOL_TO_AF_MAP: dict[str, str] = {}
     TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
 
-    def __init__(self, model, tools: list | None = None, system_prompt: str = "", name: str = ""):
+    def __init__(self, model, tools: list | None = None, system_prompt: str | Callable[[], str] = "", name: str = ""):
         self.name = name
-        self.agent = create_agent(
-            model=model,
-            tools=tools,
+        self._model = model
+        self._tools = tools
+        self._system_prompt = system_prompt
+
+    def _build_agent(self):
+        prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
+        return create_agent(
+            model=self._model,
+            tools=self._tools,
             debug=True,
-            system_prompt=system_prompt,
-            name=name,
+            system_prompt=prompt,
+            name=self.name,
         )
 
     def invoke(self, messages: list[dict]) -> str:
-        result = self.agent.invoke({"messages": messages})
+        agent = self._build_agent()
+        result = agent.invoke({"messages": messages})
         return result["messages"][-1].content
 
     def stream(self, messages: list[dict]):
@@ -37,10 +45,11 @@ class BaseAgent(ABC):
         - message: Agent messages with agent name
         - tool: Tool execution results with tool name, input, and output
         """
+        agent = self._build_agent()
         # Track tool calls to capture input args
         tool_calls_map: dict[str, dict] = {}
 
-        for mode, chunk in self.agent.stream(
+        for mode, chunk in agent.stream(
             {"messages": messages},
             stream_mode=["messages", "updates"],
         ):
@@ -95,8 +104,9 @@ class BaseAgent(ABC):
         Use this when you want to format tool outputs as UI templates directly.
         """
         import json
+        agent = self._build_agent()
 
-        for mode, chunk in self.agent.stream(
+        for mode, chunk in agent.stream(
             {"messages": messages},
             stream_mode=["messages", "updates"],
         ):
