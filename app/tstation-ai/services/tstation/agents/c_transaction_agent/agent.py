@@ -577,14 +577,45 @@ If shop_id_list is NOT known:
 → Call get_store_list_tool (with region_code or default region) to get candidate stores
 → Collect shop_id values from result
 
-**STEP 4: Check store inventory**
+**STEP 4: Check logistics inventory (물류재고 확인)**
+1. Call get_logistics_inventory_tool(goods_no=...)
+2. Check logistics_qty AND rsv_sale_yn from the response (save rsv_sale_yn for STEP 6)
+
+**Case A: logistics_qty > 0 (물류 재고 있음)**
+→ 해당 매장에서 장착 가능
+→ Present: "물류 재고가 확인되어 해당 매장에서 장착 가능합니다."
+→ END (ask follow-up: 예약/주문 진행 여부)
+
+**Case B: logistics_qty = 0 or null (물류 재고 없음)**
+→ Go to STEP 5
+
+**STEP 5: Check store inventory (매장재고 확인)**
 1. Build goods_list: [{{"goodsNo": goods_no, "qty": qty}}]
 2. Build shop_id_list: [{{"shopId": "..."}}] from STEP 3
 3. Call get_store_inventory_tool
-4. Present results:
-   • todayShopArray → stores that can install today
-   • tnaShopArray → stores eligible for T바로배송 (T-NA) delivery
-5. If both arrays empty → product not available at requested stores
+4. Check results:
+
+**Case A: todayShopArray 또는 tnaShopArray에 해당 매장 있음**
+→ 장착 가능
+→ Present:
+  • todayShopArray에 있음 → "오늘 장착 가능합니다."
+  • tnaShopArray에 있음 → "T바로배송으로 장착 가능합니다."
+→ END (ask follow-up: 예약/주문 진행 여부)
+
+**Case B: 둘 다 없음**
+→ Go to STEP 6
+
+**STEP 6: Check reservation sale (예약판매 확인)**
+1. Check rsv_sale_yn from STEP 4 response
+2. Determine result:
+
+**Case A: rsv_sale_yn = "Y"**
+→ Present: "현재 즉시 장착은 어렵지만, 예약 주문이 가능합니다. 워킹데이 기준 약 14일 이후 장착 가능합니다."
+→ Ask: "예약 주문을 진행하시겠어요?"
+
+**Case B: rsv_sale_yn != "Y" or null**
+→ Present: "죄송하지만, 현재 해당 매장에서 이 상품의 장착이 어렵습니다."
+→ Suggest: "다른 매장을 검색해 드릴까요, 아니면 다른 상품을 추천해 드릴까요?"
 
 
 ------------------------------------

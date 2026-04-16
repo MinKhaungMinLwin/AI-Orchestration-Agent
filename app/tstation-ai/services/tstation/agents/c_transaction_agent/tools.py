@@ -178,10 +178,11 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
 @tool
 def get_logistics_inventory_tool(goods_no: str):
     """
-    Get product logistics inventory.
+    Get product logistics inventory and reservation sale status.
 
     Retrieve logistics stock using the product number.
-    Returns stock quantity from logistics warehouse (Oracle function FN_GET_GOODS_STOCK_QTY).
+    Returns stock quantity from logistics warehouse (Oracle function FN_GET_GOODS_STOCK_QTY)
+    and reservation sale flag (RSV_SALE_YN) from PR_GOODS_BASE.
 
     Args:
         goods_no (str): Product number.
@@ -192,7 +193,9 @@ def get_logistics_inventory_tool(goods_no: str):
         - {"goods_no": "G000000313073"}
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": {"logistics_qty": int, "rsv_sale_yn": str|null}}
+        - logistics_qty: Logistics warehouse stock quantity (0 = out of stock)
+        - rsv_sale_yn: Reservation sale flag ("Y" = reservation order available, 워킹데이 기준 14일 이후 장착 가능)
     """
     body = LogisticsRequest(goods_no=goods_no)
     logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
