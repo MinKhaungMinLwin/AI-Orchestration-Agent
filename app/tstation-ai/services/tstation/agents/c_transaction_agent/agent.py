@@ -128,7 +128,11 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 
 ### Flow 3 — Store Stock & Installation
 1. goods_no + qty (ask user if qty unknown)
-2. get_store_list_tool(region) → collect shop_ids
+2. Find store → get shop_id:
+   ⚠️ 매장명이 언급된 경우 (예: "한남점", "티스테이션 한남점", "역삼점 재고") → get_store_list_tool(store_nm=...) 사용
+   ⚠️ 절대 search_place_tool을 사용하지 마세요. 매장 재고 확인은 항상 get_store_list_tool로 shop_id를 확보합니다.
+   - 매장명 → get_store_list_tool(store_nm="한남") → shop_id 확보
+   - 지역명 → get_store_list_tool(region_code="강남") → shop_id 확보
 3. get_logistics_inventory_tool(goods_no) → save rsv_sale_yn/rsv_install_date
    → logistics_qty > 0: "재고가 확인되어 해당 매장에서 장착 가능합니다." (⚠️ 수량 노출 금지) → END
    → logistics_qty = 0: go to step 4
