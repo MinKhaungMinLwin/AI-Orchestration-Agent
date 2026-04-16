@@ -1459,48 +1459,25 @@ class TStationChatServiceV2:
 
                 final_qc_text = ""
                 try:
-                    qc_stream = stream_qc(QC_LLM, user_query, draft_response, source_data_str)
-                    buffer = ""
-                    is_pass = None  # None = undecided, True = PASS, False = correction
+                    # FIX: Bulk invoke instead of streaming
+                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str)
 
-                    for chunk in qc_stream:
-                        if is_pass is None:
-                            # Buffering phase: collect first ~10 chars to detect PASS
-                            buffer += chunk
-                            if len(buffer.strip()) >= 4:
-                                if buffer.strip().upper() == "PASS":
-                                    is_pass = True
-                                    break
-                                else:
-                                    is_pass = False
-                                    # Flush buffer as first correction tokens
-                                    yield f"data: {json.dumps({'type': 'token', 'content': buffer}, ensure_ascii=False)}\n\n"
-                                    final_qc_text = buffer
-                        else:
-                            # Streaming phase: correction mode
-                            yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
-                            final_qc_text += chunk
-
-                    # Handle edge case: buffer never reached 4 chars
-                    if is_pass is None:
-                        is_pass = buffer.strip().upper() == "PASS"
-
-                    if is_pass:
+                    if qc_result.strip().upper() == "PASS":
                         final_qc_text = draft_response
-                        yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
                         logger.info("[QC_AGENT] PASS — draft is factually correct")
                     else:
+                        final_qc_text = qc_result
                         logger.info("[QC_AGENT] Corrected draft response")
 
                 except Exception as e:
                     logger.exception(f"[QC_AGENT] Failed: {e}")
                     final_qc_text = draft_response  # fallback
-                    yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
 
                 # Sanitize: replace internal jargon with user-friendly fallback
                 final_qc_text = _sanitize_response(final_qc_text)
 
-                # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
+                # 3. HISTORY & UI SYNC: Yield the final message event with QC'd content
+                # The frontend MUST use this event to overwrite the fast-streamed draft
                 if original_message_events:
                     final_msg_event = original_message_events[-1]
                     final_msg_event["content"] = final_qc_text
