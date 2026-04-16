@@ -318,7 +318,6 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
         chl_sct_cd (str | None): Channel section code for shop type filtering.
             F = T'Station (티스테이션)
             S = The Tire Shop (더타이어샵)
-            C = HK SHOP
             Default: None (all shop types).
 
     Example Inputs:
@@ -385,7 +384,6 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     사용자가 특정 매장 타입을 언급하면 chl_sct_cd 를 설정하세요:
     - "티스테이션", "t'station", "T'Station", "티스테" → chl_sct_cd="F"
     - "더타이어샵", "the tire shop", "The Tire Shop", "타이어샵" → chl_sct_cd="S"
-    - "HK샵", "HK SHOP", "HK shop", "에이치케이샵" → chl_sct_cd="C"
     일반 매장 검색(특정 타입 미언급)은 chl_sct_cd=None (기본값, 전체 매장).
 
     Response stores include is_installable field:
@@ -404,7 +402,6 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         chl_sct_cd (str | None): Channel section code for shop type filtering.
             F = T'Station (티스테이션)
             S = The Tire Shop (더타이어샵)
-            C = HK SHOP
             Default: None (all shop types).
 
     Example Inputs:

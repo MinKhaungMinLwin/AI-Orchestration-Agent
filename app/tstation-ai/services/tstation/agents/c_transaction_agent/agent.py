@@ -330,7 +330,7 @@ region_code - region/address keyword (optional)
 
 store_nm - store name keyword (optional)
   **Already normalized to Korean by system**
-  ⚠️ 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 필터링.
+  ⚠️ 매장 타입명(티스테이션, 더타이어샵)은 store_nm이 아닌 chl_sct_cd로 필터링.
   store_nm은 특정 지점명 검색에만 사용. Examples: '극동상사', '한국타이어'
   → Use as-is, do NOT modify or guess alternatives
 
@@ -362,16 +362,14 @@ Example of WRONG approach:
 |-------------|-----------|
 | 티스테이션, t'station, T'Station, 티스테 | "F" |
 | 더타이어샵, the tire shop, The Tire Shop, 타이어샵 | "S" |
-| HK샵, HK SHOP, HK shop, 에이치케이샵 | "C" |
 
 Examples:
   • "내 주변 매장 찾아줘" → chl_sct_cd 없음 (일반 검색)
   • "내 주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
   • "강남 더타이어샵 매장 보여줘" → region_code="강남", chl_sct_cd="S"
-  • "부산 HK샵 찾아줘" → region_code="부산", chl_sct_cd="C"
 
 ⚠️ 매장 타입 필터와 store_nm은 다릅니다:
-  • chl_sct_cd는 매장 유형(채널) 필터 — 티스테이션/더타이어샵/HK샵 전체를 필터링
+  • chl_sct_cd는 매장 유형(채널) 필터 — 티스테이션/더타이어샵 전체를 필터링
   • store_nm은 매장명 키워드 검색 — 특정 매장 이름으로 검색
   • 사용자가 "티스테이션 매장"이라고 하면 → chl_sct_cd="F" (매장 타입 필터)
   • 사용자가 "티스테이션 강남점"이라고 하면 → store_nm="티스테이션 강남점" (매장명 검색)
@@ -612,7 +610,7 @@ Steps:
    - region_code (if provided): already in Korean (e.g., '강남', '부산')
    - store_nm (if provided): specific branch name keyword (e.g., '극동상사', '한국타이어')
    - all_my_t_only (if user requests "all my T" stores): True
-   - chl_sct_cd (if user mentions shop type): "F", "S", or "C"
+   - chl_sct_cd (if user mentions shop type): "F" or "S"
 
 2. Use parameters EXACTLY AS PROVIDED:
    - Call get_store_list_tool(region_code, store_nm, all_my_t_only=all_my_t_only, chl_sct_cd=chl_sct_cd) with the values provided
@@ -629,7 +627,7 @@ If user expresses visit intent in the same message (e.g., "방문할게", "visit
 
 **Important:**
 - If region_code is provided as "부산" → use it as-is, never guess variants
-- 매장 타입명(티스테이션, 더타이어샵, HK샵)은 store_nm이 아닌 chl_sct_cd로 전달
+- 매장 타입명(티스테이션, 더타이어샵)은 store_nm이 아닌 chl_sct_cd로 전달
 - Do NOT try alternative spellings or brand names if search fails
 
 ------------------------------------
@@ -689,7 +687,7 @@ When user asks for stores near a place, address, or landmark:
 
 **STEP 2: Search Nearby Stores**
 2. Call get_nearby_stores_tool with coordinates (x → user_xpos, y → user_ypos)
-   → If user mentioned a shop type (티스테이션/더타이어샵/HK샵), also pass chl_sct_cd
+   → If user mentioned a shop type (티스테이션/더타이어샵), also pass chl_sct_cd
    → Returns list of stores with: shop_id, shop_nm, distance, address, etc.
 
 **STEP 2-1: No Results → Expand Radius**
