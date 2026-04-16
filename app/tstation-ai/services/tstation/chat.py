@@ -909,15 +909,13 @@ class StreamingMultiAgentCoordinator:
                             msg.get("content", "") for msg in messages if msg.get("role") == "user"
                         )
                         qty_match = re.search(r"(\d+)\s*개", user_text)
-                        ord_qty = int(qty_match.group(1)) if qty_match else 2
-                        accumulated_tool_data.append({
-                            "tool": "user_intent",
-                            "data": {"ord_qty": ord_qty}
-                        })
                         if qty_match:
+                            ord_qty = int(qty_match.group(1))
+                            accumulated_tool_data.append({
+                                "tool": "user_intent",
+                                "data": {"ord_qty": ord_qty}
+                            })
                             logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
-                        else:
-                            logger.info(f"[COORDINATOR] No qty found in user message, using default ord_qty={ord_qty}")
 
                 tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
                 enriched_messages.append({
