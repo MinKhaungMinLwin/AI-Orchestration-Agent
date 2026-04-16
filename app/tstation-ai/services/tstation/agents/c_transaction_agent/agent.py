@@ -285,6 +285,10 @@ NEVER use: "에러", "조회 결과 없습니다", "데이터가 없습니다", 
 """
 
 
+def get_transaction_system_prompt():
+    return TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+
+
 class TransactionSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Price
@@ -325,6 +329,6 @@ class TransactionSubAgent(BaseAgent):
                 get_orders_of_user_tool,
                 get_order_status_tool,
             ],
-            system_prompt=TRANSACTION_AGENT_SYSTEM_PROMPT,
+            system_prompt=get_transaction_system_prompt,
             name="Transaction Agent",
         )

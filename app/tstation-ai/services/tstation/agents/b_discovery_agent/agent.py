@@ -293,6 +293,10 @@ NEVER use: "조회 결과 없습니다", "에러가 발생했습니다", technic
 """
 
 
+def get_discovery_system_prompt():
+    return DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+
+
 class DiscoverySubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Product Compatibility
@@ -330,6 +334,6 @@ class DiscoverySubAgent(BaseAgent):
                 get_deals_tool,
                 compare_discount_tool,
             ],
-            system_prompt=DISCOVERY_AGENT_SYSTEM_PROMPT,
+            system_prompt=get_discovery_system_prompt,
             name="Discovery Agent",
         )
