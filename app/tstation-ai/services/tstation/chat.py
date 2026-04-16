@@ -168,6 +168,35 @@ class MultiAgentDomain(BaseModel):
     domains: list[Domain] = Field(
         description="List of domains detected in the request, ordered by priority"
     )
+    user_behavior: str = Field(
+        description=(
+            "What the user is currently doing in this conversation turn, inferred from full history. "
+            "Examples: 'selecting car from list shown in previous turn', "
+            "'providing car number to resolve vehicle', "
+            "'confirming product selection', 'responding to recommendation', "
+            "'fresh start — first message'. "
+            "Always provide a value."
+        ),
+    )
+    next_action: str = Field(
+        description=(
+            "The specific action the target agent should perform immediately based on conversation state. "
+            "Be concrete — reference tool name and key param if possible. "
+            "Examples: 'match car_no 123가4566 from previous car list → extract tire_size_fr → call get_products_recommendations_tool', "
+            "'user already has goods_no from context → call get_final_price_tool directly', "
+            "'call get_my_cars_tool with mbr_no from user context'. "
+            "Use 'proceed normally' if action is obvious from the user message alone."
+        ),
+    )
+    flow: str = Field(
+        description=(
+            "One-line summary of the conversation journey so far. "
+            "Examples: 'user requested tires → agent showed 2 cars → user is selecting car', "
+            "'user asked price → discovery found goods_no → transaction showing price', "
+            "'fresh start — no prior context'. "
+            "Keep under 120 chars."
+        ),
+    )
 
     def get_agents(self):
         """Return list of agents based on detected domains."""
@@ -181,12 +210,24 @@ class MultiAgentDomain(BaseModel):
 
 
 def prompt_router_multi() -> str:
-    """Classification prompt that detects multi-intent with flow sequences."""
+    """Classification prompt that detects multi-intent with flow sequences and conversation context."""
     return f"""
 Current Time: {get_current_time()}
 
 You are a domain classifier for T-Station AI (Hankook Tire).
-Classify user message into ONE OR MORE domains based on detected intents.
+Read the FULL conversation history to classify the current user message.
+
+Produce 4 outputs:
+1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
+2. reason — why you chose these domains
+3. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
+4. next_action — the concrete action the agent should take immediately (e.g. "match car_no 123가4566 from car list → extract tire_size_fr → call get_products_recommendations_tool")
+5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+
+IMPORTANT: user_behavior and next_action must reflect the FULL conversation context, not just the current message.
+If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
+identify WHAT they are responding to and set next_action accordingly.
+
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
 DOMAINS:
@@ -346,7 +387,7 @@ EXAMPLE QUERIES → FLOW:
     (Cart Save - goods_no and qty must be in context)
 
 25. "{{goods_no}} 4개 주문할게"
-    "Order 4 of {{goods_no}}" (e.g., "G012345678901")
+    "Order 4 of {{goods_no}}" (e.g., "GXXXXXXXXXXXX")
     → TRANSACTION
     (goods_no known → Quantity confirmed → Store or Cart)
 
@@ -435,8 +476,8 @@ EXAMPLE QUERIES → FLOW:
     → TRANSACTION
     (Pre-order preview with recommendActions → visitMethod selection)
 
-39. "G000000314254이랑 G000000312692 가격 비교해줘"
-    "Compare prices between G000000314254 and G000000312692"
+39. "GXXXXXXXXXXXX이랑 GXXXXXXXXXXXX 가격 비교해줘"
+    "Compare prices between GXXXXXXXXXXXX and GXXXXXXXXXXXX"
     → TRANSACTION
     (Multiple goods_no known → compare_discount_tool)
 
@@ -511,7 +552,7 @@ DISCOVERY if user wants:
 Examples: "Find tires called Ventus", "What tires fit my car {{vehicle_number}}?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles", "이벤트 알려줘", "기획전 정보"
 
 ⚠️ CRITICAL DISTINCTION for price queries:
-- "{{goods_no}} 가격" (e.g., "G012345678901") → goods_no KNOWN → TRANSACTION only
+- "{{goods_no}} 가격" (e.g., "GXXXXXXXXXXXX") → goods_no KNOWN → TRANSACTION only
 - "Dynapro HPX 가격" → goods_no NOT known → DISCOVERY, TRANSACTION
 - "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY, TRANSACTION
 
@@ -581,8 +622,12 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
 
-    def classify_multi_intent(self, messages: list) -> list[MultiAgentDomain.Domain]:
-        """Classify user message into one or more domains."""
+    def classify_multi_intent(self, messages: list) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
+        """Classify user message into one or more domains.
+
+        Returns:
+            (domains, routing_result) — domains for backward compat, full result for context injection.
+        """
         from langchain_litellm import ChatLiteLLM
         from langchain_core.messages import SystemMessage
 
@@ -602,12 +647,61 @@ class StreamingMultiAgentCoordinator:
             all_messages = [system_msg] + list(messages)
 
             result: MultiAgentDomain = structured_model.invoke(all_messages)
-            logger.info(f"[MULTI-DOMAIN] Classification result: {result}")
-            return result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            logger.info(f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}")
+            domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            return domains, result
 
         except Exception as e:
             logger.exception(f"[MULTI-DOMAIN] Classification failed: {e}")
-            return [MultiAgentDomain.Domain.LEADING]
+            return [MultiAgentDomain.Domain.LEADING], None
+
+    @staticmethod
+    def _inject_conversation_context(messages: list[dict], routing: MultiAgentDomain | None) -> list[dict]:
+        """Inject conversation context (user_behavior, next_action, flow) above the Korean instruction
+        in the last user message.
+
+        The current last user message already has the format:
+            # Respond in Korean language
+            <original user text>
+
+        After injection:
+            ## CONVERSATION CONTEXT
+            - User behavior: ...
+            - Next action: ...
+            - Flow so far: ...
+
+            # Respond in Korean language
+            <original user text>
+        """
+        if routing is None:
+            return messages
+
+        # Only inject if at least one field is non-empty
+        context_parts = []
+        if routing.user_behavior:
+            context_parts.append(f"- User behavior: {routing.user_behavior}")
+        if routing.next_action:
+            context_parts.append(f"- Next action: {routing.next_action}")
+        if routing.flow:
+            context_parts.append(f"- Flow so far: {routing.flow}")
+
+        if not context_parts:
+            return messages
+
+        context_block = "## CONVERSATION CONTEXT\n" + "\n".join(context_parts) + "\n"
+
+        # Find last user message and prepend the context block above "# Respond in Korean language"
+        messages = [dict(m) for m in messages]
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                content = messages[i]["content"]
+                if content.startswith("# Respond in Korean language"):
+                    messages[i]["content"] = context_block + "\n" + content
+                else:
+                    messages[i]["content"] = context_block + "\n# Respond in Korean language\n" + content
+                break
+
+        return messages
 
     def _build_context_message(
         self,
@@ -738,7 +832,8 @@ class StreamingMultiAgentCoordinator:
         """
         # Classify if domains not provided
         if domains is None:
-            domains = self.classify_multi_intent(messages)
+            domains, routing_result = self.classify_multi_intent(messages)
+            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
         if not domains:
             domains = [MultiAgentDomain.Domain.LEADING]
@@ -1018,7 +1113,7 @@ def _sanitize_response(text: str) -> str:
 
 _FACTUAL_CLAIM_PATTERN = re.compile(
     r'\d{1,3}(?:,\d{3})*\s*원'      # 가격 (e.g. 150,000원)
-    r'|G\d{9,}'                      # goods_no (e.g. G000000314254)
+    r'|G\d{9,}'                      # goods_no (e.g. GXXXXXXXXXXXX)
     r'|shop(?:Seq|_id|Id)'           # 매장 ID
     r'|재고|할인|%\s*할인'            # 재고/할인
     r'|\d{3}/\d{2,3}[a-zA-Z]+\d{2}'  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
@@ -1291,7 +1386,9 @@ class TStationChatServiceV2:
             slot_context = None
 
         # Domain classification (separate from slot processing — must not fail)
-        domains = _coordinator.classify_multi_intent(messages)
+        # Also injects conversation context (user_behavior, next_action, flow) into messages
+        domains, routing_result = _coordinator.classify_multi_intent(messages)
+        messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
         # STREAM MODE
         if request.stream:

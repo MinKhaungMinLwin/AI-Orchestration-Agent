@@ -108,10 +108,14 @@ def _success_response(http_status: int, data: Any) -> dict:
 @tool
 def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
     """
-    차량-상품 타이어 호환 검증
+    차량-상품 타이어 호환 검증.
 
-    차량번호(CAR_NO)와 소유주명(OWNER_NM)으로 차량 타이어 사이즈를 조회하고,
-    상품번호(GOODS_NO)로 타이어 스펙(단면폭/편평비/인치)을 조회하여 호환 여부를 반환합니다.
+    When to use:
+    - ONLY when tire_size is NOT yet confirmed AND user explicitly provides car_no + owner_nm
+
+    When NOT to use:
+    - If tire_size is already confirmed → compare product's tire_size directly (no tool needed)
+    - If user only mentions car model name → use CAR MODEL DISPLAY (own knowledge) instead
 
     Args:
         goods_no (str): 상품 번호
@@ -119,9 +123,9 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
         owner_nm (str): 차량 소유주
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "car_no": "33가3333", "owner_nm": "공태웅"}
-        - {"goods_no": "G000000309860", "car_no": "11가0000", "owner_nm": "공태웅"}
-        - {"goods_no": "G000000313073", "car_no": "29조3344", "owner_nm": "공태웅"}
+        - {"goods_no": "GXXXXXXXXXXXX", "car_no": "12가3456", "owner_nm": "홍길동"}
+        - {"goods_no": "GXXXXXXXXXXXX", "car_no": "34나5678", "owner_nm": "홍길동"}
+        - {"goods_no": "GXXXXXXXXXXXX", "car_no": "56다7890", "owner_nm": "홍길동"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -146,13 +150,21 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 @tool
 def search_product_tool(keyword: str, limit: int = 20, size: str | None = None, brand_cd: str = "HK"):
     """
-    상품 검색
+    상품 검색.
 
-    제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원.
-    사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다.
+    When to use:
+    - User searches for a specific tire by name/keyword
+    - Resolving goods_no for price/stock/order handoff (Flow C/D)
+
+    Important: Translate Korean product names to English before calling.
+    - 벤투스→Ventus, 키네르기→Kinergy, 옵티모→Optimo, 다이나프로→Dynapro, 에보→evo
+
+    Brand detection: Set brand_cd from product name (MC=Michelin, PI=Pirelli, BS=Bridgestone,
+    CT=Continental, GY=Goodyear, LF=Laufenn). Default: HK.
+    Unsupported brands (금호, 넥센 etc.) → decline, do not search.
 
     Args:
-        keyword (str): 검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')
+        keyword (str): 검색할 제품명 키워드 — English name preferred (예: 'Ventus S2', 'Kinergy EX')
         limit (int): 반환할 최대 상품 수 Default: 20.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
         brand_cd (str): 브랜드 코드. Default: HK.
@@ -193,19 +205,24 @@ def search_product_tool(keyword: str, limit: int = 20, size: str | None = None, 
 @tool
 def get_user_vehicles_tool(car_no: str, owner_nm: str):
     """
-    Get user vehicles.
+    차량번호+소유주명으로 차량 조회.
 
-    Retrieve vehicle information associated with the given vehicle
-    registration number and owner name.
+    When to use:
+    - FALLBACK only: after get_my_cars_tool returns 0 cars AND user provides car_no + owner_nm
+    - Also when user provides someone else's vehicle number
+
+    When NOT to use:
+    - Do NOT use before trying get_my_cars_tool first
+    - Do NOT use if tire_size is already confirmed
 
     Args:
-        car_no (str): Vehicle registration number.
-        owner_nm (str): Owner name.
+        car_no (str): Vehicle registration number (차량번호).
+        owner_nm (str): Owner name (소유주명).
 
     Example Inputs:
-        - {"car_no": "33가3333", "owner_nm": "공태웅"}
-        - {"car_no": "11가0000", "owner_nm": "공태웅"}
-        - {"car_no": "29조3344", "owner_nm": "공태웅"}
+        - {"car_no": "12가3456", "owner_nm": "홍길동"}
+        - {"car_no": "34나5678", "owner_nm": "홍길동"}
+        - {"car_no": "56다7890", "owner_nm": "홍길동"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -230,16 +247,23 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
 @tool
 def get_my_cars_tool(mbr_no: str):
     """
-    Get user's registered vehicles (by member number).
+    사용자 등록 차량 조회 (회원번호 기준).
 
-    This API retrieves all vehicles registered under the given member number.
+    When to use:
+    - FIRST step for ANY vehicle-related request (tire recommendation, compatibility, price by vehicle)
+    - Call immediately using mbr_no from JWT — do NOT ask user questions first
+
+    Result handling:
+    - 1 car → auto-select, use tire_size_fr and car_lnc_cd
+    - 2+ cars → show ALL in numbered list, wait for user to select
+    - 0 cars → guide user to provide car_no+owner_nm or car model name
 
     Args:
-        mbr_no (str): Member number.
+        mbr_no (str): Member number (from user context provided by the system).
 
     Example Inputs:
-        - {"mbr_no": "M000000001"}
-        - {"mbr_no": "M123456789"}
+        - {"mbr_no": "MXXXXXXXXX"}
+        - {"mbr_no": "MXXXXXXXXX"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -264,13 +288,20 @@ def get_my_cars_tool(mbr_no: str):
 @tool
 def search_car_model_tool(keyword: str, limit: int = 20):
     """
-    차량 모델 검색
+    차량 모델 검색 (car_lnc_cd 조회용).
 
-    차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.
+    When to use:
+    - ONLY after get_user_vehicles_tool fails as a last fallback to get car_lnc_cd
+    - When another flow explicitly requires car_lnc_cd lookup
+
+    When NOT to use:
+    - Do NOT call when user just mentions a car model name for tire recommendation
+      → Instead, use your own knowledge to describe representative trims/tire sizes (CAR MODEL DISPLAY)
+    - Do NOT call as first step for car model mentions
 
     Args:
-        keyword (str): 검색할 차량 모델명 키워드 (예: '소나타', '그랜저')
-        limit (int): 반환할 최대 차량 수 Default: 20.
+        keyword (str): 차량 모델명 키워드 (한국어, 브랜드명 제외. 예: '소나타', '그랜저', 'BMW')
+        limit (int): 최대 결과 수. Default: 20.
 
     Example Inputs:
         - {"keyword": "소나타", "limit": 20}
@@ -316,9 +347,9 @@ def get_product_description_tool(goods_no: str):
         goods_no (str): Product number.
 
     Example Inputs:
-        - {"goods_no": "G000000312692"}
-        - {"goods_no": "G000000313186"}
-        - {"goods_no": "G000000310122"}
+        - {"goods_no": "GXXXXXXXXXXXX"}
+        - {"goods_no": "GXXXXXXXXXXXX"}
+        - {"goods_no": "GXXXXXXXXXXXX"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -381,7 +412,7 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
 
     Example Inputs:
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "entr_yn": "n", "entr_no": None, "car_lnc_cd": None, "tire_size": None}
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": "LNC12345", "tire_size": None}
+        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX", "tire_size": None}
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": None, "tire_size": "245/45R18"}
 
     Returns:
@@ -499,14 +530,14 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     - User asks for "cheapest", "가장 저렴한", "가장 싼" product
 
     Args:
-        goods_no_list (list[str]): List of product numbers (e.g., ['G000000314254', 'G000000312692']).
+        goods_no_list (list[str]): List of product numbers (e.g., ['GXXXXXXXXXXXX', 'GXXXXXXXXXXXX']).
             Supports 2 or more products for comparison.
         quantity (int): Quantity (minimum 1, default 1). Use 4 for full tire set.
 
     Example Inputs:
-        - {"goods_no_list": ["G000000314254", "G000000312692"], "quantity": 4}
-        - {"goods_no_list": ["G000000313165", "G000000309860", "G000000313073"], "quantity": 2}
-        - {"goods_no_list": ["G000000314254", "G000000312692"], "quantity": 1}
+        - {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 4}
+        - {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 2}
+        - {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 1}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}

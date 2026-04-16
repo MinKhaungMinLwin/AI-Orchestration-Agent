@@ -67,13 +67,13 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     labor cost, and today's labor cost using the product number.
 
     Args:
-        goods_no (str): Product number (e.g., G000000314254).
+        goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
         member_type (str | None): Member type (e.g., 'general', 'PARTNER').
 
     Example Inputs:
-        - {"goods_no": "G000000314254", "member_type": "general"}
-        - {"goods_no": "G000000312692", "member_type": "PARTNER"}
-        - {"goods_no": "G000000310122", "member_type": "general"}
+        - {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
+        - {"goods_no": "GXXXXXXXXXXXX", "member_type": "PARTNER"}
+        - {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -178,18 +178,23 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
 @tool
 def get_logistics_inventory_tool(goods_no: str):
     """
-    Get product logistics inventory.
+    물류 창고 재고 조회.
 
-    Retrieve logistics stock using the product number.
-    Returns stock quantity from logistics warehouse (Oracle function FN_GET_GOODS_STOCK_QTY).
+    When to use:
+    - MANDATORY as STEP 3 in order flow — call before presenting store options
+    - When user asks if product is in stock (warehouse level)
+
+    Result:
+    - logistics_qty > 0 → inventory_mode = LOGISTICS_AVAILABLE (all stores eligible)
+    - logistics_qty = 0 → inventory_mode = LOGISTICS_UNAVAILABLE (must check store inventory)
 
     Args:
         goods_no (str): Product number.
 
     Example Inputs:
-        - {"goods_no": "G000000313165"}
-        - {"goods_no": "G000000309860"}
-        - {"goods_no": "G000000313073"}
+        - {"goods_no": "GXXXXXXXXXXXX"}
+        - {"goods_no": "GXXXXXXXXXXXX"}
+        - {"goods_no": "GXXXXXXXXXXXX"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -228,7 +233,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
             Each item: {"shopId": "F0001"}
 
     Example Inputs:
-        - {"goods_list": [{"goodsNo": "G000000309860", "qty": "4"}], "shop_id_list": [{"shopId": "B01018"}]}
+        - {"goods_list": [{"goodsNo": "GXXXXXXXXXXXX", "qty": "4"}], "shop_id_list": [{"shopId": "BXXXXX"}]}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -473,11 +478,11 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
         cal_day (str): Query date in YYYYMMDD format.
 
     Example Inputs:
-        - {"shop_id": "B00712", "cal_day": "20260401"}
-        - {"shop_id": "B01018", "cal_day": "20250225"}
-        - {"shop_id": "F00015", "cal_day": "20260320"}
-        - {"shop_id": "F00098", "cal_day": "20260401"}
-        - {"shop_id": "C07941", "cal_day": "20250225"}
+        - {"shop_id": "BXXXXX", "cal_day": "20260401"}
+        - {"shop_id": "BXXXXX", "cal_day": "20250225"}
+        - {"shop_id": "FXXXXX", "cal_day": "20260320"}
+        - {"shop_id": "FXXXXX", "cal_day": "20260401"}
+        - {"shop_id": "CXXXXX", "cal_day": "20250225"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -518,13 +523,13 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
     - User skips store selection step
 
     Args:
-        goods_no (str): Product number (e.g., G000000314254).
+        goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
         ord_qty (int): Quantity to add to cart, min is 1.
         car_lnc_cd (str | None): Vehicle launch code (optional, for vehicle info).
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 4}
-        - {"goods_no": "G000000309860", "ord_qty": 2, "car_lnc_cd": "LNC12345"}
+        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4}
+        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 2, "car_lnc_cd": "LNCXXXXXX"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
@@ -556,24 +561,29 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
 @tool
 def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str | None = None):
     """
-    퀵쇼핑 주문을 실행합니다 (매장 선택 포함).
+    퀵쇼핑 주문 실행 (매장 선택 포함).
 
-    매장이 선택된 상태에서 퀵쇼핑 주문을 생성하는 API입니다.
-    setOrderFormAI API를 drtPurYn="Y" (주문하기 모드)으로 호출합니다.
+    When to use:
+    - User confirmed goods_no + ord_qty + selected shop_id
+    - Pre-conditions MUST all pass before calling:
+      1. get_logistics_inventory_tool called (inventory_mode set)
+      2. get_store_detail_tool called → is_installable=true confirmed
+      3. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool verified shop in todayShopArray/tnaShopArray
+      4. Pre-order preview shown, user confirmed in a separate turn
 
-    Use this tool when:
-    - User has confirmed goods_no, quantity, AND selected a store
-    - shop_id is available from get_store_list_tool or get_nearby_stores_tool result
+    When NOT to use:
+    - shop_id is not yet confirmed from tool result (never fabricate shop_id)
+    - is_installable not yet verified
 
     Args:
-        goods_no (str): Product number (e.g., G000000314254).
+        goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
         ord_qty (int): Quantity to order, min is 1.
-        shop_id (str): Store ID from store tool results (e.g., "C01306", "B01018").
+        shop_id (str): Store ID from store tool results (e.g., "CXXXXX", "BXXXXX").
         car_lnc_cd (str | None): Vehicle launch code (optional, for vehicle info).
 
     Example Inputs:
-        - {"goods_no": "G000000313165", "ord_qty": 4, "shop_id": "C01306"}
-        - {"goods_no": "G000000309860", "ord_qty": 2, "shop_id": "B01018", "car_lnc_cd": "LNC12345"}
+        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX"}
+        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 2, "shop_id": "BXXXXX", "car_lnc_cd": "LNCXXXXXX"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}

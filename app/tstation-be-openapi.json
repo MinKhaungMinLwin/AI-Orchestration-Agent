@@ -1,1 +1,4835 @@
-{"openapi":"3.1.0","info":{"title":"HKT API","version":"0.1.0"},"paths":{"/api/store/detail":{"get":{"tags":["Store AF - 매장 정보 및 예약 조회"],"summary":"매장 상세 정보 및 예약 가능 시간 조회","description":"매장 ID와 날짜를 기준으로 매장 정보와 예약 가능 시간 슬롯(시 단위)을 반환합니다.","operationId":"get_store_detail_api_store_detail_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"shop_id","in":"query","required":true,"schema":{"type":"string","description":"매장 ID","title":"Shop Id"},"description":"매장 ID"},{"name":"cal_day","in":"query","required":true,"schema":{"type":"string","pattern":"^\\d{8}$","description":"조회 날짜 (YYYYMMDD)","title":"Cal Day"},"description":"조회 날짜 (YYYYMMDD)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StoreDetailResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/store/list":{"get":{"tags":["Store AF - 매장 정보 및 예약 조회"],"summary":"매장 목록 조회","description":"매장명/지역명 검색 또는 좌표 기반 주변 매장 검색. xpos, ypos 를 입력하면 해당 좌표 주변 매장을 거리순으로 반환합니다.","operationId":"get_store_list_api_store_list_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"region_code","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"지역 검색어","title":"Region Code"},"description":"지역 검색어"},{"name":"store_nm","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"매장명 명칭 검색","title":"Store Nm"},"description":"매장명 명칭 검색"},{"name":"xpos","in":"query","required":false,"schema":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"X 좌표 (경도, place-search 결과의 x 값)","title":"Xpos"},"description":"X 좌표 (경도, place-search 결과의 x 값)"},{"name":"ypos","in":"query","required":false,"schema":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"Y 좌표 (위도, place-search 결과의 y 값)","title":"Ypos"},"description":"Y 좌표 (위도, place-search 결과의 y 값)"},{"name":"radius_km","in":"query","required":false,"schema":{"type":"number","maximum":100,"minimum":1,"description":"좌표 검색 반경 (km), 기본값 20km","default":20.0,"title":"Radius Km"},"description":"좌표 검색 반경 (km), 기본값 20km"},{"name":"svc_codes","in":"query","required":false,"schema":{"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}],"description":"서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']","title":"Svc Codes"},"description":"서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']"},{"name":"all_my_t_only","in":"query","required":false,"schema":{"type":"boolean","description":"True 이면 all my T 매장만 조회","default":false,"title":"All My T Only"},"description":"True 이면 all my T 매장만 조회"},{"name":"chl_sct_cd","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP","title":"Chl Sct Cd"},"description":"채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP"},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":100,"minimum":1,"description":"반환할 최대 매장 수","default":20,"title":"Limit"},"description":"반환할 최대 매장 수"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StoreListResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/store/place-search":{"get":{"tags":["Store AF - 매장 정보 및 예약 조회"],"summary":"위치 명칭 검색","description":"Kakao 키워드 검색 API를 이용하여 위치 명칭(건물명, 장소명 등)을 검색하고 좌표를 반환합니다.","operationId":"search_place_api_store_place_search_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"query","in":"query","required":true,"schema":{"type":"string","description":"검색어 (예: 부산센텀시티, 강남역)","title":"Query"},"description":"검색어 (예: 부산센텀시티, 강남역)"},{"name":"size","in":"query","required":false,"schema":{"type":"integer","maximum":45,"minimum":1,"description":"반환할 최대 결과 수","default":10,"title":"Size"},"description":"반환할 최대 결과 수"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PlaceSearchResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/prices/final":{"get":{"tags":["Price AF - 가격 및 할인 조회"],"summary":"상품 가격 및 할인 조회","description":"상품 번호로 기본 판매가, 최대 혜택가(프로모션·쿠폰 적용), 공임비 및 오늘의 공임비를 반환합니다.\n(샘플번호: G000000314254)","operationId":"get_price_api_prices_final_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"goods_no","in":"query","required":true,"schema":{"type":"string","description":"상품 번호 (예: G000000314254)","title":"Goods No"},"description":"상품 번호 (예: G000000314254)"},{"name":"member_type","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"회원 유형 (예: 'general', 'PARTNER')","title":"Member Type"},"description":"회원 유형 (예: 'general', 'PARTNER')"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PriceResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/prices/coupons/available":{"get":{"tags":["Price AF - 가격 및 할인 조회"],"summary":"다운로드 가능 쿠폰 조회","description":"현재 사용자가 다운로드 가능한 쿠폰 목록을 조회합니다.","operationId":"get_available_coupons_api_prices_coupons_available_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"lang_cd","in":"query","required":false,"schema":{"type":"string","description":"언어 코드 (기본값: 'ko' 한국어)","default":"ko","title":"Lang Cd"},"description":"언어 코드 (기본값: 'ko' 한국어)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/AvailableCouponResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/prices/coupons/mine":{"get":{"tags":["Price AF - 가격 및 할인 조회"],"summary":"내 쿠폰 목록 조회","description":"사용자가 보유한 사용 가능한 쿠폰 목록을 조회합니다.","operationId":"get_my_coupons_api_prices_coupons_mine_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"lang_cd","in":"query","required":false,"schema":{"type":"string","description":"언어 코드 (기본값: 'ko' 한국어)","default":"ko","title":"Lang Cd"},"description":"언어 코드 (기본값: 'ko' 한국어)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MyCouponResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/prices/discount-compare":{"get":{"tags":["Price AF - 가격 및 할인 조회"],"summary":"복수 상품 할인 가격 비교 조회","description":"복수 상품 번호와 수량을 입력하여 상품별 정가, 상품할인, 쿠폰할인, 최종 결제금액을 비교합니다. JWT 토큰의 affiliate_yn 값으로 일반/제휴 회원을 자동 구분합니다. 최저가 상품 번호(cheapest_goods_no)를 함께 반환합니다.","operationId":"get_discount_compare_api_prices_discount_compare_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"goods_no_list","in":"query","required":true,"schema":{"type":"array","items":{"type":"string"},"description":"상품 번호 목록 (예: ['G000000314254', 'G000000312692'])","title":"Goods No List"},"description":"상품 번호 목록 (예: ['G000000314254', 'G000000312692'])"},{"name":"quantity","in":"query","required":true,"schema":{"type":"integer","minimum":1,"description":"수량","title":"Quantity"},"description":"수량"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DiscountPriceResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/inventory/logistics":{"post":{"tags":["Inventory AF - 재고 조회"],"summary":"상품 물류 재고 조회","description":"물류 재고(오라클 함수 FN_GET_GOODS_STOCK_QTY)를 반환합니다.","operationId":"get_logistics_inventory_api_inventory_logistics_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LogisticsRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LogisticsResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/inventory/store":{"post":{"tags":["Inventory AF - 재고 조회"],"summary":"매장 재고 가용 여부 조회","description":"상품 목록과 매장 목록을 입력받아 오늘 장착 가능 매장(todayShopArray)과 T바로배송 가능 매장(tnaShopArray)을 반환합니다. (외부 API: getStockCheckShopList)","operationId":"get_store_inventory_api_inventory_store_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/StoreInventoryRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StoreInventoryResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/orders/":{"get":{"tags":["Order/Delivery AF - 주문 및 배송 추적"],"summary":"주문 내역 조회","description":"인증된 사용자의 주문 내역(주문번호, 상품명, 수량, 등록일시)을 조회합니다.","operationId":"get_orders_api_orders__get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OrderListResponse"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/orders/summary":{"get":{"tags":["Order/Delivery AF - 주문 및 배송 추적"],"summary":"주문 및 배송 상태 조회","description":"조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.","operationId":"get_order_delivery_api_orders_summary_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"query_no","in":"query","required":true,"schema":{"type":"string","description":"조회번호 (주문번호: O..., 배송번호: D...)","title":"Query No"},"description":"조회번호 (주문번호: O..., 배송번호: D...)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OrderDeliveryResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/quick-order/draft":{"post":{"tags":["Quick Shopping AF - 퀵 쇼핑/주문서 초안 생성"],"summary":"퀵 쇼핑 / 주문서 초안 생성","description":"회원번호(MBR_NO) 또는 차량번호(CAR_NO)와 상품번호(GOODS_NO), 수량(ORD_QTY)을 입력받아 상품 유효성(PR_GOODS_BASE: 판매 상태, 최소 주문 수량)을 검증한 뒤, 주문서 작성 페이지 URL(REDIRECT_URL)을 반환합니다.","operationId":"create_quick_order_api_quick_order_draft_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/QuickOrderRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/QuickOrderResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/quick-order/order/setOrderFormAI.do":{"post":{"tags":["Quick Shopping AF - 퀵 쇼핑/주문서 초안 생성"],"summary":"AI 퀵쇼핑/장바구니등록 API","description":"티스테이션 사이트에서 자바스크립트로 실행되는 퀵쇼핑/장바구니 등록 API. 로그인 필수.","operationId":"set_order_form_ai_api_quick_order_order_setOrderFormAI_do_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SetOrderFormAIRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SetOrderFormAIResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/product/compatible":{"get":{"tags":["Product Compatibility AF - 차량 및 상품 호환 검증"],"summary":"차량-상품 타이어 호환 검증","operationId":"check_compatibility_api_product_compatible_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"car_no","in":"query","required":true,"schema":{"type":"string","description":"차량 번호","title":"Car No"},"description":"차량 번호"},{"name":"owner_nm","in":"query","required":true,"schema":{"type":"string","description":"차량 소유주","title":"Owner Nm"},"description":"차량 소유주"},{"name":"goods_no","in":"query","required":true,"schema":{"type":"string","description":"상품 번호","title":"Goods No"},"description":"상품 번호"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CompatibilityResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/user/vehicles":{"get":{"tags":["Product Compatibility AF - 차량 및 상품 호환 검증"],"summary":"Get User Vehicles","operationId":"get_user_vehicles_api_user_vehicles_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"car_no","in":"query","required":true,"schema":{"type":"string","description":"자동차 등록번호","title":"Car No"},"description":"자동차 등록번호"},{"name":"owner_nm","in":"query","required":true,"schema":{"type":"string","description":"소유자 이름","title":"Owner Nm"},"description":"소유자 이름"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/product/search":{"get":{"tags":["Product Compatibility AF - 차량 및 상품 호환 검증"],"summary":"상품 검색","description":"제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')\n사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다. (예: '2254517')","operationId":"search_product_api_product_search_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"keyword","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')","title":"Keyword"},"description":"검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')"},{"name":"size","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"타이어 사이즈 (예: '2254517' 또는 '225/45R17')","title":"Size"},"description":"타이어 사이즈 (예: '2254517' 또는 '225/45R17')"},{"name":"brand_cd","in":"query","required":false,"schema":{"type":"string","description":"브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈, GY=굿이어)","default":"HK","title":"Brand Cd"},"description":"브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈, GY=굿이어)"},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":100,"minimum":1,"description":"반환할 최대 상품 수","default":20,"title":"Limit"},"description":"반환할 최대 상품 수"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProductSearchResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/vehicle/search":{"get":{"tags":["Product Compatibility AF - 차량 및 상품 호환 검증"],"summary":"차량 모델 검색","description":"차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.","operationId":"search_car_model_api_vehicle_search_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"keyword","in":"query","required":true,"schema":{"type":"string","description":"검색할 차량 모델명 키워드 (예: '소나타', '그랜저')","title":"Keyword"},"description":"검색할 차량 모델명 키워드 (예: '소나타', '그랜저')"},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":100,"minimum":1,"description":"반환할 최대 차량 수","default":20,"title":"Limit"},"description":"반환할 최대 차량 수"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CarModelSearchResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/product/recommend":{"get":{"tags":["Product Recommendation AF - 상품 추천"],"summary":"상품 추천","description":"추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n- **tstation**: 티스테이션 추천 (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)","operationId":"get_recommendations_api_product_recommend_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"rcmd_type","in":"query","required":true,"schema":{"$ref":"#/components/schemas/RcmdType","description":"추천 타입 (tstation | discount | value)"},"description":"추천 타입 (tstation | discount | value)"},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":100,"minimum":1,"description":"반환할 상품 수 (기본 10, 최대 100)","default":10,"title":"Limit"},"description":"반환할 상품 수 (기본 10, 최대 100)"},{"name":"brand_cd","in":"query","required":true,"schema":{"type":"string","description":"각 브랜드(HK / LF / MC / PI / BS / CT / GY","title":"Brand Cd"},"description":"각 브랜드(HK / LF / MC / PI / BS / CT / GY"},{"name":"entr_yn","in":"query","required":true,"schema":{"type":"string","description":"제휴 사이트 (y/n)","title":"Entr Yn"},"description":"제휴 사이트 (y/n)"},{"name":"entr_no","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"제휴사 번호 (entr_yn=y 일 때 필수)","title":"Entr No"},"description":"제휴사 번호 (entr_yn=y 일 때 필수)"},{"name":"car_lnc_cd","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용","title":"Car Lnc Cd"},"description":"차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용"},{"name":"tire_size","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)","title":"Tire Size"},"description":"타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/RecommendationResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/product/detail/{goods_no}":{"get":{"tags":["Product Description AF - 상품 설명"],"summary":"상품 설명 조회","description":"상품 번호로 PR_GOODS_BASE → PR_PATTERN_BASE를 조인하여 특장점(PC_PROD_REMARK_DESC), 기술력(PC_PROD_TECH_DESC), 슬로건(SLOGAN)을 조회하고, PR_PTRN_IMG_INFO에서 이미지 및 썸네일 경로 목록을 반환합니다.","operationId":"get_description_api_product_detail__goods_no__get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"goods_no","in":"path","required":true,"schema":{"type":"string","title":"Goods No"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProductDescResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/faq":{"get":{"tags":["FAQ AF - 일반 문의"],"summary":"FAQ 목록 조회","description":"CS_CUST_INQ_MGMT_INFO에서 FAQ 데이터(INQ_TYPE_CD='FAQ')만 조회합니다. 1:1 문의 내역은 개인정보 보호를 위해 제외됩니다. lrcl_cd(대분류), mdcl_cd(중분류)로 필터링할 수 있습니다.","operationId":"get_faq_api_faq_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"lrcl_cd","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"대분류 코드 필터 (LRCL_CD)","title":"Lrcl Cd"},"description":"대분류 코드 필터 (LRCL_CD)"},{"name":"mdcl_cd","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"중분류 코드 필터 (MDCL_CD)","title":"Mdcl Cd"},"description":"중분류 코드 필터 (MDCL_CD)"},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":200,"minimum":1,"description":"반환할 FAQ 수 (기본 50, 최대 200)","default":50,"title":"Limit"},"description":"반환할 FAQ 수 (기본 50, 최대 200)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/FaqListResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/escalation":{"post":{"tags":["Fallback / Escalation AF - 상담 연결"],"summary":"상담 연결 분기 처리","description":"대화량과 문의 유형에 따라 3가지 분기로 처리합니다.\n\n- **with_summary**: 대화 메시지 수 ≥ 기준치(`ESCALATION_MSG_THRESHOLD`, 기본 3)이고 요약(`summary`)이 있는 경우 — 요약을 `summary` 쿼리 파라미터로 URL 인코딩하여 전달\n- **direct**: 대화량이 적거나 요약이 없는 경우 — 요약 없이 상담 페이지로 바로 전달\n- **policy**: `inq_type_cd`가 정책 테이블에 등록된 경우 — 지정 채널(call/email 등)로 분기\n\n**summary URL 파라미터 규격**: `summary` 키, URL 인코딩(percent-encoding) 적용, 예) `?inq_type_cd=ORDER&mbr_no=M001&summary=%EB%B0%B0%EC%86%A1+...`","operationId":"escalate_api_escalation_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/EscalationRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/EscalationResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/product/reviews":{"get":{"tags":["Product Review AF - 상품 리뷰 조회"],"summary":"상품 리뷰 조회","description":"상품 번호(goods_no)로 해당 상품의 리뷰 목록과 평점 정보(리뷰 수, 평균 평점)를 반환합니다.","operationId":"get_reviews_api_product_reviews_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"goods_no","in":"query","required":true,"schema":{"type":"string","description":"상품 번호 (예: G000000314254)","title":"Goods No"},"description":"상품 번호 (예: G000000314254)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReviewResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/messages":{"post":{"tags":["Chat Message History AF - 채팅 메시지 이력"],"summary":"새 메시지 저장 및 어시스턴트 응답 처리","description":"사용자 메시지를 status='received'로 저장합니다. 이후 Agent/LLM 호출 결과를 어시스턴트 메시지로 status='completed'와 함께 삽입합니다. LLM 호출 실패 시 사용자 메시지 status를 'failed'로 업데이트합니다.","operationId":"create_message_api_messages_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageCreate"}}},"required":true},"responses":{"201":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/messages/sessions":{"get":{"tags":["Chat Message History AF - 채팅 메시지 이력"],"summary":"사용자 세션 목록 조회","description":"인증된 사용자(user_id)의 모든 채팅 세션을 마지막 메시지 일시 내림차순으로 반환합니다. 각 세션의 마지막 메시지 시각(last_message_at)과 메시지 수(msg_count)를 포함합니다.","operationId":"list_sessions_api_messages_sessions_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SessionListResponse"}}}}},"security":[{"HTTPBearer":[]}]}},"/api/messages/history/{session_id}":{"get":{"tags":["Chat Message History AF - 채팅 메시지 이력"],"summary":"세션 메시지 이력 조회","description":"session_id에 해당하는 모든 메시지를 CREATED_AT 오름차순으로 반환합니다.","operationId":"get_history_api_messages_history__session_id__get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"session_id","in":"path","required":true,"schema":{"type":"string","title":"Session Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ChatHistoryResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/messages/{session_id}":{"delete":{"tags":["Chat Message History AF - 채팅 메시지 이력"],"summary":"세션 메시지 이력 삭제","description":"session_id에 해당하는 모든 메시지를 삭제합니다.","operationId":"delete_history_api_messages__session_id__delete","security":[{"HTTPBearer":[]}],"parameters":[{"name":"session_id","in":"path","required":true,"schema":{"type":"string","title":"Session Id"}}],"responses":{"204":{"description":"Successful Response"},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/member/cars":{"get":{"tags":["Member AF - 회원 정보 조회"],"summary":"회원 등록 차량 정보 조회","description":"회원번호(mbr_no)에 등록된 차량 정보를 조회합니다.","operationId":"get_member_cars_api_member_cars_get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"mbr_no","in":"query","required":true,"schema":{"type":"string","description":"회원 번호","title":"Mbr No"},"description":"회원 번호"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MemberCarListResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/events/":{"get":{"tags":["Event/Deal AF - 이벤트 및 기획전 조회"],"summary":"이벤트 목록 조회","description":"현재 전시 중인 이벤트 목록을 조회합니다. (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)","operationId":"get_events_api_events__get","security":[{"HTTPBearer":[]}],"parameters":[{"name":"lang_cd","in":"query","required":false,"schema":{"type":"string","description":"언어코드 (기본값: ko)","default":"ko","title":"Lang Cd"},"description":"언어코드 (기본값: ko)"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/EventListResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/events/deals":{"get":{"tags":["Event/Deal AF - 이벤트 및 기획전 조회"],"summary":"기획전 목록 조회","description":"현재 전시 중인 기획전 목록을 조회합니다. (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)","operationId":"get_deals_api_events_deals_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DealListResponse"}}}}},"security":[{"HTTPBearer":[]}]}}},"components":{"schemas":{"AvailableCouponItem":{"properties":{"cpn_no":{"type":"string","title":"Cpn No","description":"쿠폰 번호"},"cpn_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cpn Nm","description":"쿠폰명"},"cpn_d_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cpn D Nm","description":"쿠폰 상세명"},"disp_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp Nm","description":"전시명"},"cpn_dscn_tp_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cpn Dscn Tp Cd","description":"쿠폰 할인 유형 코드"},"rt_amt_val":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Rt Amt Val","description":"정률/정액 값"},"min_pur_amt":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Min Pur Amt","description":"최소 구매 금액"},"max_dscnt_amt":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Max Dscnt Amt","description":"최대 할인 금액"},"disp_strt_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp Strt Dtime","description":"전시 시작 일시"},"disp_end_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp End Dtime","description":"전시 종료 일시"},"disp_wday_bit":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp Wday Bit","description":"전시 요일 비트"},"use_strt_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Use Strt Dtime","description":"사용 시작 일시"},"use_end_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Use End Dtime","description":"사용 종료 일시"},"use_term_dds":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Use Term Dds","description":"사용 기간 일수"}},"type":"object","required":["cpn_no"],"title":"AvailableCouponItem"},"AvailableCouponResponse":{"properties":{"coupons":{"items":{"$ref":"#/components/schemas/AvailableCouponItem"},"type":"array","title":"Coupons"}},"type":"object","required":["coupons"],"title":"AvailableCouponResponse"},"CarModelSearchItem":{"properties":{"car_lnc_cd":{"type":"string","title":"Car Lnc Cd","description":"차량 출시 코드"},"car_nm":{"type":"string","title":"Car Nm","description":"차량명"},"car_model_det":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Model Det","description":"차량 상세 모델명"}},"type":"object","required":["car_lnc_cd","car_nm"],"title":"CarModelSearchItem"},"CarModelSearchResponse":{"properties":{"items":{"items":{"$ref":"#/components/schemas/CarModelSearchItem"},"type":"array","title":"Items"}},"type":"object","required":["items"],"title":"CarModelSearchResponse"},"ChatHistoryResponse":{"properties":{"session_id":{"type":"string","title":"Session Id","description":"채팅 세션 ID"},"total":{"type":"integer","title":"Total","description":"메시지 수"},"messages":{"items":{"$ref":"#/components/schemas/MessageResponse"},"type":"array","title":"Messages","description":"메시지 목록 (CREATED_AT 오름차순)"}},"type":"object","required":["session_id","total"],"title":"ChatHistoryResponse"},"CompatibilityResponse":{"properties":{"tire_size_fr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tire Size Fr","description":"차량 전륜 타이어 사이즈 (예: 205/55R16)"},"tire_size_re":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tire Size Re","description":"차량 후륜 타이어 사이즈 (예: 225/45R17)"},"goods_spec":{"$ref":"#/components/schemas/TireSpec","description":"상품 타이어 스펙 (단면폭/편평비/인치)"},"is_compatible_fr":{"type":"boolean","title":"Is Compatible Fr","description":"전륜 호환 여부"},"is_compatible_re":{"type":"boolean","title":"Is Compatible Re","description":"후륜 호환 여부"},"is_compatible":{"type":"boolean","title":"Is Compatible","description":"전체 호환 여부 (전/후 모두 호환 시 true)"}},"type":"object","required":["is_compatible_fr","is_compatible_re","is_compatible"],"title":"CompatibilityResponse"},"DealItem":{"properties":{"deal_no":{"type":"string","title":"Deal No","description":"기획전 번호"},"deal_tp_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Deal Tp Cd","description":"기획전 유형 코드"},"deal_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Deal Nm","description":"기획전명"},"disp_seq":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Disp Seq","description":"전시 순서"},"deal_cpn_tp_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Deal Cpn Tp Cd","description":"기획전 쿠폰 유형 코드"},"bnr_pc_img_url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Bnr Pc Img Url","description":"배너 이미지 PC"},"bnr_mc_img_url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Bnr Mc Img Url","description":"배너 이미지 모바일"},"disp_strt_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp Strt Dtime","description":"전시 시작 일시"},"disp_end_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp End Dtime","description":"전시 종료 일시"},"new_deal_yn":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"New Deal Yn","description":"신규 기획전 여부"},"deal_brand_logo":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Deal Brand Logo","description":"기획전 브랜드 로고"},"deal_notice":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Deal Notice","description":"기획전 유의사항"}},"type":"object","required":["deal_no"],"title":"DealItem"},"DealListResponse":{"properties":{"total":{"type":"integer","title":"Total","description":"반환된 기획전 수"},"items":{"items":{"$ref":"#/components/schemas/DealItem"},"type":"array","title":"Items"}},"type":"object","required":["total","items"],"title":"DealListResponse"},"DiscountPriceItem":{"properties":{"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"},"sale_prc":{"type":"integer","title":"Sale Prc","description":"정가 (단가)"},"product_discount":{"type":"integer","title":"Product Discount","description":"상품할인 (단가, SALE_PRC - MAX_FVR_SALE_PRC)"},"coupon_discount":{"type":"integer","title":"Coupon Discount","description":"쿠폰할인 (단가, 할인 - 상품할인)"},"total_discount":{"type":"integer","title":"Total Discount","description":"총 할인 (단가, SALE_PRC - EXTRA_FVR_SALE_PRC)"},"final_unit_price":{"type":"integer","title":"Final Unit Price","description":"최종 단가 (EXTRA_FVR_SALE_PRC)"},"total_product_price":{"type":"integer","title":"Total Product Price","description":"총 상품가 (final_unit_price × quantity)"},"wage_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Wage Prc","description":"공임비 (단가)"},"wage_today_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Wage Today Prc","description":"오늘의 공임비 (단가)"},"total_wage":{"type":"integer","title":"Total Wage","description":"총 공임비"},"final_price":{"type":"integer","title":"Final Price","description":"최종 결제금액 (총 상품가 + 총 공임비)"}},"type":"object","required":["goods_no","sale_prc","product_discount","coupon_discount","total_discount","final_unit_price","total_product_price","total_wage","final_price"],"title":"DiscountPriceItem"},"DiscountPriceResponse":{"properties":{"quantity":{"type":"integer","title":"Quantity","description":"수량"},"items":{"items":{"$ref":"#/components/schemas/DiscountPriceItem"},"type":"array","title":"Items","description":"상품별 가격 정보"},"cheapest_goods_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cheapest Goods No","description":"최저가 상품 번호"}},"type":"object","required":["quantity","items"],"title":"DiscountPriceResponse"},"EscalationRequest":{"properties":{"mbr_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Mbr No","description":"회원 번호 (상담 페이지 전달용)"},"inq_type_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Inq Type Cd","description":"문의 유형 코드 (정책 기반 채널 분기에 사용)"},"msg_count":{"type":"integer","minimum":0.0,"title":"Msg Count","description":"현재까지의 대화 메시지 수","default":0},"summary":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Summary","description":"AI가 생성한 대화 요약 (대화량 충분 시 전달)"}},"type":"object","title":"EscalationRequest"},"EscalationResponse":{"properties":{"channel":{"type":"string","title":"Channel","description":"상담 채널 (chat | call | email)"},"branch":{"type":"string","title":"Branch","description":"분기 유형 (with_summary | direct | policy)"},"has_summary":{"type":"boolean","title":"Has Summary","description":"요약 내용 포함 여부"},"redirect_url":{"type":"string","title":"Redirect Url","description":"상담 페이지 URL (요약은 summary 쿼리 파라미터로 전달)"}},"type":"object","required":["channel","branch","has_summary","redirect_url"],"title":"EscalationResponse"},"EventItem":{"properties":{"evt_no":{"type":"string","title":"Evt No","description":"이벤트 번호"},"evt_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Evt Nm","description":"이벤트명"},"evt_clss_cd":{"type":"string","title":"Evt Clss Cd","description":"이벤트 분류 코드"},"evt_strt_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Evt Strt Dtime","description":"이벤트 시작 일시"},"evt_end_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Evt End Dtime","description":"이벤트 종료 일시"},"evt_prgs_stat_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Evt Prgs Stat Cd","description":"이벤트 진행 상태 코드"},"evt_url_addr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Evt Url Addr","description":"이벤트 URL 주소"},"bnr_img_url_addr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Bnr Img Url Addr","description":"배너 이미지 URL 주소"},"dtl_conts_url_addr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Dtl Conts Url Addr","description":"상세 컨텐츠 URL 주소"},"frdm_cmps_url_addr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Frdm Cmps Url Addr","description":"자유 구성 URL 주소"},"evt_badge_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Evt Badge Nm","description":"이벤트 뱃지 이름"},"new_evt_yn":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"New Evt Yn","description":"신규 이벤트 여부"},"dtl_evt_cont":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Dtl Evt Cont","description":"상세 이벤트 내용"}},"type":"object","required":["evt_no","evt_clss_cd"],"title":"EventItem"},"EventListResponse":{"properties":{"total":{"type":"integer","title":"Total","description":"반환된 이벤트 수"},"items":{"items":{"$ref":"#/components/schemas/EventItem"},"type":"array","title":"Items"}},"type":"object","required":["total","items"],"title":"EventListResponse"},"FaqItem":{"properties":{"lrcl_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Lrcl Cd","description":"대분류 코드 (LRCL_CD)"},"mdcl_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Mdcl Cd","description":"중분류 코드 (MDCL_CD)"},"cust_quest":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cust Quest","description":"질문 (CUST_QUEST)"},"pc_ans_cont":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Pc Ans Cont","description":"답변 (PC_ANS_CONT)"}},"type":"object","title":"FaqItem"},"FaqListResponse":{"properties":{"total":{"type":"integer","title":"Total","description":"반환된 FAQ 수"},"items":{"items":{"$ref":"#/components/schemas/FaqItem"},"type":"array","title":"Items"}},"type":"object","required":["total","items"],"title":"FaqListResponse"},"GoodsItem":{"properties":{"goodsNo":{"type":"string","title":"Goodsno","description":"상품 번호"},"qty":{"type":"string","title":"Qty","description":"수량"}},"type":"object","required":["goodsNo","qty"],"title":"GoodsItem"},"HTTPValidationError":{"properties":{"detail":{"items":{"$ref":"#/components/schemas/ValidationError"},"type":"array","title":"Detail"}},"type":"object","title":"HTTPValidationError"},"LogisticsRequest":{"properties":{"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"}},"type":"object","required":["goods_no"],"title":"LogisticsRequest"},"LogisticsResponse":{"properties":{"logistics_qty":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Logistics Qty","description":"물류 재고 수량 (FN_GET_GOODS_STOCK_QTY)"}},"type":"object","title":"LogisticsResponse"},"MemberCarInfo":{"properties":{"car_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car No","description":"차량 번호"},"car_lnc_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Lnc Cd","description":"차량 출시 코드"},"car_engine":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Engine","description":"엔진 형식"},"fuel_type":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Fuel Type","description":"연료 타입"},"ver_opt_choc":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Ver Opt Choc","description":"버전 옵션 선택"},"tire_size_fr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tire Size Fr","description":"전륜 타이어 사이즈"},"tire_size_re":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tire Size Re","description":"후륜 타이어 사이즈"},"tot_milg":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Tot Milg","description":"총 주행거리"},"daly_avg_milg":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Daly Avg Milg","description":"일 평균 주행거리"},"car_buy_dt":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Buy Dt","description":"차량 구매 일자"},"car_info_sts_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Info Sts Cd","description":"차량 정보 상태 코드"},"car_ispt_noti_req_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Ispt Noti Req Cd","description":"차량 검사 알림 요청 코드"},"car_reg_self_auth_yn":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Reg Self Auth Yn","description":"차량 등록 본인 인증 여부"},"car_info_reg_dt":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Info Reg Dt","description":"차량 정보 등록 일자"},"car_ownr_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Ownr Nm","description":"차량 소유주 명"},"mbr_car_unif_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Mbr Car Unif No","description":"회원 차량 통합 번호"},"car_auth_yn":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Auth Yn","description":"차량 인증 여부"},"car_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Nm","description":"차량명"},"car_model_det":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Model Det","description":"차량 상세 모델명"},"car_eng_vol":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Eng Vol","description":"차량 배기량"},"car_type":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Type","description":"차량 타입"},"car_origin":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Car Origin","description":"차량 제조국"},"pc_img_path_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Pc Img Path Nm","description":"PC 이미지 경로"},"mo_img_path_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Mo Img Path Nm","description":"모바일 이미지 경로"},"thnl_img_path_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Thnl Img Path Nm","description":"썸네일 이미지 경로"}},"type":"object","title":"MemberCarInfo"},"MemberCarListResponse":{"properties":{"items":{"items":{"$ref":"#/components/schemas/MemberCarInfo"},"type":"array","title":"Items","description":"회원 등록 차량 목록"}},"type":"object","title":"MemberCarListResponse"},"MessageCreate":{"properties":{"session_id":{"type":"string","title":"Session Id","description":"채팅 세션 ID"},"content":{"type":"string","title":"Content","description":"사용자 메시지 내용"}},"type":"object","required":["session_id","content"],"title":"MessageCreate"},"MessageResponse":{"properties":{"msg_id":{"type":"string","title":"Msg Id","description":"메시지 고유 ID (UUID)"},"session_id":{"type":"string","title":"Session Id","description":"채팅 세션 ID"},"role":{"type":"string","title":"Role","description":"메시지 역할 (user / assistant)"},"content":{"type":"string","title":"Content","description":"메시지 내용"},"status":{"type":"string","title":"Status","description":"처리 상태 (received / completed / failed)"},"created_at":{"type":"string","title":"Created At","description":"생성 일시 (YYYY-MM-DD HH24:MI:SS)"}},"type":"object","required":["msg_id","session_id","role","content","status","created_at"],"title":"MessageResponse"},"MyCouponItem":{"properties":{"cpn_issu_no":{"type":"string","title":"Cpn Issu No","description":"쿠폰 발급 번호"},"mbr_no":{"type":"string","title":"Mbr No","description":"회원 번호"},"cpn_no":{"type":"string","title":"Cpn No","description":"쿠폰 번호"},"cpn_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cpn Nm","description":"쿠폰명"},"cpn_d_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cpn D Nm","description":"쿠폰 상세명"},"disp_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Disp Nm","description":"전시명"},"issu_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Issu Dtime","description":"발급 일시"},"use_strt_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Use Strt Dtime","description":"사용 시작 일시"},"use_end_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Use End Dtime","description":"사용 종료 일시"},"mbr_use_yn":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Mbr Use Yn","description":"회원 사용 여부"},"cpn_dscn_tp_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Cpn Dscn Tp Cd","description":"쿠폰 할인 유형 코드"},"rt_amt_val":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Rt Amt Val","description":"정률/정액 값"},"min_pur_amt":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Min Pur Amt","description":"최소 구매 금액"},"max_dscnt_amt":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Max Dscnt Amt","description":"최대 할인 금액"}},"type":"object","required":["cpn_issu_no","mbr_no","cpn_no"],"title":"MyCouponItem"},"MyCouponResponse":{"properties":{"coupons":{"items":{"$ref":"#/components/schemas/MyCouponItem"},"type":"array","title":"Coupons"}},"type":"object","required":["coupons"],"title":"MyCouponResponse"},"OrderDeliveryResponse":{"properties":{"query_no":{"type":"string","title":"Query No","description":"입력 조회 번호 (주문번호 O..., 배송번호 D...)"},"ord_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Ord No","description":"주문 번호"},"dlv_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Dlv No","description":"배송 번호"},"ord_prgs_stat_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Ord Prgs Stat Cd","description":"주문 진행 상태 코드"},"ord_prgs_stat_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Ord Prgs Stat Nm","description":"주문 진행 상태명"},"dlv_prgs_stat_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Dlv Prgs Stat Cd","description":"배송 진행 상태 코드"},"dlv_prgs_stat_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Dlv Prgs Stat Nm","description":"배송 진행 상태명"},"inv_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Inv No","description":"운송장 번호"},"hdc_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Hdc Cd","description":"택배사 코드"},"dlv_fcst_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Dlv Fcst Dtime","description":"도착 예정 일시"}},"type":"object","required":["query_no"],"title":"OrderDeliveryResponse"},"OrderListItem":{"properties":{"ord_no":{"type":"string","title":"Ord No","description":"주문 번호"},"goods_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Goods Nm","description":"상품명"},"ord_qty":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Ord Qty","description":"주문 수량"},"sys_reg_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Sys Reg Dtime","description":"시스템 등록 일시"}},"type":"object","required":["ord_no"],"title":"OrderListItem"},"OrderListResponse":{"properties":{"orders":{"items":{"$ref":"#/components/schemas/OrderListItem"},"type":"array","title":"Orders"}},"type":"object","required":["orders"],"title":"OrderListResponse"},"PlaceSearchItem":{"properties":{"title":{"type":"string","title":"Title","description":"장소명"},"road_addr":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Road Addr","description":"도로명 주소"},"x":{"type":"string","title":"X","description":"X 좌표 (경도)"},"y":{"type":"string","title":"Y","description":"Y 좌표 (위도)"}},"type":"object","required":["title","x","y"],"title":"PlaceSearchItem"},"PlaceSearchResponse":{"properties":{"total":{"type":"integer","title":"Total","description":"검색 결과 수","default":0},"items":{"items":{"$ref":"#/components/schemas/PlaceSearchItem"},"type":"array","title":"Items"}},"type":"object","title":"PlaceSearchResponse"},"PriceResponse":{"properties":{"sale_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Sale Prc","description":"기본 판매가"},"extra_fvr_sale_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Extra Fvr Sale Prc","description":"최대 혜택 판매가 (쿠폰 등 적용)"},"extra_fvr_sale_per":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Extra Fvr Sale Per","description":"최대 혜택 할인율 (%)"},"wage_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Wage Prc","description":"공임비"},"wage_today_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Wage Today Prc","description":"오늘의 공임비"}},"type":"object","title":"PriceResponse"},"ProductDescResponse":{"properties":{"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"},"ptrn_cd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Ptrn Cd","description":"패턴 번호"},"pc_prod_remark_desc":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Pc Prod Remark Desc","description":"특장점 (PC_PROD_REMARK_DESC)"},"pc_prod_tech_desc":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Pc Prod Tech Desc","description":"기술력 (PC_PROD_TECH_DESC)"},"slogan":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Slogan","description":"슬로건 (SLOGAN)"},"images":{"items":{"$ref":"#/components/schemas/ProductImage"},"type":"array","title":"Images","description":"상품 이미지 목록"},"rating":{"anyOf":[{"$ref":"#/components/schemas/ReviewRating"},{"type":"null"}]},"reviews":{"items":{"$ref":"#/components/schemas/ReviewItem"},"type":"array","title":"Reviews"}},"type":"object","required":["goods_no"],"title":"ProductDescResponse"},"ProductImage":{"properties":{"img_path_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Img Path Nm","description":"이미지 경로 (IMG_PATH_NM)"},"thnl_path_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Thnl Path Nm","description":"썸네일 경로 (THNL_PATH_NM)"}},"type":"object","title":"ProductImage"},"ProductSearchItem":{"properties":{"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"},"goods_nm":{"type":"string","title":"Goods Nm","description":"상품명"},"tire_size_1":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tire Size 1","description":"타이어 사이즈 (TIRE_SIZE_1)"},"tire_size_2":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tire Size 2","description":"타이어 사이즈 (TIRE_SIZE_2)"},"score":{"type":"integer","title":"Score","description":"검색 관련도 점수","default":0},"match_type":{"type":"string","title":"Match Type","description":"매칭 유형 (exact/prefix/partial/alias)","default":"none"}},"type":"object","required":["goods_no","goods_nm"],"title":"ProductSearchItem"},"ProductSearchResponse":{"properties":{"items":{"items":{"$ref":"#/components/schemas/ProductSearchItem"},"type":"array","title":"Items"}},"type":"object","required":["items"],"title":"ProductSearchResponse"},"QuickOrderRequest":{"properties":{"mbr_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Mbr No","description":"회원 번호 (MBR_NO 또는 CAR_NO? 중 하나 필수)"},"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"},"ord_qty":{"type":"integer","minimum":1.0,"title":"Ord Qty","description":"주문 수량"}},"type":"object","required":["goods_no","ord_qty"],"title":"QuickOrderRequest"},"QuickOrderResponse":{"properties":{"redirect_url":{"type":"string","title":"Redirect Url","description":"주문서 작성 페이지 URL"}},"type":"object","required":["redirect_url"],"title":"QuickOrderResponse"},"RcmdGoodsItem":{"properties":{"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"},"goods_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Goods Nm","description":"상품명"},"extra_fvr_sale_prc":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Extra Fvr Sale Prc","description":"최대 혜택 판매가"},"extra_fvr_sale_per":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Extra Fvr Sale Per","description":"최대 혜택 할인율 (%)"},"tot_scr":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Tot Scr","description":"추천 점수 (TOT_SCR (FST_DISP_YN = ‘Y’ 이면 TOT_SCR * 10), 티스테이션 추천 전용)"},"t_comfort":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"T Comfort","description":"승차감 (T_COMFORT)"},"t_silence":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"T Silence","description":"정숙성 (T_SILENCE)"},"t_life_span":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"T Life Span","description":"수명 (T_LIFE_SPAN)"},"t_fuel_eff_convert":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"T Fuel Eff Convert","description":"연비 (T_FUEL_EFF_CONVERT)"},"image_url":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Image Url"},"title":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Title"},"price":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Price"},"rate":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Rate"},"comfort":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Comfort"}},"type":"object","required":["goods_no"],"title":"RcmdGoodsItem"},"RcmdType":{"type":"string","enum":["tstation","discount","value"],"title":"RcmdType"},"RecommendationResponse":{"properties":{"rcmd_type":{"type":"string","title":"Rcmd Type","description":"추천 타입 (tstation | discount | value)"},"total":{"type":"integer","title":"Total","description":"반환된 상품 수"},"items":{"items":{"$ref":"#/components/schemas/RcmdGoodsItem"},"type":"array","title":"Items"}},"type":"object","required":["rcmd_type","total","items"],"title":"RecommendationResponse"},"ReviewData":{"properties":{"goods_no":{"type":"string","title":"Goods No","description":"상품 번호"},"rating":{"$ref":"#/components/schemas/ReviewRating","description":"평점 정보"},"reviews":{"items":{"$ref":"#/components/schemas/ReviewItem"},"type":"array","title":"Reviews","description":"리뷰 목록"}},"type":"object","required":["goods_no"],"title":"ReviewData"},"ReviewItem":{"properties":{"goods_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Goods No","description":"상품 번호"},"gdas_score":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Gdas Score","description":"상품평 점수 (GDAS_SCR_VAL)"},"gdas_cont":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Gdas Cont","description":"상품평 내용 (GDAS_CONT)"},"reg_dtime":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Reg Dtime","description":"등록 일시 (SYS_REG_DTIME)"}},"type":"object","title":"ReviewItem"},"ReviewRating":{"properties":{"review_count":{"type":"integer","title":"Review Count","description":"리뷰 수","default":0},"rating_avg":{"type":"number","title":"Rating Avg","description":"평점 평균","default":0}},"type":"object","title":"ReviewRating"},"ReviewResponse":{"properties":{"data":{"$ref":"#/components/schemas/ReviewData"}},"type":"object","required":["data"],"title":"ReviewResponse"},"SessionInfo":{"properties":{"session_id":{"type":"string","title":"Session Id","description":"채팅 세션 ID"},"last_message_at":{"type":"string","title":"Last Message At","description":"마지막 메시지 일시 (YYYY-MM-DD HH24:MI:SS)"},"msg_count":{"type":"integer","title":"Msg Count","description":"세션 내 메시지 수"}},"type":"object","required":["session_id","last_message_at","msg_count"],"title":"SessionInfo"},"SessionListResponse":{"properties":{"user_id":{"type":"string","title":"User Id","description":"회원번호"},"total_sessions":{"type":"integer","title":"Total Sessions","description":"전체 세션 수"},"sessions":{"items":{"$ref":"#/components/schemas/SessionInfo"},"type":"array","title":"Sessions","description":"세션 목록 (last_message_at 내림차순)"}},"type":"object","required":["user_id","total_sessions"],"title":"SessionListResponse"},"SetOrderFormAIRequest":{"properties":{"goodsInfoArrStr":{"type":"string","title":"Goodsinfoarrstr","description":"상품정보 (GOODS_NO|ORD_QTY,...)"},"shopSeq":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shopseq","description":"방문매장 가맹점주문번호 ET_SHOP_INFO테이블 SHOP_SEQ 컬럼"},"smrtPayYn":{"type":"string","title":"Smrtpayyn","description":"스마트페이여부 (Y/N)"},"smrtPayInstMm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Smrtpayinstmm","description":"스마트페이시 할부개월수 (12/24)"},"drtPurYn":{"type":"string","title":"Drtpuryn","description":"주문하기여부 (Y: 주문하기, N: 장바구니)"},"carLncCd":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Carlnccd","description":"차량정보 WCODE"}},"type":"object","required":["goodsInfoArrStr","smrtPayYn","drtPurYn"],"title":"SetOrderFormAIRequest"},"SetOrderFormAIResponse":{"properties":{"result":{"type":"boolean","title":"Result","description":"성공/실패 여부"},"message":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Message","description":"실패시 메시지"},"drtPurYn":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Drtpuryn","description":"주문하기 여부"},"data":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"title":"Data","description":"주문하기 페이지 이동에 필요한 데이터"}},"type":"object","required":["result"],"title":"SetOrderFormAIResponse"},"ShopIdItem":{"properties":{"shopId":{"type":"string","title":"Shopid","description":"매장 ID"}},"type":"object","required":["shopId"],"title":"ShopIdItem"},"StoreDetailResponse":{"properties":{"shop_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Nm","description":"매장명"},"tel_no":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Tel No","description":"전화번호"},"is_all_my_t":{"type":"boolean","title":"Is All My T","description":"all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')","default":false},"is_installable":{"type":"boolean","title":"Is Installable","description":"쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))","default":false},"is_tna_delivery":{"type":"boolean","title":"Is Tna Delivery","description":"T바로배송(한국타이어 퀵배송) 가능 매장 여부","default":false},"holiday":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Holiday","description":"휴무일"},"shop_biz_strt_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz Strt Time","description":"영업 시작 시간"},"shop_biz_end_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz End Time","description":"영업 종료 시간"},"shop_biz_strt_wday":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz Strt Wday","description":"영업 시작 요일 (예: 월요일)"},"shop_biz_end_wday":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz End Wday","description":"영업 종료 요일 (예: 금요일)"},"shop_sat_strt_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Sat Strt Time","description":"토요일 영업 시작 시간"},"shop_sat_end_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Sat End Time","description":"토요일 영업 종료 시간"},"available_slots":{"items":{"type":"string"},"type":"array","title":"Available Slots","description":"예약 가능 시간 슬롯 목록 (예: ['09','10','11'])"}},"type":"object","title":"StoreDetailResponse"},"StoreInventoryRequest":{"properties":{"goodsList":{"items":{"$ref":"#/components/schemas/GoodsItem"},"type":"array","title":"Goodslist","description":"재고 확인 상품 목록"},"shopIdList":{"items":{"$ref":"#/components/schemas/ShopIdItem"},"type":"array","title":"Shopidlist","description":"재고 확인 매장 목록"}},"type":"object","required":["goodsList","shopIdList"],"title":"StoreInventoryRequest"},"StoreInventoryResponse":{"properties":{"todayShopArray":{"items":{"$ref":"#/components/schemas/ShopIdItem"},"type":"array","title":"Todayshoparray","description":"오늘 장착 가능 매장 목록"},"tnaShopArray":{"items":{"$ref":"#/components/schemas/ShopIdItem"},"type":"array","title":"Tnashoparray","description":"T바로배송 가능 매장 목록"}},"type":"object","title":"StoreInventoryResponse"},"StoreListItem":{"properties":{"shop_id":{"type":"string","title":"Shop Id","description":"매장 ID"},"shop_nm":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Nm","description":"매장명"},"is_all_my_t":{"type":"boolean","title":"Is All My T","description":"all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')","default":false},"is_installable":{"type":"boolean","title":"Is Installable","description":"쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))","default":false},"addr_base":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Addr Base","description":"일반주소"},"addr_dtl":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Addr Dtl","description":"일반주소"},"road_addr_base":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Road Addr Base","description":"도로명주소"},"road_addr_dtl":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Road Addr Dtl","description":"도로명주소 상세"},"shop_biz_strt_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz Strt Time","description":"영업 시작 시간"},"shop_biz_end_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz End Time","description":"영업 종료 시간"},"shop_biz_strt_wday":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz Strt Wday","description":"영업 시작 요일 (예: 월요일)"},"shop_biz_end_wday":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Biz End Wday","description":"영업 종료 요일 (예: 금요일)"},"shop_sat_strt_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Sat Strt Time","description":"토요일 영업 시작 시간"},"shop_sat_end_time":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Shop Sat End Time","description":"토요일 영업 종료 시간"},"distance_km":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Distance Km","description":"좌표 기준 거리 (km), 좌표 검색 시에만 반환"}},"type":"object","required":["shop_id"],"title":"StoreListItem"},"StoreListResponse":{"properties":{"stores":{"items":{"$ref":"#/components/schemas/StoreListItem"},"type":"array","title":"Stores"}},"type":"object","required":["stores"],"title":"StoreListResponse"},"TireSpec":{"properties":{"tire_width":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Tire Width","description":"단면폭 (TIRE_WIDTH)"},"tire_series":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Tire Series","description":"편평비 (TIRE_SERIES)"},"inch":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Inch","description":"인치 (INCH)"}},"type":"object","title":"TireSpec"},"ValidationError":{"properties":{"loc":{"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array","title":"Location"},"msg":{"type":"string","title":"Message"},"type":{"type":"string","title":"Error Type"},"input":{"title":"Input"},"ctx":{"type":"object","title":"Context"}},"type":"object","required":["loc","msg","type"],"title":"ValidationError"}},"securitySchemes":{"HTTPBearer":{"type":"http","scheme":"bearer"}}}}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "HKT API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/store/detail": {
+      "get": {
+        "tags": [
+          "Store AF - 매장 정보 및 예약 조회"
+        ],
+        "summary": "매장 상세 정보 및 예약 가능 시간 조회",
+        "description": "매장 ID와 날짜를 기준으로 매장 정보와 예약 가능 시간 슬롯(시 단위)을 반환합니다.",
+        "operationId": "get_store_detail_api_store_detail_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "shop_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "매장 ID",
+              "title": "Shop Id"
+            },
+            "description": "매장 ID"
+          },
+          {
+            "name": "cal_day",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{8}$",
+              "description": "조회 날짜 (YYYYMMDD)",
+              "title": "Cal Day"
+            },
+            "description": "조회 날짜 (YYYYMMDD)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/store/list": {
+      "get": {
+        "tags": [
+          "Store AF - 매장 정보 및 예약 조회"
+        ],
+        "summary": "매장 목록 조회",
+        "description": "매장명/지역명 검색 또는 좌표 기반 주변 매장 검색. xpos, ypos 를 입력하면 해당 좌표 주변 매장을 거리순으로 반환합니다.",
+        "operationId": "get_store_list_api_store_list_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "region_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "지역 검색어",
+              "title": "Region Code"
+            },
+            "description": "지역 검색어"
+          },
+          {
+            "name": "store_nm",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "매장명 명칭 검색",
+              "title": "Store Nm"
+            },
+            "description": "매장명 명칭 검색"
+          },
+          {
+            "name": "xpos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "X 좌표 (경도, place-search 결과의 x 값)",
+              "title": "Xpos"
+            },
+            "description": "X 좌표 (경도, place-search 결과의 x 값)"
+          },
+          {
+            "name": "ypos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Y 좌표 (위도, place-search 결과의 y 값)",
+              "title": "Ypos"
+            },
+            "description": "Y 좌표 (위도, place-search 결과의 y 값)"
+          },
+          {
+            "name": "radius_km",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "좌표 검색 반경 (km), 기본값 20km",
+              "default": 20,
+              "title": "Radius Km"
+            },
+            "description": "좌표 검색 반경 (km), 기본값 20km"
+          },
+          {
+            "name": "svc_codes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']",
+              "title": "Svc Codes"
+            },
+            "description": "서비스 구분 코드 목록. 하나라도 보유한 매장 반환. 예: ['101', '102']"
+          },
+          {
+            "name": "all_my_t_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "True 이면 all my T 매장만 조회",
+              "default": false,
+              "title": "All My T Only"
+            },
+            "description": "True 이면 all my T 매장만 조회"
+          },
+          {
+            "name": "chl_sct_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP",
+              "title": "Chl Sct Cd"
+            },
+            "description": "채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "반환할 최대 매장 수",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "반환할 최대 매장 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/store/place-search": {
+      "get": {
+        "tags": [
+          "Store AF - 매장 정보 및 예약 조회"
+        ],
+        "summary": "위치 명칭 검색",
+        "description": "Kakao 키워드 검색 API를 이용하여 위치 명칭(건물명, 장소명 등)을 검색하고 좌표를 반환합니다.",
+        "operationId": "search_place_api_store_place_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "검색어 (예: 부산센텀시티, 강남역)",
+              "title": "Query"
+            },
+            "description": "검색어 (예: 부산센텀시티, 강남역)"
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 45,
+              "minimum": 1,
+              "description": "반환할 최대 결과 수",
+              "default": 10,
+              "title": "Size"
+            },
+            "description": "반환할 최대 결과 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prices/final": {
+      "get": {
+        "tags": [
+          "Price AF - 가격 및 할인 조회"
+        ],
+        "summary": "상품 가격 및 할인 조회",
+        "description": "상품 번호로 기본 판매가, 최대 혜택가(프로모션·쿠폰 적용), 공임비 및 오늘의 공임비를 반환합니다.\n(샘플번호: G000000314254)",
+        "operationId": "get_price_api_prices_final_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "goods_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "상품 번호 (예: G000000314254)",
+              "title": "Goods No"
+            },
+            "description": "상품 번호 (예: G000000314254)"
+          },
+          {
+            "name": "member_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "회원 유형 (예: 'general', 'PARTNER')",
+              "title": "Member Type"
+            },
+            "description": "회원 유형 (예: 'general', 'PARTNER')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prices/coupons/available": {
+      "get": {
+        "tags": [
+          "Price AF - 가격 및 할인 조회"
+        ],
+        "summary": "다운로드 가능 쿠폰 조회",
+        "description": "현재 사용자가 다운로드 가능한 쿠폰 목록을 조회합니다.",
+        "operationId": "get_available_coupons_api_prices_coupons_available_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lang_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "언어 코드 (기본값: 'ko' 한국어)",
+              "default": "ko",
+              "title": "Lang Cd"
+            },
+            "description": "언어 코드 (기본값: 'ko' 한국어)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailableCouponResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prices/coupons/mine": {
+      "get": {
+        "tags": [
+          "Price AF - 가격 및 할인 조회"
+        ],
+        "summary": "내 쿠폰 목록 조회",
+        "description": "사용자가 보유한 사용 가능한 쿠폰 목록을 조회합니다.",
+        "operationId": "get_my_coupons_api_prices_coupons_mine_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lang_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "언어 코드 (기본값: 'ko' 한국어)",
+              "default": "ko",
+              "title": "Lang Cd"
+            },
+            "description": "언어 코드 (기본값: 'ko' 한국어)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyCouponResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prices/discount-compare": {
+      "get": {
+        "tags": [
+          "Price AF - 가격 및 할인 조회"
+        ],
+        "summary": "복수 상품 할인 가격 비교 조회",
+        "description": "복수 상품 번호와 수량을 입력하여 상품별 정가, 상품할인, 쿠폰할인, 최종 결제금액을 비교합니다. JWT 토큰의 affiliate_yn 값으로 일반/제휴 회원을 자동 구분합니다. 최저가 상품 번호(cheapest_goods_no)를 함께 반환합니다.",
+        "operationId": "get_discount_compare_api_prices_discount_compare_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "goods_no_list",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "상품 번호 목록 (예: ['G000000314254', 'G000000312692'])",
+              "title": "Goods No List"
+            },
+            "description": "상품 번호 목록 (예: ['G000000314254', 'G000000312692'])"
+          },
+          {
+            "name": "quantity",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "수량",
+              "title": "Quantity"
+            },
+            "description": "수량"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscountPriceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/inventory/logistics": {
+      "post": {
+        "tags": [
+          "Inventory AF - 재고 조회"
+        ],
+        "summary": "상품 물류 재고 조회",
+        "description": "물류 재고(오라클 함수 FN_GET_GOODS_STOCK_QTY)를 반환합니다.",
+        "operationId": "get_logistics_inventory_api_inventory_logistics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogisticsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/inventory/store": {
+      "post": {
+        "tags": [
+          "Inventory AF - 재고 조회"
+        ],
+        "summary": "매장 재고 가용 여부 조회",
+        "description": "상품 목록과 매장 목록을 입력받아 오늘 장착 가능 매장(todayShopArray)과 T바로배송 가능 매장(tnaShopArray)을 반환합니다. (외부 API: getStockCheckShopList)",
+        "operationId": "get_store_inventory_api_inventory_store_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreInventoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreInventoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/orders/": {
+      "get": {
+        "tags": [
+          "Order/Delivery AF - 주문 및 배송 추적"
+        ],
+        "summary": "주문 내역 조회",
+        "description": "인증된 사용자의 주문 내역(주문번호, 상품명, 수량, 등록일시)을 조회합니다.",
+        "operationId": "get_orders_api_orders__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/orders/summary": {
+      "get": {
+        "tags": [
+          "Order/Delivery AF - 주문 및 배송 추적"
+        ],
+        "summary": "주문 및 배송 상태 조회",
+        "description": "조회번호가 O로 시작하면 주문번호 기준, D로 시작하면 배송번호 기준으로 주문/배송 정보를 함께 반환합니다.",
+        "operationId": "get_order_delivery_api_orders_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "query_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "조회번호 (주문번호: O..., 배송번호: D...)",
+              "title": "Query No"
+            },
+            "description": "조회번호 (주문번호: O..., 배송번호: D...)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDeliveryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/quick-order/order/setOrderFormAI.do": {
+      "post": {
+        "tags": [
+          "Quick Shopping AF - 퀵 쇼핑/주문서 초안 생성"
+        ],
+        "summary": "AI 퀵쇼핑/장바구니등록 API",
+        "description": "티스테이션 사이트에서 자바스크립트로 실행되는 퀵쇼핑/장바구니 등록 API. 로그인 필수.",
+        "operationId": "set_order_form_ai_api_quick_order_order_setOrderFormAI_do_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOrderFormAIRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetOrderFormAIResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/product/compatible": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "차량-상품 타이어 호환 검증",
+        "operationId": "check_compatibility_api_product_compatible_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "car_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "차량 번호",
+              "title": "Car No"
+            },
+            "description": "차량 번호"
+          },
+          {
+            "name": "owner_nm",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "차량 소유주",
+              "title": "Owner Nm"
+            },
+            "description": "차량 소유주"
+          },
+          {
+            "name": "goods_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "상품 번호",
+              "title": "Goods No"
+            },
+            "description": "상품 번호"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibilityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/vehicles": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "Get User Vehicles",
+        "operationId": "get_user_vehicles_api_user_vehicles_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "car_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "자동차 등록번호",
+              "title": "Car No"
+            },
+            "description": "자동차 등록번호"
+          },
+          {
+            "name": "owner_nm",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "소유자 이름",
+              "title": "Owner Nm"
+            },
+            "description": "소유자 이름"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/product/search": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "상품 검색",
+        "description": "제품명 키워드로 상품을 검색합니다. 한글/영문 혼용, 부분 키워드 지원. (예: '벤투스', 's1 evo', '아이온 suv')\n사이즈를 지정하여 검색 결과를 필터링할 수도 있습니다. (예: '2254517')",
+        "operationId": "search_product_api_product_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')",
+              "title": "Keyword"
+            },
+            "description": "검색할 제품명 키워드 (예: '벤투스 S2', 's1-evo')"
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "타이어 사이즈 (예: '2254517' 또는 '225/45R17')",
+              "title": "Size"
+            },
+            "description": "타이어 사이즈 (예: '2254517' 또는 '225/45R17')"
+          },
+          {
+            "name": "brand_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈, GY=굿이어)",
+              "default": "HK",
+              "title": "Brand Cd"
+            },
+            "description": "브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈, GY=굿이어)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "반환할 최대 상품 수",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "반환할 최대 상품 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vehicle/search": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "차량 모델 검색",
+        "description": "차량 모델명 키워드로 PR_CAR_BASE에서 차량을 검색합니다. alias 확장 지원.",
+        "operationId": "search_car_model_api_vehicle_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "검색할 차량 모델명 키워드 (예: '소나타', '그랜저')",
+              "title": "Keyword"
+            },
+            "description": "검색할 차량 모델명 키워드 (예: '소나타', '그랜저')"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "반환할 최대 차량 수",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "반환할 최대 차량 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarModelSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vehicle/models": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "차종 모델 그룹 검색 (1단계)",
+        "description": "차량 모델명 키워드로 CAR_MODEL_DET 그룹별 요약을 반환합니다. 각 그룹에 연식 범위(year_from~year_to)와 트림 수(trim_count)가 포함됩니다.",
+        "operationId": "search_car_model_groups_api_vehicle_models_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "검색할 차량 모델명 키워드 (예: 'K7', '소나타')",
+              "title": "Keyword"
+            },
+            "description": "검색할 차량 모델명 키워드 (예: 'K7', '소나타')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarModelGroupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vehicle/trims": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "차종 트림 목록 조회 (2단계)",
+        "description": "CAR_MODEL_DET로 해당 모델의 세부 트림(연식/차량명/출시코드) 목록을 반환합니다.",
+        "operationId": "get_car_trims_api_vehicle_trims_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "car_model_det",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "차량 상세 모델명 (예: '더 뉴 K7(VG)')",
+              "title": "Car Model Det"
+            },
+            "description": "차량 상세 모델명 (예: '더 뉴 K7(VG)')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarTrimResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vehicle/tire-size": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "차량 타이어 사이즈 조회 (3단계)",
+        "description": "CAR_LNC_CD로 해당 차량의 전륜/후륜 타이어 사이즈를 반환합니다.",
+        "operationId": "get_car_tire_size_api_vehicle_tire_size_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "car_lnc_cd",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "차량 출시 코드",
+              "title": "Car Lnc Cd"
+            },
+            "description": "차량 출시 코드"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarTireSizeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/product/recommend": {
+      "get": {
+        "tags": [
+          "Product Recommendation AF - 상품 추천"
+        ],
+        "summary": "상품 추천",
+        "description": "추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n- **tstation**: 티스테이션 추천 (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)",
+        "operationId": "get_recommendations_api_product_recommend_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "rcmd_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RcmdType",
+              "description": "추천 타입 (tstation | discount | value)"
+            },
+            "description": "추천 타입 (tstation | discount | value)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "반환할 상품 수 (기본 10, 최대 100)",
+              "default": 10,
+              "title": "Limit"
+            },
+            "description": "반환할 상품 수 (기본 10, 최대 100)"
+          },
+          {
+            "name": "brand_cd",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "각 브랜드(HK / LF / MC / PI / BS / CT / GY",
+              "title": "Brand Cd"
+            },
+            "description": "각 브랜드(HK / LF / MC / PI / BS / CT / GY"
+          },
+          {
+            "name": "entr_yn",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "제휴 사이트 (y/n)",
+              "title": "Entr Yn"
+            },
+            "description": "제휴 사이트 (y/n)"
+          },
+          {
+            "name": "entr_no",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "제휴사 번호 (entr_yn=y 일 때 필수)",
+              "title": "Entr No"
+            },
+            "description": "제휴사 번호 (entr_yn=y 일 때 필수)"
+          },
+          {
+            "name": "car_lnc_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용",
+              "title": "Car Lnc Cd"
+            },
+            "description": "차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용"
+          },
+          {
+            "name": "tire_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)",
+              "title": "Tire Size"
+            },
+            "description": "타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/product/detail/{goods_no}": {
+      "get": {
+        "tags": [
+          "Product Description AF - 상품 설명"
+        ],
+        "summary": "상품 설명 조회",
+        "description": "상품 번호로 PR_GOODS_BASE → PR_PATTERN_BASE를 조인하여 특장점(PC_PROD_REMARK_DESC), 기술력(PC_PROD_TECH_DESC), 슬로건(SLOGAN)을 조회하고, PR_PTRN_IMG_INFO에서 이미지 및 썸네일 경로 목록을 반환합니다.",
+        "operationId": "get_description_api_product_detail__goods_no__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "goods_no",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goods No"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDescResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faq": {
+      "get": {
+        "tags": [
+          "FAQ AF - 일반 문의"
+        ],
+        "summary": "FAQ 목록 조회",
+        "description": "CS_CUST_INQ_MGMT_INFO에서 FAQ 데이터(INQ_TYPE_CD='FAQ')만 조회합니다. 1:1 문의 내역은 개인정보 보호를 위해 제외됩니다. lrcl_cd(대분류), mdcl_cd(중분류)로 필터링할 수 있습니다.",
+        "operationId": "get_faq_api_faq_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lrcl_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "대분류 코드 필터 (LRCL_CD)",
+              "title": "Lrcl Cd"
+            },
+            "description": "대분류 코드 필터 (LRCL_CD)"
+          },
+          {
+            "name": "mdcl_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "중분류 코드 필터 (MDCL_CD)",
+              "title": "Mdcl Cd"
+            },
+            "description": "중분류 코드 필터 (MDCL_CD)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "반환할 FAQ 수 (기본 50, 최대 200)",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "반환할 FAQ 수 (기본 50, 최대 200)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaqListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/escalation": {
+      "post": {
+        "tags": [
+          "Fallback / Escalation AF - 상담 연결"
+        ],
+        "summary": "상담 연결 분기 처리",
+        "description": "대화량과 문의 유형에 따라 3가지 분기로 처리합니다.\n\n- **with_summary**: 대화 메시지 수 ≥ 기준치(`ESCALATION_MSG_THRESHOLD`, 기본 3)이고 요약(`summary`)이 있는 경우 — 요약을 `summary` 쿼리 파라미터로 URL 인코딩하여 전달\n- **direct**: 대화량이 적거나 요약이 없는 경우 — 요약 없이 상담 페이지로 바로 전달\n- **policy**: `inq_type_cd`가 정책 테이블에 등록된 경우 — 지정 채널(call/email 등)로 분기\n\n**summary URL 파라미터 규격**: `summary` 키, URL 인코딩(percent-encoding) 적용, 예) `?inq_type_cd=ORDER&mbr_no=M001&summary=%EB%B0%B0%EC%86%A1+...`",
+        "operationId": "escalate_api_escalation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EscalationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscalationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/member/cars": {
+      "get": {
+        "tags": [
+          "Member AF - 회원 정보 조회"
+        ],
+        "summary": "회원 등록 차량 정보 조회",
+        "description": "회원번호(mbr_no)에 등록된 차량 정보를 조회합니다.",
+        "operationId": "get_member_cars_api_member_cars_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mbr_no",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "회원 번호",
+              "title": "Mbr No"
+            },
+            "description": "회원 번호"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberCarListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events/": {
+      "get": {
+        "tags": [
+          "Event/Deal AF - 이벤트 및 기획전 조회"
+        ],
+        "summary": "이벤트 목록 조회",
+        "description": "현재 전시 중인 이벤트 목록을 조회합니다. (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)",
+        "operationId": "get_events_api_events__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lang_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "언어코드 (기본값: ko)",
+              "default": "ko",
+              "title": "Lang Cd"
+            },
+            "description": "언어코드 (기본값: ko)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events/deals": {
+      "get": {
+        "tags": [
+          "Event/Deal AF - 이벤트 및 기획전 조회"
+        ],
+        "summary": "기획전 목록 조회",
+        "description": "현재 전시 중인 기획전 목록을 조회합니다. (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)",
+        "operationId": "get_deals_api_events_deals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AvailableCouponItem": {
+        "properties": {
+          "cpn_no": {
+            "type": "string",
+            "title": "Cpn No",
+            "description": "쿠폰 번호"
+          },
+          "cpn_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpn Nm",
+            "description": "쿠폰명"
+          },
+          "cpn_d_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpn D Nm",
+            "description": "쿠폰 상세명"
+          },
+          "disp_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Nm",
+            "description": "전시명"
+          },
+          "cpn_dscn_tp_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpn Dscn Tp Cd",
+            "description": "쿠폰 할인 유형 코드"
+          },
+          "rt_amt_val": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rt Amt Val",
+            "description": "정률/정액 값"
+          },
+          "min_pur_amt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Pur Amt",
+            "description": "최소 구매 금액"
+          },
+          "max_dscnt_amt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Dscnt Amt",
+            "description": "최대 할인 금액"
+          },
+          "disp_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Strt Dtime",
+            "description": "전시 시작 일시"
+          },
+          "disp_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp End Dtime",
+            "description": "전시 종료 일시"
+          },
+          "disp_wday_bit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Wday Bit",
+            "description": "전시 요일 비트"
+          },
+          "use_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use Strt Dtime",
+            "description": "사용 시작 일시"
+          },
+          "use_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use End Dtime",
+            "description": "사용 종료 일시"
+          },
+          "use_term_dds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use Term Dds",
+            "description": "사용 기간 일수"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cpn_no"
+        ],
+        "title": "AvailableCouponItem"
+      },
+      "AvailableCouponResponse": {
+        "properties": {
+          "coupons": {
+            "items": {
+              "$ref": "#/components/schemas/AvailableCouponItem"
+            },
+            "type": "array",
+            "title": "Coupons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coupons"
+        ],
+        "title": "AvailableCouponResponse"
+      },
+      "CarModelGroup": {
+        "properties": {
+          "car_model_det": {
+            "type": "string",
+            "title": "Car Model Det",
+            "description": "차량 상세 모델명 (예: '더 뉴 K7(VG)')"
+          },
+          "year_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year From",
+            "description": "최소 연식"
+          },
+          "year_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year To",
+            "description": "최대 연식"
+          },
+          "trim_count": {
+            "type": "integer",
+            "title": "Trim Count",
+            "description": "해당 그룹 내 트림 수"
+          }
+        },
+        "type": "object",
+        "required": [
+          "car_model_det",
+          "trim_count"
+        ],
+        "title": "CarModelGroup"
+      },
+      "CarModelGroupResponse": {
+        "properties": {
+          "keyword": {
+            "type": "string",
+            "title": "Keyword",
+            "description": "검색한 차량 모델명 키워드"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CarModelGroup"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keyword",
+          "items"
+        ],
+        "title": "CarModelGroupResponse"
+      },
+      "CarModelSearchItem": {
+        "properties": {
+          "car_lnc_cd": {
+            "type": "string",
+            "title": "Car Lnc Cd",
+            "description": "차량 출시 코드"
+          },
+          "car_nm": {
+            "type": "string",
+            "title": "Car Nm",
+            "description": "차량명"
+          },
+          "car_model_det": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Model Det",
+            "description": "차량 상세 모델명"
+          }
+        },
+        "type": "object",
+        "required": [
+          "car_lnc_cd",
+          "car_nm"
+        ],
+        "title": "CarModelSearchItem"
+      },
+      "CarModelSearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CarModelSearchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "CarModelSearchResponse"
+      },
+      "CarTireSizeResponse": {
+        "properties": {
+          "car_lnc_cd": {
+            "type": "string",
+            "title": "Car Lnc Cd",
+            "description": "차량 출시 코드"
+          },
+          "tire_size_fr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Fr",
+            "description": "전륜 타이어 사이즈 (예: 225/45R18)"
+          },
+          "tire_size_re": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Re",
+            "description": "후륜 타이어 사이즈 (예: 225/45R18)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "car_lnc_cd"
+        ],
+        "title": "CarTireSizeResponse"
+      },
+      "CarTrimItem": {
+        "properties": {
+          "car_lnc_cd": {
+            "type": "string",
+            "title": "Car Lnc Cd",
+            "description": "차량 출시 코드"
+          },
+          "car_nm": {
+            "type": "string",
+            "title": "Car Nm",
+            "description": "차량명 (예: 'K7 2.4 GDI 프레스티지')"
+          },
+          "car_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Year",
+            "description": "연식"
+          },
+          "tire_size_fr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Fr",
+            "description": "전륜 타이어 사이즈 (예: 225/45R18)"
+          },
+          "tire_size_re": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Re",
+            "description": "후륜 타이어 사이즈 (예: 225/45R18)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "car_lnc_cd",
+          "car_nm"
+        ],
+        "title": "CarTrimItem"
+      },
+      "CarTrimResponse": {
+        "properties": {
+          "car_model_det": {
+            "type": "string",
+            "title": "Car Model Det",
+            "description": "차량 상세 모델명"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CarTrimItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "car_model_det",
+          "items"
+        ],
+        "title": "CarTrimResponse"
+      },
+      "ChatHistoryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "메시지 수"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "type": "array",
+            "title": "Messages",
+            "description": "메시지 목록 (CREATED_AT 오름차순)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "total"
+        ],
+        "title": "ChatHistoryResponse"
+      },
+      "CompatibilityResponse": {
+        "properties": {
+          "tire_size_fr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Fr",
+            "description": "차량 전륜 타이어 사이즈 (예: 205/55R16)"
+          },
+          "tire_size_re": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Re",
+            "description": "차량 후륜 타이어 사이즈 (예: 225/45R17)"
+          },
+          "goods_spec": {
+            "$ref": "#/components/schemas/TireSpec",
+            "description": "상품 타이어 스펙 (단면폭/편평비/인치)"
+          },
+          "is_compatible_fr": {
+            "type": "boolean",
+            "title": "Is Compatible Fr",
+            "description": "전륜 호환 여부"
+          },
+          "is_compatible_re": {
+            "type": "boolean",
+            "title": "Is Compatible Re",
+            "description": "후륜 호환 여부"
+          },
+          "is_compatible": {
+            "type": "boolean",
+            "title": "Is Compatible",
+            "description": "전체 호환 여부 (전/후 모두 호환 시 true)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_compatible_fr",
+          "is_compatible_re",
+          "is_compatible"
+        ],
+        "title": "CompatibilityResponse"
+      },
+      "DealItem": {
+        "properties": {
+          "deal_no": {
+            "type": "string",
+            "title": "Deal No",
+            "description": "기획전 번호"
+          },
+          "deal_tp_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Tp Cd",
+            "description": "기획전 유형 코드"
+          },
+          "deal_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Nm",
+            "description": "기획전명"
+          },
+          "disp_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Seq",
+            "description": "전시 순서"
+          },
+          "deal_cpn_tp_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Cpn Tp Cd",
+            "description": "기획전 쿠폰 유형 코드"
+          },
+          "bnr_pc_img_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bnr Pc Img Url",
+            "description": "배너 이미지 PC"
+          },
+          "bnr_mc_img_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bnr Mc Img Url",
+            "description": "배너 이미지 모바일"
+          },
+          "disp_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Strt Dtime",
+            "description": "전시 시작 일시"
+          },
+          "disp_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp End Dtime",
+            "description": "전시 종료 일시"
+          },
+          "new_deal_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Deal Yn",
+            "description": "신규 기획전 여부"
+          },
+          "deal_brand_logo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Brand Logo",
+            "description": "기획전 브랜드 로고"
+          },
+          "deal_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deal Notice",
+            "description": "기획전 유의사항"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deal_no"
+        ],
+        "title": "DealItem"
+      },
+      "DealListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "반환된 기획전 수"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DealItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "DealListResponse"
+      },
+      "DiscountPriceItem": {
+        "properties": {
+          "goods_no": {
+            "type": "string",
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "sale_prc": {
+            "type": "integer",
+            "title": "Sale Prc",
+            "description": "정가 (단가)"
+          },
+          "product_discount": {
+            "type": "integer",
+            "title": "Product Discount",
+            "description": "상품할인 (단가, SALE_PRC - MAX_FVR_SALE_PRC)"
+          },
+          "coupon_discount": {
+            "type": "integer",
+            "title": "Coupon Discount",
+            "description": "쿠폰할인 (단가, 할인 - 상품할인)"
+          },
+          "total_discount": {
+            "type": "integer",
+            "title": "Total Discount",
+            "description": "총 할인 (단가, SALE_PRC - EXTRA_FVR_SALE_PRC)"
+          },
+          "final_unit_price": {
+            "type": "integer",
+            "title": "Final Unit Price",
+            "description": "최종 단가 (EXTRA_FVR_SALE_PRC)"
+          },
+          "total_product_price": {
+            "type": "integer",
+            "title": "Total Product Price",
+            "description": "총 상품가 (final_unit_price × quantity)"
+          },
+          "wage_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wage Prc",
+            "description": "공임비 (단가)"
+          },
+          "wage_today_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wage Today Prc",
+            "description": "오늘의 공임비 (단가)"
+          },
+          "total_wage": {
+            "type": "integer",
+            "title": "Total Wage",
+            "description": "총 공임비"
+          },
+          "final_price": {
+            "type": "integer",
+            "title": "Final Price",
+            "description": "최종 결제금액 (총 상품가 + 총 공임비)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goods_no",
+          "sale_prc",
+          "product_discount",
+          "coupon_discount",
+          "total_discount",
+          "final_unit_price",
+          "total_product_price",
+          "total_wage",
+          "final_price"
+        ],
+        "title": "DiscountPriceItem"
+      },
+      "DiscountPriceResponse": {
+        "properties": {
+          "quantity": {
+            "type": "integer",
+            "title": "Quantity",
+            "description": "수량"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DiscountPriceItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "상품별 가격 정보"
+          },
+          "cheapest_goods_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cheapest Goods No",
+            "description": "최저가 상품 번호"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quantity",
+          "items"
+        ],
+        "title": "DiscountPriceResponse"
+      },
+      "EscalationRequest": {
+        "properties": {
+          "mbr_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mbr No",
+            "description": "회원 번호 (상담 페이지 전달용)"
+          },
+          "inq_type_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inq Type Cd",
+            "description": "문의 유형 코드 (정책 기반 채널 분기에 사용)"
+          },
+          "msg_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Msg Count",
+            "description": "현재까지의 대화 메시지 수",
+            "default": 0
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary",
+            "description": "AI가 생성한 대화 요약 (대화량 충분 시 전달)"
+          }
+        },
+        "type": "object",
+        "title": "EscalationRequest"
+      },
+      "EscalationResponse": {
+        "properties": {
+          "channel": {
+            "type": "string",
+            "title": "Channel",
+            "description": "상담 채널 (chat | call | email)"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch",
+            "description": "분기 유형 (with_summary | direct | policy)"
+          },
+          "has_summary": {
+            "type": "boolean",
+            "title": "Has Summary",
+            "description": "요약 내용 포함 여부"
+          },
+          "redirect_url": {
+            "type": "string",
+            "title": "Redirect Url",
+            "description": "상담 페이지 URL (요약은 summary 쿼리 파라미터로 전달)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "channel",
+          "branch",
+          "has_summary",
+          "redirect_url"
+        ],
+        "title": "EscalationResponse"
+      },
+      "EventItem": {
+        "properties": {
+          "evt_no": {
+            "type": "string",
+            "title": "Evt No",
+            "description": "이벤트 번호"
+          },
+          "evt_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Nm",
+            "description": "이벤트명"
+          },
+          "evt_clss_cd": {
+            "type": "string",
+            "title": "Evt Clss Cd",
+            "description": "이벤트 분류 코드"
+          },
+          "evt_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Strt Dtime",
+            "description": "이벤트 시작 일시"
+          },
+          "evt_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt End Dtime",
+            "description": "이벤트 종료 일시"
+          },
+          "evt_prgs_stat_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Prgs Stat Cd",
+            "description": "이벤트 진행 상태 코드"
+          },
+          "evt_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Url Addr",
+            "description": "이벤트 URL 주소"
+          },
+          "bnr_img_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bnr Img Url Addr",
+            "description": "배너 이미지 URL 주소"
+          },
+          "dtl_conts_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dtl Conts Url Addr",
+            "description": "상세 컨텐츠 URL 주소"
+          },
+          "frdm_cmps_url_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frdm Cmps Url Addr",
+            "description": "자유 구성 URL 주소"
+          },
+          "evt_badge_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evt Badge Nm",
+            "description": "이벤트 뱃지 이름"
+          },
+          "new_evt_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Evt Yn",
+            "description": "신규 이벤트 여부"
+          },
+          "dtl_evt_cont": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dtl Evt Cont",
+            "description": "상세 이벤트 내용"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evt_no",
+          "evt_clss_cd"
+        ],
+        "title": "EventItem"
+      },
+      "EventListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "반환된 이벤트 수"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "EventListResponse"
+      },
+      "FaqItem": {
+        "properties": {
+          "lrcl_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lrcl Cd",
+            "description": "대분류 코드 (LRCL_CD)"
+          },
+          "mdcl_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mdcl Cd",
+            "description": "중분류 코드 (MDCL_CD)"
+          },
+          "cust_quest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cust Quest",
+            "description": "질문 (CUST_QUEST)"
+          },
+          "pc_ans_cont": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Ans Cont",
+            "description": "답변 (PC_ANS_CONT)"
+          }
+        },
+        "type": "object",
+        "title": "FaqItem"
+      },
+      "FaqListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "반환된 FAQ 수"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FaqItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "FaqListResponse"
+      },
+      "GoodsItem": {
+        "properties": {
+          "goodsNo": {
+            "type": "string",
+            "title": "Goodsno",
+            "description": "상품 번호"
+          },
+          "qty": {
+            "type": "string",
+            "title": "Qty",
+            "description": "수량"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goodsNo",
+          "qty"
+        ],
+        "title": "GoodsItem"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LogisticsRequest": {
+        "properties": {
+          "goods_no": {
+            "type": "string",
+            "title": "Goods No",
+            "description": "상품 번호"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goods_no"
+        ],
+        "title": "LogisticsRequest"
+      },
+      "LogisticsResponse": {
+        "properties": {
+          "logistics_qty": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logistics Qty",
+            "description": "물류 재고 수량 (FN_GET_GOODS_STOCK_QTY)"
+          }
+        },
+        "type": "object",
+        "title": "LogisticsResponse"
+      },
+      "MemberCarInfo": {
+        "properties": {
+          "car_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car No",
+            "description": "차량 번호"
+          },
+          "car_lnc_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Lnc Cd",
+            "description": "차량 출시 코드"
+          },
+          "car_engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Engine",
+            "description": "엔진 형식"
+          },
+          "fuel_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fuel Type",
+            "description": "연료 타입"
+          },
+          "ver_opt_choc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ver Opt Choc",
+            "description": "버전 옵션 선택"
+          },
+          "tire_size_fr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Fr",
+            "description": "전륜 타이어 사이즈"
+          },
+          "tire_size_re": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size Re",
+            "description": "후륜 타이어 사이즈"
+          },
+          "tot_milg": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tot Milg",
+            "description": "총 주행거리"
+          },
+          "daly_avg_milg": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daly Avg Milg",
+            "description": "일 평균 주행거리"
+          },
+          "car_buy_dt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Buy Dt",
+            "description": "차량 구매 일자"
+          },
+          "car_info_sts_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Info Sts Cd",
+            "description": "차량 정보 상태 코드"
+          },
+          "car_ispt_noti_req_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Ispt Noti Req Cd",
+            "description": "차량 검사 알림 요청 코드"
+          },
+          "car_reg_self_auth_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Reg Self Auth Yn",
+            "description": "차량 등록 본인 인증 여부"
+          },
+          "car_info_reg_dt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Info Reg Dt",
+            "description": "차량 정보 등록 일자"
+          },
+          "car_ownr_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Ownr Nm",
+            "description": "차량 소유주 명"
+          },
+          "mbr_car_unif_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mbr Car Unif No",
+            "description": "회원 차량 통합 번호"
+          },
+          "car_auth_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Auth Yn",
+            "description": "차량 인증 여부"
+          },
+          "car_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Nm",
+            "description": "차량명"
+          },
+          "car_model_det": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Model Det",
+            "description": "차량 상세 모델명"
+          },
+          "car_eng_vol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Eng Vol",
+            "description": "차량 배기량"
+          },
+          "car_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Type",
+            "description": "차량 타입"
+          },
+          "car_origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Origin",
+            "description": "차량 제조국"
+          },
+          "pc_img_path_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Img Path Nm",
+            "description": "PC 이미지 경로"
+          },
+          "mo_img_path_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mo Img Path Nm",
+            "description": "모바일 이미지 경로"
+          },
+          "thnl_img_path_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thnl Img Path Nm",
+            "description": "썸네일 이미지 경로"
+          }
+        },
+        "type": "object",
+        "title": "MemberCarInfo"
+      },
+      "MemberCarListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MemberCarInfo"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "회원 등록 차량 목록"
+          }
+        },
+        "type": "object",
+        "title": "MemberCarListResponse"
+      },
+      "MessageCreate": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content",
+            "description": "사용자 메시지 내용"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "content"
+        ],
+        "title": "MessageCreate"
+      },
+      "MessageResponse": {
+        "properties": {
+          "msg_id": {
+            "type": "string",
+            "title": "Msg Id",
+            "description": "메시지 고유 ID (UUID)"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "메시지 역할 (user / assistant)"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content",
+            "description": "메시지 내용"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "처리 상태 (received / completed / failed)"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "생성 일시 (YYYY-MM-DD HH24:MI:SS)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "msg_id",
+          "session_id",
+          "role",
+          "content",
+          "status",
+          "created_at"
+        ],
+        "title": "MessageResponse"
+      },
+      "MyCouponItem": {
+        "properties": {
+          "cpn_issu_no": {
+            "type": "string",
+            "title": "Cpn Issu No",
+            "description": "쿠폰 발급 번호"
+          },
+          "mbr_no": {
+            "type": "string",
+            "title": "Mbr No",
+            "description": "회원 번호"
+          },
+          "cpn_no": {
+            "type": "string",
+            "title": "Cpn No",
+            "description": "쿠폰 번호"
+          },
+          "cpn_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpn Nm",
+            "description": "쿠폰명"
+          },
+          "cpn_d_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpn D Nm",
+            "description": "쿠폰 상세명"
+          },
+          "disp_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disp Nm",
+            "description": "전시명"
+          },
+          "issu_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issu Dtime",
+            "description": "발급 일시"
+          },
+          "use_strt_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use Strt Dtime",
+            "description": "사용 시작 일시"
+          },
+          "use_end_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use End Dtime",
+            "description": "사용 종료 일시"
+          },
+          "mbr_use_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mbr Use Yn",
+            "description": "회원 사용 여부"
+          },
+          "cpn_dscn_tp_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpn Dscn Tp Cd",
+            "description": "쿠폰 할인 유형 코드"
+          },
+          "rt_amt_val": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rt Amt Val",
+            "description": "정률/정액 값"
+          },
+          "min_pur_amt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Pur Amt",
+            "description": "최소 구매 금액"
+          },
+          "max_dscnt_amt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Dscnt Amt",
+            "description": "최대 할인 금액"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cpn_issu_no",
+          "mbr_no",
+          "cpn_no"
+        ],
+        "title": "MyCouponItem"
+      },
+      "MyCouponResponse": {
+        "properties": {
+          "coupons": {
+            "items": {
+              "$ref": "#/components/schemas/MyCouponItem"
+            },
+            "type": "array",
+            "title": "Coupons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coupons"
+        ],
+        "title": "MyCouponResponse"
+      },
+      "OrderDeliveryResponse": {
+        "properties": {
+          "query_no": {
+            "type": "string",
+            "title": "Query No",
+            "description": "입력 조회 번호 (주문번호 O..., 배송번호 D...)"
+          },
+          "ord_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord No",
+            "description": "주문 번호"
+          },
+          "dlv_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dlv No",
+            "description": "배송 번호"
+          },
+          "ord_prgs_stat_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord Prgs Stat Cd",
+            "description": "주문 진행 상태 코드"
+          },
+          "ord_prgs_stat_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord Prgs Stat Nm",
+            "description": "주문 진행 상태명"
+          },
+          "dlv_prgs_stat_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dlv Prgs Stat Cd",
+            "description": "배송 진행 상태 코드"
+          },
+          "dlv_prgs_stat_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dlv Prgs Stat Nm",
+            "description": "배송 진행 상태명"
+          },
+          "inv_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inv No",
+            "description": "운송장 번호"
+          },
+          "hdc_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hdc Cd",
+            "description": "택배사 코드"
+          },
+          "dlv_fcst_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dlv Fcst Dtime",
+            "description": "도착 예정 일시"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query_no"
+        ],
+        "title": "OrderDeliveryResponse"
+      },
+      "OrderListItem": {
+        "properties": {
+          "ord_no": {
+            "type": "string",
+            "title": "Ord No",
+            "description": "주문 번호"
+          },
+          "goods_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods Nm",
+            "description": "상품명"
+          },
+          "ord_qty": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ord Qty",
+            "description": "주문 수량"
+          },
+          "sys_reg_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sys Reg Dtime",
+            "description": "시스템 등록 일시"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ord_no"
+        ],
+        "title": "OrderListItem"
+      },
+      "OrderListResponse": {
+        "properties": {
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/OrderListItem"
+            },
+            "type": "array",
+            "title": "Orders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "orders"
+        ],
+        "title": "OrderListResponse"
+      },
+      "PlaceSearchItem": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "장소명"
+          },
+          "road_addr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Road Addr",
+            "description": "도로명 주소"
+          },
+          "x": {
+            "type": "string",
+            "title": "X",
+            "description": "X 좌표 (경도)"
+          },
+          "y": {
+            "type": "string",
+            "title": "Y",
+            "description": "Y 좌표 (위도)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "x",
+          "y"
+        ],
+        "title": "PlaceSearchItem"
+      },
+      "PlaceSearchResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "검색 결과 수",
+            "default": 0
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlaceSearchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "PlaceSearchResponse"
+      },
+      "PriceResponse": {
+        "properties": {
+          "sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sale Prc",
+            "description": "기본 판매가"
+          },
+          "extra_fvr_sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Fvr Sale Prc",
+            "description": "최대 혜택 판매가 (쿠폰 등 적용)"
+          },
+          "extra_fvr_sale_per": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Fvr Sale Per",
+            "description": "최대 혜택 할인율 (%)"
+          },
+          "wage_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wage Prc",
+            "description": "공임비"
+          },
+          "wage_today_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wage Today Prc",
+            "description": "오늘의 공임비"
+          }
+        },
+        "type": "object",
+        "title": "PriceResponse"
+      },
+      "ProductDescResponse": {
+        "properties": {
+          "goods_no": {
+            "type": "string",
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "ptrn_cd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ptrn Cd",
+            "description": "패턴 번호"
+          },
+          "pc_prod_remark_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Prod Remark Desc",
+            "description": "특장점 (PC_PROD_REMARK_DESC)"
+          },
+          "pc_prod_tech_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Prod Tech Desc",
+            "description": "기술력 (PC_PROD_TECH_DESC)"
+          },
+          "slogan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slogan",
+            "description": "슬로건 (SLOGAN)"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ProductImage"
+            },
+            "type": "array",
+            "title": "Images",
+            "description": "상품 이미지 목록"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewRating"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItem"
+            },
+            "type": "array",
+            "title": "Reviews"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goods_no"
+        ],
+        "title": "ProductDescResponse"
+      },
+      "ProductImage": {
+        "properties": {
+          "img_path_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Img Path Nm",
+            "description": "이미지 경로 (IMG_PATH_NM)"
+          },
+          "thnl_path_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thnl Path Nm",
+            "description": "썸네일 경로 (THNL_PATH_NM)"
+          }
+        },
+        "type": "object",
+        "title": "ProductImage"
+      },
+      "ProductSearchItem": {
+        "properties": {
+          "goods_no": {
+            "type": "string",
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "goods_nm": {
+            "type": "string",
+            "title": "Goods Nm",
+            "description": "상품명"
+          },
+          "tire_size_1": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size 1",
+            "description": "타이어 사이즈 (TIRE_SIZE_1)"
+          },
+          "tire_size_2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Size 2",
+            "description": "타이어 사이즈 (TIRE_SIZE_2)"
+          },
+          "score": {
+            "type": "integer",
+            "title": "Score",
+            "description": "검색 관련도 점수",
+            "default": 0
+          },
+          "match_type": {
+            "type": "string",
+            "title": "Match Type",
+            "description": "매칭 유형 (exact/prefix/partial/alias)",
+            "default": "none"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goods_no",
+          "goods_nm"
+        ],
+        "title": "ProductSearchItem"
+      },
+      "ProductSearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSearchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ProductSearchResponse"
+      },
+      "RcmdGoodsItem": {
+        "properties": {
+          "goods_no": {
+            "type": "string",
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "goods_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods Nm",
+            "description": "상품명"
+          },
+          "extra_fvr_sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Fvr Sale Prc",
+            "description": "최대 혜택 판매가"
+          },
+          "extra_fvr_sale_per": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Fvr Sale Per",
+            "description": "최대 혜택 할인율 (%)"
+          },
+          "tot_scr": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tot Scr",
+            "description": "추천 점수 (TOT_SCR (FST_DISP_YN = ‘Y’ 이면 TOT_SCR * 10), 티스테이션 추천 전용)"
+          },
+          "t_comfort": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Comfort",
+            "description": "승차감 (T_COMFORT)"
+          },
+          "t_silence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Silence",
+            "description": "정숙성 (T_SILENCE)"
+          },
+          "t_life_span": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Life Span",
+            "description": "수명 (T_LIFE_SPAN)"
+          },
+          "t_fuel_eff_convert": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Fuel Eff Convert",
+            "description": "연비 (T_FUEL_EFF_CONVERT)"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "comfort": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comfort"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goods_no"
+        ],
+        "title": "RcmdGoodsItem"
+      },
+      "RcmdType": {
+        "type": "string",
+        "enum": [
+          "tstation",
+          "discount",
+          "value"
+        ],
+        "title": "RcmdType"
+      },
+      "RecommendationResponse": {
+        "properties": {
+          "rcmd_type": {
+            "type": "string",
+            "title": "Rcmd Type",
+            "description": "추천 타입 (tstation | discount | value)"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "반환된 상품 수"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RcmdGoodsItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rcmd_type",
+          "total",
+          "items"
+        ],
+        "title": "RecommendationResponse"
+      },
+      "ReviewItem": {
+        "properties": {
+          "goods_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods No",
+            "description": "상품 번호"
+          },
+          "gdas_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gdas Score",
+            "description": "상품평 점수 (GDAS_SCR_VAL)"
+          },
+          "gdas_cont": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gdas Cont",
+            "description": "상품평 내용 (GDAS_CONT)"
+          },
+          "reg_dtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reg Dtime",
+            "description": "등록 일시 (SYS_REG_DTIME)"
+          }
+        },
+        "type": "object",
+        "title": "ReviewItem"
+      },
+      "ReviewRating": {
+        "properties": {
+          "review_count": {
+            "type": "integer",
+            "title": "Review Count",
+            "description": "리뷰 수",
+            "default": 0
+          },
+          "rating_avg": {
+            "type": "number",
+            "title": "Rating Avg",
+            "description": "평점 평균",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ReviewRating"
+      },
+      "SessionInfo": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "채팅 세션 ID"
+          },
+          "last_message_at": {
+            "type": "string",
+            "title": "Last Message At",
+            "description": "마지막 메시지 일시 (YYYY-MM-DD HH24:MI:SS)"
+          },
+          "msg_count": {
+            "type": "integer",
+            "title": "Msg Count",
+            "description": "세션 내 메시지 수"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "last_message_at",
+          "msg_count"
+        ],
+        "title": "SessionInfo"
+      },
+      "SessionListResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "회원번호"
+          },
+          "total_sessions": {
+            "type": "integer",
+            "title": "Total Sessions",
+            "description": "전체 세션 수"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionInfo"
+            },
+            "type": "array",
+            "title": "Sessions",
+            "description": "세션 목록 (last_message_at 내림차순)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "total_sessions"
+        ],
+        "title": "SessionListResponse"
+      },
+      "SetOrderFormAIRequest": {
+        "properties": {
+          "goodsInfoArrStr": {
+            "type": "string",
+            "title": "Goodsinfoarrstr",
+            "description": "상품정보 (GOODS_NO|ORD_QTY,...)"
+          },
+          "shopSeq": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shopseq",
+            "description": "방문매장 가맹점주문번호 ET_SHOP_INFO테이블 SHOP_SEQ 컬럼"
+          },
+          "smrtPayYn": {
+            "type": "string",
+            "title": "Smrtpayyn",
+            "description": "스마트페이여부 (Y/N)"
+          },
+          "smrtPayInstMm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smrtpayinstmm",
+            "description": "스마트페이시 할부개월수 (12/24)"
+          },
+          "drtPurYn": {
+            "type": "string",
+            "title": "Drtpuryn",
+            "description": "주문하기여부 (Y: 주문하기, N: 장바구니)"
+          },
+          "carLncCd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carlnccd",
+            "description": "차량정보 WCODE"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goodsInfoArrStr",
+          "smrtPayYn",
+          "drtPurYn"
+        ],
+        "title": "SetOrderFormAIRequest"
+      },
+      "SetOrderFormAIResponse": {
+        "properties": {
+          "result": {
+            "type": "boolean",
+            "title": "Result",
+            "description": "성공/실패 여부"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "실패시 메시지"
+          },
+          "drtPurYn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drtpuryn",
+            "description": "주문하기 여부"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data",
+            "description": "주문하기 페이지 이동에 필요한 데이터"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "title": "SetOrderFormAIResponse"
+      },
+      "ShopIdItem": {
+        "properties": {
+          "shopId": {
+            "type": "string",
+            "title": "Shopid",
+            "description": "매장 ID"
+          }
+        },
+        "type": "object",
+        "required": [
+          "shopId"
+        ],
+        "title": "ShopIdItem"
+      },
+      "StoreDetailResponse": {
+        "properties": {
+          "shop_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Nm",
+            "description": "매장명"
+          },
+          "tel_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tel No",
+            "description": "전화번호"
+          },
+          "is_all_my_t": {
+            "type": "boolean",
+            "title": "Is All My T",
+            "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
+          },
+          "is_installable": {
+            "type": "boolean",
+            "title": "Is Installable",
+            "description": "쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))",
+            "default": false
+          },
+          "is_tna_delivery": {
+            "type": "boolean",
+            "title": "Is Tna Delivery",
+            "description": "T바로배송(한국타이어 퀵배송) 가능 매장 여부",
+            "default": false
+          },
+          "holiday": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holiday",
+            "description": "휴무일"
+          },
+          "shop_biz_strt_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz Strt Time",
+            "description": "영업 시작 시간"
+          },
+          "shop_biz_end_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz End Time",
+            "description": "영업 종료 시간"
+          },
+          "shop_biz_strt_wday": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz Strt Wday",
+            "description": "영업 시작 요일 (예: 월요일)"
+          },
+          "shop_biz_end_wday": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz End Wday",
+            "description": "영업 종료 요일 (예: 금요일)"
+          },
+          "shop_sat_strt_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Sat Strt Time",
+            "description": "토요일 영업 시작 시간"
+          },
+          "shop_sat_end_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Sat End Time",
+            "description": "토요일 영업 종료 시간"
+          },
+          "available_slots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Slots",
+            "description": "예약 가능 시간 슬롯 목록 (예: ['09','10','11'])"
+          }
+        },
+        "type": "object",
+        "title": "StoreDetailResponse"
+      },
+      "StoreInventoryRequest": {
+        "properties": {
+          "goodsList": {
+            "items": {
+              "$ref": "#/components/schemas/GoodsItem"
+            },
+            "type": "array",
+            "title": "Goodslist",
+            "description": "재고 확인 상품 목록"
+          },
+          "shopIdList": {
+            "items": {
+              "$ref": "#/components/schemas/ShopIdItem"
+            },
+            "type": "array",
+            "title": "Shopidlist",
+            "description": "재고 확인 매장 목록"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goodsList",
+          "shopIdList"
+        ],
+        "title": "StoreInventoryRequest"
+      },
+      "StoreInventoryResponse": {
+        "properties": {
+          "todayShopArray": {
+            "items": {
+              "$ref": "#/components/schemas/ShopIdItem"
+            },
+            "type": "array",
+            "title": "Todayshoparray",
+            "description": "오늘 장착 가능 매장 목록"
+          },
+          "tnaShopArray": {
+            "items": {
+              "$ref": "#/components/schemas/ShopIdItem"
+            },
+            "type": "array",
+            "title": "Tnashoparray",
+            "description": "T바로배송 가능 매장 목록"
+          }
+        },
+        "type": "object",
+        "title": "StoreInventoryResponse"
+      },
+      "StoreListItem": {
+        "properties": {
+          "shop_id": {
+            "type": "string",
+            "title": "Shop Id",
+            "description": "매장 ID"
+          },
+          "shop_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Nm",
+            "description": "매장명"
+          },
+          "is_all_my_t": {
+            "type": "boolean",
+            "title": "Is All My T",
+            "description": "all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y')",
+            "default": false
+          },
+          "is_installable": {
+            "type": "boolean",
+            "title": "Is Installable",
+            "description": "쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E'))",
+            "default": false
+          },
+          "addr_base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Addr Base",
+            "description": "일반주소"
+          },
+          "addr_dtl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Addr Dtl",
+            "description": "일반주소"
+          },
+          "road_addr_base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Road Addr Base",
+            "description": "도로명주소"
+          },
+          "road_addr_dtl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Road Addr Dtl",
+            "description": "도로명주소 상세"
+          },
+          "shop_biz_strt_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz Strt Time",
+            "description": "영업 시작 시간"
+          },
+          "shop_biz_end_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz End Time",
+            "description": "영업 종료 시간"
+          },
+          "shop_biz_strt_wday": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz Strt Wday",
+            "description": "영업 시작 요일 (예: 월요일)"
+          },
+          "shop_biz_end_wday": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Biz End Wday",
+            "description": "영업 종료 요일 (예: 금요일)"
+          },
+          "shop_sat_strt_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Sat Strt Time",
+            "description": "토요일 영업 시작 시간"
+          },
+          "shop_sat_end_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shop Sat End Time",
+            "description": "토요일 영업 종료 시간"
+          },
+          "distance_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance Km",
+            "description": "좌표 기준 거리 (km), 좌표 검색 시에만 반환"
+          }
+        },
+        "type": "object",
+        "required": [
+          "shop_id"
+        ],
+        "title": "StoreListItem"
+      },
+      "StoreListResponse": {
+        "properties": {
+          "stores": {
+            "items": {
+              "$ref": "#/components/schemas/StoreListItem"
+            },
+            "type": "array",
+            "title": "Stores"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stores"
+        ],
+        "title": "StoreListResponse"
+      },
+      "TireSpec": {
+        "properties": {
+          "tire_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Width",
+            "description": "단면폭 (TIRE_WIDTH)"
+          },
+          "tire_series": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tire Series",
+            "description": "편평비 (TIRE_SERIES)"
+          },
+          "inch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inch",
+            "description": "인치 (INCH)"
+          }
+        },
+        "type": "object",
+        "title": "TireSpec"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}
