@@ -980,8 +980,8 @@ class StreamingMultiAgentCoordinator:
             # Stream from UI Template Agent (use stream_template to get data events)
             for event in ui_template_subagent.stream_template(ui_messages):
                 event["source_domain"] = "ui_template"
-                # FIX: Must yield as SSE formatted string
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                # FIX: reverted the yield statement back to yield event
+                yield event
 
             # Yield UI Template Agent completion event
             yield {
