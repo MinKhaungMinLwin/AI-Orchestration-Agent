@@ -193,9 +193,10 @@ def get_logistics_inventory_tool(goods_no: str):
         - {"goods_no": "G000000313073"}
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": {"logistics_qty": int, "rsv_sale_yn": str|null}}
-        - logistics_qty: Logistics warehouse stock quantity (0 = out of stock)
-        - rsv_sale_yn: Reservation sale flag ("Y" = reservation order available, 워킹데이 기준 14일 이후 장착 가능)
+        dict: {"status": "success", "http_status": ..., "data": {"logistics_qty": int, "rsv_sale_yn": str|null, "rsv_install_date": str|null}}
+        - logistics_qty: Logistics warehouse stock quantity (0 = out of stock). ⚠️ Do NOT expose quantity to user.
+        - rsv_sale_yn: Reservation sale flag ("Y" = reservation order available). ⚠️ Do NOT expose raw value to user.
+        - rsv_install_date: Earliest installation date for reservation orders (YYYY-MM-DD format, only present when rsv_sale_yn="Y"). Use this date in user-facing messages.
     """
     body = LogisticsRequest(goods_no=goods_no)
     logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
