@@ -24,7 +24,7 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.agent import stream_qc
+from services.tstation.agents.g_qc_agent.agent import invoke_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 
 logger = logging.getLogger(__name__)
@@ -980,7 +980,8 @@ class StreamingMultiAgentCoordinator:
             # Stream from UI Template Agent (use stream_template to get data events)
             for event in ui_template_subagent.stream_template(ui_messages):
                 event["source_domain"] = "ui_template"
-                yield event
+                # FIX: Must yield as SSE formatted string
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
             # Yield UI Template Agent completion event
             yield {
@@ -1321,8 +1322,8 @@ class TStationChatServiceV2:
                         elif event.get("type") == "message":
                             last_message_content = event.get("content", "")
 
-            # SAFETY NET: Fallback to message content if no tokens were emitted
-            if not final_content and last_message_content:
+            # FIX: Always prefer the final message event, because it contains the QC-corrected text!
+            if last_message_content:
                 final_content = last_message_content
 
             return TStationChatResponse(content=final_content)
@@ -1371,10 +1372,12 @@ class TStationChatServiceV2:
         for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id, tool_context=tool_context):
             event_type = event.get("type")
             
-            # --- INTERCEPT TOKENS (Draft Response) ---
+            # --- INTERCEPT TOKENS (Draft Response & TTFT Fix) ---
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
+                # FIX: Yield immediately so the UI isn't blocked!
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
                 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
