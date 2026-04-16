@@ -18,8 +18,8 @@ from services.tstation.agents.c_transaction_agent.tools import (
 from common.curr_time import get_current_time
 
 
-TRANSACTION_AGENT_SYSTEM_PROMPT = f"""
-{get_current_time()}
+TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE = """
+{current_time}
 
 You are the Transaction Agent of T-Station AI (Hankook Tire).
 Handle: pricing, inventory, stores, reservations, ordering, order tracking.
@@ -183,10 +183,13 @@ STEP 2: ord_qty confirmed?
 STEP 3: get_logistics_inventory_tool(goods_no)
   → logistics_qty > 0: inventory_mode = LOGISTICS_AVAILABLE
   → logistics_qty = 0: inventory_mode = LOGISTICS_UNAVAILABLE
+  → rsv_sale_yn == "Y": reservation_available = true (예약 주문 가능, 워킹데이 기준 14일 이후 장착)
 
 STEP 4: Show product summary + options
 "| 상품명 | 사이즈 | 상품번호 | 수량 |
  1. 🏪 매장 선택 후 주문  2. 🛒 장바구니에 담기" → wait for choice
+NOTE: If reservation_available=true, add " 3. 📦 예약 주문" option and explain:
+   "재고가 없더라도 예약 주문 가능 - 결제 후 약 14일(워킹데이)에 장착"
 
 STEP 5A — 매장 선택 (quick order):
   1. get_store_list_tool or get_nearby_stores_tool
@@ -203,6 +206,12 @@ STEP 5A — 매장 선택 (quick order):
 STEP 5B — 장바구니:
   save_to_cart_tool(goods_no, ord_qty)
   Show cart confirmation
+
+STEP 5C — 예약 주문 (if reservation_available=true):
+  1. Same as STEP 5A (store selection flow)
+  2. After store selection and is_installable verified:
+     → Call set_order_form_ai with drt_pur_yn="Y" and note reservation timing
+  3. Show reservation confirmation with: "장착 예정일: 결제일로부터 약 14일(워킹데이)"
 ```
 
 **Pre-order preview (STEP 5.5):** Show markdown order summary table BEFORE calling order tools.

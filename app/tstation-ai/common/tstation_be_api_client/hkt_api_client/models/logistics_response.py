@@ -16,9 +16,11 @@ class LogisticsResponse:
     """
     Attributes:
         logistics_qty (int | None | Unset): 물류 재고 수량 (FN_GET_GOODS_STOCK_QTY)
+        rsv_sale_yn (None | str | Unset): 예약 판매 여부 (PR_GOODS_BASE.RSV_SALE_YN). Y=예약판매 가능
     """
 
     logistics_qty: int | None | Unset = UNSET
+    rsv_sale_yn: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -28,11 +30,19 @@ class LogisticsResponse:
         else:
             logistics_qty = self.logistics_qty
 
+        rsv_sale_yn: None | str | Unset
+        if isinstance(self.rsv_sale_yn, Unset):
+            rsv_sale_yn = UNSET
+        else:
+            rsv_sale_yn = self.rsv_sale_yn
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if logistics_qty is not UNSET:
             field_dict["logistics_qty"] = logistics_qty
+        if rsv_sale_yn is not UNSET:
+            field_dict["rsv_sale_yn"] = rsv_sale_yn
 
         return field_dict
 
@@ -49,8 +59,18 @@ class LogisticsResponse:
 
         logistics_qty = _parse_logistics_qty(d.pop("logistics_qty", UNSET))
 
+        def _parse_rsv_sale_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        rsv_sale_yn = _parse_rsv_sale_yn(d.pop("rsv_sale_yn", UNSET))
+
         logistics_response = cls(
             logistics_qty=logistics_qty,
+            rsv_sale_yn=rsv_sale_yn,
         )
 
         logistics_response.additional_properties = d

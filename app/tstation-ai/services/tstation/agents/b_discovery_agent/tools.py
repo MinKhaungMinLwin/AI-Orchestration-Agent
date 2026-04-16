@@ -13,6 +13,8 @@ from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_�
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_api_vehicle_search_get import sync_detailed as search_car_model
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_groups_api_vehicle_models_get import sync_detailed as search_car_model_groups
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_car_trims_api_vehicle_trims_get import sync_detailed as get_car_trims
 
 # Product Description
 from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상품_설명.get_description_api_product_detail_goods_no_get import sync_detailed as get_product_description
@@ -325,6 +327,93 @@ def search_car_model_tool(keyword: str, limit: int = 20):
     except Exception as e:
         logger.exception("[TOOL][search_car_model_tool] Failed")
         return _error_response(None, str(e), "Failed to search car models")
+
+
+@tool
+def search_car_model_groups_tool(keyword: str):
+    """
+    차종 모델 그룹 검색 — CAR MODEL DISPLAY step 1.
+
+    When to use:
+    - User mentions a car model name (e.g., "K7", "소나타", "팰리세이드") for tire recommendation
+    - Use this INSTEAD of LLM own knowledge for the CAR MODEL DISPLAY flow
+    - Step 1 of 2: returns model groups with year ranges → user selects → call get_car_trims_tool
+
+    When NOT to use:
+    - Do NOT call when user already provided car_no + owner_nm (use get_user_vehicles_tool)
+    - Do NOT call when car is already confirmed from get_my_cars_tool result
+
+    Returns grouped car models with year range so user can identify their generation.
+    Each group has car_model_det (e.g., "더 뉴 K7(VG)"), year_from, year_to, trim_count.
+
+    Args:
+        keyword (str): 차량 모델명 키워드 (예: 'K7', '소나타', '팰리세이드', 'BMW 5시리즈')
+
+    Example Inputs:
+        - {"keyword": "K7"}
+        - {"keyword": "소나타"}
+        - {"keyword": "팰리세이드"}
+
+    Returns:
+        dict: {"status": "success", "data": {"keyword": "...", "items": [{"car_model_det": "...", "year_from": 2019, "year_to": 2023, "trim_count": 8}]}}
+    """
+    logger.info("[TOOL][search_car_model_groups_tool] Called with: keyword=%s", keyword)
+
+    try:
+        response = search_car_model_groups(client=get_client(), keyword=keyword)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search car model groups"
+            )
+        logger.info("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][search_car_model_groups_tool] Failed")
+        return _error_response(None, str(e), "Failed to search car model groups")
+
+
+@tool
+def get_car_trims_tool(car_model_det: str):
+    """
+    차량 트림 목록 조회 — CAR MODEL DISPLAY step 2.
+
+    When to use:
+    - After search_car_model_groups_tool, user selects a car_model_det
+    - Returns all trims with car_lnc_cd AND tire_size_fr/re directly
+    - Step 2 of 2: once user selects a trim, extract tire_size_fr → RECOMMEND ENGINE
+
+    Returns each trim with: car_lnc_cd, car_nm, car_year, tire_size_fr, tire_size_re.
+    If user selects a trim → use tire_size_fr directly for get_products_recommendations_tool.
+    If only 1 trim exists → auto-select, extract tire_size_fr, proceed to RECOMMEND ENGINE.
+
+    Args:
+        car_model_det (str): 차량 상세 모델명 from search_car_model_groups_tool result
+            (예: "더 뉴 K7(VG)", "쏘나타 DN8")
+
+    Example Inputs:
+        - {"car_model_det": "더 뉴 K7(VG)"}
+        - {"car_model_det": "쏘나타 DN8"}
+
+    Returns:
+        dict: {"status": "success", "data": {"car_model_det": "...", "items": [{"car_lnc_cd": "...", "car_nm": "...", "car_year": 2021, "tire_size_fr": "225/45R18", "tire_size_re": "225/45R18"}]}}
+    """
+    logger.info("[TOOL][get_car_trims_tool] Called with: car_model_det=%s", car_model_det)
+
+    try:
+        response = get_car_trims(client=get_client(), car_model_det=car_model_det)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get car trims"
+            )
+        logger.info("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_car_trims_tool] Failed")
+        return _error_response(None, str(e), "Failed to get car trims")
 
 
 @tool

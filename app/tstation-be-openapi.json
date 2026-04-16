@@ -213,10 +213,10 @@
                   "type": "null"
                 }
               ],
-              "description": "채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP",
+              "description": "채널 구분 코드. F=T'Station, S=The Tire Shop",
               "title": "Chl Sct Cd"
             },
-            "description": "채널 구분 코드. F=T'Station, S=The Tire Shop, C=HK SHOP"
+            "description": "채널 구분 코드. F=T'Station, S=The Tire Shop"
           },
           {
             "name": "limit",
@@ -2850,6 +2850,18 @@
             ],
             "title": "Logistics Qty",
             "description": "물류 재고 수량 (FN_GET_GOODS_STOCK_QTY)"
+          },
+          "rsv_sale_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rsv Sale Yn",
+            "description": "예약 판매 여부 (PR_GOODS_BASE.RSV_SALE_YN). Y=예약판매 가능"
           }
         },
         "type": "object",

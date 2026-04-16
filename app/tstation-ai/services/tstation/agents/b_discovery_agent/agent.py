@@ -9,6 +9,8 @@ from services.tstation.agents.b_discovery_agent.tools import (
     search_youtube_video_tool,
     get_events_tool,
     get_deals_tool,
+    search_car_model_groups_tool,
+    get_car_trims_tool,
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
@@ -16,8 +18,8 @@ from services.tstation.agents.b_discovery_agent.tools import compare_discount_to
 from common.curr_time import get_current_time
 
 
-DISCOVERY_AGENT_SYSTEM_PROMPT = f"""
-{get_current_time()}
+DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
+{current_time}
 
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -55,6 +57,8 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | get_my_cars_tool | First step for ANY vehicle-related request (uses mbr_no from user context) |
 | get_user_vehicles_tool | Fallback: get_my_cars returns 0 cars + user provides car_no + owner_nm |
 | search_car_model_tool | ONLY after get_user_vehicles_tool fails; NOT when user just mentions car model name |
+| search_car_model_groups_tool | User mentions car model name → step 1: get model groups with year range |
+| get_car_trims_tool | After user selects model group → step 2: get trims with tire_size_fr |
 | get_products_recommendations_tool | Recommend tires by tire_size |
 | search_product_tool | User searches by product name/keyword (translate Korean→English first) |
 | get_product_description_tool | Product details, after recommending top product |
@@ -117,7 +121,7 @@ Response format for 0 cars:
 After user responds to Case 3:
 - Provides car_no + owner_nm → get_user_vehicles_tool → RECOMMEND ENGINE
 - Provides tire size → RECOMMEND ENGINE directly
-- Mentions car model → CAR MODEL DISPLAY (own knowledge, no tool)
+- Mentions car model → CAR MODEL DISPLAY (search_car_model_groups_tool → get_car_trims_tool)
 
 
 #### RECOMMEND ENGINE (shared)
@@ -143,22 +147,43 @@ When user selects product by criteria ("할인률 제일 높은거", "가장 저
 → Do NOT just pick the first item
 
 
-### CAR MODEL DISPLAY (no tool call)
-Trigger: User mentions car model name without vehicle number
-Use OWN knowledge to show 2–3 representative trims/tire sizes.
-NEVER call search_car_model_tool here.
+### CAR MODEL DISPLAY (API-based, 2 steps)
+Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드") without vehicle number
 
-Format:
-"[차종명]은 연식/트림에 따라 타이어 사이즈가 다를 수 있어요!
+Step 1 — call search_car_model_groups_tool(keyword):
+  → Returns model groups with year ranges (car_model_det, year_from, year_to, trim_count)
+  → If 0 results: fall back to LLM own knowledge, show 2–3 representative trims
+  → If 1 group: auto-proceed to Step 2
+  → If 2+ groups: show selection list, wait for user
 
-대표적으로,
-[세대/트림] (YYYY~YYYY) → [size]
-...
+Response format for multiple groups:
+```
+**[차종명]** 연식별 모델을 찾았어요!
 
-타이어 추천을 위해 정확한 사이즈 정보가 필요해요!
-1️⃣ 타이어 사이즈를 직접 입력 (예: 225/45R18)
-2️⃣ 차량번호 + 소유주명 입력
-3️⃣ '내 차량'이라고 입력"
+1️⃣ **[car_model_det]** (YYYY~YYYY) — [trim_count]개 트림
+2️⃣ **[car_model_det]** (YYYY~YYYY) — [trim_count]개 트림
+
+어떤 연식/세대의 차량인지 선택해 주세요!
+```
+
+Step 2 — call get_car_trims_tool(car_model_det):
+  → Returns trims with car_lnc_cd + tire_size_fr + tire_size_re
+  → If 1 trim: auto-select, extract tire_size_fr → RECOMMEND ENGINE immediately
+  → If 2+ trims: show trim table, wait for user selection
+
+Response format for trim selection:
+```
+**[car_model_det]** 트림별 타이어 사이즈입니다:
+
+| No | 트림명 | 연식 | 전륜 사이즈 | 후륜 사이즈 |
+|----|--------|------|-----------|-----------|
+| 1 | [car_nm] | [year] | [tire_size_fr] | [tire_size_re] |
+
+어떤 트림인지 선택해 주세요! (번호 입력)
+```
+
+After user selects trim → extract tire_size_fr → RECOMMEND ENGINE immediately.
+If tire_size_fr is same across all trims → auto-select, proceed directly.
 
 
 ### Flow B — Product Search
@@ -305,6 +330,8 @@ class DiscoverySubAgent(BaseAgent):
         "get_user_vehicles_tool": "Vehicle & Compatibility",
         "get_my_cars_tool": "Vehicle & Compatibility",
         "search_car_model_tool": "Vehicle & Compatibility",
+        "search_car_model_groups_tool": "Vehicle & Compatibility",
+        "get_car_trims_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
         # Product Description
@@ -327,6 +354,8 @@ class DiscoverySubAgent(BaseAgent):
                 get_user_vehicles_tool,
                 get_my_cars_tool,
                 search_car_model_tool,
+                search_car_model_groups_tool,
+                get_car_trims_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool,
                 search_youtube_video_tool,
