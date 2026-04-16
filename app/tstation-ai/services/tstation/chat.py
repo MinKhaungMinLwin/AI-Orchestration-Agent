@@ -435,6 +435,31 @@ EXAMPLE QUERIES → FLOW:
     → TRANSACTION
     (Pre-order preview with recommendActions → visitMethod selection)
 
+39. "G000000314254이랑 G000000312692 가격 비교해줘"
+    "Compare prices between G000000314254 and G000000312692"
+    → TRANSACTION
+    (Multiple goods_no known → compare_discount_tool)
+
+40. "벤투스 S2랑 키네르기 EX 가격 비교해줘"
+    "Compare prices between Ventus S2 and Kinergy EX"
+    → DISCOVERY → TRANSACTION
+    (Product Name Search → goods_no Resolution → Discount Price Comparison)
+
+41. "추천 타이어들 가격 비교해서 가장 싼 거 알려줘"
+    "Compare the recommended tires and tell me which is cheapest"
+    → DISCOVERY
+    (Recommendation → compare_discount_tool → UI Template Agent)
+
+42. "둘 중 어느 게 더 싸?", "Which one is cheaper?"
+    "Which one is cheaper?" (when multiple products in context)
+    → DISCOVERY
+    (Discovery Agent has compare_discount_tool)
+
+43. "이 제품들 할인 가격 비교해줘"
+    "Compare discount prices for these products"
+    → DISCOVERY
+    (Discovery Agent has compare_discount_tool)
+
 ====================================================
 PRE-ORDER PREVIEW FLOW RULES
 ====================================================
@@ -458,6 +483,7 @@ DECISION RULES
 
 TRANSACTION if user wants:
 - "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "{{goods_no}} 가격" - format: G + 12 digits)
+- **Price comparison** between multiple products ("비교", "둘 중 어느 게 더 싸", "which is cheaper", "가격 비교")
 - "In stock?", "available?" for specific product at specific store
 - Check logistics stock (warehouse availability)
 - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
@@ -1126,6 +1152,7 @@ class TStationChatServiceV2:
             "get_orders_of_user_tool": "주문 내역",
             "check_compatibility_tool": "호환 사이즈 조회",
             "get_final_price_tool": "가격 조회",
+            "compare_discount_tool": "할인 가격 비교",
             "get_product_description_tool": "상품 상세",
         }
 
