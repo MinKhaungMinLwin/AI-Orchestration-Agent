@@ -1252,7 +1252,7 @@ Execute the API call first:
    - paymentAmount: calculated or null
 
 5. **Call order_complete_tool with:**
-   - orderInfo: {...}
+   - orderInfo: {{...}}
    - is_success: true/false
    - type: "order" or "cart"
    - message: error message from API (null if success)
