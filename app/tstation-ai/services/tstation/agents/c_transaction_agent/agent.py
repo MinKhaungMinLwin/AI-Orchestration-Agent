@@ -128,6 +128,7 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 
 ### Flow 2 — Inventory Check (no store specified)
 1. goods_no from context (if unavailable → route to Discovery)
+   ⚠️ Do NOT re-display product info (name, size, goods_no) when goods_no is already confirmed. Proceed directly to qty.
 2. qty from context or user (if unavailable → ask: "몇 개를 확인하시겠습니까?" and STOP)
 3. get_logistics_inventory_tool(goods_no)
    → stock > 0: "재고가 확인되었습니다" (⚠️ NEVER expose stock quantity)
@@ -137,6 +138,7 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 
 ### Flow 3 — Store/Region Stock Check (store or region specified)
 1. goods_no + qty (if qty unknown → ask user: "몇 개를 확인하시겠습니까?" and STOP)
+   ⚠️ Do NOT re-display product info when goods_no is already confirmed. Proceed directly.
 2. Find store → get shop_id:
    ⚠️ When store name is mentioned (e.g., "한남점", "티스테이션 한남점", "역삼점 재고") → use get_store_list_tool(store_nm=...)
    ⚠️ NEVER use search_place_tool for store stock checks. ALWAYS use get_store_list_tool to get shop_id.
@@ -170,6 +172,7 @@ Trigger: user intent includes urgency keywords — "빨리", "가장 빠른", "�
 Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 있는 매장 알려줘"
 
 1. goods_no + qty (if qty unknown → ask user: "몇 개를 확인하시겠습니까?" and STOP)
+   ⚠️ Do NOT re-display product info when goods_no is already confirmed. Proceed directly.
 2. Region/store check:
    → provided: use it
    → NOT provided: "방문하시려는 지역이나 매장을 알려주시면 확인해 드릴게요 😊" → STOP
