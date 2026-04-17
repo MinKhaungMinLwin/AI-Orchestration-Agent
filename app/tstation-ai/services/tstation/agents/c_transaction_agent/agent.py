@@ -325,7 +325,7 @@ STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes",
 NEVER proceed to order tools in the same turn as showing the preview.
 ⚠️ Once user confirms, IMMEDIATELY execute the order tool. Do NOT show the preview again or ask for confirmation a second time.
 
-Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상품: [goods_nm]([goods_no]), 수량: [ord_qty]개, 매장: [shop_nm]([shop_id]), 방문 장착. 주문을 진행할까요? 😊"
+Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상품: [goods_nm]([goods_no]), 수량: [ord_qty]개, 매장: [shop_nm]([shop_id]). 주문을 진행할까요? 😊"
 
 **Mid-flow changes:**
 - Quantity change → update qty, re-check inventory from STEP 3 (keep existing goods_no, shop_id)

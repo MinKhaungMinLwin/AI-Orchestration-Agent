@@ -78,7 +78,7 @@ TEMPLATE TYPES (use ONE that best fits)
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
 • available_dates_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null), metadata (camelCase, no underscore). IMPORTANT: Include ALL available dates - do NOT truncate or limit the dates array. If source has 10 dates, pass all 10.
 • preorder_tool → "preOrder" - Pre-order card with fields:
-  - orderInfo[[{{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, visitMethod? (Visit in Person | Use Pickup), paymentAmount?}}]]
+  - orderInfo[[{{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, paymentAmount?}}]]
   - recommendActions (dict): Recommend action with {{question (str), listActions (list[str])}}
   - isReadyToOrder (bool): True if ready for quick_order (carInfo + product + quantity + storeName + bookingDateTime).
   - isReadyToAddToCart (bool): True if ready for save_to_cart (carInfo + product + quantity)
@@ -86,7 +86,7 @@ TEMPLATE TYPES (use ONE that best fits)
   IMPORTANT: All fields always present - if no value, set to null
   (camelCase, no underscore)
 • order_complete_tool → "orderComplete" - Order completion card with fields:
-  - orderInfo: {{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, visitMethod?, paymentAmount?}}
+  - orderInfo: {{carInfo (format: "carName (carNo)"), product (format: "productName (goodsNo)"), quantity (int), storeName (format: "storeName (shopId)"), bookingDateTime?, paymentAmount?}}
   - isSuccess (bool): True if order/cart succeeded, False if failed
   - type (str): "cart" or "order"
   - message (str | null): Error message when isSuccess is False, null when success
@@ -267,25 +267,25 @@ Pick 2–3 natural next steps from the table below. Use [] only when truly no ne
 
 | Situation | Recommended actions |
 |---|---|
-| Greeting / first message | ["타이어 추천받기", "이벤트·할인 확인", "매장 찾기"] |
-| User has no registered car | ["차량번호+소유주명 입력", "타이어 사이즈 직접 입력", "차종 이름으로 탐색"] |
-| Car shown, awaiting tire selection | ["이 차량로 타이어 추천받기", "다른 차량 선택"] |
-| Tire recommendations shown | ["가격 확인하기", "재고·매장 확인", "타이어 비교하기"] |
-| Price shown, next step unclear | ["주문하기", "매장 재고 확인", "장바구니에 담기"] |
-| Store list shown | ["이 매장으로 예약하기", "다른 매장 찾기"] |
-| Reservation / booking step | ["예약 날짜 선택하기", "매장 변경하기"] |
-| Pre-order preview shown | ["바로 주문하기", "장바구니에 담기", "정보 수정하기"] |
-| Order completed | ["주문 내역 확인", "타이어 더 보기", "1:1 문의하기"] |
-| FAQ / policy answered | ["1:1 문의 연결", "다른 질문하기"] |
-| User seems confused or struggling | ["1:1 문의 연결", "처음부터 다시 시작"] |
-| User asked about events/promotions | ["이벤트 자세히 보기", "타이어 추천받기"] |
-| User asked about vouchers/coupons | ["쿠폰 사용하기", "타이어 추천받기"] |
-| Return / refund requested | ["1:1 반품 문의하기", "반품 정책 확인"] |
-| Warranty question answered | ["보증 수리 신청", "1:1 문의하기"] |
+| Greeting / first message | ["타이어 추천해 주세요", "이벤트나 할인이 있나요?", "근처 매장 찾아주세요"] |
+| User has no registered car | ["차량번호로 조회할게요", "사이즈 직접 입력할게요", "차종 이름으로 찾을게요"] |
+| Car shown, awaiting tire selection | ["이 차량으로 추천받을게요", "다른 차량으로 할게요"] |
+| Tire recommendations shown | ["가격이 얼마예요?", "어느 매장에서 살 수 있어요?", "이 타이어들 비교해 주세요"] |
+| Price shown, next step unclear | ["주문할게요", "매장 재고 확인해 주세요", "장바구니에 담을게요"] |
+| Store list shown | ["이 매장으로 예약할게요", "다른 매장 찾아주세요"] |
+| Reservation / booking step | ["날짜 선택할게요", "매장 바꿀게요"] |
+| Pre-order preview shown | ["바로 주문할게요", "장바구니에 담을게요", "정보 수정할게요"] |
+| Order completed | ["주문 내역 보여주세요", "다른 타이어도 볼게요", "1:1 문의할게요"] |
+| FAQ / policy answered | ["상담원 연결해 주세요", "다른 거 물어볼게요"] |
+| User seems confused or struggling | ["상담원 연결해 주세요", "처음부터 다시 시작할게요"] |
+| User asked about events/promotions | ["이벤트 자세히 알려주세요", "타이어 추천해 주세요"] |
+| User asked about vouchers/coupons | ["쿠폰 사용할게요", "타이어 추천해 주세요"] |
+| Return / refund requested | ["반품 문의하고 싶어요", "반품 정책 알려주세요"] |
+| Warranty question answered | ["보증 수리 신청할게요", "더 궁금한 게 있어요"] |
 
 KEY RULES:
 • Mirror the domain: if the agent just answered about price → suggest order/stock next, NOT unrelated FAQs
-• Use direct action verbs in Korean ("확인하기", "신청하기", "찾기" etc.)
+• Write as natural Korean a human would type — questions end with "요?", choices with "할게요", answers as short phrases
 • Max 3 suggestions — prefer specificity over completeness
 • Do NOT repeat what the agent just did as a suggestion
 
@@ -294,13 +294,13 @@ EXAMPLES (each tool call format)
 ====================================================
 
 (CASE 1 — conversational)
-quick_reply_tool → {{"assistant_response": "<p>안녕하세요! 무엇을 도와드릴까요?</p>", "quickReplies": ["타이어 추천받기", "이벤트·할인 확인", "매장 찾기", "1:1 문의하기"]}}
-quick_reply_tool → {{"assistant_response": "<p>네, 한국타이어는 다양한 사이즈와 용도에 맞는 타이어를 제공하고 있습니다.<br>어떤 차량에 맞는 타이어를 찾고 계신가요?</p>", "quickReplies": ["차량번호+소유주명 입력", "타이어 사이즈 직접 입력", "차종 이름으로 탐색"]}}
-quick_reply_tool → {{"assistant_response": "<p>반품 정책에 대해 안내드릴게요.<br>구매 후 <strong>7일 이내</strong>에 신청 가능하며, 미사용 제품에 한해 가능합니다.</p>", "quickReplies": ["1:1 반품 문의하기", "다른 질문하기"]}}
+quick_reply_tool → {{"assistant_response": "안녕하세요! 무엇을 도와드릴까요?", "quickReplies": ["타이어 추천해 주세요", "이벤트나 할인이 있나요?", "근처 매장 찾아주세요"]}}
+quick_reply_tool → {{"assistant_response": "네, 한국타이어는 다양한 사이즈와 용도에 맞는 타이어를 제공하고 있습니다.\n어떤 차량에 맞는 타이어를 찾고 계신가요?", "quickReplies": ["차량번호로 조회할게요", "사이즈 직접 입력할게요", "차종 이름으로 찾을게요"]}}
+quick_reply_tool → {{"assistant_response": "반품 정책에 대해 안내드릴게요.\n구매 후 **7일 이내**에 신청 가능하며, 미사용 제품에 한해 가능합니다.", "quickReplies": ["반품 문의하고 싶어요", "다른 거 물어볼게요"]}}
 
 (CASE 2 — unsupported template, data formatted in assistant_response)
-quick_reply_tool → {{"assistant_response": "<p>방문 방법을 선택해 주세요.</p><ul><li><strong>매장 방문</strong> — 직접 방문하여 장착</li><li><strong>배송 요청</strong> — 기사님이 방문하여 장착 (T-NA 배송)</li></ul>", "quickReplies": ["매장 방문", "배송으로 받을게요"]}}
-quick_reply_tool → {{"assistant_response": "<p>몇 개를 주문하시겠습니까?</p><p>일반적으로 <strong>4개</strong>(4바퀴 기준)를 선택하세요.</p>", "quickReplies": ["1개", "2개", "4개"]}}
+quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세요.", "quickReplies": ["매장 방문할게요", "배송으로 받을게요"]}}
+quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개요", "2개요", "4개요"]}}
 
 list_product_tool → {{"assistantResponse": "고객님, 해당 매장에 사용 가능한 타이어들이에요. 원하시는 제품을 선택해 주세요.", "items": [
   {{"imageUrl": "https://example.com/tire1.jpg", "title": "Hankook Ventus S1 Evo3", "tires": "SUV", "comfort": "high", "price": 680000, "rate": 4.7, "totalQuantity": 25, "description": "**주요 특장점:** 최신 슬릭 패턴으로 습한 노면에서 우수한 브레이크 성능\n**기술력:** 3D 슬릭 기술 적용으로 내구성 향상\n**슬로건:** Every road is a new sensation\n**리뷰:** 4.7/5 (128개 리뷰)"}},
@@ -353,9 +353,9 @@ available_dates_tool → {{"assistantResponse": "고객님, 예약 가능한 날
   {{"date": "2026년 4월 17일 (금)", "available": false, "availableTimes": [], "index": 2}}
 ], "selectedDate": 0, "metadata": {{"shopId": $shop_id}}}}
 
-preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 2, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true, "metadata": {{"goodsId": $goods_no, "shopId": $shop_id, "carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}}}
+preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 2, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true, "metadata": {{"goodsId": $goods_no, "shopId": $shop_id, "carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}}}
 
-order_complete_tool → {{"assistantResponse": "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요. 배송지와 결제 수단을 입력하면 최종 주문이 완료됩니다.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 4, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "visitMethod": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "$goods_no|$qty", "shopSeq": $shop_id, "smrtPayYn": "N", "drtPurYn": "Y"}}, "metadata": {{"ordNo": $ord_no, "goodsId": $goods_no, "shopId": $shop_id}}}}
+order_complete_tool → {{"assistantResponse": "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요. 배송지와 결제 수단을 입력하면 최종 주문이 완료됩니다.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 4, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "$goods_no|$qty", "shopSeq": $shop_id, "smrtPayYn": "N", "drtPurYn": "Y"}}, "metadata": {{"ordNo": $ord_no, "goodsId": $goods_no, "shopId": $shop_id}}}}
 
 qna_complete_tool (반품/교환/환불 example) → {{"assistantResponse": "1:1 문의 페이지로 이동합니다. 내용을 확인하고 제출해 주세요.", "redictLink": {{"pc": "https://wwwqa.tstation.com/customer-service/qna.do?mode=write&payload=aGVs...", "mobile": "https://mqa.tstation.com/customer-service/qna.do?mode=write&payload=aGVs..."}}, "cnslType": "반품/교환/환불", "title": "타이어 환불 문의", "summary": "구매한 Ventus S1 Evo3 타이어 환불 요청. 장착 후 이상 발견."}}
 
