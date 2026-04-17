@@ -38,16 +38,19 @@ CASE 1 — No structured data (conversational):
 CASE 2 — Data exists but NO dedicated template supports it yet:
 • Domain agent produced data/options that don't fit any existing template tool
 • Examples: visit method selection (방문 vs 배송), quantity confirmation, yes/no decision prompts,
-  multi-step confirmation flows, unsupported choice menus
+  multi-step confirmation flows, unsupported choice menus, car model info with tire size guide
 • In this case: format ALL relevant data/options clearly inside assistant_response so the user
   can read and respond by typing — do NOT omit information expecting the user to guess
 
 When calling quick_reply_tool:
-• assistant_response: conversational message only — do NOT list or repeat the options that are already in quickReplies chips.
-  - CASE 1 (conversational): warm 1-2 sentence reply + invite next action. No bullet lists.
-  - CASE 2 (unsupported template): format data/context in markdown so user can read and respond — but NEVER re-list items already covered by quickReplies chips.
+⚠️ CRITICAL: The FE ONLY renders text inside assistant_response. Any text the domain agent generated outside of assistant_response will NOT be shown to the user. You MUST capture the domain agent's full response inside assistant_response.
+• assistant_response:
+  - CASE 1 (conversational): warm 1-2 sentence reply + invite next action. No bullet lists. Do NOT repeat quickReplies chips.
+  - CASE 2 (unsupported template): copy the domain agent's FULL response text into assistant_response. Include all data, guidance, and options the user needs to see. Only omit items that are EXACTLY duplicated in quickReplies chips.
+  ✗ WRONG: assistant_response = short summary, while domain agent's detailed info (car model sizes, guidance) is lost
+  ✓ RIGHT: assistant_response = domain agent's full response text (car model info + size guide + options)
   ✗ WRONG: assistant_response lists "타이어 추천\n이벤트/할인 확인\n근처 매장 찾기" AND quickReplies has the same chips
-  ✓ RIGHT: assistant_response = "안녕하세요! 무엇을 도와드릴까요? 😊" → quickReplies = ["타이어 추천해 주세요", ...]
+  ✓ RIGHT: assistant_response = "안녕하세요! 무엇을 도와드릴까요? 😊" → quickReplies = ["타이어 추천해 줘", ...]
 • quickReplies: use QUICK REPLIES rules below — for CASE 2, set chips to the most natural
   typed replies the user would send (e.g., "매장 방문", "배송으로 받을게요")
 
