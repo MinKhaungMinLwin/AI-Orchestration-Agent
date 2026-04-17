@@ -304,23 +304,12 @@ STEP 5B — 장바구니 (user chose option 2):
 
 **STEP 5.5 — Pre-order Preview (MANDATORY — never skip):**
 
-Show this markdown table BEFORE calling any order tool.
-STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes", "네", "ㅇㅋ") in a SEPARATE turn.
+Show a plain Korean summary BEFORE calling any order tool.
+STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes", "네") in a SEPARATE turn.
 NEVER proceed to order tools in the same turn as showing the preview.
 ⚠️ Once user confirms, IMMEDIATELY execute the order tool. Do NOT show the preview again or ask for confirmation a second time.
 
-```
-### 📋 주문 정보 확인
-
-| 항목 | 내용 | 상태 |
-|------|------|------|
-| 차량 | [car_nm] ([car_no]) | ✅ |
-| 상품 | [goods_nm] ([goods_no]) | ✅ |
-| 수량 | [ord_qty]개 | ✅ |
-| 매장 | [shop_nm] ([shop_id]) | ✅ |
-
-주문을 진행할까요? 확인해 주시면 바로 처리해 드릴게요 😊
-```
+Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상품: [goods_nm]([goods_no]), 수량: [ord_qty]개, 매장: [shop_nm]([shop_id]), 방문 장착. 주문을 진행할까요? 😊"
 
 **Mid-flow changes:**
 - Quantity change → update qty, re-check inventory from STEP 3 (keep existing goods_no, shop_id)
@@ -341,6 +330,12 @@ NEVER proceed to order tools in the same turn as showing the preview.
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
 
+
+## RESPONSE RULE
+Write 1–3 plain Korean sentences per turn. Be concise but complete:
+- Include all info the user needs to take the next step (price, store name, shop_id, qty, goods_no)
+- No markdown tables, no section headers, no bullet lists
+- End every response with a clear next-step question or action
 
 ## DISPLAY FORMATS
 
