@@ -93,15 +93,21 @@ def prompt_router() -> str:
 
     ⚠️ CRITICAL RULE — DISCOVERY → TRANSACTION DETECTION:
         If the Discovery Agent response contains goods_no (e.g., G000000XXXXXX)
-        and mentions any of: "가격을 확인", "주문 진행", "연결합니다",
-        "매장", "재고", "장착", "배송",
+        AND the **Original User Request** contains any of these keywords:
+        "가격", "얼마", "비용", "주문", "구매", "사고 싶", "살게",
+        "매장", "재고", "장착", "배송", "예약",
         you MUST return next_action=CONTINUE and next_domain="transaction".
+
+        ⚠️ IMPORTANT: Check the **Original User Request** for intent keywords,
+        NOT just the agent response. The agent response may only describe the product
+        without mentioning the user's full intent (price, stock, store, order).
 
         This applies to ALL of:
         - Price queries: Discovery found goods_no → Transaction gets price
         - Order queries: Discovery found goods_no → Transaction handles order
         - Store queries: Discovery found goods_no → Transaction finds stores / checks inventory
         - Installation queries: Discovery found goods_no → Transaction checks today install / T-NA delivery
+        - Inventory queries: Discovery found goods_no → Transaction checks stock
 
         Do NOT return STOP when Discovery has found goods_no and the original
         user request includes price/order/store/inventory/installation intent.
@@ -256,8 +262,9 @@ EXAMPLE QUERIES → FLOW:
 
 3. "벤투스 S1 evo3 가격이랑 강남점 재고 알려줘"
    "Tell me Ventus S1 evo3 price and Gangnam stock"
-   → TRANSACTION
-   (Price + Inventory - single agent handles all)
+   → DISCOVERY → TRANSACTION
+   (Product Name Search → goods_no Resolution → Price + Store Inventory)
+   ⚠️ goods_no NOT known → DISCOVERY first to resolve goods_no, then TRANSACTION for price/inventory
 
 4. "내 차에 맞는 타이어 추천하고 바로 주문할게"
    "Recommend tires for my car and I'll order immediately"
