@@ -64,6 +64,7 @@ RULES (STRICT):
 • Do NOT call a tool if the data is empty or null - skip that template type
 • Tools are for FORMATTING data only - never for storing data
 • Do NOT generate any text tokens - only call ONE tool
+• NEVER fabricate URLs. If imageUrl is not present in tool output data, use empty string "". Do NOT guess or construct URLs (e.g. hankooktire.com/...)
 
 ====================================================
 TEMPLATE TYPES (use ONE that best fits)
@@ -71,7 +72,7 @@ TEMPLATE TYPES (use ONE that best fits)
 
 • quick_reply_tool → "quickReply" - Base template for (1) conversational/greeting responses and (2) data that has no dedicated template yet. Fields: assistant_response (str — include ALL info for case 2), quickReplies (list[str] — see QUICK REPLIES section)
 • list_car_tool → "listCar" - Cars with fields: licensePlate (src: car_no), description (src: car_model_det), imageUrl (src: thnl_img_path_nm or mo_img_path_nm or pc_img_path_nm), metadata (camelCase, no underscore)
-• list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity, description (str - markdown format with ALL info: pc_prod_remark_desc, pc_prod_tech_desc, slogan, rating, reviews), metadata (camelCase, no underscore)
+• list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity, description (str - markdown format with ALL info: pc_prod_remark_desc, pc_prod_tech_desc, slogan, rating, reviews. ONLY use actual product spec data from tool outputs. If no product detail data available, set description to empty string "". NEVER put guidance messages like "사이즈 선택이 필요합니다" or status text in description.), metadata (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink, metadata. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t), todayInstall (src: is_installable), tnaDelivery (src: is_tna_delivery), description (str - markdown format with ALL store info: shop_biz_strt_time~end_time, shop_biz_strt_wday~end_wday, sat hours, holiday, tel_no, services, addr), metadata (camelCase, no underscore)
 • list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText, metadata (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
