@@ -1526,8 +1526,14 @@ class TStationChatServiceV2:
             if event_type == "tool":
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 tool_name = event.get("tool", "Unknown")
-                # If this tool has a code mapper, suppress subsequent tokens
-                if tool_name in _TOOL_TEMPLATE_MAP:
+                # Suppress tokens when a "list display" tool is called (card will replace text).
+                # Exclude car lookup tools — agent may need to show selection text first.
+                _SUPPRESS_ON_TOOLS = {
+                    "search_product_tool", "get_products_recommendations_tool",
+                    "get_available_coupons_tool", "get_my_coupons_tool",
+                    "compare_discount_tool", "search_youtube_video_tool",
+                }
+                if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
                 input_data = event.get("input", {})
                 output_data = event.get("output", "")

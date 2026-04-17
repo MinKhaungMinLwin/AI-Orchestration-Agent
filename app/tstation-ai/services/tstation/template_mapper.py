@@ -146,6 +146,10 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             })
     if not items:
         return None
+    # 차량 1대면 에이전트가 자동 선택하므로 카드 불필요 → LLM fallback 또는 product 매핑으로
+    if len(items) == 1:
+        logger.info("[TEMPLATE_MAPPER] Single car — skipping listCar card (auto-selected by agent)")
+        return None
     return _build_event("listCar", {"listCar": items, "metadata": metadata}, assistant_text, len(items))
 
 
@@ -369,11 +373,26 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     if not accumulated_tool_data:
         return None
 
-    # Find the LAST tool that has a code mapper (most recent = most relevant)
-    for entry in reversed(accumulated_tool_data):
-        tool_name = entry.get("tool", "")
-        mapper = _MAPPERS.get(tool_name)
-        if mapper:
+    # When multiple tools are called, pick the most important UI template.
+    # Priority: product > listCar > voucher > cheapestProduct > previewYoutube > qnaComplete
+    # This handles cases like: get_my_cars → get_products_recommendations → compare_discount
+    # where product cards should be shown, not cheapestProduct.
+    _PRIORITY = [
+        ("search_product_tool", _map_product),
+        ("get_products_recommendations_tool", _map_product),
+        ("get_my_cars_tool", _map_list_car),
+        ("get_user_vehicles_tool", _map_list_car),
+        ("get_available_coupons_tool", _map_voucher),
+        ("get_my_coupons_tool", _map_voucher),
+        ("compare_discount_tool", _map_cheapest_product),
+        ("search_youtube_video_tool", _map_preview_youtube),
+        ("transfer_to_qna_tool", _map_qna_complete),
+    ]
+
+    called_tools = {e.get("tool", "") for e in accumulated_tool_data}
+
+    for tool_name, mapper in _PRIORITY:
+        if tool_name in called_tools:
             result = mapper(accumulated_tool_data, assistant_text)
             if result:
                 logger.info(
