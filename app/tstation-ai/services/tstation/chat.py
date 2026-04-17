@@ -1027,18 +1027,20 @@ class StreamingMultiAgentCoordinator:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
         # Run UI Template Agent when:
-        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools), OR
-        # 2. Domain agents responded but called NO tools (pure text response — agent decides if template needed)
+        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools)
+        # NOTE: Do NOT run UI Template Agent when no tools were called.
+        # When domain agent responds with only text (e.g., asking for quantity, store selection),
+        # the text is already streamed to the user — UI Template Agent would override it with
+        # an irrelevant quickReply template.
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
             for item in accumulated_tool_data
         )
         _has_agent_response = bool(accumulated_context)
-        _no_tools_called = not accumulated_tool_data
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
-        if _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
-            trigger_reason = "no tools called" if _no_tools_called else f"{len(accumulated_tool_data)} tool outputs"
+        if _has_agent_response and _has_relevant_tool_data:
+            trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
             logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
             # Try code-based template mapping first (no LLM call)
