@@ -727,7 +727,7 @@ class StreamingMultiAgentCoordinator:
             return None
 
         return {
-            "role": "system",
+            "role": "assistant",
             "content": f"[Context from previous steps]\n" + "\n".join(parts)
         }
 
@@ -866,14 +866,14 @@ class StreamingMultiAgentCoordinator:
             # 1. slot_context FIRST
             if slot_context:
                 enriched_messages.append({
-                    "role": "system",
+                    "role": "assistant",
                     "content": slot_context,
                 })
 
             # 1.5. tool_context from previous turn (structured tool results)
             if tool_context:
                 enriched_messages.append({
-                    "role": "system",
+                    "role": "assistant",
                     "content": tool_context,
                 })
 
@@ -925,7 +925,7 @@ class StreamingMultiAgentCoordinator:
 
                 tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
                 enriched_messages.append({
-                    "role": "system",
+                    "role": "assistant",
                     "content": f"[Previous agent tool results]\n{tool_summary}"
                 })
                 logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
@@ -1052,7 +1052,7 @@ class StreamingMultiAgentCoordinator:
                 # 1. slot_context FIRST
                 if slot_context:
                     ui_messages.append({
-                        "role": "system",
+                        "role": "assistant",
                         "content": slot_context,
                     })
 
@@ -1101,50 +1101,13 @@ class StreamingMultiAgentCoordinator:
                     "status": "start",
                 }
 
-            # 4. Append tool data summary LAST
-            # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
-            # The actual data is at item["data"]["data"] (nested inside API response wrapper)
-            tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
-            ui_messages.append({
-                "role": "assistant",
-                "content": (
-                    "[Accumulated tool data for UI rendering]\n"
-                    "Note: Each item has structure {\"tool\": \"...\", \"data\": {\"status\": \"...\", \"data\": {ACTUAL_DATA}}}.\n"
-                    "Extract ACTUAL_DATA from item[\"data\"][\"data\"] for template rendering.\n\n"
-                    f"{tool_summary}"
-                )
-            })
-            # Extract original user message to help UI Template Agent infer correct template
-            original_user_text = ""
-            for msg in reversed(original_messages):
-                if msg.get("role") == "user":
-                    original_user_text = msg.get("content", "").strip()
-                    break
+                # Signal UI that template data is about to arrive
+                yield {"type": "status", "status": "화면 구성 중..."}
 
-            ui_messages.append({
-                "role": "user",
-                "content": (
-                    f"## USER REQUEST\n{original_user_text}\n\n"
-                    "Help me generate Template UI"
-                ),
-            })
-
-            # Log UI Template Agent messages
-            logger.info(f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}")
-
-            # Yield waiting event while UI Template Agent processes
-            yield {
-                "type": "waiting",
-                "agent": "[UI TEMPLATE AGENT]",
-            }
-
-            # Signal UI that template data is about to arrive
-            yield {"type": "status", "status": "화면 구성 중..."}
-
-            # Stream from UI Template Agent (use stream_template to get data events)
-            for event in ui_template_subagent.stream_template(ui_messages):
-                event["source_domain"] = "ui_template"
-                yield event
+                # Stream from UI Template Agent (use stream_template to get data events)
+                for event in ui_template_subagent.stream_template(ui_messages):
+                    event["source_domain"] = "ui_template"
+                    yield event
 
             # Yield UI Template Agent completion event
             yield {

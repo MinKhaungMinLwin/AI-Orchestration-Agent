@@ -404,16 +404,8 @@ if prompt:
     with chat_container:
         with st.chat_message("assistant"):
             if stream_mode:
-                # Tool calls display - list of expanders
                 tool_calls = []
-
-                # Data events for UI templates
-                data_events = []
-
-                # Agent flow display at top - list of steps
-                agent_flow_steps = []
-                agent_flow_placeholder = st.empty()
-
+                status_placeholder = st.empty()
                 message_placeholder = st.empty()
                 full_response = ""
 
@@ -427,7 +419,6 @@ if prompt:
                     )
 
                     for chunk in response_generator:
-                        # Handle session info from first chunk
                         if chunk.get("type") == "session_info":
                             new_session_id = chunk.get("session_id")
                             if new_session_id and new_session_id != st.session_state.get("current_session_id"):
@@ -435,43 +426,35 @@ if prompt:
                             continue
 
                         if chunk.get("type") == "tool":
-                            tool_name = chunk.get("tool", "")
-                            tool_input = chunk.get("input", {})
-                            tool_output = chunk.get("output", "")
-                            tool_calls.append({"tool": tool_name, "input": tool_input, "output": tool_output})
-                        elif chunk.get("type") == "agent_flow":
-                            agent = chunk.get("agent", "")
-                            status = chunk.get("status", "success")
-                            agent_flow_steps.append({"agent": agent, "status": status})
-                            # Render each step with arrow between
-                            steps_html = ""
-                            for i, step in enumerate(agent_flow_steps):
-                                if step["status"] == "error":
-                                    bg_color = "#dc2626"  # Red
-                                else:
-                                    bg_color = "#16a34a"  # Green
-                                steps_html += f"<span style='background: {bg_color}; padding: 4px 12px; border-radius: 15px; color: white; font-weight: bold; display: inline-block; vertical-align: middle;'>{step['agent']}</span>"
-                                if i < len(agent_flow_steps) - 1:
-                                    steps_html += "<span style='margin: 0 8px; color: #6b7280; font-size: 14px; vertical-align: middle;'>→</span>"
-                            agent_flow_placeholder.markdown(
-                                f"<div style='display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 4px; padding: 8px; margin-bottom: 10px;'>{steps_html}</div>",
-                                unsafe_allow_html=True
-                            )
+                            tool_calls.append({
+                                "tool": chunk.get("tool", ""),
+                                "input": chunk.get("input", {}),
+                                "output": chunk.get("output", ""),
+                            })
+                        elif chunk.get("type") == "status":
+                            status_val = chunk.get("status", "")
+                            if status_val == "tool_start":
+                                display_name = chunk.get("display_name", "처리 중...")
+                                status_placeholder.markdown(f"⚙️ *{display_name}*")
+                            else:
+                                status_placeholder.markdown(f"⚙️ *{status_val}*")
                         elif chunk.get("type") == "token":
+                            status_placeholder.empty()
                             full_response += chunk.get("content", "")
                             message_placeholder.markdown(full_response + "▌")
                         elif chunk.get("type") == "error":
                             full_response += f"\nError: {chunk.get('content', '')}"
                             message_placeholder.markdown(full_response)
                         elif chunk.get("type") == "data":
-                            data_events.append(chunk)
+                            status_placeholder.empty()
+                            render_template_expander(chunk.get("template", ""), chunk.get("data", {}))
 
                     message_placeholder.markdown(full_response)
+                    status_placeholder.empty()
 
-                    # Render tool calls in Streamlit expanders above AF
                     if tool_calls:
-                        with st.expander("🔧 Tools Called", expanded=True):
-                            for i, tc in enumerate(tool_calls):
+                        with st.expander("🔧 Tools Called", expanded=False):
+                            for tc in tool_calls:
                                 with st.expander(f"{tc['tool']}", expanded=False):
                                     col1, col2 = st.columns(2)
                                     with col1:
@@ -480,27 +463,14 @@ if prompt:
                                     with col2:
                                         st.markdown("**OUTPUT:**")
                                         output_data = tc["output"]
-                                        # Try to parse as JSON, fallback to text
                                         if isinstance(output_data, str):
                                             try:
-                                                parsed = json.loads(output_data)
-                                                output_text = json.dumps(parsed, indent=2, ensure_ascii=False)
+                                                output_text = json.dumps(json.loads(output_data), indent=2, ensure_ascii=False)
                                             except (json.JSONDecodeError, TypeError):
                                                 output_text = output_data
                                         else:
                                             output_text = json.dumps(output_data, indent=2, ensure_ascii=False)
                                         st.code(output_text, language="json")
-
-                    # Render UI template events
-                    if data_events:
-                        for item in data_events:
-                            template = item.get("template", "")
-                            data = item.get("data", {})
-                            with st.expander(f"📋 Results [{template}]", expanded=True):
-                                # Handle items array or single item
-                                items = data.get("items", [data])
-                                for single_item in items:
-                                    render_template_expander(template, single_item)
 
                     bot_reply = full_response
 
