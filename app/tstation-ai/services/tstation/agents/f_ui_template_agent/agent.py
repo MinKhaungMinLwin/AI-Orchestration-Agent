@@ -71,6 +71,12 @@ RULES (STRICT):
 • Do NOT generate any text tokens - only call ONE tool
 • NEVER fabricate URLs. If imageUrl is not present in tool output data, use empty string "". Do NOT guess or construct URLs (e.g. hankooktire.com/...)
 
+🔴 DATA DISPLAY BANS (CRITICAL):
+• NEVER expose stock quantity (logistics_qty, stock count, "60개", "264개") to the customer
+  - Stock available → "재고 확인됨" / "장착 가능"
+  - Stock unavailable → "재고 없음"
+• NEVER use "T-NA" — always display as "T바로배송"
+
 ====================================================
 TEMPLATE TYPES (use ONE that best fits)
 ====================================================
@@ -79,7 +85,7 @@ TEMPLATE TYPES (use ONE that best fits)
 • list_car_tool → "listCar" - Cars with fields: licensePlate (src: car_no), description (src: car_model_det), imageUrl (src: thnl_img_path_nm or mo_img_path_nm or pc_img_path_nm), metadata (camelCase, no underscore)
 • list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity, description (str - markdown format with ALL info: pc_prod_remark_desc, pc_prod_tech_desc, slogan, rating, reviews. ONLY use actual product spec data from tool outputs. If no product detail data available, set description to empty string "". NEVER put guidance messages like "사이즈 선택이 필요합니다" or status text in description.), metadata (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink, metadata. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
-• list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t), todayInstall (src: is_installable), tnaDelivery (src: is_tna_delivery), description (str - markdown format with ALL store info: shop_biz_strt_time~end_time, shop_biz_strt_wday~end_wday, sat hours, holiday, tel_no, services, addr), metadata (camelCase, no underscore)
+• list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t), todayInstall (src: is_installable), tnaDelivery (src: is_tna_delivery — display as "T바로배송", NEVER "T-NA"), description (str - markdown format: **영업일:** shop_biz_strt_wday~shop_biz_end_wday\n**영업시간:** 주중 shop_biz_strt_time~shop_biz_end_time, 주말 shop_sat_strt_time~shop_sat_end_time\n**휴무일:** holiday\n**전화:** tel_no), metadata (camelCase, no underscore)
 • list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText, metadata (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
 • available_dates_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null), metadata (camelCase, no underscore). IMPORTANT: Include ALL available dates - do NOT truncate or limit the dates array. If source has 10 dates, pass all 10.
@@ -343,8 +349,8 @@ list_voucher_tool → {{"assistantResponse": "고객님, 사용 가능한 쿠폰
 ]}}
 
 list_location_tool → {{"assistantResponse": "고객님, 근처 매장을 찾았어요. 원하시는 매장을 선택해 주세요.", "items": [
-  {{"nameAddress": "Hankook Tire 서울 강남점", "distance": "1.2km", "detailAddress": "서울시 강남구 테헤란로 123", "isAllMyT": true, "todayInstall": true, "tnaDelivery": false, "description": "**영업시간:** 월~금 09:00-20:00, 토 10:00-18:00\n**휴무일:** 일요일/공휴일\n**전화:** 02-1234-5678\n**서비스:** 타이어 교체, 밸런스, 사제택\n**주차:** 가능"}},
-  {{"nameAddress": "Hankook Tire 서울 강북점", "distance": "3.5km", "detailAddress": "서울시 강북구 수유동 456", "isAllMyT": false, "todayInstall": false, "tnaDelivery": true, "description": "**영업시간:** 월~금 08:00-19:00, 토 09:00-15:00\n**휴무일:** 일요일\n**전화:** 02-9876-5432\n**서비스:** 타이어 교체, 네비게이션 설정\n**주차:** 무료"}}
+  {{"nameAddress": "Hankook Tire 서울 강남점", "distance": "1.2km", "detailAddress": "서울시 강남구 테헤란로 123", "isAllMyT": true, "todayInstall": true, "tnaDelivery": false, "description": "**영업일:** 월~토\n**영업시간:** 주중 09:00~20:00, 주말 10:00~18:00\n**휴무일:** 일요일/공휴일\n**전화:** 02-1234-5678"}},
+  {{"nameAddress": "Hankook Tire 서울 강북점", "distance": "3.5km", "detailAddress": "서울시 강북구 수유동 456", "isAllMyT": false, "todayInstall": false, "tnaDelivery": true, "description": "**영업일:** 월~토\n**영업시간:** 주중 08:00~19:00, 주말 09:00~15:00\n**휴무일:** 일요일\n**전화:** 02-9876-5432"}}
 ], "metadata": [
   {{"shopId": $shop_id}},
   {{"shopId": $shop_id}}
