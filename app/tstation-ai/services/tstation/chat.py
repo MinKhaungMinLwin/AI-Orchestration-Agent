@@ -954,6 +954,7 @@ class StreamingMultiAgentCoordinator:
 
             # Stream from agent and yield events immediately
             full_response = ""
+            last_agent_called_tools = False
             for event in agent.stream(enriched_messages):
                 # Tag with source domain for UI
                 event["source_domain"] = domain_key
@@ -969,6 +970,7 @@ class StreamingMultiAgentCoordinator:
 
                 # Capture tool outputs for UI Template Agent
                 if event.get("type") == "tool":
+                    last_agent_called_tools = True
                     tool_output = event.get("output", "")
                     if tool_output:
                         try:
@@ -1027,11 +1029,12 @@ class StreamingMultiAgentCoordinator:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
         # Run UI Template Agent when:
-        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools)
-        # NOTE: Do NOT run UI Template Agent when no tools were called.
-        # When domain agent responds with only text (e.g., asking for quantity, store selection),
-        # the text is already streamed to the user — UI Template Agent would override it with
-        # an irrelevant quickReply template.
+        # 1. The LAST agent in the chain called tools with relevant data, OR
+        # 2. Only one agent ran and it called tools
+        # NOTE: Do NOT run UI Template Agent when the last agent called NO tools.
+        # In multi-agent chains (e.g., DISCOVERY → TRANSACTION), if the last agent (Transaction)
+        # only produced text (asking for qty, store selection), the text is already streamed.
+        # Running UI Template would override it with an irrelevant product card from Discovery's tools.
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
@@ -1039,7 +1042,7 @@ class StreamingMultiAgentCoordinator:
         )
         _has_agent_response = bool(accumulated_context)
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
-        if _has_agent_response and _has_relevant_tool_data:
+        if _has_agent_response and _has_relevant_tool_data and last_agent_called_tools:
             trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
             logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
