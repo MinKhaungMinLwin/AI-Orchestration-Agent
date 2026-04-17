@@ -67,6 +67,9 @@ def list_product_tool(
             • rating: 리뷰 수 및 평균 평점
             • Any other available fields
             Format as readable markdown with sections.
+            IMPORTANT: ONLY use actual product spec data from tool outputs.
+            If no product detail data (pc_prod_remark_desc etc.) is available, set to empty string "".
+            NEVER put guidance/status messages (e.g. "사이즈 선택이 필요합니다") in this field.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"products": items, "assistantResponse": assistant_response, "metadata": metadata}}
