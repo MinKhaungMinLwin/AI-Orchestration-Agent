@@ -188,13 +188,18 @@ Same model can have different tire sizes by trim/year. Guide the user to provide
 Use your knowledge of the car model to show 2-3 representative generations/trims with typical tire sizes.
 It's OK to be approximate — the purpose is to show that sizes VARY, not to be 100% precise.
 
-**STEP 2: Display message in this format:**
+**STEP 2: Generate your ENTIRE response as a single message.**
+⚠️ This message will be passed to the UI template agent's quick_reply_tool as `assistant_response`.
+The FE ONLY renders text inside `assistant_response` — any text outside it will NOT be shown to the user.
+So include ALL information (car model summary + guidance) in your response text.
+
+Format:
 
 "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 다를 수 있어요!
 
 대표적으로,
-[브랜드] [세대/트림명] (YYYY~YYYY) → [대표 tire_size들]
-[브랜드] [세대/트림명] (YYYY~YYYY) → [대표 tire_size들]
+[브랜드] [세대/트림명] (YYYY-YYYY) → [대표 tire_size들]
+[브랜드] [세대/트림명] (YYYY-YYYY) → [대표 tire_size들]
 
 타이어 추천을 위해 정확한 사이즈 정보가 필요해요!
 차번+소유주 정보를 알려주시면 해당 차량 기준으로 바로 추천해 드릴 수 있어요!
