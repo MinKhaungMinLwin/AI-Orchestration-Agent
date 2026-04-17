@@ -71,6 +71,14 @@ def build_embeddings(documents, embedding_svc):
         question_texts.append(q)
         answer_texts.append(a)
 
+    # Warn about documents that produced empty embedding texts
+    empty_q = [i for i, t in enumerate(question_texts) if not t.strip()]
+    empty_a = [i for i, t in enumerate(answer_texts) if not t.strip()]
+    if empty_q:
+        logger.warning(f"build_embeddings: {len(empty_q)} document(s) have empty question text at indices {empty_q}")
+    if empty_a:
+        logger.warning(f"build_embeddings: {len(empty_a)} document(s) have empty answer text at indices {empty_a}")
+
     all_texts = question_texts + answer_texts
     embeddings = embedding_svc.embed_texts(all_texts)
 

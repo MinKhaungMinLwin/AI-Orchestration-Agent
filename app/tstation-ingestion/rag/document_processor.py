@@ -75,22 +75,10 @@ class DocumentProcessor:
             if not isinstance(doc, dict):
                 raise ValueError(f"Document {idx} is not a dict: {type(doc)}")
 
-            normalized = {
-                "id": doc.get("id", idx),
-                "content": doc.get("content", doc.get("text", "")),
-                "metadata": {
-                    "source": doc.get("source", "unknown"),
-                    "timestamp": doc.get("timestamp", None),
-                    **{
-                        k: v
-                        for k, v in doc.items()
-                        if k not in ["id", "content", "text"]
-                    },
-                },
-            }
+            normalized = DocumentProcessor._normalize_document(doc, idx)
 
-            if not normalized["content"]:
-                logger.warning(f"Document {idx} has empty content")
+            if not normalized["question"] and not normalized["answer"]:
+                logger.warning(f"Document {idx} (id={normalized['id']}) has no question or answer text")
 
             documents.append(normalized)
 
@@ -187,6 +175,88 @@ class DocumentProcessor:
         return all_chunks
 
     # ---------------------------------------------------------------------------
+    # Document normalization — unify different source schemas
+    # ---------------------------------------------------------------------------
+
+    # Candidate field names for each logical field, tried in order
+    _QUESTION_FIELDS: list[str] = ["question", "representative_question"]
+    _ANSWER_FIELDS: list[str]   = ["answer",   "representative_answer"]
+    _CONTENT_FIELDS: list[str]  = ["content",  "text", "body"]
+
+    @staticmethod
+    def _resolve_field(doc: dict, candidates: list[str]) -> str:
+        """Return the first non-empty string value found among candidate keys."""
+        for key in candidates:
+            val = doc.get(key)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+        return ""
+
+    @staticmethod
+    def _normalize_document(doc: dict, idx: int) -> dict:
+        """
+        Convert any supported raw document format into a unified schema.
+
+        Supported source formats:
+          - Type 1: {question, answer, content, metadata: {intent, keywords, ...}}
+          - Type 2: {representative_question, representative_answer, similar_questions,
+                     metadata: {category_lv1, category_lv2}}
+          - Any future format that uses _QUESTION_FIELDS / _ANSWER_FIELDS variants
+
+        Output schema:
+          {
+            id, question, answer, content,
+            similar_questions: list[str],
+            metadata: {category_lv1, category_lv2, intent, keywords, source, lang, document_type, ...}
+          }
+        """
+        dp = DocumentProcessor
+
+        question = dp._resolve_field(doc, dp._QUESTION_FIELDS)
+        answer   = dp._resolve_field(doc, dp._ANSWER_FIELDS)
+
+        # Build `content` from question+answer when not explicitly provided
+        content = dp._resolve_field(doc, dp._CONTENT_FIELDS)
+        if not content:
+            parts = []
+            if question:
+                parts.append(f"질문: {question}")
+            if answer:
+                parts.append(f"답변: {answer}")
+            content = "\n".join(parts)
+
+        # Collect similar_questions (Type 2 field, empty list for Type 1)
+        similar_questions: list[str] = [
+            q for q in doc.get("similar_questions", [])
+            if isinstance(q, str) and q.strip()
+        ]
+
+        # Merge metadata — raw metadata block takes priority over top-level fields
+        raw_meta: dict = doc.get("metadata", {})
+        meta = {
+            "category_lv1":  raw_meta.get("category_lv1", ""),
+            "category_lv2":  raw_meta.get("category_lv2", ""),
+            "intent":        raw_meta.get("intent", ""),
+            "keywords":      raw_meta.get("keywords", []),
+            "source":        raw_meta.get("source", doc.get("source", "unknown")),
+            "lang":          raw_meta.get("lang", "ko"),
+            "document_type": raw_meta.get("document_type", "faq_qa"),
+        }
+        # Preserve any extra keys from raw_meta not already captured
+        for k, v in raw_meta.items():
+            if k not in meta:
+                meta[k] = v
+
+        return {
+            "id":               doc.get("id", idx),
+            "question":         question,
+            "answer":           answer,
+            "content":          content,
+            "similar_questions": similar_questions,
+            "metadata":         meta,
+        }
+
+    # ---------------------------------------------------------------------------
     # Multi-vector helpers
     # ---------------------------------------------------------------------------
 
@@ -230,32 +300,46 @@ class DocumentProcessor:
         """
         Build (question_text, answer_text) for multi-vector embedding.
 
-        question_text is augmented with intent + category for domain context.
-        answer_text is augmented with normalized keywords to improve recall.
+        Works with the unified schema produced by _normalize_document:
+          - question_text: [intent] category: question + similar_questions (Type 2)
+          - answer_text:   answer + normalized keywords (Type 1) or category context (Type 2)
+
+        Documents must be normalized via _normalize_document before calling this.
         """
         question = document.get("question", "")
-        answer = document.get("answer", "")
+        answer   = document.get("answer", "")
+        similar_questions: list[str] = document.get("similar_questions", [])
         meta = document.get("metadata", {})
 
         intent = meta.get("intent", "")
-        cat1 = meta.get("category_lv1", "")
-        cat2 = meta.get("category_lv2", "")
+        cat1   = meta.get("category_lv1", "")
+        cat2   = meta.get("category_lv2", "")
         category = f"{cat1} > {cat2}".strip(" >") if cat2 else cat1
 
-        # Augment question: [intent] category: question
+        # --- question_text ---
         parts = []
         if intent:
             parts.append(f"[{intent}]")
         if category:
             parts.append(f"{category}:")
-        parts.append(question)
+        if question:
+            parts.append(question)
+        # Append similar_questions (Type 2) for multi-surface coverage
+        if similar_questions:
+            parts.append("유사 질문: " + " / ".join(similar_questions[:5]))
         question_text = " ".join(parts)
 
-        # Augment answer with normalized top keywords
+        # --- answer_text ---
         raw_keywords = meta.get("keywords", [])
         clean_kws = DocumentProcessor.normalize_keywords(raw_keywords)
         kw_str = " ".join(clean_kws[:6])
-        answer_text = f"{answer}\n키워드: {kw_str}" if kw_str else answer
+        if kw_str:
+            answer_text = f"{answer}\n키워드: {kw_str}"
+        elif category:
+            # Type 2 has no keywords — append category as fallback context
+            answer_text = f"{answer}\n카테고리: {category}"
+        else:
+            answer_text = answer
 
         return question_text, answer_text
 
