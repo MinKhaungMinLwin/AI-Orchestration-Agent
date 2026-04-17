@@ -1029,30 +1029,31 @@ class StreamingMultiAgentCoordinator:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
         # Run UI Template Agent when:
-        # 1. The LAST agent in the chain called tools with relevant data, OR
-        # 2. Only one agent ran and it called tools
-        # NOTE: Do NOT run UI Template Agent when the last agent called NO tools.
-        # In multi-agent chains (e.g., DISCOVERY → TRANSACTION), if the last agent (Transaction)
-        # only produced text (asking for qty, store selection), the text is already streamed.
-        # Running UI Template would override it with an irrelevant product card from Discovery's tools.
+        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools), OR
+        # 2. Domain agents responded but called NO tools (pure text — UI Template generates quickReply)
+        # NOTE: FE only renders "data" events (not "token"), so UI Template Agent must ALWAYS run
+        # to produce a data event for the FE to display.
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
             for item in accumulated_tool_data
         )
         _has_agent_response = bool(accumulated_context)
+        _no_tools_called = not accumulated_tool_data
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
-        if _has_agent_response and _has_relevant_tool_data and last_agent_called_tools:
+        if _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
             trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
             logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
             # Try code-based template mapping first (no LLM call)
+            # Skip code mapper when last agent called no tools (e.g., Transaction asking for qty after Discovery found product)
+            # — the product card from Discovery's tools would override Transaction's text question
             from services.tstation.template_mapper import try_build_template
             # Use the LAST agent's response as assistantResponse (e.g., Transaction's qty question over Discovery's "found product")
             assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
             tool_names = [e.get("tool", "") for e in accumulated_tool_data] if accumulated_tool_data else []
-            logger.info(f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}")
-            code_template = try_build_template(accumulated_tool_data, assistant_text) if accumulated_tool_data else None
+            logger.info(f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}, last_agent_called_tools={last_agent_called_tools}")
+            code_template = try_build_template(accumulated_tool_data, assistant_text) if accumulated_tool_data and last_agent_called_tools else None
             logger.info(f"[COORDINATOR] Template mapper result: {'template=' + code_template.get('template', '') if code_template else 'None (LLM fallback)'}")
 
             if code_template:
@@ -1081,7 +1082,8 @@ class StreamingMultiAgentCoordinator:
                 # (avoid confusing UI Template Agent with routing next_action instructions)
                 ui_messages.extend(original_messages)
 
-                # 3. Append accumulated context
+                # 3. Append ALL accumulated context (multi-agent chains may have multiple entries)
+                # e.g., Discovery found product + Transaction asked for quantity
                 for prev_domain, content in accumulated_context.items():
                     if content and content.strip():
                         ui_messages.append({
@@ -1092,7 +1094,6 @@ class StreamingMultiAgentCoordinator:
                             "role": "user",
                             "content": "Continue with next step"
                         })
-                        break
 
                 # 4. Append tool data summary LAST
                 # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
