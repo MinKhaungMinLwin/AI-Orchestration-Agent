@@ -1008,15 +1008,20 @@ class StreamingMultiAgentCoordinator:
                 if next_domain:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
-        # Run UI Template Agent with accumulated data
-        # Only trigger when QnA tool was called OR non-support (FAQ) tools produced data
+        # Run UI Template Agent when:
+        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools), OR
+        # 2. Domain agents responded but called NO tools (pure text response — agent decides if template needed)
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
             for item in accumulated_tool_data
         )
-        if accumulated_tool_data and (_has_qna or _has_non_support_data):
-            logger.info(f"[COORDINATOR] Running UI Template Agent with {len(accumulated_tool_data)} tool outputs")
+        _has_agent_response = bool(accumulated_context)
+        _no_tools_called = not accumulated_tool_data
+        _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
+        if _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
+            trigger_reason = "no tools called" if _no_tools_called else f"{len(accumulated_tool_data)} tool outputs"
+            logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
             # Build context for UI Template Agent
             # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context | accumulated_tool_data LAST
@@ -1590,7 +1595,7 @@ class TStationChatServiceV2:
             else:
                 # No factual claims (greetings, FAQ): skip QC, pass draft directly
                 draft_response = _sanitize_response(draft_response)
-                yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
+                # Yield message event for history sync (not duplicate with token - different purpose)
                 if original_message_events:
                     final_msg_event = original_message_events[-1]
                     final_msg_event["content"] = draft_response
