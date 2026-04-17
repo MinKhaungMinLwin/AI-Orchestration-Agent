@@ -24,7 +24,7 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.agent import stream_qc
+from services.tstation.agents.g_qc_agent.agent import invoke_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 
 logger = logging.getLogger(__name__)
@@ -1008,15 +1008,20 @@ class StreamingMultiAgentCoordinator:
                 if next_domain:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
-        # Run UI Template Agent with accumulated data
-        # Only trigger when QnA tool was called OR non-support (FAQ) tools produced data
+        # Run UI Template Agent when:
+        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools), OR
+        # 2. Domain agents responded but called NO tools (pure text response — agent decides if template needed)
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
             for item in accumulated_tool_data
         )
-        if accumulated_tool_data and (_has_qna or _has_non_support_data):
-            logger.info(f"[COORDINATOR] Running UI Template Agent with {len(accumulated_tool_data)} tool outputs")
+        _has_agent_response = bool(accumulated_context)
+        _no_tools_called = not accumulated_tool_data
+        _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
+        if _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
+            trigger_reason = "no tools called" if _no_tools_called else f"{len(accumulated_tool_data)} tool outputs"
+            logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
             # Build context for UI Template Agent
             # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context | accumulated_tool_data LAST
@@ -1083,6 +1088,7 @@ class StreamingMultiAgentCoordinator:
             # Stream from UI Template Agent (use stream_template to get data events)
             for event in ui_template_subagent.stream_template(ui_messages):
                 event["source_domain"] = "ui_template"
+                # FIX: reverted the yield statement back to yield event
                 yield event
 
             # Yield UI Template Agent completion event
@@ -1426,8 +1432,8 @@ class TStationChatServiceV2:
                         elif event.get("type") == "message":
                             last_message_content = event.get("content", "")
 
-            # SAFETY NET: Fallback to message content if no tokens were emitted
-            if not final_content and last_message_content:
+            # FIX: Always prefer the final message event, because it contains the QC-corrected text!
+            if last_message_content:
                 final_content = last_message_content
 
             return TStationChatResponse(content=final_content)
@@ -1476,10 +1482,12 @@ class TStationChatServiceV2:
         for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id, tool_context=tool_context):
             event_type = event.get("type")
             
-            # --- INTERCEPT TOKENS (Draft Response) ---
+            # --- INTERCEPT TOKENS (Draft Response & TTFT Fix) ---
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
+                # FIX: Yield immediately so the UI isn't blocked!
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
                 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
@@ -1561,48 +1569,25 @@ class TStationChatServiceV2:
 
                 final_qc_text = ""
                 try:
-                    qc_stream = stream_qc(QC_LLM, user_query, draft_response, source_data_str)
-                    buffer = ""
-                    is_pass = None  # None = undecided, True = PASS, False = correction
+                    # FIX: Bulk invoke instead of streaming
+                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str)
 
-                    for chunk in qc_stream:
-                        if is_pass is None:
-                            # Buffering phase: collect first ~10 chars to detect PASS
-                            buffer += chunk
-                            if len(buffer.strip()) >= 4:
-                                if buffer.strip().upper() == "PASS":
-                                    is_pass = True
-                                    break
-                                else:
-                                    is_pass = False
-                                    # Flush buffer as first correction tokens
-                                    yield f"data: {json.dumps({'type': 'token', 'content': buffer}, ensure_ascii=False)}\n\n"
-                                    final_qc_text = buffer
-                        else:
-                            # Streaming phase: correction mode
-                            yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
-                            final_qc_text += chunk
-
-                    # Handle edge case: buffer never reached 4 chars
-                    if is_pass is None:
-                        is_pass = buffer.strip().upper() == "PASS"
-
-                    if is_pass:
+                    if qc_result.strip().upper() == "PASS":
                         final_qc_text = draft_response
-                        yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
                         logger.info("[QC_AGENT] PASS — draft is factually correct")
                     else:
+                        final_qc_text = qc_result
                         logger.info("[QC_AGENT] Corrected draft response")
 
                 except Exception as e:
                     logger.exception(f"[QC_AGENT] Failed: {e}")
                     final_qc_text = draft_response  # fallback
-                    yield f"data: {json.dumps({'type': 'token', 'content': final_qc_text}, ensure_ascii=False)}\n\n"
 
                 # Sanitize: replace internal jargon with user-friendly fallback
                 final_qc_text = _sanitize_response(final_qc_text)
 
-                # 3. HISTORY SYNC: Yield the intercepted message event with QC'd content
+                # 3. HISTORY & UI SYNC: Yield the final message event with QC'd content
+                # The frontend MUST use this event to overwrite the fast-streamed draft
                 if original_message_events:
                     final_msg_event = original_message_events[-1]
                     final_msg_event["content"] = final_qc_text
@@ -1610,7 +1595,7 @@ class TStationChatServiceV2:
             else:
                 # No factual claims (greetings, FAQ): skip QC, pass draft directly
                 draft_response = _sanitize_response(draft_response)
-                yield f"data: {json.dumps({'type': 'token', 'content': draft_response}, ensure_ascii=False)}\n\n"
+                # Yield message event for history sync (not duplicate with token - different purpose)
                 if original_message_events:
                     final_msg_event = original_message_events[-1]
                     final_msg_event["content"] = draft_response
