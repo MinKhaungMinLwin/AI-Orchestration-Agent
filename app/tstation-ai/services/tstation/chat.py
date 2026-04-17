@@ -532,11 +532,12 @@ DECISION RULES
 TRANSACTION if user wants:
 - "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "{{goods_no}} 가격" - format: G + 12 digits)
 - **Price comparison** between multiple products ("비교", "둘 중 어느 게 더 싸", "which is cheaper", "가격 비교")
-- "In stock?", "available?" for specific product at specific store
-- Check logistics stock (warehouse availability)
+- "In stock?", "available?" for product with KNOWN goods_no at specific store
+- Check logistics stock (warehouse availability) with KNOWN goods_no
 - Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
 - Find stores by NAME (e.g., "find Hankook store")
-- Check store inventory (which stores have this tire)
+- Check store inventory (which stores have this tire) with KNOWN goods_no
+  ⚠️ If product is specified by NAME (not goods_no), route DISCOVERY → TRANSACTION to resolve goods_no first
 - "Buy", "purchase", "order", "checkout" with goods_no known
 - Track existing order (provide order number)
 - "장바구니에 담아줘", "장바구니 저장" (save to cart)
@@ -558,10 +559,14 @@ DISCOVERY if user wants:
 - **Event/Deal information** ("이벤트 알려줘", "기획전 정보", "현재 진행중인 이벤트")
 Examples: "Find tires called Ventus", "What tires fit my car {{vehicle_number}}?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles", "이벤트 알려줘", "기획전 정보"
 
-⚠️ CRITICAL DISTINCTION for price queries:
+⚠️ CRITICAL DISTINCTION — goods_no known vs unknown:
 - "{{goods_no}} 가격" (e.g., "GXXXXXXXXXXXX") → goods_no KNOWN → TRANSACTION only
+- "{{goods_no}} 재고 확인" → goods_no KNOWN → TRANSACTION only
 - "Dynapro HPX 가격" → goods_no NOT known → DISCOVERY, TRANSACTION
 - "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY, TRANSACTION
+- "벤투스 S2 AS 2354519 한남점 재고확인" → goods_no NOT known → DISCOVERY, TRANSACTION
+- "스콜피온제로 강남점 재고" → goods_no NOT known → DISCOVERY, TRANSACTION
+  ⚠️ Product specified by NAME (not G+12digits goods_no) → ALWAYS needs DISCOVERY first to resolve goods_no
 
 SUPPORT if user wants:
 - Tire replacement guidance (when to replace, air pressure, maintenance)
