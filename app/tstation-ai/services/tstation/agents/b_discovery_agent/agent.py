@@ -50,6 +50,18 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - If user mentions a DIFFERENT car model → ignore confirmed tire_size, re-lookup for new vehicle.
 
 
+## INPUT NORMALIZATION
+⚠️ search_car_model_groups_tool accepts Korean car model names only. Before calling it, translate any English/romanized name to Korean.
+- "Sonata" → "소나타" | "Grandeur" → "그랜저" | "Tucson" → "투싼"
+- "Palisade" → "팰리세이드" | "Santa Fe" → "싼타페" | "Avante" → "아반떼"
+- "K5" → "K5" | "K7" → "K7" | "K8" → "K8" | "K9" → "K9" (model codes keep as-is)
+- "Carnival" → "카니발" | "Sportage" → "스포티지" | "Sorento" → "쏘렌토"
+- General rule: English/romanized Hyundai/Kia/Genesis model names → Korean equivalents
+
+⚠️ search_product_tool accepts English product names. Before calling it, translate Korean → English.
+- "벤투스" → "Ventus" | "키네르기" → "Kinergy" | "옵티모" → "Optimo" | "다이나프로" → "Dynapro"
+
+
 ## TOOLS
 
 | Tool | Use when |
