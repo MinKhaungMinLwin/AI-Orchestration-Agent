@@ -1029,73 +1029,89 @@ class StreamingMultiAgentCoordinator:
             trigger_reason = "no tools called" if _no_tools_called else f"{len(accumulated_tool_data)} tool outputs"
             logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
-            # Build context for UI Template Agent
-            # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context | accumulated_tool_data LAST
-            ui_messages = []
+            # Try code-based template mapping first (no LLM call)
+            from services.tstation.template_mapper import try_build_template
+            assistant_text = next((c for c in accumulated_context.values() if c and c.strip()), "")
+            code_template = try_build_template(accumulated_tool_data, assistant_text) if accumulated_tool_data else None
 
-            # 1. slot_context FIRST
-            if slot_context:
+            if code_template:
+                # Code mapper handled it — yield template event directly, skip LLM UI Template Agent
+                yield {
+                    "type": "sub-agent",
+                    "agent": "[UI TEMPLATE AGENT]",
+                    "status": "start",
+                }
+                code_template["source_domain"] = "ui_template"
+                yield code_template
+            else:
+                # Fall through to LLM UI Template Agent for unmapped templates
+                # Build context for UI Template Agent
+                # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context | accumulated_tool_data LAST
+                ui_messages = []
+
+                # 1. slot_context FIRST
+                if slot_context:
+                    ui_messages.append({
+                        "role": "system",
+                        "content": slot_context,
+                    })
+
+                # 2. Original messages WITHOUT conversation context injection
+                # (avoid confusing UI Template Agent with routing next_action instructions)
+                ui_messages.extend(original_messages)
+
+                # 3. Append accumulated context
+                for prev_domain, content in accumulated_context.items():
+                    if content and content.strip():
+                        ui_messages.append({
+                            "role": "assistant",
+                            "content": str(content)
+                        })
+                        ui_messages.append({
+                            "role": "user",
+                            "content": "Continue with next step"
+                        })
+                        break
+
+                # 4. Append tool data summary LAST
+                # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
+                # The actual data is at item["data"]["data"] (nested inside API response wrapper)
+                tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
                 ui_messages.append({
-                    "role": "system",
-                    "content": slot_context,
+                    "role": "assistant",
+                    "content": (
+                        "[Accumulated tool data for UI rendering]\n"
+                        "Note: Each item has structure {\"tool\": \"...\", \"data\": {\"status\": \"...\", \"data\": {ACTUAL_DATA}}}.\n"
+                        "Extract ACTUAL_DATA from item[\"data\"][\"data\"] for template rendering.\n\n"
+                        f"{tool_summary}"
+                    )
+                })
+                ui_messages.append({
+                    "role": "user",
+                    "content": "Help me generate Template UI"
                 })
 
-            # 2. Original messages WITHOUT conversation context injection
-            # (avoid confusing UI Template Agent with routing next_action instructions)
-            ui_messages.extend(original_messages)
+                # Log UI Template Agent messages
+                logger.info(f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}")
 
-            # 3. Append accumulated context
-            for prev_domain, content in accumulated_context.items():
-                if content and content.strip():
-                    ui_messages.append({
-                        "role": "assistant",
-                        "content": str(content)
-                    })
-                    ui_messages.append({
-                        "role": "user",
-                        "content": "Continue with next step"
-                    })
-                    break
+                # Yield UI Template Agent start event
+                yield {
+                    "type": "sub-agent",
+                    "agent": "[UI TEMPLATE AGENT]",
+                    "status": "start",
+                }
 
-            # 4. Append tool data summary LAST
-            # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
-            # The actual data is at item["data"]["data"] (nested inside API response wrapper)
-            tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
-            ui_messages.append({
-                "role": "assistant",
-                "content": (
-                    "[Accumulated tool data for UI rendering]\n"
-                    "Note: Each item has structure {\"tool\": \"...\", \"data\": {\"status\": \"...\", \"data\": {ACTUAL_DATA}}}.\n"
-                    "Extract ACTUAL_DATA from item[\"data\"][\"data\"] for template rendering.\n\n"
-                    f"{tool_summary}"
-                )
-            })
-            ui_messages.append({
-                "role": "user",
-                "content": "Help me generate Template UI"
-            })
+                # Yield waiting event while UI Template Agent processes
+                yield {
+                    "type": "waiting",
+                    "agent": "[UI TEMPLATE AGENT]",
+                }
 
-            # Log UI Template Agent messages
-            logger.info(f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}")
-
-            # Yield UI Template Agent start event
-            yield {
-                "type": "sub-agent",
-                "agent": "[UI TEMPLATE AGENT]",
-                "status": "start",
-            }
-
-            # Yield waiting event while UI Template Agent processes
-            yield {
-                "type": "waiting",
-                "agent": "[UI TEMPLATE AGENT]",
-            }
-
-            # Stream from UI Template Agent (use stream_template to get data events)
-            for event in ui_template_subagent.stream_template(ui_messages):
-                event["source_domain"] = "ui_template"
-                # FIX: reverted the yield statement back to yield event
-                yield event
+                # Stream from UI Template Agent (use stream_template to get data events)
+                for event in ui_template_subagent.stream_template(ui_messages):
+                    event["source_domain"] = "ui_template"
+                    # FIX: reverted the yield statement back to yield event
+                    yield event
 
             # Yield UI Template Agent completion event
             yield {
