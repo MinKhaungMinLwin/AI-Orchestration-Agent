@@ -19,24 +19,28 @@ flowchart TB
     subgraph AI["tstation-ai FastAPI"]
       EP[Chat Endpoint<br/>POST /tstation/messages/chat]
       SESS[Session APIs<br/>/tstation/messages/sessions<br/>/history/{session_id}]
-      CS[TStationChatServiceV2]
-      CO[StreamingMultiAgentCoordinator]
-      QC[QC Agent]
-      UT[UI Template Agent]
+      CS[TStationChatServiceV2<br/>classify_multi_intent → stream → QC]
       HS[ChatHistoryService]
-      EP --> CS --> CO
+      EP --> CS
       SESS --> HS
-      CO --> QC
-      CO --> UT
       CS --> HS
     end
 
-    subgraph Agents["Multi-Agent Layer"]
-      L[a_leading_agent]
+    subgraph Agents["Multi-Agent Layer (orchestrated by Coordinator)"]
+      CO[StreamingMultiAgentCoordinator<br/>decide_next_action]
+      L[a_leading_agent<br/>no tools]
       D[b_discovery_agent]
       T[c_transaction_agent]
       S[e_support_agent]
+      UT[f_ui_template_agent]
+      CO -->|domain=LEADING| L
+      CO -->|domain=DISCOVERY| D
+      CO -->|domain=TRANSACTION| T
+      CO -->|domain=SUPPORT| S
+      CO -->|after agents, if tool data| UT
     end
+
+    QC[g_qc_agent<br/>fact-check draft vs tools]
 
     subgraph External
       LLM[LiteLLM / AI Gateway]
@@ -44,99 +48,125 @@ flowchart TB
       QDRANT[(Qdrant: RAG)]
       BE[tstation-be APIs via OpenAPI client]
       ORACLE[(Oracle DB)]
-      LANG[Langfuse config/tracing]
+      LANG[Langfuse<br/>global config/tracing]
+    end
+
+    subgraph Ingestion["tstation-ingestion"]
+      ING[Ingestion Service]
     end
 
     UI -->|POST /api/tstation/messages/chat SSE| EP
     UI -->|GET/DELETE session APIs| SESS
     EP -->|SSE: token/tool/data/message + DONE| UI
-    CO --> L
-    CO --> D
-    CO --> T
-    CO --> S
+
+    CS -->|1. classify + inject context| CO
+    CS -->|3. fact-check after CO done| QC
 
     L --> LLM
     D --> LLM
     T --> LLM
     S --> LLM
+    UT --> LLM
+    QC --> LLM
 
     HS --> REDIS
-    D --> QDRANT
+    S --> QDRANT
     D --> BE
     T --> BE
     S --> BE
     BE --> ORACLE
-    CS --> LANG
+    AI -.->|global init| LANG
+
+    ING --> QDRANT
 ```
 
-## 2) Sequence Diagram
+## 2) Sequence Diagram — Full Agent Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User/UI
-    participant API as /tstation/messages/chat
-    participant V2 as TStationChatServiceV2
+    participant API as POST /tstation/messages/chat
     participant R as Redis
-    participant C as Coordinator
-    participant D as Discovery Agent
-    participant T as Transaction Agent
-    participant S as Support Agent
-    participant UT as UI Template Agent
+    participant V2 as TStationChatServiceV2
+    participant CO as StreamingMultiAgentCoordinator
+    participant L as a_leading_agent
+    participant D as b_discovery_agent
+    participant T as c_transaction_agent
+    participant S as e_support_agent
+    participant UT as f_ui_template_agent
     participant B as tstation-be APIs
-    participant Q as QC Agent
+    participant QDRANT as Qdrant RAG
+    participant QC as g_qc_agent
 
-    U->>API: Chat request (message, session, token, stream)
-    API->>R: save user message/history
-    API->>V2: chat(request)
-    V2->>V2: set_tstation_be_token + PII guardrail
+    U->>API: Chat request (message, session, access_token, stream)
+    API->>R: save user message to Redis history
+    API->>V2: TStationChatServiceV2.chat(request)
+
+    Note over V2: set_tstation_be_token → PII guardrail check
     V2->>R: load template_data + slots + tool_context
     V2->>R: merge/save slots
-    V2->>C: classify_multi_intent + start stream
 
-    alt Intent includes discovery (tire search, compatibility, recommendation)
-        C->>D: stream(messages + context)
-        D->>B: search_product / compatibility / recommendations / description
-        B-->>D: product data + goods_no + tire_size
-        D-->>C: tool events + draft response
-        C->>R: save slot(goods_no,tire_size,shop_id) + tool context
+    V2->>CO: classify_multi_intent(messages)
+    CO-->>V2: ordered domain list e.g. [DISCOVERY, TRANSACTION]
+    Note over V2: inject CONVERSATION CONTEXT into last user message
+
+    V2->>CO: stream(messages, domains, slot_context, tool_context)
+
+    alt domain = LEADING (greeting / unclear intent / small talk)
+        CO->>L: stream(enriched_messages)
+        Note over L: No tools — pure LLM conversational response
+        L-->>CO: token stream + message event
     end
 
-    C->>C: decide_next_action (STOP/CONTINUE)
-    alt CONTINUE to transaction (price/inventory/store/purchase)
-        C->>T: stream(handover context from discovery)
-        T->>B: final_price / inventory / nearby_stores / quick_order or save_to_cart
+    alt domain = DISCOVERY (product search, recommendation, compatibility)
+        CO->>D: stream(enriched_messages)
+        D->>B: search_product / check_compatibility / get_recommendations / get_description / get_events / get_deals / compare_discount / search_youtube
+        B-->>D: product data (goods_no, tire_size, etc.)
+        D-->>CO: tool events + token stream + message event
+        CO->>R: save slot(goods_no, tire_size, shop_id) from tool output
+    end
+
+    Note over CO: decide_next_action() — LLM decides STOP or CONTINUE after first agent
+    alt CONTINUE → TRANSACTION
+        CO->>T: stream(enriched_messages + handover context + accumulated_tool_data)
+        T->>B: get_final_price / get_logistics_inventory / get_store_inventory / get_nearby_stores / quick_order / save_to_cart
         B-->>T: commerce data + order/cart result
-        T-->>C: unified commerce response
-        C->>R: update tool context
+        T-->>CO: tool events + token stream + message event
+        CO->>R: update tool context
     end
 
-    alt Support request (warranty/FAQ/escalation)
-        C->>S: stream()
-        S->>B: faq/escalate
+    alt domain = SUPPORT (FAQ / warranty / escalation)
+        CO->>S: stream(enriched_messages)
+        S->>B: get_faq / escalate
+        S->>QDRANT: search_faq_rag_tool (RAG)
         B-->>S: support data
-        S-->>C: support response
+        S-->>CO: tool events + token stream + message event
+        Note over CO: Support domain → always STOP, skip decide_next_action
     end
 
-    alt has non-support tool data or qna transfer
-        C->>UT: stream_template(ui messages)
-        UT-->>C: data events for frontend templates
+    alt tool data exists AND (non-support tools OR qna transfer)
+        Note over CO,UT: V2 emits waiting event before UT starts
+        CO->>UT: stream_template(ui_messages + accumulated_tool_data)
+        UT-->>CO: data events (UI templates for frontend)
     end
 
-    C->>Q: fact-check draft vs tool outputs
-    alt QC PASS
-        Q-->>C: PASS (keep draft)
-    else QC CORRECT
-        Q-->>C: corrected answer stream
+    CO-->>V2: all events (tokens intercepted by V2; tool/data/sub-agent passed through)
+
+    Note over V2: QC Layer — called by V2, NOT by Coordinator
+    alt tool data exists AND draft has factual claims
+        V2->>QC: stream_qc(user_query, draft_response, source_data)
+        alt QC PASS
+            QC-->>V2: "PASS" → keep draft as final
+        else QC CORRECT
+            QC-->>V2: corrected token stream → override draft
+        end
+    else no factual claims (greeting, FAQ only)
+        Note over V2: skip QC — pass draft directly
     end
 
-    C-->>U: SSE: agent_flow/sub-agent/tool/token/data/message
-    C-->>U: final {"type":"DONE"} + [DONE]
+    V2->>R: save tool_context_items for next turn
+    V2-->>U: SSE: agent_flow / sub-agent / tool / token / data / message events
+    V2-->>U: {"type": "DONE"}
+    V2-->>U: data: [DONE]
 ```
-
-## Validation Notes Based on Code
-
-- The repo currently does not contain the actual running source code for `app/tstation-be`; the AI service calls the BE via a generated OpenAPI client.
-- The actual chat endpoint is `/tstation/messages/chat` in `api/tstation/chat_message.py` (mounted by `api/router.py`).
-- The UI demo currently has differences in the base URL between modules (`chat.py` uses `/api`, while `sessions.py` does not), so the diagram reflects the primary chat calling path.
-- The sequence has been updated to include the `UI Template Agent` step and the finalize stream (`DONE` + `[DONE]`), consistent with `_stream_response_multi()`.
