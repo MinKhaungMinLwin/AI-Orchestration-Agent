@@ -113,17 +113,44 @@ class EmbeddingService:
 
         try:
             if self.provider == "openai":
-                # Remove newlines for better results
-                texts_cleaned = [text.replace("\n", " ") for text in texts]
+                # Remove newlines for better results, strip whitespace
+                texts_cleaned = [text.replace("\n", " ").strip() for text in texts]
+
+                # Track empty-string positions — OpenAI rejects empty inputs
+                empty_indices = {i for i, t in enumerate(texts_cleaned) if not t}
+                if empty_indices:
+                    logger.warning(
+                        f"embed_texts: {len(empty_indices)} empty string(s) at indices "
+                        f"{sorted(empty_indices)} — will return zero vectors for those positions"
+                    )
+
+                non_empty_texts = [t for i, t in enumerate(texts_cleaned) if i not in empty_indices]
+
+                if not non_empty_texts:
+                    dim = self.get_embedding_dimension()
+                    return [[0.0] * dim for _ in texts]
 
                 response = self.client.embeddings.create(
-                    input=texts_cleaned,
+                    input=non_empty_texts,
                     model=self.model,
                 )
+                api_embeddings = [item.embedding for item in response.data]
 
-                embeddings = [item.embedding for item in response.data]
-                logger.info(f"Generated embeddings for {len(texts)} texts via OpenAI")
-                return embeddings
+                # Reconstruct full list, inserting zero vectors for empty positions
+                dim = len(api_embeddings[0])
+                result: list[list[float]] = []
+                api_iter = iter(api_embeddings)
+                for i in range(len(texts)):
+                    if i in empty_indices:
+                        result.append([0.0] * dim)
+                    else:
+                        result.append(next(api_iter))
+
+                logger.info(
+                    f"Generated embeddings for {len(texts)} texts via OpenAI "
+                    f"({len(empty_indices)} skipped as empty)"
+                )
+                return result
 
             elif self.provider == "cohere":
                 response = self.client.embed(
