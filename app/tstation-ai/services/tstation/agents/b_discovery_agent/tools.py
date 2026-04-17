@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
@@ -107,6 +107,45 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 
+def _fetch_description(goods_no: str) -> dict:
+    """Fetch product description for a single goods_no, return merged fields or empty dict on failure."""
+    try:
+        response = get_product_description(client=get_client(), goods_no=goods_no)
+        if response.parsed is None:
+            return {}
+        desc = _to_dict(response.parsed)
+        return {
+            "pc_prod_remark_desc": desc.get("pc_prod_remark_desc"),
+            "pc_prod_tech_desc": desc.get("pc_prod_tech_desc"),
+            "slogan": desc.get("slogan"),
+            "images": desc.get("images"),
+            "rating": desc.get("rating"),
+            "reviews": desc.get("reviews"),
+        }
+    except Exception:
+        logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)
+        return {}
+
+
+def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
+    """Parallel-fetch descriptions for each item and merge into item dicts."""
+    if not items:
+        return items
+
+    goods_nos = [item.get("goods_no") for item in items if item.get("goods_no")]
+    if not goods_nos:
+        return items
+
+    desc_map: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 5)) as executor:
+        futures = {executor.submit(_fetch_description, gno): gno for gno in goods_nos}
+        for future in as_completed(futures):
+            gno = futures[future]
+            desc_map[gno] = future.result()
+
+    return [{**item, **desc_map.get(item.get("goods_no"), {})} for item in items]
+
+
 @tool
 def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
     """
@@ -198,7 +237,10 @@ def search_product_tool(keyword: str, limit: int = 20, size: str | None = None, 
                 response.content.decode(errors="ignore") or "Failed to search products"
             )
         logger.info("[TOOL][search_product_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = _enrich_items_with_descriptions(data["items"])
+        return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
         return _error_response(None, str(e), "Failed to search products")
@@ -527,7 +569,10 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, bran
                 response.content.decode(errors="ignore") or "Failed to get product recommendations"
             )
         logger.info("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = _enrich_items_with_descriptions(data["items"])
+        return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
         return _error_response(None, str(e), "Failed to get product recommendations")

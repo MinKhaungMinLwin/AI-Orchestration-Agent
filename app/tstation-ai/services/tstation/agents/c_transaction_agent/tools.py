@@ -1,4 +1,7 @@
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
@@ -52,6 +55,79 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 
 def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
+
+
+def _next_cal_days(n: int = 3) -> list[str]:
+    """Return today + next n days as YYYYMMDD strings, using project timezone (TZ_OFFSET env)."""
+    tz_offset = int(os.getenv("TZ_OFFSET", "0"))
+    tz = timezone(timedelta(hours=tz_offset))
+    today = datetime.now(tz).date()
+    return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(0, n + 1)]
+
+
+def _fetch_store_availability(shop_id: str, cal_days: list[str]) -> dict:
+    """Fetch store detail for multiple cal_days, return dict keyed by cal_day."""
+    availability: dict[str, Any] = {}
+    for cal_day in cal_days:
+        try:
+            response = get_store_detail(client=get_client(), shop_id=shop_id, cal_day=cal_day)
+            if response.parsed is not None:
+                detail = _to_dict(response.parsed)
+                availability[cal_day] = detail.get("time_slots") or detail.get("available_times") or detail
+        except Exception:
+            logger.warning("[_fetch_store_availability] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
+    return availability
+
+
+def _enrich_stores_with_availability(stores: list[dict]) -> list[dict]:
+    """Parallel-fetch 3-day availability for each store and merge into store dicts."""
+    if not stores:
+        return stores
+
+    shop_ids = [s.get("shop_id") for s in stores if s.get("shop_id")]
+    if not shop_ids:
+        return stores
+
+    cal_days = _next_cal_days(3)
+    avail_map: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(len(shop_ids), 5)) as executor:
+        futures = {executor.submit(_fetch_store_availability, sid, cal_days): sid for sid in shop_ids}
+        for future in as_completed(futures):
+            sid = futures[future]
+            avail_map[sid] = future.result()
+
+    return [{**store, "availability": avail_map.get(store.get("shop_id"), {})} for store in stores]
+
+
+def _fetch_order_detail(ord_no: str) -> dict:
+    """Fetch order delivery detail for a single ord_no, return detail dict or empty on failure."""
+    try:
+        response = get_order_delivery(client=get_client(), query_no=ord_no)
+        if response.parsed is None:
+            return {}
+        return _to_dict(response.parsed)
+    except Exception:
+        logger.warning("[_fetch_order_detail] Failed for ord_no=%s", ord_no)
+        return {}
+
+
+def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
+    """Parallel-fetch order detail for each order and merge into order dicts."""
+    if not orders:
+        return orders
+
+    ord_nos = [o.get("ord_no") for o in orders if o.get("ord_no")]
+    if not ord_nos:
+        return orders
+
+    detail_map: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(len(ord_nos), 5)) as executor:
+        futures = {executor.submit(_fetch_order_detail, ono): ono for ono in ord_nos}
+        for future in as_completed(futures):
+            ono = futures[future]
+            detail_map[ono] = future.result()
+
+    return [{**order, "detail": detail_map.get(order.get("ord_no"), {})} for order in orders]
 
 
 # =====================================================
@@ -357,7 +433,10 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
                 response.content.decode(errors="ignore") or "Failed to get nearby stores"
             )
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("stores"), list):
+            data["stores"] = _enrich_stores_with_availability(data["stores"])
+        return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_nearby_stores_tool] Failed")
         return _error_response(None, str(e), "Failed to get nearby stores")
@@ -454,7 +533,10 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
                 response.content.decode(errors="ignore") or "Failed to get store list"
             )
         logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("stores"), list):
+            data["stores"] = _enrich_stores_with_availability(data["stores"])
+        return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_store_list_tool] Failed")
         return _error_response(None, str(e), "Failed to get store list")
@@ -700,7 +782,10 @@ def get_orders_of_user_tool():
                 response.content.decode(errors="ignore") or "Failed to retrieve order list"
             )
         logger.info("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("orders"), list):
+            data["orders"] = _enrich_orders_with_detail(data["orders"])
+        return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_orders_of_user_tool] Failed")
         return _error_response(None, str(e), "Failed to retrieve order list")
