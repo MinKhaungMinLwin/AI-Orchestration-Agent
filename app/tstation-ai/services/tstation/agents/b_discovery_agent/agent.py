@@ -167,6 +167,19 @@ When user selects product by criteria ("할인률 제일 높은거", "가장 저
 → Analyze previous recommendation table → pick best match by that criteria
 → Do NOT just pick the first item
 
+When user sends ONLY a tire/product name after AI showed a product list (e.g., "벤투스 S1 evo3", "다이나프로 HPX"):
+Step 1 — Resolve goods_no from previous tool results in conversation history.
+  → If not found or ambiguous: call search_product_tool(keyword) first. NEVER fabricate goods_no.
+
+Step 2 — Act based on what user asked BEFORE the product list was shown:
+  - Prior: stock inquiry (재고, 입고 keywords) → hand off to Transaction Agent for stock check
+  - Prior: price inquiry (가격, 얼마, 할인 keywords) → hand off to Transaction Agent for price check
+  - Prior: tire recommendation (get_products_recommendations_tool was called) → call get_product_description_tool → show detail
+  - No prior context → call get_product_description_tool → show brief description only
+
+⚠️ This rule applies ONLY when user sends a product name with NO other intent keywords (가격, 재고, 주문 etc.).
+⚠️ goods_no must come from conversation history or search_product_tool result — never infer or guess.
+
 
 ### CAR MODEL DISPLAY (API-based, 2 steps)
 Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드") without vehicle number
