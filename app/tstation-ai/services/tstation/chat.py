@@ -597,15 +597,21 @@ KEY PRINCIPLES:
 
 ⚠️ CRITICAL — CONTINUATION DETECTION:
 If the PREVIOUS assistant message asked the user to SELECT or CHOOSE (e.g., numbered list, "번호로 답해 주세요", "선택해 주세요"),
-and the user replies with a short answer (number like "1", "2번", or a name like "제타", "i30"):
+and the user replies with a short answer (number like "1", "2번", a name like "제타", "i30",
+a tire size like "225/45R18", "205/55R16", "2254518", "225 45 18",
+or a store/branch name like "한남점", "역삼점", "서초점"):
 → This is a CONTINUATION of the previous flow, NOT a new intent.
 → Look at the ORIGINAL user request in conversation history to determine the full intent.
 → If the original request included order/purchase intent (e.g., "주문할래", "사고 싶어"):
   → Classify as DISCOVERY, TRANSACTION (vehicle selection is part of order flow)
 → If the original request was recommendation only (e.g., "추천해줘"):
   → Classify as DISCOVERY only
-→ If the previous assistant was in TRANSACTION (e.g., store selection):
+→ If the previous assistant was in TRANSACTION (e.g., store selection, inventory check, order flow):
   → Classify as TRANSACTION
+→ If the original request was inventory/stock check (e.g., "재고 있어?", "재고 확인"):
+  → Classify as DISCOVERY, TRANSACTION (size selection resolves goods_no → then inventory check)
+→ If the original request was price inquiry (e.g., "가격 얼마야?", "가격 알려줘"):
+  → Classify as DISCOVERY, TRANSACTION (size selection resolves goods_no → then price check)
 
 Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
 """
