@@ -172,35 +172,6 @@ def list_location_tool(
 
 
 @tool
-def list_event_tool(
-    assistant_response: Annotated[str, "Message text to display with template"],
-    items: Annotated[list[dict], "List of events. Each: eventName (str), bannerImage (str), eventUrl (str), badge (str), period (str), actionLink (str), actionText (str)"],
-    metadata: Annotated[list[dict], "List of metadata objects. Each: eventId (str, required). Rule: REQUIRED — must be provided."],
-) -> dict:
-    """Render event list cards.
-
-    Args:
-        assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
-        items: List of event objects.
-        metadata: List of metadata objects with event IDs. Each contains:
-            - eventId (str): Event ID (from evt_no field in domain agent output).
-
-    Field Details:
-        - eventName (str): Event name (src: evt_nm). Rule: required, non-empty string.
-        - bannerImage (str): Banner image URL (src: bnr_img_url_addr). Rule: optional, may be relative path.
-        - eventUrl (str): Event detail page URL or path (src: evt_url_addr). Rule: optional.
-        - badge (str): Event badge name (src: evt_badge_nm). Rule: optional, string (e.g., "주유권증정").
-        - period (str): Event period (src: evt_strt_dtime ~ evt_end_dtime). Rule: optional, string (e.g., "2026-03-27 ~ 2026-04-30").
-        - actionLink (str): Action button link. Rule: optional, valid URL string.
-        - actionText (str): Action button text. Rule: optional, non-empty string (e.g., "자세히 보기").
-
-    Returns:
-        {"status": "success", "http_status": 200, "data": {"events": items, "assistantResponse": assistant_response, "metadata": metadata}}
-    """
-    return _success_response(200, {"events": items, "assistantResponse": assistant_response, "metadata": metadata})
-
-
-@tool
 def list_preview_youtube_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of videos. Each: title (str), thumbnailUrl (str), youtubeUrl (str), videoId (str)"],
