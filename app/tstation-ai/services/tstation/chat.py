@@ -1032,7 +1032,10 @@ class StreamingMultiAgentCoordinator:
             # Try code-based template mapping first (no LLM call)
             from services.tstation.template_mapper import try_build_template
             assistant_text = next((c for c in accumulated_context.values() if c and c.strip()), "")
+            tool_names = [e.get("tool", "") for e in accumulated_tool_data] if accumulated_tool_data else []
+            logger.info(f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}")
             code_template = try_build_template(accumulated_tool_data, assistant_text) if accumulated_tool_data else None
+            logger.info(f"[COORDINATOR] Template mapper result: {'template=' + code_template.get('template', '') if code_template else 'None (LLM fallback)'}")
 
             if code_template:
                 # Code mapper handled it — yield template event directly, skip LLM UI Template Agent
@@ -1501,15 +1504,21 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+        # Track whether a code-mapper-eligible tool was called — if so, suppress token streaming
+        # to avoid the "long text flashes then gets replaced by card" UX issue.
+        from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP
+        _suppress_tokens = False
+
         for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id, tool_context=tool_context):
             event_type = event.get("type")
-            
+
             # --- INTERCEPT TOKENS (Draft Response & TTFT Fix) ---
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
-                # FIX: Yield immediately so the UI isn't blocked!
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                # Suppress tokens if a code-mapper tool was called (card will replace text)
+                if not _suppress_tokens:
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
                 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
@@ -1521,6 +1530,9 @@ class TStationChatServiceV2:
             if event_type == "tool":
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 tool_name = event.get("tool", "Unknown")
+                # If this tool has a code mapper, suppress subsequent tokens
+                if tool_name in _TOOL_TEMPLATE_MAP:
+                    _suppress_tokens = True
                 input_data = event.get("input", {})
                 output_data = event.get("output", "")
                 source_parts = []
