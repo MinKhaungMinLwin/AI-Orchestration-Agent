@@ -1124,9 +1124,26 @@ class StreamingMultiAgentCoordinator:
                 }
 
                 # Stream from UI Template Agent (use stream_template to get data events)
+                ui_template_yielded_data = False
                 for event in ui_template_subagent.stream_template(ui_messages):
                     event["source_domain"] = "ui_template"
+                    if event.get("type") == "data":
+                        ui_template_yielded_data = True
                     yield event
+
+                # Fallback: if UI Template Agent produced no data event, generate quickReply
+                # so the FE (which only renders data events) has something to display
+                if not ui_template_yielded_data:
+                    logger.warning("[COORDINATOR] UI Template Agent produced no data event — generating fallback quickReply")
+                    yield {
+                        "type": "data",
+                        "template": "quickReply",
+                        "data": {
+                            "assistantResponse": assistant_text,
+                            "quickReplies": [],
+                        },
+                        "source_domain": "ui_template",
+                    }
 
             # Yield UI Template Agent completion event
             yield {
