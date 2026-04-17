@@ -1064,9 +1064,19 @@ class StreamingMultiAgentCoordinator:
                     f"{tool_summary}"
                 )
             })
+            # Extract original user message to help UI Template Agent infer correct template
+            original_user_text = ""
+            for msg in reversed(original_messages):
+                if msg.get("role") == "user":
+                    original_user_text = msg.get("content", "").strip()
+                    break
+
             ui_messages.append({
                 "role": "user",
-                "content": "Help me generate Template UI"
+                "content": (
+                    f"## USER REQUEST\n{original_user_text}\n\n"
+                    "Help me generate Template UI"
+                ),
             })
 
             # Log UI Template Agent messages
@@ -1085,10 +1095,12 @@ class StreamingMultiAgentCoordinator:
                 "agent": "[UI TEMPLATE AGENT]",
             }
 
+            # Signal UI that template data is about to arrive
+            yield {"type": "status", "status": "화면 구성 중..."}
+
             # Stream from UI Template Agent (use stream_template to get data events)
             for event in ui_template_subagent.stream_template(ui_messages):
                 event["source_domain"] = "ui_template"
-                # FIX: reverted the yield statement back to yield event
                 yield event
 
             # Yield UI Template Agent completion event

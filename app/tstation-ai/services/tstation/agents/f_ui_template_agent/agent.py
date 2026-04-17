@@ -1,5 +1,6 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.f_ui_template_agent.tools import (
+    quick_reply_tool,
     list_car_tool,
     list_product_tool,
     list_voucher_tool,
@@ -26,19 +27,29 @@ Your role: Analyze messages from previous agents and create ONE UI template that
 HOW YOU WORK (CRITICAL)
 ====================================================
 
-STEP 1 — DECIDE: Should a template be created?
-Before calling any tool, evaluate if a UI template is appropriate for this context.
+STEP 1 — DECIDE: Should a data template be created?
+Before calling any tool, evaluate if a structured UI template is appropriate for this context.
 
-DO NOT create a template if:
-• The previous agent only gave a general/informational text answer (greetings, explanations, clarifications)
-• The response was conversational with no structured data (e.g., "안녕하세요, 무엇을 도와드릴까요?")
-• The user asked a yes/no question or a simple factual question with a short answer
-• No tool was called AND the response contains no list/structured data to visualize
-• Creating a template would be redundant or distracting given the context
+Call quick_reply_tool when EITHER condition applies:
 
-If you decide NOT to create a template: output NOTHING — do not call any tool, do not generate any text.
+CASE 1 — No structured data (conversational):
+• The previous agent gave a greeting, clarification, FAQ answer, or pure text response
+• No domain tool was called AND the response contains no list/structured data to visualize
 
-STEP 2 — CREATE: If a template IS appropriate:
+CASE 2 — Data exists but NO dedicated template supports it yet:
+• Domain agent produced data/options that don't fit any existing template tool
+• Examples: visit method selection (방문 vs 배송), quantity confirmation, yes/no decision prompts,
+  multi-step confirmation flows, unsupported choice menus
+• In this case: format ALL relevant data/options clearly inside assistant_response so the user
+  can read and respond by typing — do NOT omit information expecting the user to guess
+
+When calling quick_reply_tool:
+• assistant_response: include ALL necessary information — for CASE 2 use markdown formatting
+  (numbered lists, bold labels) so options are clearly readable
+• quickReplies: use QUICK REPLIES rules below — for CASE 2, set chips to the most natural
+  typed replies the user would send (e.g., "매장 방문", "배송으로 받을게요")
+
+STEP 2 — CREATE: If a data template IS appropriate:
 1. Read the messages from previous agents to understand what data was shown to the user
 2. Identify the MOST IMPORTANT data type for UI display (product, location, voucher, etc.)
 3. Call the appropriate template tool ONCE with ALL relevant items aggregated
@@ -58,6 +69,7 @@ RULES (STRICT):
 TEMPLATE TYPES (use ONE that best fits)
 ====================================================
 
+• quick_reply_tool → "quickReply" - Base template for (1) conversational/greeting responses and (2) data that has no dedicated template yet. Fields: assistant_response (str — include ALL info for case 2), quickReplies (list[str] — see QUICK REPLIES section)
 • list_car_tool → "listCar" - Cars with fields: licensePlate (src: car_no), description (src: car_model_det), imageUrl (src: thnl_img_path_nm or mo_img_path_nm or pc_img_path_nm), metadata (camelCase, no underscore)
 • list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity, description (str - markdown format with ALL info: pc_prod_remark_desc, pc_prod_tech_desc, slogan, rating, reviews), metadata (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink, metadata. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
@@ -223,32 +235,72 @@ SELECTION RULES
 ====================================================
 OUTPUT FORMAT
 ====================================================
-• assistant_response: REQUIRED as FIRST param - Chatbot-style message:
-  - When user asks "details" (詳細, 설명, 특징, 상세): Include description/features in the message
-  - Otherwise: intro + status + next step (NO data details, NO duplicate with template)
-  - Example (normal): "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요."
-  - Example (when asking details): "고객님, 이 타이어의 주요 특징을 안내해 드릴게요. 내구성이 뛰어나고 연료 효율이 우수합니다. 구체적인 스펙이나 사용 후기를 더 알고 싶으시면 말씀해 주세요!"
+• assistant_response: REQUIRED as FIRST param - warm Korean markdown message:
+  - Always address user as "고객님"
+  - Use soft expressions: "찾았어요", "확인해봤어요", "도와드릴게요", "선택해 주세요", "말씀해 주세요"
+  - Light emoji where natural: 😊 🙏 — not on every sentence
+  - End with a clear next-step question or offer
+  - Use best-practice markdown for readability (bold key info, bullet lists for details, line breaks)
+  - Otherwise: status + next step only (NO duplicate with template data)
+  - Empty data → "확인해봤는데 해당 정보를 찾지 못했어요. [alternative next step]"
+  SECURITY RULES (apply to ALL tool assistantResponse fields):
+  - NEVER use: "조회 결과 없습니다", "데이터가 없습니다", "시스템상 불가합니다", "에러가 발생했습니다"
+  - NEVER mention: tool names, DB, API, 시스템, 에러, 실패, JSON, 백엔드
+  - Replace forbidden expressions naturally:
+    * "조회 결과 없습니다" → "확인해봤는데 해당 정보를 찾지 못했어요"
+    * "데이터가 없습니다" → "관련 정보가 없어요"
+    * "시스템상 불가합니다" → "안내해 드리기 어려운 부분이에요"
+    * "에러가 발생했습니다" → "확인 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요"
 • Other params: optional - template data
 
 Call ONE tool that best matches the data type:
-{{"assistantResponse": "고객님, 등록된 차량은 아래 2대예요", "items": [...], "metadata": [...]}}
-
-====================================================
-LANGUAGE
-====================================================
-ASSISTANT RESPONSE (REQUIRED)
-====================================================
-• ALWAYS include assistant_response field in tool call
-• Generate concise Korean message summarizing the data
-• Format example: "서울 강남점에서 사용 가능한 타이어 2개 제품입니다."
-• When user asks about details/features (상세, 설명, 특징): include description content in response
-• This ensures text is synced with data displayed in template
+{{"assistantResponse": "고객님, 등록된 차량은 아래 2대예요. 번호로 선택해 주시면 바로 타이어를 추천해 드릴게요 😊", "items": [...], "metadata": [...]}}
 
 Always respond in Korean (based on user context).
 
 ====================================================
+QUICK REPLIES
+====================================================
+
+quickReplies must reflect the user's CURRENT SITUATION inferred from conversation context.
+Pick 2–3 natural next steps from the table below. Use [] only when truly no next step exists.
+
+| Situation | Recommended actions |
+|---|---|
+| Greeting / first message | ["타이어 추천받기", "이벤트·할인 확인", "매장 찾기"] |
+| User has no registered car | ["차량번호+소유주명 입력", "타이어 사이즈 직접 입력", "차종 이름으로 탐색"] |
+| Car shown, awaiting tire selection | ["이 차량로 타이어 추천받기", "다른 차량 선택"] |
+| Tire recommendations shown | ["가격 확인하기", "재고·매장 확인", "타이어 비교하기"] |
+| Price shown, next step unclear | ["주문하기", "매장 재고 확인", "장바구니에 담기"] |
+| Store list shown | ["이 매장으로 예약하기", "다른 매장 찾기"] |
+| Reservation / booking step | ["예약 날짜 선택하기", "매장 변경하기"] |
+| Pre-order preview shown | ["바로 주문하기", "장바구니에 담기", "정보 수정하기"] |
+| Order completed | ["주문 내역 확인", "타이어 더 보기", "1:1 문의하기"] |
+| FAQ / policy answered | ["1:1 문의 연결", "다른 질문하기"] |
+| User seems confused or struggling | ["1:1 문의 연결", "처음부터 다시 시작"] |
+| User asked about events/promotions | ["이벤트 자세히 보기", "타이어 추천받기"] |
+| User asked about vouchers/coupons | ["쿠폰 사용하기", "타이어 추천받기"] |
+| Return / refund requested | ["1:1 반품 문의하기", "반품 정책 확인"] |
+| Warranty question answered | ["보증 수리 신청", "1:1 문의하기"] |
+
+KEY RULES:
+• Mirror the domain: if the agent just answered about price → suggest order/stock next, NOT unrelated FAQs
+• Use direct action verbs in Korean ("확인하기", "신청하기", "찾기" etc.)
+• Max 3 suggestions — prefer specificity over completeness
+• Do NOT repeat what the agent just did as a suggestion
+
+====================================================
 EXAMPLES (each tool call format)
 ====================================================
+
+(CASE 1 — conversational)
+quick_reply_tool → {{"assistant_response": "<p>안녕하세요! 무엇을 도와드릴까요?</p>", "quickReplies": ["타이어 추천받기", "이벤트·할인 확인", "매장 찾기", "1:1 문의하기"]}}
+quick_reply_tool → {{"assistant_response": "<p>네, 한국타이어는 다양한 사이즈와 용도에 맞는 타이어를 제공하고 있습니다.<br>어떤 차량에 맞는 타이어를 찾고 계신가요?</p>", "quickReplies": ["차량번호+소유주명 입력", "타이어 사이즈 직접 입력", "차종 이름으로 탐색"]}}
+quick_reply_tool → {{"assistant_response": "<p>반품 정책에 대해 안내드릴게요.<br>구매 후 <strong>7일 이내</strong>에 신청 가능하며, 미사용 제품에 한해 가능합니다.</p>", "quickReplies": ["1:1 반품 문의하기", "다른 질문하기"]}}
+
+(CASE 2 — unsupported template, data formatted in assistant_response)
+quick_reply_tool → {{"assistant_response": "<p>방문 방법을 선택해 주세요.</p><ul><li><strong>매장 방문</strong> — 직접 방문하여 장착</li><li><strong>배송 요청</strong> — 기사님이 방문하여 장착 (T-NA 배송)</li></ul>", "quickReplies": ["매장 방문", "배송으로 받을게요"]}}
+quick_reply_tool → {{"assistant_response": "<p>몇 개를 주문하시겠습니까?</p><p>일반적으로 <strong>4개</strong>(4바퀴 기준)를 선택하세요.</p>", "quickReplies": ["1개", "2개", "4개"]}}
 
 list_product_tool → {{"assistantResponse": "고객님, 해당 매장에 사용 가능한 타이어들이에요. 원하시는 제품을 선택해 주세요.", "items": [
   {{"imageUrl": "https://example.com/tire1.jpg", "title": "Hankook Ventus S1 Evo3", "tires": "SUV", "comfort": "high", "price": 680000, "rate": 4.7, "totalQuantity": 25, "description": "**주요 특장점:** 최신 슬릭 패턴으로 습한 노면에서 우수한 브레이크 성능\n**기술력:** 3D 슬릭 기술 적용으로 내구성 향상\n**슬로건:** Every road is a new sensation\n**리뷰:** 4.7/5 (128개 리뷰)"}},
@@ -317,6 +369,7 @@ def get_ui_template_system_prompt():
 
 class UITemplateSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
+        "quick_reply_tool": "Quick Reply",
         "list_car_tool": "Car",
         "list_product_tool": "Product",
         "list_voucher_tool": "Voucher",
@@ -331,6 +384,7 @@ class UITemplateSubAgent(BaseAgent):
     }
 
     TOOL_TO_TEMPLATE_MAP = {
+        "quick_reply_tool": "quickReply",
         "list_car_tool": "listCar",
         "list_product_tool": "product",
         "list_voucher_tool": "voucher",
@@ -348,6 +402,7 @@ class UITemplateSubAgent(BaseAgent):
         super().__init__(
             model=model,
             tools=[
+                quick_reply_tool,
                 list_car_tool,
                 list_product_tool,
                 list_voucher_tool,

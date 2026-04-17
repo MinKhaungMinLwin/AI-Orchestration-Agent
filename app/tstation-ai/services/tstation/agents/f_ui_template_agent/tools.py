@@ -13,6 +13,28 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 
 
 @tool
+def quick_reply_tool(
+    assistant_response: Annotated[str, "Conversational Korean response to the user. No template data needed."],
+    quickReplies: Annotated[list[str], "Context-aware quick reply chips shown below the message. User taps one to send it as their next message. Must reflect the user's current situation and natural next steps. Empty list [] only when truly no next step exists."],
+) -> dict:
+    """Base chat template — use when no data card template is appropriate.
+
+    Renders a text message with tappable quick reply chips below it.
+    This is the default template for greetings, clarifications, FAQ answers,
+    and any turn where domain agents produced no structured data to display.
+
+    Args:
+        assistant_response (str): Concise Korean message summarizing the agent's response.
+        quickReplies (list[str]): Quick reply chip labels. User taps one → sent as next message.
+            Must be tailored to the user's current situation — see QUICK REPLIES section in prompt.
+
+    Returns:
+        {"status": "success", "http_status": 200, "data": {"assistantResponse": ..., "quickReplies": ...}}
+    """
+    return _success_response(200, {"assistantResponse": assistant_response, "quickReplies": quickReplies})
+
+
+@tool
 def list_car_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
     items: Annotated[list[dict], "List of cars. Each: licensePlate (str), description (str), imageUrl (str)"],
