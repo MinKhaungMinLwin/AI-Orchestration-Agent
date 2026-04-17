@@ -53,7 +53,7 @@ def list_product_tool(
             - goodsId (str): Product number (from goods_no field in domain agent output).
 
     Field Details:
-        - imageUrl (str): URL of product image. Rule: required, valid URL string.
+        - imageUrl (str): URL of product image from tool output data (e.g. image_url field). If not available in tool data, use empty string "". NEVER fabricate or guess URLs.
         - title (str): Product name. Rule: required, non-empty string.
         - tires (str): Product tier/category. Rule: optional, string (e.g., "SUV", "Sedan").
         - comfort (str): Comfort level. Rule: optional, string (e.g., "high", "medium", "low").

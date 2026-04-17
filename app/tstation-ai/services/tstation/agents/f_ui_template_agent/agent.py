@@ -53,6 +53,7 @@ RULES (STRICT):
 • Do NOT call a tool if the data is empty or null - skip that template type
 • Tools are for FORMATTING data only - never for storing data
 • Do NOT generate any text tokens - only call ONE tool
+• NEVER fabricate URLs. If imageUrl is not present in tool output data, use empty string "". Do NOT guess or construct URLs (e.g. hankooktire.com/...)
 
 ====================================================
 TEMPLATE TYPES (use ONE that best fits)
