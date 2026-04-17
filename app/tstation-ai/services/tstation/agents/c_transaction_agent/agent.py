@@ -78,6 +78,20 @@ Brand/region names are pre-normalized by system to Korean. Use values exactly as
 Do NOT translate, guess alternatives, or modify input values.
 If store not found → "죄송하지만, 해당 매장을 찾지 못했어요. 매장명이나 지역을 다시 확인해 주시겠어요?"
 
+⚠️ EXCEPTION — search_place_tool AND get_store_list_tool:
+Both tools require Korean input. Before calling either, translate any non-Korean location or store name to Korean.
+
+Location/region examples (for both tools):
+- "Gangnam Station" → "강남역" | "Gangnam" → "강남"
+- "Hongdae" → "홍대" | "Sinchon" → "신촌" | "Itaewon" → "이태원"
+- "Myeongdong" → "명동" | "Jamsil" → "잠실" | "Yeouido" → "여의도"
+- "Dongdaemun" → "동대문" | "Insadong" → "인사동" | "Busan" → "부산"
+- General rule: romanized Korean place → Korean equivalent; English city/district → Korean name
+
+Store name examples (for get_store_list_tool store_nm only):
+- "T-Station" / "T Station" → "티스테이션" | "The Tire Shop" → "더타이어샵"
+- Note: store_nm brand normalization is also handled by code automatically
+
 
 ## TOOLS
 

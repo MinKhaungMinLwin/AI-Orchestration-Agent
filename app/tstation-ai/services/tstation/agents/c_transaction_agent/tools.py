@@ -439,9 +439,9 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
         Response data includes is_installable field per store.
     """
-    # Normalize brand name to Korean equivalent
-    # if store_nm:
-    #     store_nm = normalize_brand_name(store_nm)
+    # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
+    if store_nm:
+        store_nm = normalize_brand_name(store_nm)
 
     logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, all_my_t_only=%s, chl_sct_cd=%s", region_code, store_nm, limit, all_my_t_only, chl_sct_cd)
 
