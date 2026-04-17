@@ -228,7 +228,7 @@ def available_dates_tool(
 @tool
 def preorder_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
-    orderInfo: Annotated[dict, "Order info. Each field is optional: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str), visitMethod (str), paymentAmount (float)"],
+    orderInfo: Annotated[dict, "Order info. Each field is optional: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str), paymentAmount (float)"],
     recommendActions: Annotated[dict, "Recommend action: question (str), listActions (list[str])"],
     isReadyToOrder: Annotated[bool, "True if all required info is available for quick_order (carInfo + product + quantity + storeName + bookingDateTime)."],
     isReadyToAddToCart: Annotated[bool, "True if all required info is available for save_to_cart (carInfo + product + quantity)"],
@@ -244,7 +244,6 @@ def preorder_tool(
             - quantity (int): Order quantity.
             - storeName (str): Store name.
             - bookingDateTime (str): Booking date and time.
-            - visitMethod (str): Visit method (e.g., "Visit in Person").
             - paymentAmount (float): Payment amount.
         recommendActions: Recommend action containing:
             - question (str): Question text.
@@ -317,7 +316,7 @@ class OrderCompleteType(str, Enum):
 @tool
 def order_complete_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
-    orderInfo: Annotated[dict, "Order info: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str | None), visitMethod (str | None), paymentAmount (float | None)"],
+    orderInfo: Annotated[dict, "Order info: carInfo (str), product (str), quantity (int), storeName (str), bookingDateTime (str | None), paymentAmount (float | None)"],
     is_success: Annotated[bool, "True if order/cart succeeded, False if failed"],
     type: Annotated[OrderCompleteType, "Type: cart or order"],
     message: Annotated[str | None, "Error message when is_success is False"],
@@ -328,7 +327,7 @@ def order_complete_tool(
 
     Args:
         assistant_response (str): Chatbot-style intro message (NO data details, NO duplicate with template). In Korean.
-        orderInfo: Order info containing: carInfo, product, quantity, storeName, bookingDateTime, visitMethod, paymentAmount
+        orderInfo: Order info containing: carInfo, product, quantity, storeName, bookingDateTime, paymentAmount
         is_success: True if order/cart succeeded, False if failed
         type: Order type - cart or order
         message: Error message when is_success is False (null when success)

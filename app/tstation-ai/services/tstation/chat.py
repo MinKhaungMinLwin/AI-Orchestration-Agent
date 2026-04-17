@@ -474,7 +474,7 @@ EXAMPLE QUERIES → FLOW:
 38. "방문 방법 선택해줘" / "哪种访问方式好?"
     "Which visit method to choose?" / "Which visit method is better?"
     → TRANSACTION
-    (Pre-order preview with recommendActions → visitMethod selection)
+    (Pre-order preview with recommendActions → next step selection)
 
 39. "GXXXXXXXXXXXX이랑 GXXXXXXXXXXXX 가격 비교해줘"
     "Compare prices between GXXXXXXXXXXXX and GXXXXXXXXXXXX"
@@ -507,7 +507,7 @@ PRE-ORDER PREVIEW FLOW RULES
 
 After user selects store path (Step 5A) or cart path (Step 5B), BEFORE calling API:
 → Transaction Agent displays pre-order preview (markdown table)
-→ User reviews: carInfo, product, quantity, storeName, bookingDateTime, visitMethod, paymentAmount
+→ User reviews: carInfo, product, quantity, storeName, bookingDateTime, paymentAmount
 → isReadyToOrder: user confirms all info → quick_order_tool
 → isReadyToAddToCart: missing critical info → save_to_cart_tool
 → recommendActions: prompts for missing info with suggested Korean phrases
@@ -1103,9 +1103,6 @@ class StreamingMultiAgentCoordinator:
                     "agent": "[UI TEMPLATE AGENT]",
                     "status": "start",
                 }
-
-                # Signal UI that template data is about to arrive
-                yield {"type": "status", "status": "화면 구성 중..."}
 
                 # Stream from UI Template Agent (use stream_template to get data events)
                 for event in ui_template_subagent.stream_template(ui_messages):

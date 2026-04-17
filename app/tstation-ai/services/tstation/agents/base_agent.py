@@ -122,7 +122,7 @@ class BaseAgent(ABC):
                         if hasattr(message, "tool_calls") and message.tool_calls:
                             for tc in message.tool_calls:
                                 tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
-                                display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "처리 중...")
+                                display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "답변 중...")
                                 yield {"type": "status", "status": "tool_start", "tool": tc["name"], "display_name": display_name}
                         yield {
                             "type": "message",
