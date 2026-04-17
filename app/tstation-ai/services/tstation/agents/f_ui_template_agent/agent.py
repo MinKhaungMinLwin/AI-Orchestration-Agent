@@ -307,13 +307,13 @@ EXAMPLES (each tool call format)
 ====================================================
 
 (CASE 1 — conversational)
-quick_reply_tool → {{"assistant_response": "안녕하세요! 무엇을 도와드릴까요?", "quickReplies": ["타이어 추천해 주세요", "이벤트나 할인이 있나요?", "근처 매장 찾아주세요"]}}
-quick_reply_tool → {{"assistant_response": "네, 한국타이어는 다양한 사이즈와 용도에 맞는 타이어를 제공하고 있습니다.\n어떤 차량에 맞는 타이어를 찾고 계신가요?", "quickReplies": ["차량번호로 조회할게요", "사이즈 직접 입력할게요", "차종 이름으로 찾을게요"]}}
-quick_reply_tool → {{"assistant_response": "반품 정책에 대해 안내드릴게요.\n구매 후 **7일 이내**에 신청 가능하며, 미사용 제품에 한해 가능합니다.", "quickReplies": ["반품 문의하고 싶어요", "다른 거 물어볼게요"]}}
+quick_reply_tool → {{"assistant_response": "안녕하세요! 무엇을 도와드릴까요?", "quickReplies": ["타이어 추천해줘", "근처 매장 찾아줘", "이벤트 알려줘"]}}
+quick_reply_tool → {{"assistant_response": "네, 한국타이어는 다양한 사이즈와 용도에 맞는 타이어를 제공하고 있습니다.\n어떤 차량에 맞는 타이어를 찾고 계신가요?", "quickReplies": ["차량번호로 조회", "사이즈 직접 입력", "차량명으로 찾기"]}}
+quick_reply_tool → {{"assistant_response": "반품 정책에 대해 안내드릴게요.\n구매 후 **7일 이내**에 신청 가능하며, 미사용 제품에 한해 가능합니다.", "quickReplies": ["반품 문의하고 싶어", "다른 거 물어볼래"]}}
 
 (CASE 2 — unsupported template, data formatted in assistant_response)
-quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세요.", "quickReplies": ["매장 방문할게요", "배송으로 받을게요"]}}
-quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개요", "2개요", "4개요"]}}
+quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세요.", "quickReplies": ["매장 방문할게", "배송으로 받을래"]}}
+quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "4개"]}}
 
 list_product_tool → {{"assistantResponse": "고객님, 해당 매장에 사용 가능한 타이어들이에요. 원하시는 제품을 선택해 주세요.", "items": [
   {{"imageUrl": "https://example.com/tire1.jpg", "title": "Hankook Ventus S1 Evo3", "tires": "SUV", "comfort": "high", "price": 680000, "rate": 4.7, "totalQuantity": 25, "description": "**주요 특장점:** 최신 슬릭 패턴으로 습한 노면에서 우수한 브레이크 성능\n**기술력:** 3D 슬릭 기술 적용으로 내구성 향상\n**슬로건:** Every road is a new sensation\n**리뷰:** 4.7/5 (128개 리뷰)"}},
