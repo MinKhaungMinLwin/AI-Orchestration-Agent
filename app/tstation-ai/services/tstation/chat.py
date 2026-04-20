@@ -706,7 +706,7 @@ class StreamingMultiAgentCoordinator:
             assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
             tool_names = [e.get("tool", "") for e in accumulated_tool_data] if accumulated_tool_data else []
             logger.info(f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}, last_agent_called_tools={last_agent_called_tools}")
-            code_template = try_build_template(accumulated_tool_data, assistant_text) if accumulated_tool_data and last_agent_called_tools else None
+            code_template = None  # Disabled: always use LLM UI Template Agent
             logger.info(f"[COORDINATOR] Template mapper result: {'template=' + code_template.get('template', '') if code_template else 'None (LLM fallback)'}")
 
             if code_template:
