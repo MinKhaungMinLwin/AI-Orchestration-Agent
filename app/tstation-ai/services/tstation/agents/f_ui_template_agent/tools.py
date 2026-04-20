@@ -78,7 +78,7 @@ def list_product_tool(
         - imageUrl (str): URL of product image from tool output data (e.g. image_url field). If not available in tool data, use empty string "". NEVER fabricate or guess URLs.
         - title (str): Product name. Rule: required, non-empty string.
         - tires (str): Product tier/category. Rule: optional, string (e.g., "SUV", "Sedan").
-        - comfort (str): Comfort level. Rule: optional, string (e.g., "high", "medium", "low").
+        - comfort (str): Comfort level in Korean. Rule: optional, string (e.g., "높음", "보통", "낮음").
         - price (int): Product price in KRW. Rule: required, 0 <= price.
         - rate (float): Rating score. Rule: required, 0 <= rate <= 5.
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
