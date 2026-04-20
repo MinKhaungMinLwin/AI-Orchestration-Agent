@@ -443,7 +443,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 
 
 @tool
-def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 20, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
+def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 5, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
     """
     Get store list by region and/or store name.
 
@@ -484,7 +484,7 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
             Examples: '서울', '강남', '부산'
         store_nm (str | None): Store or business name keyword.
             Examples: '티스테', '타이'
-        limit (int): Maximum number of stores to return (default 20).
+        limit (int): Maximum number of stores to return (default 5).
         all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
             Default: False.
         chl_sct_cd (str | None): Channel section code for shop type filtering.
@@ -494,25 +494,25 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
 
     Example Inputs:
         # User says "강남에 티스테 찾아줘" → pass BOTH
-        - {"region_code": "강남", "store_nm": "티스테", "limit": 20}
+        - {"region_code": "강남", "store_nm": "티스테", "limit": 5}
 
         # User says "부산 한국타이어" → pass BOTH
-        - {"region_code": "부산", "store_nm": "한국타이어", "limit": 20}
+        - {"region_code": "부산", "store_nm": "한국타이어", "limit": 5}
 
         # User says "서울 매장 보여줘" → region only
-        - {"region_code": "서울", "store_nm": None, "limit": 20}
+        - {"region_code": "서울", "store_nm": None, "limit": 5}
 
         # User says "극동상사 찾아줘" → store name only
-        - {"region_code": None, "store_nm": "극동상사", "limit": 20}
+        - {"region_code": None, "store_nm": "극동상사", "limit": 5}
 
         # User says "all my T 매장" → all_my_t_only=True
-        - {"region_code": None, "store_nm": None, "limit": 20, "all_my_t_only": True}
+        - {"region_code": None, "store_nm": None, "limit": 5, "all_my_t_only": True}
 
         # User says "내주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
-        - {"region_code": None, "store_nm": None, "limit": 20, "chl_sct_cd": "F"}
+        - {"region_code": None, "store_nm": None, "limit": 5, "chl_sct_cd": "F"}
 
         # User says "강남 더타이어샵 매장" → region + chl_sct_cd
-        - {"region_code": "강남", "store_nm": None, "limit": 20, "chl_sct_cd": "S"}
+        - {"region_code": "강남", "store_nm": None, "limit": 5, "chl_sct_cd": "S"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}

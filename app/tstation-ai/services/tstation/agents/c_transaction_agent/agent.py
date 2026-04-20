@@ -184,11 +184,11 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 ── STEP C: Visit date (on user request) ──
 5. User confirms ("네", "확인해줘", etc.) →
    ⚠️ Only show stores that passed the stock check (todayShopArray/tnaShopArray in STEP A, or logistics-available stores in STEP B).
-   - If multiple stocked stores: show only stocked store list and ask user to SELECT → then proceed
+   - If multiple stocked stores: show only stocked store list → STOP and wait for user to SELECT one store
    - Once single shop_id is determined:
-     get_store_schedule_tool(shop_id) → returns all 4 days (TODAY~+3) in ONE call
-     → UI Template Agent will render datepick card with all dates and slots
-     → Empty slots for all 4 days: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
+     get_store_schedule_tool(shop_id) → UI Template Agent renders datepick card
+     → STOP and wait for user to SELECT a date and time slot
+     → Empty slots for all days: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?" → wait
 
 ⚠️ Flow 3 STRICT RULES:
 - Flow 3 is stock check + visit date ONLY. Do NOT show price information unless user explicitly asked.
@@ -233,8 +233,13 @@ Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 
    → 0 results: "해당 장소를 찾지 못했어요. 다른 키워드로 검색해 보시겠어요?"
 2. get_nearby_stores_tool(user_xpos=x, user_ypos=y)
    → 0 results: "반경 10km 내 매장이 없어요. 반경 20km로 넓혀드릴까요?"
-3. For EACH store: get_store_detail_tool(shop_id, cal_day=TODAY) in parallel
-4. Show unified store table (100% Korean)
+3. Show store list → STOP and wait for user to select a store
+
+#### Flow 4.1 — User selects a store from list:
+Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할게요") after store list was shown
+1. get_store_list_tool(store_nm=...) to resolve shop_id
+2. get_store_schedule_tool(shop_id) → UI Template Agent renders datepick card
+   → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
 
 
 ### Flow 5 — Store Hours / Reservation
@@ -322,12 +327,14 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
   1. Ask for store preference: "어느 지역 매장을 찾아드릴까요?"
      - Even if shop_id is in confirmed slots, always show store list and ask user to SELECT
   2. get_store_list_tool or get_nearby_stores_tool
-  3. Show store table (올마이티 | 장착가능 | T바로배송 columns) → wait for user to SELECT a store
-  4. get_store_schedule_tool(shop_id) → check is_installable from first day result:
-     - false: "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
+  3. Show store list (UI card renders automatically) → STOP and wait for user to SELECT a store
+  4. User selects store → get_store_schedule_tool(shop_id):
+     - is_installable=false: "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
   5. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool → verify shop in todayShopArray/tnaShopArray
      → NOT found: "선택하신 매장에 재고가 없어요. 다른 매장을 검색해 드릴까요?" → wait
-  6. Show PRE-ORDER PREVIEW (STEP 5.5) → wait for explicit confirmation → THEN quick_order_tool
+  6. Show datepick card (UI Template renders available dates/times) → STOP and wait for user to SELECT a date and time slot
+     - Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜나 매장을 확인해 드릴까요?" → wait
+  7. User selects date+time → Show PRE-ORDER PREVIEW (STEP 5.5) with bookingDateTime filled → wait for explicit confirmation → THEN quick_order_tool
 
 STEP 5B — 장바구니 (user chose option 2):
   Show PRE-ORDER PREVIEW (STEP 5.5) → wait for explicit confirmation → THEN save_to_cart_tool
@@ -375,7 +382,8 @@ When these tools succeed, respond with ONLY a short contextual message (1-2 sent
 Do NOT generate large tables or repeat data that will already appear in the UI cards.
 
 **UI card tools (short response only):**
-- get_store_list_tool, get_nearby_stores_tool → store cards (location)
+- get_store_list_tool, get_nearby_stores_tool → store location cards (do NOT list stores as text)
+- get_store_schedule_tool → date picker card (do NOT list dates/slots as text)
 - get_available_coupons_tool, get_my_coupons_tool → coupon cards
 - get_store_detail_tool (with reservation slots) → date picker card
 
