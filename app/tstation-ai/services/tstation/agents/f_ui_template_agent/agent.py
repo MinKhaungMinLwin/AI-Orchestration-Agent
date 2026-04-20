@@ -111,10 +111,10 @@ TEMPLATE TYPES (use ONE that best fits)
   - rate (float): src → rate field. 0.0 if not available.
   - totalQuantity (int): 0 if not in tool output (recommendation tools do not return stock count).
   - description (str): REQUIRED — build from available fields in this order (strip ALL HTML tags first):
-      1. Slogan: "**{slogan}**\n\n" (skip if slogan is "-" or null)
+      1. Slogan: "**{{slogan}}**\n\n" (skip if slogan is "-" or null)
       2. Tech desc: pc_prod_tech_desc stripped of HTML → plain text bullet points
-      3. Scores line: "**승차감** {t_comfort} | **정숙성** {t_silence} | **내구성** {t_life_span} | **연비** {t_fuel_eff_convert}" (skip 0.0 scores)
-      4. Rating: "**리뷰** {rating.rating_avg}/5 ({rating.review_count}개)" (skip if review_count=0)
+      3. Scores line: "**승차감** {{t_comfort}} | **정숙성** {{t_silence}} | **내구성** {{t_life_span}} | **연비** {{t_fuel_eff_convert}}" (skip 0.0 scores)
+      4. Rating: "**리뷰** {{rating.rating_avg}}/5 ({{rating.review_count}}개)" (skip if review_count=0)
       Set to empty string "" ONLY if ALL above fields are null/empty.
       NEVER include pc_prod_remark_desc (too long, legal/warranty text).
       NEVER put guidance messages like "사이즈 선택이 필요합니다" in description.
