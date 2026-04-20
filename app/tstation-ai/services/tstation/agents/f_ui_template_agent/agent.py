@@ -71,12 +71,28 @@ When calling quick_reply_tool:
 • quickReplies: use QUICK REPLIES rules below — for CASE 2, set chips to the most natural
   typed replies the user would send (e.g., "매장 방문", "배송으로 받을게요")
 
-STEP 2 — CREATE: If a data template IS appropriate:
-1. Read the messages from previous agents to understand what data was shown to the user
-2. If no accumulated tool data: scan conversation history for [이전 선택된 상품 데이터] blocks
-   and prior structured data (car_no, goods_no, shop_id fields) to reconstruct template items
-3. Identify the MOST IMPORTANT data type for UI display (product, location, voucher, etc.)
-4. Call the appropriate template tool ONCE with ALL relevant items aggregated
+STEP 2 — SELECT template by scanning tool names in [Previous agent tool results]:
+Use this EXACT priority lookup — find the FIRST match from top to bottom:
+
+| Domain tool called                                        | → Call this template tool  |
+|-----------------------------------------------------------|----------------------------|
+| transfer_to_qna_tool                                      | qna_complete_tool          |
+| compare_discount_tool                                     | cheapest_product_tool      |
+| get_my_cars_tool / get_user_vehicles_tool                 | list_car_tool              |
+| get_store_schedule_tool                                   | available_dates_tool       |
+| get_store_list_tool / get_nearby_stores_tool              | list_location_tool         |
+| search_product_tool / get_products_recommendations_tool   | list_product_tool          |
+| get_available_coupons_tool / get_my_coupons_tool          | list_voucher_tool          |
+| search_youtube_video_tool                                 | list_preview_youtube_tool  |
+| quick_order_tool / save_to_cart_tool                      | order_complete_tool        |
+| (preorder data present in context)                        | preorder_tool              |
+| (none of the above match)                                 | quick_reply_tool           |
+
+⚠️ CRITICAL: This is a LOOKUP TABLE, not a judgment call.
+- Scan [Previous agent tool results] for tool names
+- Match the FIRST row that applies → call that template tool
+- Do NOT override based on context, intent, or "most important data" reasoning
+- Do NOT call quick_reply_tool if ANY tool in the table above was called successfully
 
 RULES (STRICT):
 • You MUST call EXACTLY ONE template tool - no more
@@ -113,7 +129,6 @@ TEMPLATE TYPES (use ONE that best fits)
   - metadata (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink, metadata. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t), todayInstall (src: is_installable), tnaDelivery (src: is_tna_delivery — display as "T바로배송", NEVER "T-NA"), description (str - markdown format: **영업일:** shop_biz_strt_wday~shop_biz_end_wday\n**영업시간:** 주중 shop_biz_strt_time~shop_biz_end_time, 주말 shop_sat_strt_time~shop_sat_end_time\n**휴무일:** holiday\n**전화:** tel_no), metadata (camelCase, no underscore)
-• list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText, metadata (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
 • list_preview_youtube_tool → "previewYoutube" - Videos with fields: title, thumbnailUrl, youtubeUrl, videoId (camelCase, no underscore). NOTE: Only use for actual YouTube videos, NOT events
 • available_dates_tool → "datepick" - Multi-date picker (calendar month view) with fields: dates (list of {{date: str "2026년 4월 9일 (화)", available: bool, availableTimes: list[int 8-22], index: int (0-based position in sorted order)}}), selectedDate (int index or null), metadata (camelCase, no underscore). IMPORTANT: Include ALL available dates - do NOT truncate or limit the dates array. If source has 10 dates, pass all 10.
 • preorder_tool → "preOrder" - Pre-order card with fields:
@@ -204,11 +219,6 @@ list_car_tool:
   3. Build: metadata = [{{carNo: $vehicle_number, carLncCd: $car_lnc_cd}}, ...] (e.g., "52가1234", "LNC12345")
   4. carLncCd is optional — only include if present in output
 
-list_event_tool:
-  1. Find get_events_tool in conversation
-  2. For each event, look for evt_no field
-  3. Build: metadata = [{{eventId: "EVT00001"}}, ...]
-
 list_voucher_tool:
   1. Find get_available_coupons_tool or get_my_coupons_tool in conversation
   2. For each coupon, look for cpn_no field
@@ -262,18 +272,6 @@ Example full call:
   {{"goodsId": $goods_no}},
   {{"goodsId": $goods_no_alt}}
 ]}}
-
-====================================================
-SELECTION RULES
-====================================================
-
-• Choose the template type that matches the MOST IMPORTANT data in the messages
-• If transfer_to_qna_tool data is present with a URL → use qna_complete_tool (HIGHEST PRIORITY — always render this when URL exists)
-• If get_store_schedule_tool was called → use available_dates_tool (HIGHER PRIORITY than list_location_tool — even if store location data also exists)
-• If there are products → use list_product_tool
-• If there are store locations (from get_store_list_tool or get_nearby_stores_tool, NOT get_store_detail_tool) → use list_location_tool
-• If there are vouchers → use list_voucher_tool
-• etc.
 
 • If items > 5, select 3-5 BEST items based on relevance
 • Prioritize by: rating, discount, compatibility for products; distance for stores
@@ -390,13 +388,6 @@ list_location_tool → {{"assistantResponse": "고객님, 근처 매장을 찾�
   {{"shopId": $shop_id}}
 ]}}
 
-list_event_tool → {{"assistantResponse": "고객님, 진행 중인 이벤트가 있어요. 자세히 보기를 클릭해 주세요.", "items": [
-  {{"eventName": "여름 타이어 세일", "bannerImage": "https://example.com/banner1.jpg", "eventUrl": "/event/summer", "badge": "주유권증정", "period": "2026-06-01 ~ 2026-08-31", "actionLink": "https://tstation.com/event/summer", "actionText": "자세히 보기"}},
-  {{"eventName": "겨울 무료 점검", "bannerImage": "https://example.com/banner2.jpg", "eventUrl": "/event/winter", "badge": "무료", "period": "2026-12-01 ~ 2026-12-31", "actionLink": "https://tstation.com/event/winter", "actionText": "신청하기"}}
-], "metadata": [
-  {{"eventId": "EVT00001"}},
-  {{"eventId": "EVT00002"}}
-]}}
 
 list_preview_youtube_tool → {{"assistantResponse": "관련 동영상을 준비했어요. 영상을 클릭해 보세요.", "items": [
   {{"title": "타이어 교체 방법", "thumbnailUrl": "https://img.youtube.com/vi/abc123/hqdefault.jpg", "youtubeUrl": "https://youtube.com/watch?v=abc123", "videoId": "abc123"}},

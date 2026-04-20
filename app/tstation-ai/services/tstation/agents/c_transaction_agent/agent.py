@@ -233,8 +233,13 @@ Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 
    → 0 results: "해당 장소를 찾지 못했어요. 다른 키워드로 검색해 보시겠어요?"
 2. get_nearby_stores_tool(user_xpos=x, user_ypos=y)
    → 0 results: "반경 10km 내 매장이 없어요. 반경 20km로 넓혀드릴까요?"
-3. For EACH store: get_store_detail_tool(shop_id, cal_day=TODAY) in parallel
-4. Show unified store table (100% Korean)
+3. Show store list → STOP and wait for user to select a store
+
+#### Flow 4.1 — User selects a store from list:
+Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할게요") after store list was shown
+1. get_store_list_tool(store_nm=...) to resolve shop_id
+2. get_store_schedule_tool(shop_id) → UI Template Agent renders datepick card
+   → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
 
 
 ### Flow 5 — Store Hours / Reservation
@@ -375,7 +380,8 @@ When these tools succeed, respond with ONLY a short contextual message (1-2 sent
 Do NOT generate large tables or repeat data that will already appear in the UI cards.
 
 **UI card tools (short response only):**
-- get_store_list_tool, get_nearby_stores_tool → store cards (location)
+- get_store_list_tool, get_nearby_stores_tool → store location cards (do NOT list stores as text)
+- get_store_schedule_tool → date picker card (do NOT list dates/slots as text)
 - get_available_coupons_tool, get_my_coupons_tool → coupon cards
 - get_store_detail_tool (with reservation slots) → date picker card
 
