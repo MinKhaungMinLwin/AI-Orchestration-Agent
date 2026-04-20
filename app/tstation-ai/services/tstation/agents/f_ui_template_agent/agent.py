@@ -197,7 +197,7 @@ STEP-BY-STEP SCOUTING FOR EACH TOOL:
 
 list_product_tool:
   1. Find search_product_tool or get_products_recommendations_tool in conversation
-  2. Each item in response data.items has: goods_no, title, image_url, price, rate, comfort, t_comfort, t_silence, t_life_span, t_fuel_eff_convert, pc_prod_tech_desc, slogan, rating{rating_avg, review_count}
+  2. Each item in response data.items has: goods_no, title, image_url, price, rate, comfort, t_comfort, t_silence, t_life_span, t_fuel_eff_convert, pc_prod_tech_desc, slogan, rating{{rating_avg, review_count}}
   3. For each item, extract goods_no → metadata = [{{goodsId: $goods_no}}, ...]
   4. Build items array using EXACT field mapping defined in list_product_tool template type above
 
