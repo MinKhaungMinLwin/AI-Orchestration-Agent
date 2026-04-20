@@ -7,13 +7,14 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
 from ...models.store_detail_response import StoreDetailResponse
-from ...types import UNSET, Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     *,
     shop_id: str,
     cal_day: str,
+    is_logistics_delivery: bool | Unset = False,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -21,6 +22,8 @@ def _get_kwargs(
     params["shop_id"] = shop_id
 
     params["cal_day"] = cal_day
+
+    params["is_logistics_delivery"] = is_logistics_delivery
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -68,6 +71,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     shop_id: str,
     cal_day: str,
+    is_logistics_delivery: bool | Unset = False,
 ) -> Response[HTTPValidationError | StoreDetailResponse]:
     """매장 상세 정보 및 예약 가능 시간 조회
 
@@ -76,6 +80,8 @@ def sync_detailed(
     Args:
         shop_id (str): 매장 ID
         cal_day (str): 조회 날짜 (YYYYMMDD)
+        is_logistics_delivery (bool | Unset): True이면 물류재고 배송 케이스로 FN_GET_NDATE_STR 리드타임 이후의 슬롯만
+            반환. 매장재고가 없고 물류재고만 있는 경우 agent가 True로 호출. Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -88,6 +94,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         shop_id=shop_id,
         cal_day=cal_day,
+        is_logistics_delivery=is_logistics_delivery,
     )
 
     response = client.get_httpx_client().request(
@@ -102,6 +109,7 @@ def sync(
     client: AuthenticatedClient,
     shop_id: str,
     cal_day: str,
+    is_logistics_delivery: bool | Unset = False,
 ) -> HTTPValidationError | StoreDetailResponse | None:
     """매장 상세 정보 및 예약 가능 시간 조회
 
@@ -110,6 +118,8 @@ def sync(
     Args:
         shop_id (str): 매장 ID
         cal_day (str): 조회 날짜 (YYYYMMDD)
+        is_logistics_delivery (bool | Unset): True이면 물류재고 배송 케이스로 FN_GET_NDATE_STR 리드타임 이후의 슬롯만
+            반환. 매장재고가 없고 물류재고만 있는 경우 agent가 True로 호출. Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -123,6 +133,7 @@ def sync(
         client=client,
         shop_id=shop_id,
         cal_day=cal_day,
+        is_logistics_delivery=is_logistics_delivery,
     ).parsed
 
 
@@ -131,6 +142,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     shop_id: str,
     cal_day: str,
+    is_logistics_delivery: bool | Unset = False,
 ) -> Response[HTTPValidationError | StoreDetailResponse]:
     """매장 상세 정보 및 예약 가능 시간 조회
 
@@ -139,6 +151,8 @@ async def asyncio_detailed(
     Args:
         shop_id (str): 매장 ID
         cal_day (str): 조회 날짜 (YYYYMMDD)
+        is_logistics_delivery (bool | Unset): True이면 물류재고 배송 케이스로 FN_GET_NDATE_STR 리드타임 이후의 슬롯만
+            반환. 매장재고가 없고 물류재고만 있는 경우 agent가 True로 호출. Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -151,6 +165,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         shop_id=shop_id,
         cal_day=cal_day,
+        is_logistics_delivery=is_logistics_delivery,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -163,6 +178,7 @@ async def asyncio(
     client: AuthenticatedClient,
     shop_id: str,
     cal_day: str,
+    is_logistics_delivery: bool | Unset = False,
 ) -> HTTPValidationError | StoreDetailResponse | None:
     """매장 상세 정보 및 예약 가능 시간 조회
 
@@ -171,6 +187,8 @@ async def asyncio(
     Args:
         shop_id (str): 매장 ID
         cal_day (str): 조회 날짜 (YYYYMMDD)
+        is_logistics_delivery (bool | Unset): True이면 물류재고 배송 케이스로 FN_GET_NDATE_STR 리드타임 이후의 슬롯만
+            반환. 매장재고가 없고 물류재고만 있는 경우 agent가 True로 호출. Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -185,5 +203,6 @@ async def asyncio(
             client=client,
             shop_id=shop_id,
             cal_day=cal_day,
+            is_logistics_delivery=is_logistics_delivery,
         )
     ).parsed
