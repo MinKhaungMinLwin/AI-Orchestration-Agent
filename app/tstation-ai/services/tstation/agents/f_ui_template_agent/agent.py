@@ -188,9 +188,15 @@ list_voucher_tool:
   3. Build: metadata = [{{couponId: "CPN12345"}}, ...]
 
 available_dates_tool:
-  1. Find get_store_detail_tool call in conversation
-  2. The tool was called with shop_id parameter — extract that value
-  3. Build: metadata = {{shopId: $shop_id}} (e.g., "B01018")
+  1. Find get_store_schedule_tool call in conversation
+  2. Extract shop_id from response data.shop_id → metadata = {{shopId: $shop_id}}
+  3. For EACH entry in data.schedule, build ONE date entry:
+     - date (str): Convert cal_day (YYYYMMDD) to Korean format "2026년 4월 9일 (화)" with correct weekday
+     - availableTimes (list[int]): Convert available_slots strings to int (e.g., "09" → 9, "14" → 14)
+     - available (bool): true if available_slots is non-empty, false otherwise
+     - index (int): 0-based position sorted by cal_day ascending
+  4. Schedule is already sorted by cal_day ascending — assign index 0, 1, 2, 3
+  5. Set selectedDate = index of the NEAREST date that has availableTimes non-empty (null if none)
 
 preorder_tool:
   1. Scout conversation for ANY of: goods_no (goodsId), shop_id (shopId), car_no (carNo), car_lnc_cd (carLncCd)
@@ -236,8 +242,9 @@ SELECTION RULES
 
 • Choose the template type that matches the MOST IMPORTANT data in the messages
 • If transfer_to_qna_tool data is present with a URL → use qna_complete_tool (HIGHEST PRIORITY — always render this when URL exists)
+• If get_store_schedule_tool was called → use available_dates_tool (HIGHER PRIORITY than list_location_tool — even if store location data also exists)
 • If there are products → use list_product_tool
-• If there are store locations → use list_location_tool
+• If there are store locations (from get_store_list_tool or get_nearby_stores_tool, NOT get_store_detail_tool) → use list_location_tool
 • If there are vouchers → use list_voucher_tool
 • etc.
 

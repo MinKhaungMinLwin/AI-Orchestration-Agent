@@ -10,6 +10,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_nearby_stores_tool,
     get_store_list_tool,
     get_store_detail_tool,
+    get_store_schedule_tool,
     save_to_cart_tool,
     quick_order_tool,
     get_order_status_tool,
@@ -105,7 +106,8 @@ Store name examples (for get_store_list_tool store_nm only):
 | search_place_tool | User mentions address or landmark near stores |
 | get_nearby_stores_tool | After search_place_tool returns coordinates |
 | get_store_list_tool | Search stores by region name or store name |
-| get_store_detail_tool | Specific date hours, holidays, reservation slots |
+| get_store_detail_tool | Specific single date hours, holidays, reservation slots |
+| get_store_schedule_tool | Reservation slots for TODAY~+3 days in ONE call (use instead of 4× get_store_detail_tool) |
 | save_to_cart_tool | User chooses cart (no store selected) |
 | quick_order_tool | User selected store, all info confirmed |
 | get_orders_of_user_tool | User asks to see their orders |
@@ -184,9 +186,9 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
    ⚠️ Only show stores that passed the stock check (todayShopArray/tnaShopArray in STEP A, or logistics-available stores in STEP B).
    - If multiple stocked stores: show only stocked store list and ask user to SELECT → then proceed
    - Once single shop_id is determined:
-     get_store_detail_tool(shop_id, TODAY) ~ (+1), (+2), (+3) in parallel
-     → Show earliest available reservation slot: date + time
-     → Empty slots for all days: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
+     get_store_schedule_tool(shop_id) → returns all 4 days (TODAY~+3) in ONE call
+     → UI Template Agent will render datepick card with all dates and slots
+     → Empty slots for all 4 days: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
 
 ⚠️ Flow 3 STRICT RULES:
 - Flow 3 is stock check + visit date ONLY. Do NOT show price information unless user explicitly asked.
@@ -308,7 +310,7 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
      - Even if shop_id is in confirmed slots, always show store list and ask user to SELECT
   2. get_store_list_tool or get_nearby_stores_tool
   3. Show store table (올마이티 | 장착가능 | T바로배송 columns) → wait for user to SELECT a store
-  4. get_store_detail_tool(shop_id, TODAY) → check is_installable:
+  4. get_store_schedule_tool(shop_id) → check is_installable from first day result:
      - false: "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
   5. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool → verify shop in todayShopArray/tnaShopArray
      → NOT found: "선택하신 매장에 재고가 없어요. 다른 매장을 검색해 드릴까요?" → wait
@@ -460,6 +462,7 @@ class TransactionSubAgent(BaseAgent):
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
+        "get_store_schedule_tool": "Store",
         # Cart & Order
         "save_to_cart_tool": "Cart",
         "quick_order_tool": "Quick Order",
@@ -481,6 +484,7 @@ class TransactionSubAgent(BaseAgent):
                 get_nearby_stores_tool,
                 get_store_list_tool,
                 get_store_detail_tool,
+                get_store_schedule_tool,
                 save_to_cart_tool,
                 quick_order_tool,
                 get_orders_of_user_tool,

@@ -209,7 +209,7 @@ def available_dates_tool(
             - index: int - 0-based position in sorted order (0 = earliest date).
             - date: str in format "2026년 4월 9일 (화)" (year년 month월 day일 (weekday)).
             - available: bool - whether date can be selected.
-            - availableTimes: list[int 8-22] - available hours. Empty = fully booked.
+            - availableTimes: list[int 8-22] - available hours (convert available_slots strings to int, e.g. "09"→9). Empty = fully booked.
         metadata: Metadata object containing:
             - shopId (str): Store ID (from shop_id field in domain agent output).
         selectedDate: Selected date index. Rule: optional, int index (0-based).
