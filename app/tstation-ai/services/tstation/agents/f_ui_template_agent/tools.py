@@ -78,7 +78,7 @@ def list_product_tool(
         - imageUrl (str): URL of product image from tool output data (e.g. image_url field). If not available in tool data, use empty string "". NEVER fabricate or guess URLs.
         - title (str): Product name. Rule: required, non-empty string.
         - tires (str): Product tier/category. Rule: optional, string (e.g., "SUV", "Sedan").
-        - comfort (str): Comfort level. Rule: optional, string (e.g., "high", "medium", "low").
+        - comfort (str): Comfort level in Korean. Rule: optional, string (e.g., "높음", "보통", "낮음").
         - price (int): Product price in KRW. Rule: required, 0 <= price.
         - rate (float): Rating score. Rule: required, 0 <= rate <= 5.
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
@@ -209,7 +209,7 @@ def available_dates_tool(
             - index: int - 0-based position in sorted order (0 = earliest date).
             - date: str in format "2026년 4월 9일 (화)" (year년 month월 day일 (weekday)).
             - available: bool - whether date can be selected.
-            - availableTimes: list[int 8-22] - available hours. Empty = fully booked.
+            - availableTimes: list[int 8-22] - available hours (convert available_slots strings to int, e.g. "09"→9). Empty = fully booked.
         metadata: Metadata object containing:
             - shopId (str): Store ID (from shop_id field in domain agent output).
         selectedDate: Selected date index. Rule: optional, int index (0-based).

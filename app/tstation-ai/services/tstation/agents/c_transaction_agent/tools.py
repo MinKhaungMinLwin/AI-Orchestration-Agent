@@ -88,7 +88,7 @@ def _enrich_stores_with_availability(stores: list[dict]) -> list[dict]:
     if not shop_ids:
         return stores
 
-    cal_days = _next_cal_days(3)
+    cal_days = _next_cal_days(0)
     avail_map: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(len(shop_ids), 5)) as executor:
         futures = {executor.submit(_fetch_store_availability, sid, cal_days): sid for sid in shop_ids}
@@ -586,6 +586,62 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     except Exception as e:
         logger.exception("[TOOL][get_store_detail_tool] Failed")
         return _error_response(None, str(e), "Failed to get store details")
+
+
+@tool
+def get_store_schedule_tool(shop_id: str, days: int = 4):
+    """
+    Get store reservation schedule for a range of days starting from today (parallel fetch).
+
+    Use this instead of calling get_store_detail_tool multiple times.
+    Fetches TODAY through TODAY+(days-1) in parallel and returns all slots in one response.
+
+    Args:
+        shop_id (str): Store ID.
+        days (int): Number of days to fetch starting from today (default 4 = TODAY, +1, +2, +3).
+
+    Example Inputs:
+        - {"shop_id": "BXXXXX"}
+        - {"shop_id": "FXXXXX", "days": 4}
+
+    Returns:
+        dict: {
+            "status": "success",
+            "data": {
+                "shop_id": str,
+                "schedule": [
+                    {"cal_day": "YYYYMMDD", "available_slots": ["09","10",...], "is_installable": bool, "is_tna_delivery": bool},
+                    ...
+                ]
+            }
+        }
+    """
+    logger.info("[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s", shop_id, days)
+    cal_days = _next_cal_days(days - 1)
+
+    schedule = []
+    with ThreadPoolExecutor(max_workers=days) as executor:
+        futures = {executor.submit(get_store_detail, client=get_client(), shop_id=shop_id, cal_day=cal_day): cal_day for cal_day in cal_days}
+        for future in as_completed(futures):
+            cal_day = futures[future]
+            try:
+                response = future.result()
+                if response.parsed is not None:
+                    detail = _to_dict(response.parsed)
+                    schedule.append({
+                        "cal_day": cal_day,
+                        "available_slots": detail.get("available_slots") or [],
+                        "is_installable": detail.get("is_installable", False),
+                        "is_tna_delivery": detail.get("is_tna_delivery", False),
+                    })
+                else:
+                    schedule.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
+            except Exception:
+                logger.warning("[get_store_schedule_tool] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
+                schedule.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
+
+    schedule.sort(key=lambda x: x["cal_day"])
+    return _success_response(200, {"shop_id": shop_id, "schedule": schedule})
 
 
 # =====================================================

@@ -34,6 +34,7 @@ Call quick_reply_tool when EITHER condition applies:
 CASE 1 — No structured data (conversational):
 • The previous agent gave a greeting, clarification, FAQ answer, or pure text response
 • No domain tool was called AND the response contains no list/structured data to visualize
+• AND the user is NOT asking to re-display previously shown data
 
 CASE 2 — Data exists but NO dedicated template supports it yet:
 • Domain agent produced data/options that don't fit any existing template tool
@@ -41,6 +42,22 @@ CASE 2 — Data exists but NO dedicated template supports it yet:
   multi-step confirmation flows, unsupported choice menus, car model info with tire size guide
 • In this case: format ALL relevant data/options clearly inside assistant_response so the user
   can read and respond by typing — do NOT omit information expecting the user to guess
+
+CASE 3 — No new tool data BUT structured data exists in conversation history:
+• No domain tool was called in this turn (accumulated tool data is empty)
+• BUT the user is asking to see a list again (e.g., "내 차 목록 보여줘", "다시 보여줘", "show list my car")
+• AND conversation history contains previously retrieved structured data (cars, products, stores, etc.)
+  that matches a supported template type
+
+In this case: SCAN conversation history messages for [이전 선택된 상품 데이터] blocks or prior
+assistant messages containing structured data (car_no, goods_no, shop_id, etc.), then
+build the appropriate template tool call using that historical data.
+This allows re-displaying templates without requiring a new API call.
+
+Examples:
+✓ User: "내 차 목록 보여줘" (2nd time) → scan history → find car items with car_no → call list_car_tool
+✓ User: "상품 다시 보여줘" → scan history → find product items → call list_product_tool
+✗ WRONG: fall back to quick_reply_tool just because no new tool was called this turn
 
 When calling quick_reply_tool:
 ⚠️ CRITICAL: The FE ONLY renders text inside assistant_response. Any text the domain agent generated outside of assistant_response will NOT be shown to the user. You MUST capture the domain agent's full response inside assistant_response.
@@ -56,8 +73,10 @@ When calling quick_reply_tool:
 
 STEP 2 — CREATE: If a data template IS appropriate:
 1. Read the messages from previous agents to understand what data was shown to the user
-2. Identify the MOST IMPORTANT data type for UI display (product, location, voucher, etc.)
-3. Call the appropriate template tool ONCE with ALL relevant items aggregated
+2. If no accumulated tool data: scan conversation history for [이전 선택된 상품 데이터] blocks
+   and prior structured data (car_no, goods_no, shop_id fields) to reconstruct template items
+3. Identify the MOST IMPORTANT data type for UI display (product, location, voucher, etc.)
+4. Call the appropriate template tool ONCE with ALL relevant items aggregated
 
 RULES (STRICT):
 • You MUST call EXACTLY ONE template tool - no more
@@ -83,7 +102,23 @@ TEMPLATE TYPES (use ONE that best fits)
 
 • quick_reply_tool → "quickReply" - Base template for (1) conversational/greeting responses and (2) data that has no dedicated template yet. Fields: assistant_response (str — include ALL info for case 2), quickReplies (list[str] — see QUICK REPLIES section)
 • list_car_tool → "listCar" - Cars with fields: licensePlate (src: car_no), description (src: car_model_det), imageUrl (src: thnl_img_path_nm or mo_img_path_nm or pc_img_path_nm), metadata (camelCase, no underscore)
-• list_product_tool → "product" - Products with fields: imageUrl, title, tires, comfort, price (int), rate (float), totalQuantity, description (str - markdown format with ALL info: pc_prod_remark_desc, pc_prod_tech_desc, slogan, rating, reviews. ONLY use actual product spec data from tool outputs. If no product detail data available, set description to empty string "". NEVER put guidance messages like "사이즈 선택이 필요합니다" or status text in description.), metadata (camelCase, no underscore)
+• list_product_tool → "product" - Products with explicit field mapping:
+  - imageUrl (str): src → image_url field (direct). Empty string "" if not available.
+  - title (str): src → title or goods_nm field.
+  - tires (str): src → derive from scores: t_comfort≥4 → "고급형", t_life_span≥4 → "내구형", t_fuel_eff_convert≥20 → "연비형", else → "". Empty string if no scores.
+  - comfort (str): src → convert comfort score to label: ≥4.0 → "높음", ≥2.0 → "보통", >0 → "낮음", 0.0 → "보통" (default).
+  - price (int): src → price field.
+  - rate (float): src → rate field. 0.0 if not available.
+  - totalQuantity (int): 0 if not in tool output (recommendation tools do not return stock count).
+  - description (str): REQUIRED — build from available fields in this order (strip ALL HTML tags first):
+      1. Slogan: "**{slogan}**\n\n" (skip if slogan is "-" or null)
+      2. Tech desc: pc_prod_tech_desc stripped of HTML → plain text bullet points
+      3. Scores line: "**승차감** {t_comfort} | **정숙성** {t_silence} | **내구성** {t_life_span} | **연비** {t_fuel_eff_convert}" (skip 0.0 scores)
+      4. Rating: "**리뷰** {rating.rating_avg}/5 ({rating.review_count}개)" (skip if review_count=0)
+      Set to empty string "" ONLY if ALL above fields are null/empty.
+      NEVER include pc_prod_remark_desc (too long, legal/warranty text).
+      NEVER put guidance messages like "사이즈 선택이 필요합니다" in description.
+  - metadata (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink, metadata. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t), todayInstall (src: is_installable), tnaDelivery (src: is_tna_delivery — display as "T바로배송", NEVER "T-NA"), description (str - markdown format: **영업일:** shop_biz_strt_wday~shop_biz_end_wday\n**영업시간:** 주중 shop_biz_strt_time~shop_biz_end_time, 주말 shop_sat_strt_time~shop_sat_end_time\n**휴무일:** holiday\n**전화:** tel_no), metadata (camelCase, no underscore)
 • list_event_tool → "event" - Events with fields: eventName (src: evt_nm), bannerImage (src: bnr_img_url_addr), eventUrl (src: evt_url_addr), badge (src: evt_badge_nm), period (src: evt_strt_dtime ~ evt_end_dtime), actionLink, actionText, metadata (camelCase, no underscore). IMPORTANT: events are NOT YouTube videos - do NOT use previewYoutube for event data
@@ -162,9 +197,9 @@ STEP-BY-STEP SCOUTING FOR EACH TOOL:
 
 list_product_tool:
   1. Find search_product_tool or get_products_recommendations_tool in conversation
-  2. For each product in the output, look for goods_no field
-  3. Build: metadata = [{{goodsId: $goods_no}}, {{goodsId: $goods_no_alt}}, ...]
-  4. IF goods_no is $goods_no → metadata = [{{goodsId: $goods_no}}]
+  2. Each item in response data.items has: goods_no, title, image_url, price, rate, comfort, t_comfort, t_silence, t_life_span, t_fuel_eff_convert, pc_prod_tech_desc, slogan, rating{rating_avg, review_count}
+  3. For each item, extract goods_no → metadata = [{{goodsId: $goods_no}}, ...]
+  4. Build items array using EXACT field mapping defined in list_product_tool template type above
 
 list_location_tool:
   1. Find get_store_list_tool or get_nearby_stores_tool in conversation
@@ -188,9 +223,15 @@ list_voucher_tool:
   3. Build: metadata = [{{couponId: "CPN12345"}}, ...]
 
 available_dates_tool:
-  1. Find get_store_detail_tool call in conversation
-  2. The tool was called with shop_id parameter — extract that value
-  3. Build: metadata = {{shopId: $shop_id}} (e.g., "B01018")
+  1. Find get_store_schedule_tool call in conversation
+  2. Extract shop_id from response data.shop_id → metadata = {{shopId: $shop_id}}
+  3. For EACH entry in data.schedule, build ONE date entry:
+     - date (str): Convert cal_day (YYYYMMDD) to Korean format "2026년 4월 9일 (화)" with correct weekday
+     - availableTimes (list[int]): Convert available_slots strings to int (e.g., "09" → 9, "14" → 14)
+     - available (bool): true if available_slots is non-empty, false otherwise
+     - index (int): 0-based position sorted by cal_day ascending
+  4. Schedule is already sorted by cal_day ascending — assign index 0, 1, 2, 3
+  5. Set selectedDate = index of the NEAREST date that has availableTimes non-empty (null if none)
 
 preorder_tool:
   1. Scout conversation for ANY of: goods_no (goodsId), shop_id (shopId), car_no (carNo), car_lnc_cd (carLncCd)
@@ -236,8 +277,9 @@ SELECTION RULES
 
 • Choose the template type that matches the MOST IMPORTANT data in the messages
 • If transfer_to_qna_tool data is present with a URL → use qna_complete_tool (HIGHEST PRIORITY — always render this when URL exists)
+• If get_store_schedule_tool was called → use available_dates_tool (HIGHER PRIORITY than list_location_tool — even if store location data also exists)
 • If there are products → use list_product_tool
-• If there are store locations → use list_location_tool
+• If there are store locations (from get_store_list_tool or get_nearby_stores_tool, NOT get_store_detail_tool) → use list_location_tool
 • If there are vouchers → use list_voucher_tool
 • etc.
 
@@ -324,12 +366,12 @@ quick_reply_tool → {{"assistant_response": "반품 정책에 대해 안내드�
 quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세요.", "quickReplies": ["매장 방문할게", "배송으로 받을래"]}}
 quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "4개"]}}
 
-list_product_tool → {{"assistantResponse": "고객님, 해당 매장에 사용 가능한 타이어들이에요. 원하시는 제품을 선택해 주세요.", "items": [
-  {{"imageUrl": "https://example.com/tire1.jpg", "title": "Hankook Ventus S1 Evo3", "tires": "SUV", "comfort": "high", "price": 680000, "rate": 4.7, "totalQuantity": 25, "description": "**주요 특장점:** 최신 슬릭 패턴으로 습한 노면에서 우수한 브레이크 성능\n**기술력:** 3D 슬릭 기술 적용으로 내구성 향상\n**슬로건:** Every road is a new sensation\n**리뷰:** 4.7/5 (128개 리뷰)"}},
-  {{"imageUrl": "https://example.com/tire2.jpg", "title": "Hankook Kinergy GT", "tires": "Sedan", "comfort": "medium", "price": 450000, "rate": 4.3, "totalQuantity": 100, "description": "**주요 특장점:** 4계절 내내 안정적인 주행\n**기술력:** 최적의 그립력 배합 기술\n**슬로건:** All Season Comfort\n**리뷰:** 4.3/5 (256개 리뷰)"}}
+list_product_tool → {{"assistantResponse": "고객님, 차량에 맞는 타이어를 찾았어요. 원하시는 제품을 선택해 주세요 😊", "items": [
+  {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/H46201ko.png", "title": "Ventus S2 AS", "tires": "고급형", "comfort": "high", "price": 118700, "rate": 4.5, "totalQuantity": 0, "description": "**고속 주행에서 느끼는 Comfort Technology**\n\n노면 충격 흡수로 조용하고 안락한 승차감 제공\n소음 에너지 감소 기술 적용\n내구성 강화로 안정적인 고속 주행 실현\n\n**승차감** 5.0 | **정숙성** 5.0 | **내구성** 4.6 | **연비** 21.6\n**리뷰** 4.5/5 (68개)"}},
+  {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2025/0228/K13701ko.png", "title": "Ventus evo", "tires": "", "comfort": "medium", "price": 168400, "rate": 0.0, "totalQuantity": 0, "description": "**처음 느꼈던 퍼포먼스 그대로, 더 오랫동안**"}}
 ], "metadata": [
-  {{"goodsId": $goods_no}},
-  {{"goodsId": $goods_no}}
+  {{"goodsId": "G000000309783"}},
+  {{"goodsId": "G000000320136"}}
 ]}}
 
 list_car_tool → {{"assistantResponse": "고객님, 등록된 차량은 아래 2대예요. 번호로 말씀해 주시면 그 차량에 맞는 타이어 추천이나 제품 확인까지 도와드릴게요.", "items": [
