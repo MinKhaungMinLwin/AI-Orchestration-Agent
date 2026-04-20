@@ -82,12 +82,12 @@ class BaseAgent(ABC):
             name=self.name,
         )
 
-    def invoke(self, messages: list[dict]) -> str:
+    def invoke(self, messages: list[dict], config: dict | None = None) -> str:
         agent = self._build_agent()
-        result = agent.invoke({"messages": messages})
+        result = agent.invoke({"messages": messages}, config=config)
         return result["messages"][-1].content
 
-    def stream(self, messages: list[dict]):
+    def stream(self, messages: list[dict], config: dict | None = None):
         """
         Supported Stream modes:
         - status: Lifecycle markers — thinking (start), answering (before first token)
@@ -106,6 +106,7 @@ class BaseAgent(ABC):
         for mode, chunk in agent.stream(
             {"messages": messages},
             stream_mode=["messages", "updates"],
+            config=config,
         ):
             if mode == "messages":
                 token, _ = chunk
@@ -151,7 +152,7 @@ class BaseAgent(ABC):
 
         yield {"type": "token", "content": "\n\n"}
 
-    def stream_template(self, messages: list[dict]):
+    def stream_template(self, messages: list[dict], config: dict | None = None):
         """
         Stream that transforms tool calls into data template events.
         Yields ONLY data events (no token or agent_flow events).
@@ -168,6 +169,7 @@ class BaseAgent(ABC):
         for mode, chunk in agent.stream(
             {"messages": messages},
             stream_mode=["messages", "updates"],
+            config=config,
         ):
             if mode == "updates":
                 for node, update in chunk.items():

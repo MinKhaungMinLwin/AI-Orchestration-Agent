@@ -1,9 +1,11 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from api.router import router
 from config.env import settings
 from config.log import setup_logging
+from config.tracing import tracer
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +17,13 @@ setup_logging(
 )
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Tracer is already initialised at import time; flush on shutdown.
+    yield
+    tracer.flush()
+
+
 app = FastAPI(
     root_path=settings.ROOT_PATH,
     title=f"{settings.PROJECT_NAME.upper()} APIs {settings.ENV.value.upper()}",
@@ -22,6 +31,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

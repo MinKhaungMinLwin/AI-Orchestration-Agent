@@ -55,14 +55,16 @@ def get_qc_chain(llm):
     ])
     return prompt | llm | StrOutputParser()
 
-def invoke_qc(llm, user_query: str, draft_response: str, source_data: str) -> str:
+def invoke_qc(llm, user_query: str, draft_response: str, source_data: str, config: dict | None = None) -> str:
     logger.info("[QC_AGENT] Invoking QC check...")
     chain = get_qc_chain(llm)
     return chain.invoke({
         "user_query": user_query, 
         "draft_response": draft_response, 
         "source_data": source_data
-    })
+        },
+        config=config
+    )
 
 def stream_qc(llm, user_query: str, draft_response: str, source_data: str):
     logger.info("[QC_AGENT] Streaming QC check...")

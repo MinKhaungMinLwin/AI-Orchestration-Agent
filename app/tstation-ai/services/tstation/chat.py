@@ -82,9 +82,14 @@ def decide_next_action(
     original_messages: list[dict],
     previous_agent_response: str,
     previous_domain: str,
+    *,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    trace_id: str | None = None,
 ) -> AgentDecision:
     from langchain_litellm import ChatLiteLLM
     from langchain_core.messages import SystemMessage, HumanMessage
+    from config.tracing import build_trace_config
 
     llm = ChatLiteLLM(
         api_base=settings.AI_GATEWAY_BASE_URL,
@@ -112,8 +117,16 @@ def decide_next_action(
         Please decide the next action.
     """))
 
+    trace_config = build_trace_config(
+        run_name="decide_next_action",
+        session_id=session_id,
+        user_id=user_id,
+        trace_id=trace_id,
+        tags=["router", "decide_next_action"],
+    )
+
     try:
-        result: AgentDecision = structured_model.invoke([system_msg, human_msg])
+        result: AgentDecision = structured_model.invoke([system_msg, human_msg], config=trace_config)
         return result
     except Exception as e:
         logger.warning(f"[DECISION] LLM decision failed: {e}")
@@ -293,7 +306,14 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
 
-    def classify_multi_intent(self, messages: list) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
+    def classify_multi_intent(
+        self,
+        messages: list,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
         """Classify user message into one or more domains.
 
         Returns:
@@ -301,6 +321,7 @@ class StreamingMultiAgentCoordinator:
         """
         from langchain_litellm import ChatLiteLLM
         from langchain_core.messages import SystemMessage
+        from config.tracing import build_trace_config
 
         llm = ChatLiteLLM(
             api_base=settings.AI_GATEWAY_BASE_URL,
@@ -317,7 +338,14 @@ class StreamingMultiAgentCoordinator:
             system_msg = SystemMessage(content=prompt_router_multi())
             all_messages = [system_msg] + list(messages)
 
-            result: MultiAgentDomain = structured_model.invoke(all_messages)
+            trace_config = build_trace_config(
+                run_name="classify_multi_intent",
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+                tags=["router", "classify_multi_intent"],
+            )
+            result: MultiAgentDomain = structured_model.invoke(all_messages, config=trace_config)
             logger.info(f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}")
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -487,6 +515,8 @@ class StreamingMultiAgentCoordinator:
         slot_context: str | None = None,
         session_id: str | None = None,
         tool_context: str | None = None,
+        user_id: str | None = None,
+        trace_id: str | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -497,15 +527,24 @@ class StreamingMultiAgentCoordinator:
             slot_context: Formatted slot context string to inject into agent messages
             session_id: Session ID for persisting tool-derived slots (goods_no, shop_id)
             tool_context: Formatted tool results from previous turn for context preservation
+            user_id: User ID for Langfuse tracing
+            trace_id: Trace ID to group all LLM calls of this request under one trace
 
         Yields:
             Stream events from all agents in sequence
         """
+        from config.tracing import build_trace_config
+
         # Classify if domains not provided
         # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
         original_messages = list(messages)
         if domains is None:
-            domains, routing_result = self.classify_multi_intent(messages)
+            domains, routing_result = self.classify_multi_intent(
+                messages,
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
             messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
         if not domains:
@@ -608,7 +647,14 @@ class StreamingMultiAgentCoordinator:
             # Stream from agent and yield events immediately
             full_response = ""
             last_agent_called_tools = False
-            for event in agent.stream(enriched_messages):
+            agent_trace_config = build_trace_config(
+                run_name=f"{domain_key}_agent",
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+                tags=[domain_key, "agent"],
+            )
+            for event in agent.stream(enriched_messages, config=agent_trace_config):
                 # Tag with source domain for UI
                 event["source_domain"] = domain_key
                 yield event
@@ -664,6 +710,9 @@ class StreamingMultiAgentCoordinator:
                     original_messages=messages,
                     previous_agent_response=full_response,
                     previous_domain=domain_key,
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
                 )
                 logger.info(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
 
@@ -778,7 +827,14 @@ class StreamingMultiAgentCoordinator:
 
                 # Stream from UI Template Agent (use stream_template to get data events)
                 ui_template_yielded_data = False
-                for event in ui_template_subagent.stream_template(ui_messages):
+                ui_trace_config = build_trace_config(
+                    run_name="ui_template_agent",
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    tags=["ui_template", "agent"],
+                )
+                for event in ui_template_subagent.stream_template(ui_messages, config=ui_trace_config):
                     event["source_domain"] = "ui_template"
                     if event.get("type") == "data":
                         ui_template_yielded_data = True
@@ -1108,13 +1164,26 @@ class TStationChatServiceV2:
 
         # Domain classification (separate from slot processing — must not fail)
         # Also injects conversation context (user_behavior, next_action, flow) into messages
-        domains, routing_result = _coordinator.classify_multi_intent(messages)
+        domains, routing_result = _coordinator.classify_multi_intent(
+            messages,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            trace_id=request.tracing_id,
+        )
         messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
-                TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id, tool_context),
+                TStationChatServiceV2._stream_response_multi(
+                    messages,
+                    domains,
+                    slot_context,
+                    request.session_id,
+                    tool_context,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1128,7 +1197,15 @@ class TStationChatServiceV2:
             final_content = ""
             last_message_content = ""
 
-            for event_str in TStationChatServiceV2._stream_response_multi(messages, domains, slot_context, request.session_id, tool_context):
+            for event_str in TStationChatServiceV2._stream_response_multi(
+                messages,
+                domains,
+                slot_context,
+                request.session_id,
+                tool_context,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+            ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
                     if json_str and json_str != "[DONE]":
@@ -1168,6 +1245,8 @@ class TStationChatServiceV2:
         slot_context: str | None = None,
         session_id: str | None = None,
         tool_context: str | None = None,
+        user_id: str | None = None,
+        trace_id: str | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
 
@@ -1191,7 +1270,15 @@ class TStationChatServiceV2:
         from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP
         _suppress_tokens = False
 
-        for event in _coordinator.stream(messages, domains=domains, slot_context=slot_context, session_id=session_id, tool_context=tool_context):
+        for event in _coordinator.stream(
+            messages,
+            domains=domains,
+            slot_context=slot_context,
+            session_id=session_id,
+            tool_context=tool_context,
+            user_id=user_id,
+            trace_id=trace_id,
+        ):
             event_type = event.get("type")
 
             # --- INTERCEPT TOKENS (Draft Response & TTFT Fix) ---
@@ -1292,7 +1379,16 @@ class TStationChatServiceV2:
                 final_qc_text = ""
                 try:
                     # FIX: Bulk invoke instead of streaming
-                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str)
+                    from config.tracing import build_trace_config
+
+                    qc_trace_config = build_trace_config(
+                        run_name="qc_agent",
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        tags=["qc", "agent"],
+                    )
+                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str, config=qc_trace_config)
 
                     if qc_result.strip().upper() == "PASS":
                         final_qc_text = draft_response
