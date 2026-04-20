@@ -88,7 +88,7 @@ def _enrich_stores_with_availability(stores: list[dict]) -> list[dict]:
     if not shop_ids:
         return stores
 
-    cal_days = _next_cal_days(3)
+    cal_days = _next_cal_days(0)
     avail_map: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(len(shop_ids), 5)) as executor:
         futures = {executor.submit(_fetch_store_availability, sid, cal_days): sid for sid in shop_ids}

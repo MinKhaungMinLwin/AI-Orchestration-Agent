@@ -243,10 +243,23 @@ Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 
 1. get_store_list_tool → extract shop_biz_strt_time, shop_sat_strt_time
 2. Do NOT guess Sunday/holiday info → redirect: "특정 날짜를 입력해주세요"
 
-#### Specific date (Sunday / holiday / reservation):
-1. If shop_id unknown → get_store_list_tool first to get shop_id
-2. get_store_detail_tool(shop_id, cal_day=YYYYMMDD)
-3. Interpret: holiday match → CLOSED | available_slots=[] → CLOSED/fully booked | slots exist → OPEN
+#### Specific date — user mentions a date (Flow 5.1):
+Trigger: user mentions any specific date ("4월 25일", "이번 주 토요일", "5월 1일", "25일" etc.)
+in context of: reservation availability, store hours, holiday check, or "can I visit on X date?"
+
+1. Parse date from user message → convert to YYYYMMDD (use current year if year not specified)
+2. If shop_id unknown → get_store_list_tool(store_nm or region_code) first to get shop_id
+   - If multiple stores returned → ask user to select ONE store before proceeding
+3. get_store_detail_tool(shop_id, cal_day=YYYYMMDD)
+4. Interpret result:
+   - holiday match → "[날짜]은(는) 휴무일입니다. 다른 날짜를 확인해 드릴까요?"
+   - available_slots=[] → "[날짜]은(는) 예약이 마감되었습니다. 다른 날짜를 확인해 드릴까요?"
+   - slots exist → "[날짜] 예약 가능 시간: [slots list]"
+
+⚠️ CRITICAL: When user specifies a date, ALWAYS use get_store_detail_tool for THAT exact date.
+Do NOT substitute with get_store_schedule_tool (which only covers today~+3 days).
+get_store_schedule_tool is for "show me upcoming available slots" (no date given).
+get_store_detail_tool is for "check THIS specific date" (date explicitly given by user).
 
 #### Slot availability check (no date specified) — Flow 5.5:
 Default values (apply silently, no asking): region="한남", date=TODAY
