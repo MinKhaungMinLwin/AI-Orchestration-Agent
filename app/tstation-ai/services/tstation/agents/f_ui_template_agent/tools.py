@@ -63,7 +63,7 @@ def list_car_tool(
 @tool
 def list_product_tool(
     assistant_response: Annotated[str, "Message text to display with template"],
-    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int), description (str)"],
+    items: Annotated[list[dict], "List of products. Each: imageUrl (str), title (str), tires (str), comfort (str), price (int), rate (float), totalQuantity (int)"],
     metadata: Annotated[list[dict], "List of metadata objects. Each: goodsId (str, required). Rule: REQUIRED — must be provided."],
 ) -> dict:
     """Render product list cards.
@@ -82,16 +82,6 @@ def list_product_tool(
         - price (int): Product price in KRW. Rule: required, 0 <= price.
         - rate (float): Rating score. Rule: required, 0 <= rate <= 5.
         - totalQuantity (int): Total stock quantity. Rule: required, 0 <= totalQuantity.
-        - description (str): Comprehensive product info in markdown format. Include ALL available from product data:
-            • pc_prod_remark_desc: 주요 특장점
-            • pc_prod_tech_desc: 기술력 설명
-            • slogan: 슬로건
-            • rating: 리뷰 수 및 평균 평점
-            • Any other available fields
-            Format as readable markdown with sections.
-            IMPORTANT: ONLY use actual product spec data from tool outputs.
-            If no product detail data (pc_prod_remark_desc etc.) is available, set to empty string "".
-            NEVER put guidance/status messages (e.g. "사이즈 선택이 필요합니다") in this field.
 
     Returns:
         {"status": "success", "http_status": 200, "data": {"products": items, "assistantResponse": assistant_response, "metadata": metadata}}

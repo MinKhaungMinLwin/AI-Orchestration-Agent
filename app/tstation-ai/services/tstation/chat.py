@@ -58,59 +58,23 @@ def prompt_router() -> str:
 
     DECISION RULES:
 
-    STOP when:
-    - Single-domain request completed
-    - Response is greeting, farewell, or acknowledgment
-    - Agent asks user for more information (e.g., user needs to provide input)
+    DEFAULT: STOP after every agent turn.
+    Each agent does its ONE job, returns the result, and waits for the user's next explicit action.
+    The user drives every step — agents never auto-chain into the next domain.
 
-    CONTINUE when:
-    - User asked multi-domain question (e.g., "recommend AND tell price")
-    - Example flows:
-      * DISCOVERY → TRANSACTION: recommendation + price
-      * DISCOVERY → TRANSACTION: recommendation + purchase
-      * TRANSACTION: price + buy/reserve (single agent handles all)
-    - Agent needs another agent's tools to complete the request
+    ONLY CONTINUE when the agent was routed to the WRONG domain and cannot complete the task:
+    - Transaction Agent has no product search tools → needs goods_no → CONTINUE → DISCOVERY
+    - Discovery Agent has no price/order/store tools → CONTINUE → TRANSACTION
+    - Discovery Agent says "다른 사이즈로 검색" (internal retry) → CONTINUE → DISCOVERY
 
-    ⚠️ CRITICAL HANDOVER RULES:
-    - Transaction Agent says "검색", "확인하기 위해", "상품 번호를 확인" → CONTINUE → DISCOVERY
-      (Agent needs Discovery tools: search_product, get_user_vehicles, check_compatibility)
-    - Discovery Agent completed product search with goods_no → CONTINUE → TRANSACTION
-      (Transaction Agent will handle: price lookup, quantity check, store selection, cart/order)
-    - Discovery Agent says "다른 사이즈로 검색" → CONTINUE → DISCOVERY
-    - Agent asks user to input tire size manually → STOP (wait for user input)
-    - Transaction Agent asks user to select quantity → STOP (wait for user input)
-    - Transaction Agent asks user to choose store vs cart → STOP (wait for user input)
+    STOP in ALL other cases:
+    - Agent completed its task (showed products, stores, prices, schedule, etc.) → STOP
+    - Agent is showing a list waiting for user selection (cars, tires, stores) → STOP
+    - Agent asks user for any input → STOP
+    - Pre-order preview shown → STOP
+    - Any confirmation step → STOP
 
-⚠️ PRE-ORDER PREVIEW FLOW RULES:
-    - Transaction Agent shows pre-order preview (Flow 5.5) → STOP (wait for user confirmation)
-    - User confirms order ("바로 주문", "주문할게") → CONTINUE → TRANSACTION (quick_order_tool)
-    - User selects from recommendActions → STOP (wait for user input, Transaction handles update)
-    - User says "장바구니로" / "나중에" → STOP (Transaction handles save_to_cart_tool)
-    - User says "예약 날짜 없이 진행" → STOP (Transaction handles isReadyToAddToCart flow)
-    - Pre-order preview with missing bookingDateTime → recommendActions shown → STOP
-
-    KEY PRINCIPLE: If agent says it will search but has no tools to search → HANDOVER NEEDED.
-
-    ⚠️ CRITICAL RULE — DISCOVERY → TRANSACTION DETECTION:
-        If the Discovery Agent response contains goods_no (e.g., G000000XXXXXX)
-        AND the **Original User Request** contains any of these keywords:
-        "가격", "얼마", "비용", "주문", "구매", "사고 싶", "살게",
-        "매장", "재고", "장착", "배송", "예약",
-        you MUST return next_action=CONTINUE and next_domain="transaction".
-
-        ⚠️ IMPORTANT: Check the **Original User Request** for intent keywords,
-        NOT just the agent response. The agent response may only describe the product
-        without mentioning the user's full intent (price, stock, store, order).
-
-        This applies to ALL of:
-        - Price queries: Discovery found goods_no → Transaction gets price
-        - Order queries: Discovery found goods_no → Transaction handles order
-        - Store queries: Discovery found goods_no → Transaction finds stores / checks inventory
-        - Installation queries: Discovery found goods_no → Transaction checks today install / T-NA delivery
-        - Inventory queries: Discovery found goods_no → Transaction checks stock
-
-        Do NOT return STOP when Discovery has found goods_no and the original
-        user request includes price/order/store/inventory/installation intent.
+    KEY PRINCIPLE: One agent, one turn, one job. User explicitly triggers the next step.
     """)
 
 
@@ -243,387 +207,76 @@ DOMAINS:
 - LEADING: Greeting, unclear intent
 
 ====================================================
-FLOW SEQUENCES (Tool/Agent Chains)
+DOMAIN ROUTING EXAMPLES
 ====================================================
 
-Map user queries to the correct flow sequence:
+DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
+1. "i want to buy tires for 29조3344" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
+2. "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
+3. "벤투스 S2 가격" / "Dynapro HPX 얼마야?" → DISCOVERY (resolve goods_no first → STOP)
+4. "벤투스 S2 재고 확인해줘" → DISCOVERY (resolve goods_no → STOP)
+5. "벤투스 S2 AS 살 수 있는 매장" → DISCOVERY (resolve goods_no → STOP)
+6. "이벤트 알려줘" / "기획전 정보" → DISCOVERY
+7. "타이어 리뷰 영상 보여줘" → DISCOVERY
+8. "추천 타이어들 가격 비교해줘" → DISCOVERY (compare_discount_tool is in Discovery)
 
-EXAMPLE QUERIES → FLOW:
+TRANSACTION — price/stock/store/order with goods_no already known in context:
+1. "{{goods_no}} 가격 얼마야?" → TRANSACTION
+2. "주문할게" / "바로 주문할게" → TRANSACTION
+3. "장바구니에 담아줘" → TRANSACTION
+4. "강남 매장 찾아줘" / "근처 매장" → TRANSACTION
+5. "한남점 예약 가능한 날짜 알려줘" → TRANSACTION
+6. "주문 내역 확인해줘" → TRANSACTION
+7. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
 
-1. "쏘나타에 맞는 타이어 추천하고 가격 알려줘"
-   "Recommend tires for Sonata and tell me the price"
-   → DISCOVERY → TRANSACTION
-   (Compatibility → Recommendation → Price)
+SUPPORT — policy, warranty, human agent:
+1. "보증 정책 알려줘" / "반품 가능해?" → SUPPORT
+2. "1:1 문의 작성해줘" / "상담원 연결" → SUPPORT
 
-2. "추천 타이어 중 재고 있는 매장 알려줘"
-   "Show stores that have recommended tires in stock"
-   → DISCOVERY → TRANSACTION
-   (Recommendation → Store Inventory)
-
-3. "벤투스 S1 evo3 가격이랑 강남점 재고 알려줘"
-   "Tell me Ventus S1 evo3 price and Gangnam stock"
-   → DISCOVERY → TRANSACTION
-   (Product Name Search → goods_no Resolution → Price + Store Inventory)
-   ⚠️ goods_no NOT known → DISCOVERY first to resolve goods_no, then TRANSACTION for price/inventory
-
-4. "내 차에 맞는 타이어 추천하고 바로 주문할게"
-   "Recommend tires for my car and I'll order immediately"
-   → DISCOVERY → TRANSACTION
-   (Compatibility → Recommendation → Purchase)
-
-5. "타이어 추천하고 할인 가격 알려줘"
-   "Recommend tires and tell me discounted price"
-   → DISCOVERY → TRANSACTION
-   (Recommendation → Price)
-
-6. "추천 타이어 중 재고 있는 것만 보여줘"
-   "Show only recommended tires that are in stock"
-   → DISCOVERY → TRANSACTION
-   (Recommendation → Inventory)
-
-7. "추천 타이어 가격 비교해줘"
-   "Compare the prices of recommended tires"
-   → DISCOVERY → TRANSACTION
-   (Recommendation → Price)
-
-8. "벤투스 S1 evo3 설명하고 가격 알려줘"
-   "Explain Ventus S1 evo3 and tell me the price"
-   → DISCOVERY → TRANSACTION
-   (Description → Price)
-
-8.1. "Dynapro HPX 가격 얼마야?"
-     "How much is Dynapro HPX?"
-     → DISCOVERY → TRANSACTION
-     (Product Name Search with JWT tire size → Price)
-     ⚠️ goods_no NOT known → DISCOVERY first, NOT TRANSACTION alone
-
-8.2. "벤투스 S2 가격"
-     "Ventus S2 price"
-     → DISCOVERY → TRANSACTION
-     (Product Name Search → Price)
-
-8.3. "스콜피온제로 2755519 재고있어?"
-     "Is Scorpion Zero 275/55R19 in stock?"
-     → DISCOVERY → TRANSACTION
-     (Product Name + Size Search → goods_no Resolution → Logistics Inventory Check)
-     ⚠️ goods_no NOT known → DISCOVERY first, NOT TRANSACTION alone
-
-8.4. "벤투스 S2 재고 확인해줘"
-     "Check Ventus S2 stock"
-     → DISCOVERY → TRANSACTION
-     (Product Name Search → goods_no Resolution → Logistics Inventory Check)
-
-9. "추천 타이어 중 강남점 재고 알려줘"
-   "Show Gangnam store stock for recommended tires"
-   → DISCOVERY → TRANSACTION
-   (Recommendation → Store Inventory)
-
-10. "쏘나타 타이어 추천하고 장착 예약할게"
-    "Recommend tires for Sonata and make installation reservation"
-    → DISCOVERY → TRANSACTION
-    (Compatibility → Recommendation → Reservation)
-
-11. "강남점 재고 있는 타이어 가격 알려줘"
-    "Tell me the price of tires in stock at Gangnam store"
-    → TRANSACTION
-    (Store Inventory + Price - single agent)
-
-12. "추천 타이어 리뷰랑 가격 알려줘"
-    "Show reviews and prices of recommended tires"
-    → DISCOVERY → TRANSACTION
-    (Recommendation → Description → Price)
-
-13. "인기 타이어 가격이랑 재고 알려줘"
-    "Tell me the price and stock of popular tires"
-    → DISCOVERY → TRANSACTION
-    (Recommendation → Price + Inventory)
-
-14. "내 차 타이어 추천하고 장착 예약하고 싶어요"
-    "Recommend tires for my car and make installation reservation"
-    → DISCOVERY → TRANSACTION
-    (Compatibility → Recommendation → Reservation)
-
-15. "재고 있는 타이어 추천해주세요"
-    "Recommend tires that are in stock"
-    → DISCOVERY → TRANSACTION
-    (Recommendation → Filter by Inventory)
-
-16. "타이어 추천하고 가까운 매장 알려줘"
-    "Recommend tires and show nearby stores"
-    → DISCOVERY → TRANSACTION
-    (Recommendation → Store)
-
-17. "재고 있는 매장 알려주고 예약할게"
-    "Show stores with stock and make a reservation"
-    → TRANSACTION
-    (Store Search → Inventory → Reservation - single agent)
-
-18. "벤투스 타이어 가격이랑 장착 예약"
-    "Ventus tire price and installation reservation"
-    → TRANSACTION
-    (Price + Reservation - single agent)
-
-19. "추천 타이어 중 할인 상품 알려줘"
-    "Show discounted products among recommended tires"
-    → DISCOVERY → TRANSACTION
-    (Recommendation → Price)
-
-20. "타이어 추천하고 비교해줘"
-    "Recommend tires and compare them"
-    → DISCOVERY
-    (Recommendation → Description)
-
-21. "벤투스 S2 225/45R17 4개 주문할게"
-    "Order 4 Ventus S2 225/45R17"
-    → DISCOVERY → TRANSACTION
-    (Product Name+Size Search → goods_no Resolution → Quantity Confirm → Store or Cart)
-
-22. "키네르기 EX 205/55R16 2개 사고 싶어"
-    "I want to buy 2 Kinergy EX 205/55R16"
-    → DISCOVERY → TRANSACTION
-    (Product Name+Size Search → goods_no Resolution → Quantity Confirm → Store or Cart)
-
-23. "Ventus S1 evo3 245/45R18 주문"
-    "Order Ventus S1 evo3 245/45R18"
-    → DISCOVERY → TRANSACTION
-    (Product Name+Size Search → Quantity Confirm → Store or Cart)
-
-24. "장바구니에 담아줘"
-    "Save to cart"
-    → TRANSACTION
-    (Cart Save - goods_no and qty must be in context)
-
-25. "{{goods_no}} 4개 주문할게"
-    "Order 4 of {{goods_no}}" (e.g., "GXXXXXXXXXXXX")
-    → TRANSACTION
-    (goods_no known → Quantity confirmed → Store or Cart)
-
-26. "벤투스 S2 AS 살 수 있는 매장 찾아줘"
-    "Find stores where I can buy Ventus S2 AS"
-    → DISCOVERY → TRANSACTION
-    (Product Name Search → goods_no Resolution → Store Search / Store Inventory)
-
-27. "Ventus S2 AS 4개 살건데 오늘 장착 가능한 매장 찾아줘"
-    "I want to buy 4 Ventus S2 AS, find stores that can install today"
-    → DISCOVERY → TRANSACTION
-    (Product Name Search → goods_no Resolution → Store Inventory with today install filter)
-
-28. "키네르기 EX T바로배송 되는 매장 알려줘"
-    "Show stores with T-NA delivery for Kinergy EX"
-    → DISCOVERY → TRANSACTION
-    (Product Name Search → goods_no Resolution → Store Inventory with T-NA filter)
-
-29. "벤투스 S2 AS 올마이티 매장에서 사고 싶어"
-    "I want to buy Ventus S2 AS at an All My T store"
-    → DISCOVERY → TRANSACTION
-    (Product Name Search → goods_no Resolution → All My T Store Search)
-
-30. "이벤트 알려줘" / "현재 진행중인 이벤트 뭐야?"
-    "Tell me about current events"
-    → DISCOVERY
-    (get_events_tool → Display event list)
-
-31. "기획전 정보" / "지금 어떤 기획전 하고 있어?"
-    "What promotions are available?"
-    → DISCOVERY
-    (get_deals_tool → Display deal list)
-
-32. "이벤트랑 기획전 다 알려줘"
-    "Tell me about events AND promotions"
-    → DISCOVERY
-    (get_events_tool + get_deals_tool → Display both sections)
-
-29. "벤투스 S1 리뷰 영상 있어?"
-    "Do you have Ventus S1 review videos?"
-    → DISCOVERY
-    (search_youtube_video_tool → Display video list)
-
-30. "타이어 소음 테스트 영상 보여줘"
-    "Show me tire noise test videos"
-    → DISCOVERY
-    (search_youtube_video_tool → Display video list)
-
-31. "iON 타이어 리뷰 영상"
-    "iON tire review videos"
-    → DISCOVERY
-    (search_youtube_video_tool → Display video list)
-
-32. "주문 확인해주세요" / "주문 정보 다시 보여줘"
-    "Check my order" / "Show order info again"
-    → TRANSACTION
-    (Pre-order preview → Order confirmation → quick_order_tool)
-
-33. "결제 금액 확인したい"
-    "Check payment amount"
-    → TRANSACTION
-    (Pre-order preview → paymentAmount calculation)
-
-34. "예약 날짜 선택해줘" / "날짜 추천받아서 예약할게"
-    "Select booking date for me" / "Book based on recommended date"
-    → TRANSACTION
-    (Pre-order preview with recommendActions → User selects action → quick_order_tool)
-
-35. "장바구니로 저장할게" / "나중에 주문할게"
-    "Save to cart" / "Order later"
-    → TRANSACTION
-    (Pre-order preview isReadyToAddToCart=true → save_to_cart_tool)
-
-36. "바로 주문할게" / "지금 주문할게"
-    "Order now" / "I'll order now"
-    → TRANSACTION
-    (Pre-order preview isReadyToOrder=true → quick_order_tool)
-
-37. "예약날짜 없이 주문 진행해줘" / "매장만 선택할게"
-    "Proceed without booking date" / "Just select store"
-    → TRANSACTION
-    (Pre-order preview isReadyToOrder=false → isReadyToAddToCart=true → save_to_cart_tool)
-
-38. "방문 방법 선택해줘" / "哪种访问方式好?"
-    "Which visit method to choose?" / "Which visit method is better?"
-    → TRANSACTION
-    (Pre-order preview with recommendActions → next step selection)
-
-39. "GXXXXXXXXXXXX이랑 GXXXXXXXXXXXX 가격 비교해줘"
-    "Compare prices between GXXXXXXXXXXXX and GXXXXXXXXXXXX"
-    → TRANSACTION
-    (Multiple goods_no known → compare_discount_tool)
-
-40. "벤투스 S2랑 키네르기 EX 가격 비교해줘"
-    "Compare prices between Ventus S2 and Kinergy EX"
-    → DISCOVERY → TRANSACTION
-    (Product Name Search → goods_no Resolution → Discount Price Comparison)
-
-41. "추천 타이어들 가격 비교해서 가장 싼 거 알려줘"
-    "Compare the recommended tires and tell me which is cheapest"
-    → DISCOVERY
-    (Recommendation → compare_discount_tool → UI Template Agent)
-
-42. "둘 중 어느 게 더 싸?", "Which one is cheaper?"
-    "Which one is cheaper?" (when multiple products in context)
-    → DISCOVERY
-    (Discovery Agent has compare_discount_tool)
-
-43. "이 제품들 할인 가격 비교해줘"
-    "Compare discount prices for these products"
-    → DISCOVERY
-    (Discovery Agent has compare_discount_tool)
-
-====================================================
-PRE-ORDER PREVIEW FLOW RULES
-====================================================
-
-After user selects store path (Step 5A) or cart path (Step 5B), BEFORE calling API:
-→ Transaction Agent displays pre-order preview (markdown table)
-→ User reviews: carInfo, product, quantity, storeName, bookingDateTime, paymentAmount
-→ isReadyToOrder: user confirms all info → quick_order_tool
-→ isReadyToAddToCart: missing critical info → save_to_cart_tool
-→ recommendActions: prompts for missing info with suggested Korean phrases
-
-Flow detection:
-- User confirms order → TRANSACTION (quick_order_tool)
-- User selects from recommendActions → TRANSACTION (update orderInfo → re-show preview)
-- User says "장바구니로" / "나중에" → TRANSACTION (save_to_cart_tool)
-- User changes mind mid-flow → same agent handles path switch
+LEADING — greeting, unclear intent:
+1. "안녕하세요" / "뭘 도와줄 수 있어?" → LEADING
 
 ====================================================
 DECISION RULES
 ====================================================
 
-TRANSACTION if user wants:
-- "How much", "price", "cost", "discount" for product with KNOWN goods_no (e.g., "{{goods_no}} 가격" - format: G + 12 digits)
-- **Price comparison** between multiple products ("비교", "둘 중 어느 게 더 싸", "which is cheaper", "가격 비교")
-- "In stock?", "available?" for product with KNOWN goods_no at specific store
-- Check logistics stock (warehouse availability) with KNOWN goods_no
-- Find stores by LOCATION (e.g., "stores near Gangnam", "stores in Seoul")
-- Find stores by NAME (e.g., "find Hankook store")
-- Check store inventory (which stores have this tire) with KNOWN goods_no
-  ⚠️ If product is specified by NAME (not goods_no), route DISCOVERY → TRANSACTION to resolve goods_no first
-- "Buy", "purchase", "order", "checkout" with goods_no known
-- Track existing order (provide order number)
-- "장바구니에 담아줘", "장바구니 저장" (save to cart)
-- Select quantity, select store for order
-- Book store visit/reservation with specific date/time
-- **Pre-order confirmation** ("주문 확인", "바로 주문", "예약 날짜 선택")
-- **Cart save** ("장바구니로 저장", "나중에 주문할게")
-- **Visit method selection** ("방문 방법", "어떻게 가지러 오지")
-- **Express store visit intent** (e.g., "방문할게", "visiting", "찜아갈게", "I'll visit [store]")
-Examples: "{{goods_no}} 가격 얼마야?", "Is {{goods_no}} in stock?", "Show me stores near Gangnam", "{{goods_no}} 4개 주문할게", "장바구니에 담아줘", "Book installation at 2pm", "Track my order 12345", "주문 확인해주세요", "바로 주문할게", "장바구니로 저장할게", "I'll visit [store name]", "방문할게요", "[매장명] 방문"
+CORE RULE: Classify into EXACTLY ONE domain per turn.
+Each domain does its ONE job and stops. User drives every next step.
 
-DISCOVERY if user wants:
-- Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
-- Recommend tires (vehicle-specific or general)
-- Check if specific tire FITS specific vehicle ("does 205/55R16 fit my BMW?")
-- Product specifications, features, technology
-- **Price for product by NAME (goods_no NOT known)** → DISCOVERY to find goods_no
-- View user's registered vehicles (list my cars, my vehicle list)
-- **Event/Deal information** ("이벤트 알려줘", "기획전 정보", "현재 진행중인 이벤트")
-Examples: "Find tires called Ventus", "What tires fit my car {{vehicle_number}}?", "Will these tires fit my vehicle?", "Dynapro HPX 가격 얼마야?", "벤투스 S2 가격", "List my cars", "Show my registered vehicles", "이벤트 알려줘", "기획전 정보"
+DISCOVERY when:
+- Product search by name/keyword (goods_no not yet known)
+- Tire recommendation (vehicle-specific or general)
+- Compatibility check
+- Product specs/features/tech
+- Price/stock/store queries where goods_no is NOT yet known → DISCOVERY resolves goods_no first, then STOP
+- Event/deal/video content
 
-⚠️ CRITICAL DISTINCTION — goods_no known vs unknown:
-- "{{goods_no}} 가격" (e.g., "GXXXXXXXXXXXX") → goods_no KNOWN → TRANSACTION only
-- "{{goods_no}} 재고 확인" → goods_no KNOWN → TRANSACTION only
-- "Dynapro HPX 가격" → goods_no NOT known → DISCOVERY, TRANSACTION
-- "벤투스 S2 가격 얼마야?" → goods_no NOT known → DISCOVERY, TRANSACTION
-- "벤투스 S2 AS 2354519 한남점 재고확인" → goods_no NOT known → DISCOVERY, TRANSACTION
-- "스콜피온제로 강남점 재고" → goods_no NOT known → DISCOVERY, TRANSACTION
-  ⚠️ Product specified by NAME (not G+12digits goods_no) → ALWAYS needs DISCOVERY first to resolve goods_no
+TRANSACTION when:
+- goods_no is already known in conversation context (G + 12 digits)
+- Store search by location/name
+- Store schedule / reservation slots
+- Order creation, cart save, order tracking
+- Pre-order confirmation flow
 
-SUPPORT if user wants:
-- Tire replacement guidance (when to replace, air pressure, maintenance)
-- Policy questions (warranty terms, return conditions, refund process)
-- General guidance without purchase intent
-- Request for human agent / 1:1 inquiry
-- Write/save 1:1 inquiry with AI-summarized content
-- "1:1 문의 작성", "상담원 연결", "이 문제를 1:1로 저장하고 싶어요"
-Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요"
+⚠️ "buy/order/purchase" with product NAME (not goods_no) → DISCOVERY first to find goods_no, then STOP and wait for user.
+⚠️ "buy/order/purchase" with goods_no already in context → TRANSACTION directly.
 
-LEADING if:
-- Just greeting ("hello", "hi", "안녕하세요")
-- No clear goal or action requested
-- General capability questions ("what can you do")
-Examples: "Hi", "What can you help me with?", "Hello"
+SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry
+LEADING when: greeting, unclear intent
 
 ====================================================
-MULTI-INTENT DETECTION
+CONTINUATION DETECTION
 ====================================================
 
-If user request contains multiple intents, detect ALL relevant domains.
-The "domains" list should be ordered by the FLOW SEQUENCE.
+If the previous agent showed a list and asked user to SELECT (cars, tires, stores, dates):
+→ User's short reply (number, name, tire size, store name) is a CONTINUATION of the SAME domain.
+→ Classify into that SAME domain — do NOT chain to another domain.
 
 Examples:
-- "Explain Ventus S1 evo3 and tell me the price" → DISCOVERY, TRANSACTION
-- "Find tires for my BMW and check if in stock at nearby store" → DISCOVERY, TRANSACTION
-- "Recommend tires and their warranty" → DISCOVERY, SUPPORT
-- "How much is this tire? Also, what's the warranty?" → TRANSACTION, SUPPORT
-
-KEY PRINCIPLES:
-- "stores near [location]" → TRANSACTION
-- "find stores" → TRANSACTION
-- "price of [specific product]" → TRANSACTION
-- "search tires named [X]" → DISCOVERY
-- "does [tire] fit [car]?" → DISCOVERY (compatibility check)
-- "buy tires" → TRANSACTION
-- "recommend tires" → DISCOVERY
-- "warranty, return, maintenance" → SUPPORT
-- When multiple intents present, return ALL relevant domains in flow order
-
-⚠️ CRITICAL — CONTINUATION DETECTION:
-If the PREVIOUS assistant message asked the user to SELECT or CHOOSE (e.g., numbered list, "번호로 답해 주세요", "선택해 주세요"),
-and the user replies with a short answer (number like "1", "2번", a name like "제타", "i30",
-a tire size like "225/45R18", "205/55R16", "2254518", "225 45 18",
-or a store/branch name like "한남점", "역삼점", "서초점"):
-→ This is a CONTINUATION of the previous flow, NOT a new intent.
-→ Look at the ORIGINAL user request in conversation history to determine the full intent.
-→ If the original request included order/purchase intent (e.g., "주문할래", "사고 싶어"):
-  → Classify as DISCOVERY, TRANSACTION (vehicle selection is part of order flow)
-→ If the original request was recommendation only (e.g., "추천해줘"):
-  → Classify as DISCOVERY only
-→ If the previous assistant was in TRANSACTION (e.g., store selection, inventory check, order flow):
-  → Classify as TRANSACTION
-→ If the original request was inventory/stock check (e.g., "재고 있어?", "재고 확인"):
-  → Classify as DISCOVERY, TRANSACTION (size selection resolves goods_no → then inventory check)
-→ If the original request was price inquiry (e.g., "가격 얼마야?", "가격 알려줘"):
-  → Classify as DISCOVERY, TRANSACTION (size selection resolves goods_no → then price check)
+- Previous: Discovery showed car list → User: "제타" → DISCOVERY (same domain continues)
+- Previous: Discovery showed tires → User: "벤투스 S2 AS" → DISCOVERY (same domain continues)
+- Previous: Transaction showed stores → User: "한남점" → TRANSACTION (same domain continues)
+- Previous: Transaction showed schedule → User: "내일 10시" → TRANSACTION (same domain continues)
 
 Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
 """

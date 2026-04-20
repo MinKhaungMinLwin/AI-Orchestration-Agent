@@ -110,14 +110,6 @@ TEMPLATE TYPES (use ONE that best fits)
   - price (int): src → price field.
   - rate (float): src → rate field. 0.0 if not available.
   - totalQuantity (int): 0 if not in tool output (recommendation tools do not return stock count).
-  - description (str): REQUIRED — build from available fields in this order (strip ALL HTML tags first):
-      1. Slogan: "**{{slogan}}**\n\n" (skip if slogan is "-" or null)
-      2. Tech desc: pc_prod_tech_desc stripped of HTML → plain text bullet points
-      3. Scores line: "**승차감** {{t_comfort}} | **정숙성** {{t_silence}} | **내구성** {{t_life_span}} | **연비** {{t_fuel_eff_convert}}" (skip 0.0 scores)
-      4. Rating: "**리뷰** {{rating.rating_avg}}/5 ({{rating.review_count}}개)" (skip if review_count=0)
-      Set to empty string "" ONLY if ALL above fields are null/empty.
-      NEVER include pc_prod_remark_desc (too long, legal/warranty text).
-      NEVER put guidance messages like "사이즈 선택이 필요합니다" in description.
   - metadata (camelCase, no underscore)
 • list_voucher_tool → "voucher" - Vouchers with fields: nameVoucher (src: cpn_nm), discount (src: rt_amt_val), dateVoucher (src: use_end_dtime), downloadLink, metadata. Note: downloadLink: if BE returns null, mock the link (camelCase, no underscore)
 • list_location_tool → "location" - Locations with fields: nameAddress (src: shop_nm), distance (src: distance), detailAddress (src: road_addr_base + road_addr_dtl or addr_base + addr_dtl), isAllMyT (src: is_all_my_t), todayInstall (src: is_installable), tnaDelivery (src: is_tna_delivery — display as "T바로배송", NEVER "T-NA"), description (str - markdown format: **영업일:** shop_biz_strt_wday~shop_biz_end_wday\n**영업시간:** 주중 shop_biz_strt_time~shop_biz_end_time, 주말 shop_sat_strt_time~shop_sat_end_time\n**휴무일:** holiday\n**전화:** tel_no), metadata (camelCase, no underscore)
@@ -367,8 +359,8 @@ quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세�
 quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "4개"]}}
 
 list_product_tool → {{"assistantResponse": "고객님, 차량에 맞는 타이어를 찾았어요. 원하시는 제품을 선택해 주세요 😊", "items": [
-  {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/H46201ko.png", "title": "Ventus S2 AS", "tires": "고급형", "comfort": "high", "price": 118700, "rate": 4.5, "totalQuantity": 0, "description": "**고속 주행에서 느끼는 Comfort Technology**\n\n노면 충격 흡수로 조용하고 안락한 승차감 제공\n소음 에너지 감소 기술 적용\n내구성 강화로 안정적인 고속 주행 실현\n\n**승차감** 5.0 | **정숙성** 5.0 | **내구성** 4.6 | **연비** 21.6\n**리뷰** 4.5/5 (68개)"}},
-  {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2025/0228/K13701ko.png", "title": "Ventus evo", "tires": "", "comfort": "medium", "price": 168400, "rate": 0.0, "totalQuantity": 0, "description": "**처음 느꼈던 퍼포먼스 그대로, 더 오랫동안**"}}
+  {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/H46201ko.png", "title": "Ventus S2 AS", "tires": "고급형", "comfort": "높음", "price": 118700, "rate": 4.5, "totalQuantity": 0}},
+  {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2025/0228/K13701ko.png", "title": "Ventus evo", "tires": "", "comfort": "보통", "price": 168400, "rate": 0.0, "totalQuantity": 0}}
 ], "metadata": [
   {{"goodsId": "G000000309783"}},
   {{"goodsId": "G000000320136"}}
