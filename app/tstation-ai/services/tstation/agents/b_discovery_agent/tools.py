@@ -189,7 +189,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 
 @tool
-def search_product_tool(keyword: str, limit: int = 20, size: str | None = None, brand_cd: str = "HK"):
+def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, brand_cd: str = "HK"):
     """
     상품 검색.
 
@@ -218,10 +218,10 @@ def search_product_tool(keyword: str, limit: int = 20, size: str | None = None, 
             - GY: Goodyear 굿이어
 
     Example Inputs:
-        - {"keyword": "벤투스 S2", "limit": 20, "size": "225/45R17"}
-        - {"keyword": "Ventus S2", "limit": 20, "size": "2254517"}
-        - {"keyword": "Pilot Sport", "limit": 20, "brand_cd": "MC"}
-        - {"keyword": "s1-evo", "limit": 20}
+        - {"keyword": "벤투스 S2", "limit": 5, "size": "225/45R17"}
+        - {"keyword": "Ventus S2", "limit": 5, "size": "2254517"}
+        - {"keyword": "Pilot Sport", "limit": 5, "brand_cd": "MC"}
+        - {"keyword": "s1-evo", "limit": 5}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -503,7 +503,7 @@ def get_product_description_tool(goods_no: str):
 
 
 @tool
-def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 20, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None, car_lnc_cd: str | None = None, tire_size: str | None = None):
+def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None, car_lnc_cd: str | None = None, tire_size: str | None = None):
     """
     Product Recommendation
 

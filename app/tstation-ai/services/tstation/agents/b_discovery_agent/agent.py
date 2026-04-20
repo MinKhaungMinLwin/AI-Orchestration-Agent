@@ -134,7 +134,7 @@ After user responds to Case 3:
 ⚠️ When tire_size is confirmed → call get_products_recommendations_tool IMMEDIATELY.
 Do NOT ask user for style/preference before calling. Just call with defaults.
 
-1. get_products_recommendations_tool(tire_size=..., limit=20, rcmd_type="tstation")
+1. get_products_recommendations_tool(tire_size=..., limit=5, rcmd_type="tstation")
    - rcmd_type default: "tstation" — NEVER ask user to choose rcmd_type first
    - Override only if user ALREADY said in their message: "가성비" → "value", "할인" → "discount"
 2. Filter: compatible products only; sort by implied priority
@@ -225,7 +225,7 @@ Trigger: User searches by name/keyword
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
 3. search_product_tool(keyword, size=if_provided, brand_cd=detected)
-4. Show 3–5 results; call get_product_description_tool for #1
+4. Show top 5 results; call get_product_description_tool for #1
 
 
 ### Flow C — Price / Stock Inquiry (Search-First → Handoff)
