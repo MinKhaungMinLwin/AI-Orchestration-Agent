@@ -87,6 +87,241 @@ class SupportDataEvent(BaseModel):
     data: dict
 
 
+class VoucherMeta(BaseModel):
+    """Hidden FE metadata for a voucher card."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    couponId: str = Field(..., min_length=1)
+
+
+class VoucherItem(BaseModel):
+    """Visible coupon card content for the FE."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nameVoucher: str = Field(..., min_length=1)
+    discount: str = Field(..., min_length=1)
+    dateVoucher: str = Field(..., min_length=1)
+    downloadLink: str
+    myCouponLink: RedictLink
+
+
+class VoucherTemplate(TemplatePayload):
+    """`voucher` template — coupon list results."""
+
+    TEMPLATE_NAME: ClassVar[str] = "voucher"
+
+    assistantResponse: str = Field(..., min_length=1)
+    vouchers: list[VoucherItem] = Field(..., min_length=1, max_length=5)
+    metadata: list[VoucherMeta] = Field(..., min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_metadata_alignment(self):
+        if len(self.vouchers) != len(self.metadata):
+            raise ValueError("metadata length must match vouchers length")
+        return self
+
+
+class VoucherDataEvent(BaseModel):
+    """Structured response for `voucher` data events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["voucher"] = "voucher"
+    data: VoucherTemplate
+
+
+class LocationMeta(BaseModel):
+    """Hidden FE metadata for a store result card."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shopId: str = Field(..., min_length=1)
+
+
+class LocationItem(BaseModel):
+    """Visible store card content for the FE."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nameAddress: str = Field(..., min_length=1)
+    distance: str
+    detailAddress: str
+    isAllMyT: bool
+    todayInstall: bool
+    tnaDelivery: bool
+    description: str
+
+
+class LocationTemplate(TemplatePayload):
+    """`location` template — store list results."""
+
+    TEMPLATE_NAME: ClassVar[str] = "location"
+
+    assistantResponse: str = Field(..., min_length=1)
+    stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
+    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_metadata_alignment(self):
+        if len(self.stores) != len(self.metadata):
+            raise ValueError("metadata length must match stores length")
+        return self
+
+
+class LocationDataEvent(BaseModel):
+    """Structured response for `location` data events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["location"] = "location"
+    data: LocationTemplate
+
+
+class ScheduleItem(BaseModel):
+    """Visible schedule item for the FE date picker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cal_day: str = Field(..., min_length=1)
+    available_slots: list[str] = Field(default_factory=list)
+    is_installable: bool
+    is_tna_delivery: bool
+
+
+class DatepickTemplate(TemplatePayload):
+    """`datepick` template — schedule and slot results."""
+
+    TEMPLATE_NAME: ClassVar[str] = "datepick"
+
+    assistantResponse: str = Field(..., min_length=1)
+    shopId: str = Field(..., min_length=1)
+    shopName: str = Field(..., min_length=1)
+    schedule: list[ScheduleItem] = Field(..., min_length=1)
+
+
+class DatepickDataEvent(BaseModel):
+    """Structured response for `datepick` data events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["datepick"] = "datepick"
+    data: DatepickTemplate
+
+
+class OrderInfo(BaseModel):
+    """Shared order summary displayed in pre-order and completion states."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    carInfo: str = Field(..., min_length=1)
+    product: str = Field(..., min_length=1)
+    quantity: int = Field(..., ge=0)
+    storeName: str = Field(..., min_length=1)
+    bookingDateTime: str | None = None
+    paymentAmount: int | None = Field(default=None, ge=0)
+
+
+class RecommendActions(BaseModel):
+    """Suggested next actions for the FE pre-order card."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(..., min_length=1)
+    listActions: list[str] = Field(..., min_length=1, max_length=5)
+
+
+class PreOrderMeta(BaseModel):
+    """Hidden FE metadata for order preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goodsId: str = Field(..., min_length=1)
+    shopId: str = Field(..., min_length=1)
+    carNo: str | None = None
+    carLncCd: str | None = None
+
+
+class PreOrderTemplate(TemplatePayload):
+    """`preOrder` template — order preview before final confirmation."""
+
+    TEMPLATE_NAME: ClassVar[str] = "preOrder"
+
+    assistantResponse: str = Field(..., min_length=1)
+    orderInfo: OrderInfo
+    isReadyToOrder: bool
+    isReadyToAddToCart: bool
+    recommendActions: RecommendActions
+    metadata: PreOrderMeta
+
+
+class PreOrderDataEvent(BaseModel):
+    """Structured response for `preOrder` data events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["preOrder"] = "preOrder"
+    data: PreOrderTemplate
+
+
+class OrderCompleteResult(BaseModel):
+    """Compact tool result included inside the orderComplete payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(..., min_length=1)
+
+
+class OrderCompleteMeta(BaseModel):
+    """Hidden FE metadata for order completion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ordNo: str | None = None
+    goodsId: str = Field(..., min_length=1)
+    shopId: str = Field(..., min_length=1)
+
+
+class OrderCompleteTemplate(TemplatePayload):
+    """`orderComplete` template — quick order or cart save result."""
+
+    TEMPLATE_NAME: ClassVar[str] = "orderComplete"
+
+    assistantResponse: str = Field(..., min_length=1)
+    orderInfo: OrderInfo
+    isSuccess: bool
+    type: Literal["order", "cart"]
+    message: str | None = None
+    data: OrderCompleteResult
+    metadata: OrderCompleteMeta
+
+
+class OrderCompleteDataEvent(BaseModel):
+    """Structured response for `orderComplete` data events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["orderComplete"] = "orderComplete"
+    data: OrderCompleteTemplate
+
+
+TransactionDataEvent = Annotated[
+    QuickReplyDataEvent
+    | VoucherDataEvent
+    | LocationDataEvent
+    | DatepickDataEvent
+    | PreOrderDataEvent
+    | OrderCompleteDataEvent,
+    Field(discriminator="template"),
+]
+
+
 class ProductMeta(BaseModel):
     """Hidden FE metadata for a product card."""
 
