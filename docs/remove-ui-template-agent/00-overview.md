@@ -167,8 +167,8 @@ End-to-end example:
 | Agent | Change size | Reason |
 |-------|-------------|--------|
 | Leading | Low | only `quickReply` |
+| Discovery | Medium | many result shapes (`product`, `listCar`, `cheapestProduct`, `previewYoutube`, `quickReply`); migrated in 5 sub-phases |
 | Support | Low | 2 templates only |
-| Discovery | Medium | many result shapes |
 | Transaction | High | `preOrder` is complex |
 
 ## Implementation Order
@@ -176,8 +176,8 @@ End-to-end example:
 1. Define shared Pydantic schema models.
 2. Update BaseAgent to validate structured output and adapt it to the old event flow.
 3. Update Leading Agent.
-4. Update Support Agent.
-5. Update Discovery Agent.
+4. Update Discovery Agent (Phase 2A–2E).
+5. Update Support Agent.
 6. Update Transaction Agent.
 7. Remove UI Template Agent and template mapper.
 
