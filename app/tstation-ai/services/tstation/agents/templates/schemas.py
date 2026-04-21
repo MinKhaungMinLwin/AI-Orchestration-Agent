@@ -44,3 +44,44 @@ class QuickReplyDataEvent(BaseModel):
     type: Literal["data"] = "data"
     template: Literal["quickReply"] = "quickReply"
     data: QuickReplyTemplate
+
+
+class RedictLink(BaseModel):
+    """PC and mobile URLs for 1:1 inquiry redirect."""
+
+    model_config = ConfigDict(extra="allow")
+
+    pc: str
+    mobile: str
+
+
+class QnaCompleteTemplate(TemplatePayload):
+    """`qnaComplete` template — used after transfer_to_qna_tool to show the inquiry link."""
+
+    TEMPLATE_NAME: ClassVar[str] = "qnaComplete"
+
+    assistantResponse: str = Field(..., min_length=1)
+    redictLink: RedictLink
+    cnslType: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    summary: str = Field(..., min_length=1)
+
+
+class QnaCompleteDataEvent(BaseModel):
+    """Structured response for `qnaComplete` data events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["qnaComplete"] = "qnaComplete"
+    data: QnaCompleteTemplate
+
+
+class SupportDataEvent(BaseModel):
+    """Structured response for Support Agent — accepts quickReply and qnaComplete templates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["quickReply", "qnaComplete"]
+    data: dict
