@@ -253,22 +253,29 @@ class BaseAgent(ABC):
     def _build_data_event_from_text(self, text: str, template_cls: Any) -> dict | None:
         """Extract a fenced JSON object from `text`, validate it against `template_cls`,
         and return a `data` event ready to yield. Returns None on any failure.
+
+        On failure, logs at error level so missed structured-output turns are observable
+        (the coordinator will fall back to the legacy UI Template Agent path).
         """
         raw = self._extract_fenced_json(text)
         if raw is None:
-            logger.warning("[%s] No JSON block found in agent response — skipping data event", self.name)
+            logger.error(
+                "[%s] No fenced JSON block found in agent response — falling back to legacy UI path",
+                self.name,
+            )
             return None
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            logger.warning("[%s] Invalid JSON in agent response: %s", self.name, exc)
+            logger.error("[%s] Invalid JSON in agent response: %s", self.name, exc)
             return None
         try:
             validated = TypeAdapter(template_cls).validate_python(parsed)
         except ValidationError as exc:
-            logger.warning(
-                "[%s] Output JSON failed schema validation: %s",
+            logger.error(
+                "[%s] Output JSON failed schema validation (template=%s): %s",
                 self.name,
+                parsed.get("template") if isinstance(parsed, dict) else None,
                 exc.errors(include_url=False),
             )
             return None

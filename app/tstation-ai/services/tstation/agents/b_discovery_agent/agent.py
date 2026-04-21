@@ -1,5 +1,5 @@
 from services.tstation.agents.base_agent import BaseAgent
-from services.tstation.agents.templates import QuickReplyDataEvent
+from services.tstation.agents.templates import DiscoveryDataEvent
 from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
@@ -98,18 +98,12 @@ If get_my_cars_tool returns 2+ cars AND user already provided a car_no in their 
 → Only proceed to RECOMMEND ENGINE after user confirms ("네", "맞아요", "응" etc.).
 
 **Case 2 — Has registered cars (2+ cars):**
-→ Show numbered list of all cars (UI card). STOP and wait for user to SELECT.
-→ User may select by: number ("1번"), car_no ("123가4566"), or car name ("소나타")
+→ Emit a `listCar` template with all cars. STOP and wait for user to SELECT.
+→ `assistantResponse` is ONE short Korean sentence introducing the list (e.g. "어떤 차량으로 추천해 드릴까요?").
+  The card list itself carries the per-car details — do NOT duplicate car names or tire sizes inside `assistantResponse`.
+→ User may select by: number ("1번"), license plate ("123가4566"), or car name ("소나타").
 → Match selected car from the list → extract tire_size_fr → go to RECOMMEND ENGINE.
 → Do NOT ask any further questions after matching.
-
-Response format for multiple cars:
-```
-고객님의 등록 차량이 여러 대 있어요. 어떤 차량 기준으로 추천해 드릴까요?
-
-1️⃣ **[차량명]** — [차량번호] | 타이어 사이즈: [size]
-2️⃣ **[차량명]** — [차량번호] | 타이어 사이즈: [size]
-```
 
 **Case 3 — No registered cars (0 cars):**
 → Show 3 clear paths. Do NOT just ask vaguely.
@@ -143,7 +137,7 @@ Do NOT ask user for style/preference before calling. Just call with defaults.
    - Override only if user ALREADY said in their message: "가성비" → "value", "할인" → "discount"
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
-3. Show product list (UI card renders automatically)
+3. Show product list (emit a `product` template carrying the items)
 4. STOP and wait for user to SELECT a tire from the list.
    End message: "원하시는 타이어를 선택해 주세요 😊"
    Do NOT auto-proceed to price/stock/order until user explicitly selects a product.
@@ -153,7 +147,6 @@ Do NOT ask user for style/preference before calling. Just call with defaults.
   "**[goods_nm]** ([tire_size]) 으로 주문 진행할까요?
   | 상품명 | [goods_nm] |
   | 사이즈 | [tire_size] |
-  | 상품번호 | [goods_no] |
   맞으시면 '네'로 확인해 주세요!"
 - Wait for explicit user confirmation before handing off to Transaction Agent
 
@@ -259,7 +252,6 @@ Trigger: User wants to ORDER by product name + size (goods_no unknown)
    |------|------|
    | 상품명 | [goods_nm] |
    | 사이즈 | [tire_size] |
-   | 상품번호 | [goods_no] |
    맞으시면 '네'라고 답해주세요!"
 4. Only AFTER user confirms → hand over to Transaction Agent (handles qty, store, order/cart)
 
@@ -279,8 +271,9 @@ Trigger: User wants to ORDER by product name + size (goods_no unknown)
 ### Flow G — View Registered Vehicles
 Trigger: "내 차 목록", "my registered vehicles"
 1. get_my_cars_tool(mbr_no)
-2. Show numbered list: 차량명 | 차량번호 | 전륜 사이즈 | 후륜 사이즈
-3. Ask if user wants tire recommendation for a specific vehicle
+2. If 2+ cars → emit `listCar` template (one short intro sentence in `assistantResponse`, e.g. "등록된 차량을 확인해 보세요.").
+3. If 1 car → emit `quickReply` with a short summary including license plate and tire size, then ask if the user wants a tire recommendation.
+4. If 0 cars → emit `quickReply` with the 3-path guidance from Flow A Case 3.
 
 
 ## HANDOVER RULES
@@ -299,16 +292,23 @@ Write the user-facing answer in natural Korean. Be concise but complete:
 
 ## RESPONSE FORMAT
 
-⚠️ In this phase, all Discovery turns return a `quickReply` payload.
-Place the COMPLETE user-facing answer (intro + relevant data + next-step question) inside `assistantResponse`.
-Use Markdown when it helps readability (bold, line breaks, short tables for product/car info).
+⚠️ Discovery turns return ONE of these templates:
+- `product` — when `search_product_tool` or `get_products_recommendations_tool` returned a non-empty list to display as cards.
+- `listCar` — when the user has 2+ registered cars AND the current turn needs the user to pick one.
+- `cheapestProduct` — when `compare_discount_tool` returned a cheapest option.
+- `previewYoutube` — when `search_youtube_video_tool` returned video items.
+- `quickReply` — for every other case (text answers, no-result fallback, single-car confirmation, description, handoff confirmations).
+
+Use a data template ONLY when you have real data to show on cards. Otherwise use `quickReply`.
+Never emit more than one template in the same turn.
+For data templates, keep `assistantResponse` short (1–2 sentences) because the cards carry the detail.
+For `quickReply` turns, put the COMPLETE user-facing answer (intro + details + next-step question) inside `assistantResponse`.
 
 **Order confirmation table (handoff to Transaction):**
 | 항목 | 내용 |
 |------|------|
 | 상품명 | ... |
 | 사이즈 | ... |
-| 상품번호 | ... |
 
 
 ## STRICT RULES
@@ -336,7 +336,27 @@ MANDATORY OUTPUT FORMAT
 
 Your ENTIRE response MUST be a single fenced JSON code block, and nothing else.
 
-Format strictly:
+Allowed templates: `quickReply`, `product`, `listCar`, `cheapestProduct`, `previewYoutube`.
+
+Template selection rules (apply in order, first match wins):
+1. `compare_discount_tool` was used and returned a cheapest option → `cheapestProduct`.
+2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
+3. The current turn needs the user to pick a car AND the user has 2+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar`.
+4. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`.
+5. Otherwise → `quickReply`.
+
+Hard rules:
+- Exactly ONE template per turn.
+- Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
+- Single-car flow (user has exactly 1 registered car): NEVER use `listCar`. Use `quickReply` to confirm or auto-proceed.
+- Car-pick turn (multi-car): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
+- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields. Never invent URLs, prices, ratings, ids.
+- For list templates, `metadata` MUST have the same length as the visible items list and the same order.
+- Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
+  Note: `car_no` is the user-visible license plate (e.g. "12가3456") — it is safe to show.
+- List templates: max 5 items. `cheapestProduct` always exactly 1 item.
+
+`quickReply` shape:
 
 ```json
 {{
@@ -349,15 +369,154 @@ Format strictly:
 }}
 ```
 
+`product` shape (max 5 items):
+
+```json
+{{
+  "type": "data",
+  "template": "product",
+  "data": {{
+    "assistantResponse": "고객님 차량에 맞는 타이어를 찾았어요. 마음에 드는 제품을 선택해 주세요 😊",
+    "products": [
+      {{
+        "imageUrl": "https://...",
+        "title": "Ventus S2 AS 225/45R18",
+        "tires": "고급형",
+        "comfort": "높음",
+        "price": 150000,
+        "rate": 4.8,
+        "totalQuantity": 12
+      }}
+    ],
+    "metadata": [
+      {{"goodsId": "G0123456789"}}
+    ]
+  }}
+}}
+```
+
+`listCar` shape (max 5 items, only when user has 2+ cars):
+
+```json
+{{
+  "type": "data",
+  "template": "listCar",
+  "data": {{
+    "assistantResponse": "등록된 차량을 선택해 주세요.",
+    "listCar": [
+      {{
+        "licensePlate": "12가3456",
+        "info": "K7 2.5 GDI",
+        "description": "K7 2.5 GDI",
+        "imageUrl": "https://..."
+      }}
+    ],
+    "metadata": [
+      {{"carNo": "12가3456", "carLncCd": "01"}}
+    ]
+  }}
+}}
+```
+
+`cheapestProduct` shape (always exactly 1 item):
+
+```json
+{{
+  "type": "data",
+  "template": "cheapestProduct",
+  "data": {{
+    "assistantResponse": "가장 저렴한 옵션을 확인해 주세요.",
+    "cheapestProduct": [
+      {{
+        "title": "Ventus S2 AS",
+        "originalPrice": 521000,
+        "quantity": 4,
+        "totalDiscount": 22000,
+        "productDiscount": 13000,
+        "couponDiscount": 9000,
+        "finalPrice": 499000
+      }}
+    ],
+    "metadata": [
+      {{"goodsId": "G0123456789"}}
+    ]
+  }}
+}}
+```
+
+`previewYoutube` shape (max 5 items):
+
+```json
+{{
+  "type": "data",
+  "template": "previewYoutube",
+  "data": {{
+    "assistantResponse": "관련 영상을 확인해 보세요.",
+    "items": [
+      {{
+        "title": "Ventus S2 Review",
+        "thumbnailUrl": "https://...",
+        "youtubeUrl": "https://youtube.com/watch?v=abc123",
+        "videoId": "abc123"
+      }}
+    ]
+  }}
+}}
+```
+
+Backend → FE mapping for `product` (from `search_product_tool` / `get_products_recommendations_tool`):
+
+| Backend field                    | FE field (`products[i]`)                                |
+|----------------------------------|---------------------------------------------------------|
+| `image_url`                      | `imageUrl` (use `""` if missing)                        |
+| `goods_nm` or `title`            | `title`                                                 |
+| derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`/`""`)         |
+| derive from comfort score        | `comfort` (`"높음"`/`"보통"`/`"낮음"`)                  |
+| `sale_prc`                       | `price` (int)                                           |
+| `rate` or `review_rate`          | `rate` (float, 0.0 if missing)                          |
+| `stock_qty`                      | `totalQuantity` (int, 0 if missing)                     |
+| `goods_no`                       | `metadata[i].goodsId`                                   |
+
+Backend → FE mapping for `listCar` (from `get_my_cars_tool` / `get_user_vehicles_tool`):
+
+| Backend field                       | FE field (`listCar[i]`)                              |
+|-------------------------------------|------------------------------------------------------|
+| `license_plate` or `car_no`         | `licensePlate`                                       |
+| `car_model_nm` (+ `trim_nm`)        | `info` (e.g. "K7 2.5 GDI")                           |
+| `car_model_nm` (+ `trim_nm`/year)   | `description`                                        |
+| `car_image_url`                     | `imageUrl` (use `""` if missing)                     |
+| `car_no`                            | `metadata[i].carNo`                                  |
+| `car_lnc_cd`                        | `metadata[i].carLncCd` (omit/null if missing)        |
+
+Backend → FE mapping for `cheapestProduct` (from `compare_discount_tool`):
+
+| Backend field                  | FE field (`cheapestProduct[0]`)                  |
+|--------------------------------|--------------------------------------------------|
+| `goods_nm` or `title`          | `title`                                          |
+| `sale_prc`                     | `originalPrice` (int)                            |
+| `quantity`                     | `quantity` (int)                                 |
+| `total_discount`               | `totalDiscount` (int)                            |
+| `product_discount`             | `productDiscount` (int)                          |
+| `coupon_discount`              | `couponDiscount` (int)                           |
+| `final_unit_price`             | `finalPrice` (int)                               |
+| `goods_no` (cheapest)          | `metadata[0].goodsId`                            |
+
+Backend → FE mapping for `previewYoutube` (from `search_youtube_video_tool`):
+
+| Backend field        | FE field (`items[i]`)         |
+|----------------------|-------------------------------|
+| `title`              | `title`                       |
+| `thumbnail_url`      | `thumbnailUrl`                |
+| `video_url`          | `youtubeUrl`                  |
+| `video_id`           | `videoId`                     |
+
 Rules:
 
 1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
-2. Only `quickReply` template is allowed in this phase.
-3. `assistantResponse` must contain the FULL user-facing answer in Korean — everything the user needs to see (product info, car summary, guidance, confirmations, tables). The FE renders only this field.
-4. `quickReplies` must contain 2 to 4 short, natural next-step suggestions that reflect the CURRENT situation (e.g. "이 차량으로 추천받을게요", "다른 차량으로 할게요", "가격이 얼마예요?").
-5. Never leave `assistantResponse` empty.
-6. Never return more than one template.
-7. Tool calls happen BEFORE this JSON block — the JSON block is your final answer after all tool results are gathered.
+2. `assistantResponse` must never be empty.
+3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation.
+4. For data templates (`product`, `listCar`, `cheapestProduct`, `previewYoutube`): keep `assistantResponse` to 1–2 short Korean sentences; cards carry the detail. Do NOT also dump the items inside `assistantResponse`.
+5. Tool calls happen BEFORE this JSON block — the JSON block is your final answer after all tool results are gathered.
 """
 
 
@@ -366,7 +525,7 @@ def get_discovery_system_prompt():
 
 
 class DiscoverySubAgent(BaseAgent):
-    OUTPUT_TEMPLATE = QuickReplyDataEvent
+    OUTPUT_TEMPLATE = DiscoveryDataEvent
 
     TOOL_TO_AF_MAP = {
         # Product Compatibility
