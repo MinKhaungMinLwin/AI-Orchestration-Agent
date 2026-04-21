@@ -77,14 +77,10 @@ class QnaCompleteDataEvent(BaseModel):
     data: QnaCompleteTemplate
 
 
-class SupportDataEvent(BaseModel):
-    """Structured response for Support Agent — accepts quickReply and qnaComplete templates."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["data"] = "data"
-    template: Literal["quickReply", "qnaComplete"]
-    data: dict
+SupportDataEvent = Annotated[
+    QuickReplyDataEvent | QnaCompleteDataEvent,
+    Field(discriminator="template"),
+]
 
 
 class VoucherMeta(BaseModel):
