@@ -4,6 +4,7 @@ from services.tstation.agents.e_support_agent.tools import (
     search_faq_rag_tool,
     transfer_to_qna_tool,
 )
+from services.tstation.agents.templates import SupportDataEvent
 from common.curr_time import get_current_time
 
 
@@ -154,9 +155,8 @@ TOOL 3: transfer_to_qna_tool  ← FOR ACTION REQUESTS AND ESCALATION
   * 상품문의: product name, specific question details
   * 회원: account issue type
 - Detect if user is on mobile and set is_mobile=True accordingly
-- ⚠️ AFTER CALLING: Output the `response` field from the tool result VERBATIM as your reply.
-  Do NOT rephrase, summarize, or add extra text around it — the response already contains
-  the formatted link for the user to click.
+- After calling: build a `qnaComplete` JSON block using the tool result (see OUTPUT FORMAT below).
+  Map cnsl_clss_seq to the Korean cnslType label. Keep redictLink URLs exactly as returned.
 
 ====================================================
 DECISION FLOW BY INTENT TYPE
@@ -165,20 +165,19 @@ DECISION FLOW BY INTENT TYPE
 TYPE A — Action Request:
   1. Empathize (1–2 sentences): "고객님, 불편을 드려 정말 죄송합니다 🙏"
   2. Call transfer_to_qna_tool immediately
-  3. Output `response` field VERBATIM
+  3. Return a `qnaComplete` JSON block (see OUTPUT FORMAT below)
 
 TYPE B — Information Request:
   1. Call get_faq_tool(lrcl_cd=<inferred>, limit=50)
   2. If no result → retry limit=100 → limit=200
   3. If still no result → call search_faq_rag_tool
   4. Answer from FAQ content naturally
-  5. Offer 1:1 inquiry if answer is partial or user needs more help
+  5. Return a `quickReply` JSON block (see OUTPUT FORMAT below)
 
 TYPE C — Mixed (info + action):
   1. Call get_faq_tool to answer the policy/information part
-  2. Provide FAQ answer
-  3. Call transfer_to_qna_tool for the action part
-  4. Output `response` field VERBATIM after transfer_to_qna_tool
+  2. Call transfer_to_qna_tool for the action part
+  3. Return a `qnaComplete` JSON block that includes both the FAQ answer and the inquiry link
 
 ====================================================
 WHEN get_faq_tool API FAILS (error/timeout)
@@ -284,6 +283,62 @@ NEVER use these expressions:
 • "에러가 발생했습니다"
 • DB, API, 시스템, 조회결과, 실패, 에러 등 기술 용어
 → Always rephrase into natural, friendly Korean.
+
+====================================================
+MANDATORY OUTPUT FORMAT
+====================================================
+
+Your entire response MUST be a single fenced JSON code block, and nothing else.
+
+Use `quickReply` for FAQ answers and text-only support turns:
+
+```json
+{{
+  "type": "data",
+  "template": "quickReply",
+  "data": {{
+    "assistantResponse": "<full natural Korean answer>",
+    "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
+  }}
+}}
+```
+
+Use `qnaComplete` when transfer_to_qna_tool was called:
+
+```json
+{{
+  "type": "data",
+  "template": "qnaComplete",
+  "data": {{
+    "assistantResponse": "<natural Korean message guiding user to submit the inquiry>",
+    "redictLink": {{
+      "pc": "<exact pc URL from tool result>",
+      "mobile": "<exact mobile URL from tool result>"
+    }},
+    "cnslType": "<Korean label for cnsl_clss_seq>",
+    "title": "<inq_tit_nm from tool call>",
+    "summary": "<ai_summary from tool call>"
+  }}
+}}
+```
+
+cnsl_clss_seq → cnslType mapping:
+- 10002 → "상품문의"
+- 10006 → "주문/결제/배송"
+- 10010 → "반품/교환/환불"
+- 10013 → "제공서비스/이벤트/혜택"
+- 10017 → "회원"
+- 10019 → "기타"
+- 10025 → "가맹점제휴문의"
+- 10034 → "이력서접수"
+
+Rules:
+1. Output exactly ONE fenced ```json block. No prose outside the block.
+2. `assistantResponse` must contain the full natural Korean answer.
+3. For `quickReply`: include 2–4 short next-step suggestion chips.
+4. For `qnaComplete`: copy `redictLink` URLs exactly as returned by the tool — never alter them.
+5. Never return more than one template per turn.
+6. Never leave `assistantResponse` empty.
 """
 
 
@@ -292,11 +347,11 @@ def get_support_system_prompt():
 
 
 class SupportSubAgent(BaseAgent):
+    OUTPUT_TEMPLATE = SupportDataEvent
+
     TOOL_TO_AF_MAP = {
-        # FAQ
         "get_faq_tool": "FAQ",
         "search_faq_rag_tool": "FAQ",
-        # QnA Transfer — result is rendered by UI Template Agent as qnaComplete card
         "transfer_to_qna_tool": "FAQ",
     }
 
