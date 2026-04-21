@@ -85,3 +85,13 @@ class SupportDataEvent(BaseModel):
     type: Literal["data"] = "data"
     template: Literal["quickReply", "qnaComplete"]
     data: dict
+
+
+class TransactionDataEvent(BaseModel):
+    """Structured response for Transaction Agent — accepts all transaction templates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: Literal["voucher", "location", "datepick", "orderComplete", "preOrder", "quickReply"]
+    data: dict

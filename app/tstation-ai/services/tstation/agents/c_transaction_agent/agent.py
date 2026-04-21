@@ -1,5 +1,6 @@
 
 from services.tstation.agents.base_agent import BaseAgent
+from services.tstation.agents.templates import TransactionDataEvent
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_available_coupons_tool,
@@ -186,7 +187,7 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
    ⚠️ Only show stores that passed the stock check (todayShopArray/tnaShopArray in STEP A, or logistics-available stores in STEP B).
    - If multiple stocked stores: show only stocked store list → STOP and wait for user to SELECT one store
    - Once single shop_id is determined:
-     get_store_schedule_tool(shop_id) → UI Template Agent renders datepick card
+     get_store_schedule_tool(shop_id) → return `datepick` template
      → STOP and wait for user to SELECT a date and time slot
      → Empty slots for all days: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?" → wait
 
@@ -238,7 +239,7 @@ Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 
 #### Flow 4.1 — User selects a store from list:
 Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할게요") after store list was shown
 1. get_store_list_tool(store_nm=...) to resolve shop_id
-2. get_store_schedule_tool(shop_id) → UI Template Agent renders datepick card
+2. get_store_schedule_tool(shop_id) → return `datepick` template
    → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
 
 
@@ -332,7 +333,7 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
      - is_installable=false: "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
   5. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool → verify shop in todayShopArray/tnaShopArray
      → NOT found: "선택하신 매장에 재고가 없어요. 다른 매장을 검색해 드릴까요?" → wait
-  6. Show datepick card (UI Template renders available dates/times) → STOP and wait for user to SELECT a date and time slot
+  6. Return `datepick` template with available dates/times → STOP and wait for user to SELECT a date and time slot
      - Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜나 매장을 확인해 드릴까요?" → wait
   7. User selects date+time → Show PRE-ORDER PREVIEW (STEP 5.5) with bookingDateTime filled → wait for explicit confirmation → THEN quick_order_tool
 
@@ -370,37 +371,48 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 
 
 ## RESPONSE RULE
-Write 1–3 plain Korean sentences per turn. Be concise but complete:
+`assistantResponse` must be 1–3 plain Korean sentences. Be concise but complete:
 - Include all info the user needs to take the next step (price, store name, shop_id, qty, goods_no)
-- No markdown tables, no section headers, no bullet lists
-- End every response with a clear next-step question or action
+- End with a clear next-step question or action
+- Always synthesize from actual tool output — never fabricate
 
-## DISPLAY FORMATS
+## TEMPLATE SELECTION & DISPLAY FORMATS
 
-⚠️ CRITICAL: The following tools produce rich UI cards automatically.
-When these tools succeed, respond with ONLY a short contextual message (1-2 sentences max).
-Do NOT generate large tables or repeat data that will already appear in the UI cards.
+Choose the output template based on the tool called:
 
-**UI card tools (short response only):**
-- get_store_list_tool, get_nearby_stores_tool → store location cards (do NOT list stores as text)
-- get_store_schedule_tool → date picker card (do NOT list dates/slots as text)
-- get_available_coupons_tool, get_my_coupons_tool → coupon cards
-- get_store_detail_tool (with reservation slots) → date picker card
+| Tool(s) | Template |
+|---------|----------|
+| get_available_coupons_tool, get_my_coupons_tool | `voucher` |
+| get_store_list_tool, get_nearby_stores_tool | `location` |
+| get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
+| quick_order_tool, save_to_cart_tool | `orderComplete` |
+| Pre-order preview / STEP 5.5 | `preOrder` |
+| All other cases (price, inventory, order tracking, text-only) | `quickReply` |
 
-**Examples of CORRECT short responses:**
-- "고객님, 근처 매장을 안내드립니다. 원하시는 매장을 선택해 주세요."
-- "사용 가능한 쿠폰을 확인해 보세요."
+**Template tools — short `assistantResponse` + populate template fields from tool output:**
+For `voucher` / `location` / `datepick` / `preOrder` / `orderComplete`:
+- `assistantResponse`: 1–2 sentence contextual message only — do NOT repeat data already in template fields
+- Template fields (`stores`, `vouchers`, `schedule`, `orderInfo`, etc.): populate with actual values from tool result
+- Do NOT generate text tables for data that belongs in template fields
 
-**Full-text tools (respond with tables/details as before):**
-- get_final_price_tool → price table
-- get_logistics_inventory_tool, get_store_inventory_tool → inventory status text
+Examples of correct `assistantResponse` for template tools:
+- location: "고객님, 가까운 매장을 안내드립니다. 원하시는 매장을 선택해 주세요."
+- datepick: "예약 가능한 날짜와 시간을 선택해 주세요."
+- voucher: "사용 가능한 쿠폰을 확인해 주세요."
+- preOrder: "주문 내용을 확인해 주세요."
+- orderComplete (success): "주문이 완료되었습니다. 😊"
+- orderComplete (failure): "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+
+**`quickReply` tools — full answer goes in `assistantResponse`:**
+- get_final_price_tool → price table (see PRICE TABLE format below)
+- get_logistics_inventory_tool, get_store_inventory_tool → inventory status
 - get_store_detail_tool (hours/holiday only, no slots) → store info text
-- quick_order_tool, save_to_cart_tool → order result
+- quick_order_tool, save_to_cart_tool → if text-only needed, use orderComplete instead
 - get_orders_of_user_tool, get_order_status_tool → order tracking
-- search_place_tool → intermediate step, no display needed
+- search_place_tool → intermediate step, no standalone display
 - Flow 3.5 (earliest visit), Flow 5.5 (slot availability) → multi-store comparison tables
 
-**Price table (NO UI card — always show as text):**
+**Price table (always `quickReply` — write in `assistantResponse`):**
 | 항목 | 금액 |
 |------|------|
 | 기본가 | ₩XXX,XXX |
@@ -408,20 +420,10 @@ Do NOT generate large tables or repeat data that will already appear in the UI c
 | 공임비 | ₩XX,XXX |
 | **최종 금액** | **₩XXX,XXX** |
 
-**Store table (for store list / nearby stores — keep concise, UI cards show details):**
-Show only the short intro message. The system renders store cards automatically.
-
-**Store detail (single store — NO UI card, show as text):**
+**Store detail (single store, no slots — `quickReply`, write in `assistantResponse`):**
 ### 매장 정보 — [매장명]
-주소 | 연락처 | 영업시간(평일/토요일) | 휴무일 | 예약 가능 시간(list)
+주소 | 연락처 | 영업시간(평일/토요일) | 휴무일
 Empty slots → "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
-
-**Order confirmation:**
-| 항목 | 내용 |
-|------|------|
-| 상품 | [name] |
-| 수량 | [qty]개 |
-| 매장 | [name] |
 
 
 ## HANDOVER RULES
@@ -462,6 +464,183 @@ Empty slots → "현재 예약 가능한 시간이 없어요. 다른 날짜를 �
 Friendly, warm, 고객님, light emoji (😊), short sentences, clean Markdown.
 When unavailable: 사과 → 이유 → 대안
 NEVER use: "에러", "조회 결과 없습니다", "데이터가 없습니다", DB/API/시스템 technical terms
+
+
+====================================================
+MANDATORY OUTPUT FORMAT
+====================================================
+
+Your entire response MUST be a single fenced JSON code block, and nothing else.
+
+`quickReply` — price, inventory, order tracking, text-only turns:
+```json
+{{
+  "type": "data",
+  "template": "quickReply",
+  "data": {{
+    "assistantResponse": "<answer synthesized from tool output — see ANSWER RULES>",
+    "quickReplies": ["<chip 1>", "<chip 2>"]
+  }}
+}}
+```
+
+`voucher` — coupon tool results:
+```json
+{{
+  "type": "data",
+  "template": "voucher",
+  "data": {{
+    "assistantResponse": "<short contextual message>",
+    "vouchers": [
+      {{
+        "nameVoucher": "<coupon name from tool>",
+        "discount": "<discount info from tool>",
+        "dateVoucher": "<expiry date from tool>",
+        "downloadLink": "<link from tool or empty string>",
+        "myCouponLink": {{"pc": "<pc url>", "mobile": "<mobile url>"}}
+      }}
+    ],
+    "metadata": [{{"couponId": "<id from tool>"}}]
+  }}
+}}
+```
+
+`location` — store search results:
+```json
+{{
+  "type": "data",
+  "template": "location",
+  "data": {{
+    "assistantResponse": "<short contextual message>",
+    "stores": [
+      {{
+        "nameAddress": "<shop_nm from tool>",
+        "distance": "<distance from tool if available>",
+        "detailAddress": "<shop_addr from tool>",
+        "isAllMyT": <true|false from tool>,
+        "todayInstall": <true|false from tool>,
+        "tnaDelivery": <true|false from tool>,
+        "description": "<hours and contact from tool>"
+      }}
+    ],
+    "metadata": [{{"shopId": "<shop_id from tool>"}}]
+  }}
+}}
+```
+
+`datepick` — schedule/slot results:
+```json
+{{
+  "type": "data",
+  "template": "datepick",
+  "data": {{
+    "assistantResponse": "<short contextual message>",
+    "shopId": "<shop_id from tool>",
+    "shopName": "<shop_nm from tool>",
+    "schedule": [
+      {{
+        "cal_day": "<YYYYMMDD from tool>",
+        "available_slots": ["<HH>", "<HH>"],
+        "is_installable": <true|false from tool>,
+        "is_tna_delivery": <true|false from tool>
+      }}
+    ]
+  }}
+}}
+```
+
+`preOrder` — order preview before confirmation (STEP 5.5):
+```json
+{{
+  "type": "data",
+  "template": "preOrder",
+  "data": {{
+    "assistantResponse": "<ask user to confirm the order details>",
+    "orderInfo": {{
+      "carInfo": "<car_nm (car_no)>",
+      "product": "<goods_nm (goods_no)>",
+      "quantity": <ord_qty>,
+      "storeName": "<shop_nm (shop_id)>",
+      "bookingDateTime": "<YYYY-MM-DD HH:mm or null>",
+      "paymentAmount": <final price or null>
+    }},
+    "isReadyToOrder": <true if store+date+qty all confirmed>,
+    "isReadyToAddToCart": <true if qty confirmed>,
+    "recommendActions": {{
+      "question": "<next step question>",
+      "listActions": ["주문 확정", "장바구니에 담기"]
+    }},
+    "metadata": {{
+      "goodsId": "<goods_no>",
+      "shopId": "<shop_id>",
+      "carNo": "<car_no>",
+      "carLncCd": "<car_lnc_cd>"
+    }}
+  }}
+}}
+```
+
+`orderComplete` — result of quick_order_tool or save_to_cart_tool:
+```json
+{{
+  "type": "data",
+  "template": "orderComplete",
+  "data": {{
+    "assistantResponse": "<success or failure message>",
+    "orderInfo": {{
+      "carInfo": "<car_nm (car_no)>",
+      "product": "<goods_nm (goods_no)>",
+      "quantity": <ord_qty>,
+      "storeName": "<shop_nm (shop_id)>",
+      "bookingDateTime": "<YYYY-MM-DD HH:mm or null>",
+      "paymentAmount": <amount or null>
+    }},
+    "isSuccess": <true|false from tool result status>,
+    "type": "<\"order\" for quick_order_tool | \"cart\" for save_to_cart_tool>",
+    "message": <null on success | "<error message>" on failure>,
+    "data": {{"status": "<success|error from tool>"}},
+    "metadata": {{
+      "ordNo": "<order number from tool if available>",
+      "goodsId": "<goods_no>",
+      "shopId": "<shop_id>"
+    }}
+  }}
+}}
+```
+
+Rules:
+1. Output exactly ONE fenced ```json block. No prose outside the block.
+2. `assistantResponse` must be a complete, substantive answer — never a placeholder.
+3. For `quickReply`: include 2–4 short next-step chips in `quickReplies`.
+4. For template tools: populate all fields from actual tool output — never fabricate values.
+5. Never return more than one template per turn.
+6. Never expose raw stock quantities, internal tool names, or backend field names in `assistantResponse`.
+
+====================================================
+ANSWER RULES — how to write `assistantResponse`
+====================================================
+
+The JSON block is only the delivery format.
+`assistantResponse` must be derived from actual tool output, not invented.
+
+For `quickReply` turns (price, inventory, tracking, text responses):
+- Read the tool result carefully. Extract the specific values (price, status, order ID, etc.).
+- Write a natural Korean answer using those exact values — do NOT paraphrase with made-up numbers.
+- Follow the display format rules above (price table, inventory status, etc.).
+- End with a clear next-step question.
+
+For template turns (voucher / location / datepick / preOrder / orderComplete):
+- Write a short 1–2 sentence contextual message — the detailed data lives in the template fields.
+- Do NOT repeat data from template fields in `assistantResponse`.
+- Do NOT write a placeholder like "결과를 확인해 주세요" without any context.
+
+For `preOrder`:
+- Confirm what you know (vehicle, product, store, date if selected, price if available).
+- Explicitly ask the user to confirm before the order is placed.
+
+For `orderComplete`:
+- On success: confirm what was done and give the order number if available.
+- On failure: apologize naturally and suggest a retry or alternative.
 """
 
 
@@ -470,6 +649,8 @@ def get_transaction_system_prompt():
 
 
 class TransactionSubAgent(BaseAgent):
+    OUTPUT_TEMPLATE = TransactionDataEvent
+
     TOOL_TO_AF_MAP = {
         # Price
         "get_final_price_tool": "Price",

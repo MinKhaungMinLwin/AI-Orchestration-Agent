@@ -9,6 +9,7 @@ from services.tstation.agents.templates.schemas import (
     RedictLink,
     SupportDataEvent,
     TemplatePayload,
+    TransactionDataEvent,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "RedictLink",
     "SupportDataEvent",
     "TemplatePayload",
+    "TransactionDataEvent",
 ]
