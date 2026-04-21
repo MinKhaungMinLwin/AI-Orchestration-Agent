@@ -1,5 +1,5 @@
-
 from services.tstation.agents.base_agent import BaseAgent
+from services.tstation.agents.templates import QuickReplyDataEvent
 from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
@@ -194,8 +194,8 @@ Use your knowledge of the car model to show 2-3 representative generations/trims
 It's OK to be approximate — the purpose is to show that sizes VARY, not to be 100% precise.
 
 **STEP 2: Generate your ENTIRE response as a single message.**
-⚠️ This message will be passed to the UI template agent's quick_reply_tool as `assistant_response`.
-The FE ONLY renders text inside `assistant_response` — any text outside it will NOT be shown to the user.
+⚠️ This message will be returned to the user as `assistantResponse` in the final JSON payload.
+The FE ONLY renders text inside `assistantResponse` — any text outside it will NOT be shown to the user.
 So include ALL information (car model summary + guidance) in your response text.
 
 Format:
@@ -292,36 +292,16 @@ Trigger: "내 차 목록", "my registered vehicles"
 
 
 ## RESPONSE RULE
-Write 1–3 plain Korean sentences per turn. Be concise but complete:
+Write the user-facing answer in natural Korean. Be concise but complete:
 - Include all info the user needs to take the next step (product names, prices, goods_no, sizes)
-- No markdown tables, no section headers, no ★ ratings, no bullet lists
 - End every response with a clear next-step question or action
+- The FE renders only `assistantResponse` — put EVERYTHING the user must see inside it (including product/car/store details when no dedicated card is shown yet)
 
 ## RESPONSE FORMAT
 
-⚠️ CRITICAL: The following tools produce rich UI cards automatically.
-When these tools succeed, respond with ONLY a short intro message (1-2 sentences max).
-Do NOT generate tables, detailed descriptions, star ratings, or "다음 단계" menus.
-
-**UI card tools (short response only):**
-- search_product_tool, get_products_recommendations_tool → product cards
-- get_my_cars_tool, get_user_vehicles_tool → car cards
-- get_available_coupons_tool, get_my_coupons_tool → coupon cards
-- compare_discount_tool → price comparison card
-- search_youtube_video_tool → video preview cards
-
-**Examples of CORRECT short responses:**
-- "고객님 차량에 맞는 추천 상품을 안내드립니다. 원하시는 상품을 선택해 주세요."
-- "등록된 차량 정보를 안내드립니다."
-- "사용 가능한 쿠폰을 확인해 보세요."
-- "관련 영상을 찾아봤어요."
-
-**Full-text tools (respond with tables/details as before):**
-- get_product_description_tool → product detail text
-- check_compatibility_tool → compatibility results
-- get_events_tool, get_deals_tool → event table
-
-**When NO tool is called** (FAQ, general knowledge, etc.): respond with full detail as before.
+⚠️ In this phase, all Discovery turns return a `quickReply` payload.
+Place the COMPLETE user-facing answer (intro + relevant data + next-step question) inside `assistantResponse`.
+Use Markdown when it helps readability (bold, line breaks, short tables for product/car info).
 
 **Order confirmation table (handoff to Transaction):**
 | 항목 | 내용 |
@@ -348,6 +328,36 @@ Do NOT generate tables, detailed descriptions, star ratings, or "다음 단계" 
 Friendly, warm, address as "고객님", light emoji (😊🙏), short sentences, clean Markdown.
 When unavailable: 사과 → 이유 → 대안
 NEVER use: "조회 결과 없습니다", "에러가 발생했습니다", technical terms (DB, API, 시스템)
+
+
+====================================================
+MANDATORY OUTPUT FORMAT
+====================================================
+
+Your ENTIRE response MUST be a single fenced JSON code block, and nothing else.
+
+Format strictly:
+
+```json
+{{
+  "type": "data",
+  "template": "quickReply",
+  "data": {{
+    "assistantResponse": "<the full user-facing Korean answer>",
+    "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
+  }}
+}}
+```
+
+Rules:
+
+1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
+2. Only `quickReply` template is allowed in this phase.
+3. `assistantResponse` must contain the FULL user-facing answer in Korean — everything the user needs to see (product info, car summary, guidance, confirmations, tables). The FE renders only this field.
+4. `quickReplies` must contain 2 to 4 short, natural next-step suggestions that reflect the CURRENT situation (e.g. "이 차량으로 추천받을게요", "다른 차량으로 할게요", "가격이 얼마예요?").
+5. Never leave `assistantResponse` empty.
+6. Never return more than one template.
+7. Tool calls happen BEFORE this JSON block — the JSON block is your final answer after all tool results are gathered.
 """
 
 
@@ -356,6 +366,8 @@ def get_discovery_system_prompt():
 
 
 class DiscoverySubAgent(BaseAgent):
+    OUTPUT_TEMPLATE = QuickReplyDataEvent
+
     TOOL_TO_AF_MAP = {
         # Product Compatibility
         "check_compatibility_tool": "Vehicle & Compatibility",
