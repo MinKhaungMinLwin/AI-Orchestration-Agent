@@ -16,6 +16,7 @@ def _error_response(http_status: int | None, reason: str, message: str) -> dict:
 def quick_reply_tool(
     assistant_response: Annotated[str, "Conversational Korean response to the user. No template data needed."],
     quickReplies: Annotated[list[str], "Context-aware quick reply chips shown below the message. User taps one to send it as their next message. Must reflect the user's current situation and natural next steps. Empty list [] only when truly no next step exists."],
+    reason: Annotated[str, "Brief English explanation of why quick_reply_tool was selected over other templates (e.g. 'No domain tool matched the lookup table; response is conversational greeting')."],
 ) -> dict:
     """Base chat template — use when no data card template is appropriate.
 
@@ -27,11 +28,12 @@ def quick_reply_tool(
         assistant_response (str): Concise Korean message summarizing the agent's response.
         quickReplies (list[str]): Quick reply chip labels. User taps one → sent as next message.
             Must be tailored to the user's current situation — see QUICK REPLIES section in prompt.
+        reason (str): Brief English explanation of why quick_reply_tool was selected.
 
     Returns:
-        {"status": "success", "http_status": 200, "data": {"assistantResponse": ..., "quickReplies": ...}}
+        {"status": "success", "http_status": 200, "data": {"assistantResponse": ..., "quickReplies": ..., "reason": ...}}
     """
-    return _success_response(200, {"assistantResponse": assistant_response, "quickReplies": quickReplies})
+    return _success_response(200, {"assistantResponse": assistant_response, "quickReplies": quickReplies, "reason": reason})
 
 
 @tool

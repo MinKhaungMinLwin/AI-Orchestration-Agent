@@ -751,15 +751,15 @@ class StreamingMultiAgentCoordinator:
                 # 4. Append tool data summary LAST
                 # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
                 # The actual data is at item["data"]["data"] (nested inside API response wrapper)
-                tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
+                # Flatten: extract actual payload from API response wrapper before sending to UI Template Agent
+                flattened_tool_data = [
+                    {"tool": item["tool"], "data": item["data"].get("data", {}) if isinstance(item.get("data"), dict) else {}}
+                    for item in accumulated_tool_data
+                ]
+                tool_summary = json.dumps(flattened_tool_data, ensure_ascii=False, indent=2)
                 ui_messages.append({
                     "role": "assistant",
-                    "content": (
-                        "[Accumulated tool data for UI rendering]\n"
-                        "Note: Each item has structure {\"tool\": \"...\", \"data\": {\"status\": \"...\", \"data\": {ACTUAL_DATA}}}.\n"
-                        "Extract ACTUAL_DATA from item[\"data\"][\"data\"] for template rendering.\n\n"
-                        f"{tool_summary}"
-                    )
+                    "content": f"[Previous agent tool results]\n{tool_summary}"
                 })
                 ui_messages.append({
                     "role": "user",
