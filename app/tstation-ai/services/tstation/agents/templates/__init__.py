@@ -1,7 +1,21 @@
 """Template schemas for direct structured output from domain agents."""
 
 from services.tstation.agents.templates.schemas import (
+    CheapestItem,
+    CheapestProductDataEvent,
+    CheapestProductTemplate,
+    CarItem,
+    CarMeta,
     DataEvent,
+    DiscoveryDataEvent,
+    ListCarDataEvent,
+    ListCarTemplate,
+    PreviewYoutubeDataEvent,
+    PreviewYoutubeTemplate,
+    ProductDataEvent,
+    ProductItem,
+    ProductMeta,
+    ProductTemplate,
     QnaCompleteDataEvent,
     QnaCompleteTemplate,
     QuickReplyDataEvent,
@@ -10,10 +24,25 @@ from services.tstation.agents.templates.schemas import (
     SupportDataEvent,
     TemplatePayload,
     TransactionDataEvent,
+    YoutubeItem,
 )
 
 __all__ = [
+    "CarItem",
+    "CarMeta",
+    "CheapestItem",
+    "CheapestProductDataEvent",
+    "CheapestProductTemplate",
     "DataEvent",
+    "DiscoveryDataEvent",
+    "ListCarDataEvent",
+    "ListCarTemplate",
+    "PreviewYoutubeDataEvent",
+    "PreviewYoutubeTemplate",
+    "ProductDataEvent",
+    "ProductItem",
+    "ProductMeta",
+    "ProductTemplate",
     "QnaCompleteDataEvent",
     "QnaCompleteTemplate",
     "QuickReplyDataEvent",
@@ -22,4 +51,5 @@ __all__ = [
     "SupportDataEvent",
     "TemplatePayload",
     "TransactionDataEvent",
+    "YoutubeItem",
 ]

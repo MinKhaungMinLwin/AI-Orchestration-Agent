@@ -1,13 +1,13 @@
 from abc import ABC
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 import json
 import logging
 import re
 
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class BaseAgent(ABC):
     TOOL_TO_AF_MAP: dict[str, str] = {}
     TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
     RESPONSE_FORMAT: type[BaseModel] | dict | None = None
-    OUTPUT_TEMPLATE: type[BaseModel] | None = None
+    OUTPUT_TEMPLATE: Any = None
 
     def __init__(self, model, tools: list | None = None, system_prompt: str | Callable[[], str] = "", name: str = ""):
         self.name = name
@@ -250,7 +250,7 @@ class BaseAgent(ABC):
         assistant_response = data.get("assistantResponse")
         return assistant_response if isinstance(assistant_response, str) else ""
 
-    def _build_data_event_from_text(self, text: str, template_cls: type[BaseModel]) -> dict | None:
+    def _build_data_event_from_text(self, text: str, template_cls: Any) -> dict | None:
         """Extract a fenced JSON object from `text`, validate it against `template_cls`,
         and return a `data` event ready to yield. Returns None on any failure.
         """
@@ -264,7 +264,7 @@ class BaseAgent(ABC):
             logger.warning("[%s] Invalid JSON in agent response: %s", self.name, exc)
             return None
         try:
-            validated = template_cls.model_validate(parsed)
+            validated = TypeAdapter(template_cls).validate_python(parsed)
         except ValidationError as exc:
             logger.warning(
                 "[%s] Output JSON failed schema validation: %s",
