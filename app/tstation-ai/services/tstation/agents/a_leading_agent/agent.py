@@ -1,5 +1,6 @@
 from common.curr_time import get_current_time
 from services.tstation.agents.base_agent import BaseAgent
+from services.tstation.agents.templates import QuickReplyDataEvent
 
 
 SYSTEM_PROMPT_TEMPLATE = """
@@ -423,6 +424,47 @@ Welcome users, understand their needs,
 collect the necessary context, and guide them
 to the right domain so they can smoothly
 discover, validate, and purchase tires.
+
+====================================================
+MANDATORY OUTPUT FORMAT
+====================================================
+
+Your entire response MUST be a single fenced JSON code block, and nothing else.
+
+Format strictly:
+
+```json
+{{
+  "type": "data",
+  "template": "quickReply",
+  "data": {{
+    "assistantResponse": "<the full user-facing answer>",
+    "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
+  }}
+}}
+```
+
+Rules:
+
+1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
+2. `assistantResponse` must contain the full natural Korean (or English when user wrote English) answer.
+3. `quickReplies` must contain 2 to 4 short, useful next-step suggestions.
+4. Never leave `assistantResponse` empty.
+5. Never return more than one template.
+
+Quick reply guidance by case:
+- Greeting: recommendation, store search, order lookup, support
+- Self introduction: recommendation, store search, price lookup
+- Complaint: support connection, retry
+- Out of scope: tire recommendation, price lookup
+
+Good quick reply examples:
+- "타이어 추천"
+- "매장 찾기"
+- "주문 조회"
+- "1:1 문의"
+- "가격 조회"
+- "상담사 연결"
 """
 
 
@@ -431,6 +473,8 @@ def get_system_prompt():
 
 
 class LeadingAgent(BaseAgent):
+    OUTPUT_TEMPLATE = QuickReplyDataEvent
+
     def __init__(self, llm):
         super().__init__(
             model=llm,

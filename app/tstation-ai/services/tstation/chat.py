@@ -106,7 +106,8 @@ def decide_next_action(
             break
 
     system_msg = SystemMessage(content=prompt_router())
-    human_msg = HumanMessage(content=dedent(f"""
+    human_msg = HumanMessage(
+        content=dedent(f"""
         Original User Request: {user_message}
 
         Previous Agent Domain: {previous_domain}
@@ -115,7 +116,8 @@ def decide_next_action(
         {previous_agent_response}
 
         Please decide the next action.
-    """))
+    """)
+    )
 
     trace_config = build_trace_config(
         run_name="decide_next_action",
@@ -148,9 +150,7 @@ class MultiAgentDomain(BaseModel):
         SUPPORT = "support"
 
     reason: str = Field(description="Reason for the classification, using english")
-    domains: list[Domain] = Field(
-        description="List of domains detected in the request, ordered by priority"
-    )
+    domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
     user_behavior: str = Field(
         description=(
             "What the user is currently doing in this conversation turn, inferred from full history. "
@@ -346,7 +346,9 @@ class StreamingMultiAgentCoordinator:
                 tags=["router", "classify_multi_intent"],
             )
             result: MultiAgentDomain = structured_model.invoke(all_messages, config=trace_config)
-            logger.info(f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}")
+            logger.info(
+                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}"
+            )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
 
@@ -419,10 +421,7 @@ class StreamingMultiAgentCoordinator:
         if not parts:
             return None
 
-        return {
-            "role": "assistant",
-            "content": f"[Context from previous steps]\n" + "\n".join(parts)
-        }
+        return {"role": "assistant", "content": f"[Context from previous steps]\n" + "\n".join(parts)}
 
     @staticmethod
     def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict, tool_input: dict | None = None):
@@ -554,6 +553,7 @@ class StreamingMultiAgentCoordinator:
 
         accumulated_context = {}
         accumulated_tool_data = []  # Collect tool outputs for UI Template Agent
+        domain_data_event_emitted = False  # Domain agent emitted a `data` event itself
 
         is_first_agent = True
 
@@ -569,17 +569,21 @@ class StreamingMultiAgentCoordinator:
 
             # 1. slot_context FIRST
             if slot_context:
-                enriched_messages.append({
-                    "role": "assistant",
-                    "content": slot_context,
-                })
+                enriched_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": slot_context,
+                    }
+                )
 
             # 1.5. tool_context from previous turn (structured tool results)
             if tool_context:
-                enriched_messages.append({
-                    "role": "assistant",
-                    "content": tool_context,
-                })
+                enriched_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": tool_context,
+                    }
+                )
 
             # 2. Original messages (already contains user_context from _build_messages_with_user_info)
             #    These messages have current_user_msg at the LAST position
@@ -589,20 +593,19 @@ class StreamingMultiAgentCoordinator:
             if accumulated_context:
                 for prev_domain, content in accumulated_context.items():
                     if content and content.strip():
-                        enriched_messages.append({
-                            "role": "assistant",
-                            "content": str(content)
-                        })
-                        enriched_messages.append({
-                            "role": "user",
-                            "content": (
-                                "Based on the previous agent's findings above, produce a SINGLE unified response for the user. "
-                                "Include key findings from the previous agent (e.g., compatibility results, product info) and "
-                                "seamlessly add your own results (e.g., pricing, inventory, store info). "
-                                "Do NOT repeat introductory greetings or offer intermediate choices that are already resolved. "
-                                "The response must read as ONE coherent answer, not two separate answers concatenated together."
-                            )
-                        })
+                        enriched_messages.append({"role": "assistant", "content": str(content)})
+                        enriched_messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Based on the previous agent's findings above, produce a SINGLE unified response for the user. "
+                                    "Include key findings from the previous agent (e.g., compatibility results, product info) and "
+                                    "seamlessly add your own results (e.g., pricing, inventory, store info). "
+                                    "Do NOT repeat introductory greetings or offer intermediate choices that are already resolved. "
+                                    "The response must read as ONE coherent answer, not two separate answers concatenated together."
+                                ),
+                            }
+                        )
                         logger.info(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
 
@@ -615,27 +618,23 @@ class StreamingMultiAgentCoordinator:
                         for item in accumulated_tool_data
                     )
                     if not has_ord_qty:
-                        user_text = " ".join(
-                            msg.get("content", "") for msg in messages if msg.get("role") == "user"
-                        )
+                        user_text = " ".join(msg.get("content", "") for msg in messages if msg.get("role") == "user")
                         qty_match = re.search(r"(\d+)\s*개", user_text)
                         if qty_match:
                             ord_qty = int(qty_match.group(1))
-                            accumulated_tool_data.append({
-                                "tool": "user_intent",
-                                "data": {"ord_qty": ord_qty}
-                            })
+                            accumulated_tool_data.append({"tool": "user_intent", "data": {"ord_qty": ord_qty}})
                             logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
 
                 tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
-                enriched_messages.append({
-                    "role": "assistant",
-                    "content": f"[Previous agent tool results]\n{tool_summary}"
-                })
+                enriched_messages.append(
+                    {"role": "assistant", "content": f"[Previous agent tool results]\n{tool_summary}"}
+                )
                 logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
 
             domain_key = domain.value
-            logger.info(f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}")
+            logger.info(
+                f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
+            )
 
             # Yield agent start event
             yield {
@@ -659,6 +658,11 @@ class StreamingMultiAgentCoordinator:
                 event["source_domain"] = domain_key
                 yield event
 
+                # Track direct data events emitted by the domain agent (JSON output).
+                # When present, skip the UI Template stage below.
+                if event.get("type") == "data":
+                    domain_data_event_emitted = True
+
                 # Capture message content for context passing
                 if event.get("type") == "message":
                     content = event.get("content", "")
@@ -674,10 +678,7 @@ class StreamingMultiAgentCoordinator:
                     if tool_output:
                         try:
                             parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "data": parsed
-                            })
+                            accumulated_tool_data.append({"tool": event.get("tool", ""), "data": parsed})
 
                             # Persist tool-derived goods_no, shop_id, and tire_size to slots
                             if session_id and isinstance(parsed, dict):
@@ -686,10 +687,7 @@ class StreamingMultiAgentCoordinator:
                                 )
 
                         except (json.JSONDecodeError, TypeError):
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "data": tool_output
-                            })
+                            accumulated_tool_data.append({"tool": event.get("tool", ""), "data": tool_output})
 
             # Yield agent completion event
             yield {
@@ -735,6 +733,8 @@ class StreamingMultiAgentCoordinator:
         # 2. Domain agents responded but called NO tools (pure text — UI Template generates quickReply)
         # NOTE: FE only renders "data" events (not "token"), so UI Template Agent must ALWAYS run
         # to produce a data event for the FE to display.
+        # SKIP entirely when a domain agent already emitted a direct `data` event
+        # (Phase 0+: domain agents may now produce the FE payload themselves).
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
@@ -743,7 +743,9 @@ class StreamingMultiAgentCoordinator:
         _has_agent_response = bool(accumulated_context)
         _no_tools_called = not accumulated_tool_data
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
-        if _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
+        if domain_data_event_emitted:
+            logger.info("[COORDINATOR] Domain agent emitted data event — skipping UI Template Agent")
+        elif _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
             trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
             logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
 
@@ -751,12 +753,17 @@ class StreamingMultiAgentCoordinator:
             # Skip code mapper when last agent called no tools (e.g., Transaction asking for qty after Discovery found product)
             # — the product card from Discovery's tools would override Transaction's text question
             from services.tstation.template_mapper import try_build_template
+
             # Use the LAST agent's response as assistantResponse (e.g., Transaction's qty question over Discovery's "found product")
             assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
             tool_names = [e.get("tool", "") for e in accumulated_tool_data] if accumulated_tool_data else []
-            logger.info(f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}, last_agent_called_tools={last_agent_called_tools}")
+            logger.info(
+                f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}, last_agent_called_tools={last_agent_called_tools}"
+            )
             code_template = None  # Disabled: always use LLM UI Template Agent
-            logger.info(f"[COORDINATOR] Template mapper result: {'template=' + code_template.get('template', '') if code_template else 'None (LLM fallback)'}")
+            logger.info(
+                f"[COORDINATOR] Template mapper result: {'template=' + code_template.get('template', '') if code_template else 'None (LLM fallback)'}"
+            )
 
             if code_template:
                 # Code mapper handled it — yield template event directly, skip LLM UI Template Agent
@@ -775,10 +782,12 @@ class StreamingMultiAgentCoordinator:
 
                 # 1. slot_context FIRST
                 if slot_context:
-                    ui_messages.append({
-                        "role": "assistant",
-                        "content": slot_context,
-                    })
+                    ui_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": slot_context,
+                        }
+                    )
 
                 # 2. Original messages WITHOUT conversation context injection
                 # (avoid confusing UI Template Agent with routing next_action instructions)
@@ -788,35 +797,28 @@ class StreamingMultiAgentCoordinator:
                 # e.g., Discovery found product + Transaction asked for quantity
                 for prev_domain, content in accumulated_context.items():
                     if content and content.strip():
-                        ui_messages.append({
-                            "role": "assistant",
-                            "content": str(content)
-                        })
-                        ui_messages.append({
-                            "role": "user",
-                            "content": "Continue with next step"
-                        })
+                        ui_messages.append({"role": "assistant", "content": str(content)})
+                        ui_messages.append({"role": "user", "content": "Continue with next step"})
 
                 # 4. Append tool data summary LAST
                 # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
                 # The actual data is at item["data"]["data"] (nested inside API response wrapper)
                 # Flatten: extract actual payload from API response wrapper before sending to UI Template Agent
                 flattened_tool_data = [
-                    {"tool": item["tool"], "data": item["data"].get("data", {}) if isinstance(item.get("data"), dict) else {}}
+                    {
+                        "tool": item["tool"],
+                        "data": item["data"].get("data", {}) if isinstance(item.get("data"), dict) else {},
+                    }
                     for item in accumulated_tool_data
                 ]
                 tool_summary = json.dumps(flattened_tool_data, ensure_ascii=False, indent=2)
-                ui_messages.append({
-                    "role": "assistant",
-                    "content": f"[Previous agent tool results]\n{tool_summary}"
-                })
-                ui_messages.append({
-                    "role": "user",
-                    "content": "Help me generate Template UI"
-                })
+                ui_messages.append({"role": "assistant", "content": f"[Previous agent tool results]\n{tool_summary}"})
+                ui_messages.append({"role": "user", "content": "Help me generate Template UI"})
 
                 # Log UI Template Agent messages
-                logger.info(f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}")
+                logger.info(
+                    f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}"
+                )
 
                 # Yield UI Template Agent start event
                 yield {
@@ -843,7 +845,9 @@ class StreamingMultiAgentCoordinator:
                 # Fallback: if UI Template Agent produced no data event, generate quickReply
                 # so the FE (which only renders data events) has something to display
                 if not ui_template_yielded_data:
-                    logger.warning("[COORDINATOR] UI Template Agent produced no data event — generating fallback quickReply")
+                    logger.warning(
+                        "[COORDINATOR] UI Template Agent produced no data event — generating fallback quickReply"
+                    )
                     yield {
                         "type": "data",
                         "template": "quickReply",
@@ -889,19 +893,21 @@ def _sanitize_response(text: str) -> str:
 
 
 _FACTUAL_CLAIM_PATTERN = re.compile(
-    r'\d{1,3}(?:,\d{3})*\s*원'      # 가격 (e.g. 150,000원)
-    r'|G\d{9,}'                      # goods_no (e.g. GXXXXXXXXXXXX)
-    r'|shop(?:Seq|_id|Id)'           # 매장 ID
-    r'|재고|할인|%\s*할인'            # 재고/할인
-    r'|\d{3}/\d{2,3}[a-zA-Z]+\d{2}'  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r'|티스테이션\s*\S*점'             # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
-    r'|F\d{5}\b',                     # shop_id (e.g. F01234)
+    r"\d{1,3}(?:,\d{3})*\s*원"  # 가격 (e.g. 150,000원)
+    r"|G\d{9,}"  # goods_no (e.g. GXXXXXXXXXXXX)
+    r"|shop(?:Seq|_id|Id)"  # 매장 ID
+    r"|재고|할인|%\s*할인"  # 재고/할인
+    r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
+    r"|티스테이션\s*\S*점"  # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
+    r"|F\d{5}\b",  # shop_id (e.g. F01234)
     re.IGNORECASE,
 )
+
 
 def _has_factual_claims(text: str) -> bool:
     """Check if draft contains factual commerce claims that need QC verification."""
     return bool(_FACTUAL_CLAIM_PATTERN.search(text))
+
 
 # Singleton coordinator instance
 _coordinator = StreamingMultiAgentCoordinator()
@@ -914,6 +920,7 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
 
     try:
         from services.tstation.chat_history_service import get_chat_history_service
+
         redis_messages = get_chat_history_service().get_history(session_id)
 
         # content -> template_data map
@@ -1002,9 +1009,7 @@ class TStationChatServiceV2:
             last_user_idx += 1
 
         # Add Korean prefix to the current user message (now at last_user_idx)
-        messages[last_user_idx]["content"] = (
-            f"# Respond in Korean language\n{messages[last_user_idx]['content']}"
-        )
+        messages[last_user_idx]["content"] = f"# Respond in Korean language\n{messages[last_user_idx]['content']}"
 
         return messages
 
@@ -1229,7 +1234,6 @@ class TStationChatServiceV2:
             logger.exception(f"Server Error: {e}")
             raise Exception("Internal Server Error")
 
-
     @staticmethod
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
@@ -1253,8 +1257,8 @@ class TStationChatServiceV2:
         draft_response = ""
         source_data_chunks = []
         tool_context_items = []  # Structured tool results for context preservation
-        original_message_events = [] # Hold message events to sync history
-        coordinator_done_event = None # Hold the premature [DONE] event
+        original_message_events = []  # Hold message events to sync history
+        coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
 
         user_query = ""
@@ -1268,6 +1272,7 @@ class TStationChatServiceV2:
         # Track whether a code-mapper-eligible tool was called — if so, suppress token streaming
         # to avoid the "long text flashes then gets replaced by card" UX issue.
         from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP
+
         _suppress_tokens = False
 
         for event in _coordinator.stream(
@@ -1289,12 +1294,12 @@ class TStationChatServiceV2:
                 if not _suppress_tokens:
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
-                
+
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
             if event_type == "message":
                 original_message_events.append(event)
                 continue
-            
+
             # --- COLLECT SOURCE DATA (Tools Only = True Ground Truth) ---
             if event_type == "tool":
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -1302,9 +1307,12 @@ class TStationChatServiceV2:
                 # Suppress tokens when a "list display" tool is called (card will replace text).
                 # Exclude car lookup tools — agent may need to show selection text first.
                 _SUPPRESS_ON_TOOLS = {
-                    "search_product_tool", "get_products_recommendations_tool",
-                    "get_available_coupons_tool", "get_my_coupons_tool",
-                    "compare_discount_tool", "search_youtube_video_tool",
+                    "search_product_tool",
+                    "get_products_recommendations_tool",
+                    "get_available_coupons_tool",
+                    "get_my_coupons_tool",
+                    "compare_discount_tool",
+                    "search_youtube_video_tool",
                 }
                 if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
@@ -1326,7 +1334,7 @@ class TStationChatServiceV2:
                         tool_context_items.append(ctx_item)
 
                 continue
-                
+
             # --- INTERCEPT EARLY DONE EVENT ---
             if event_type == "sub-agent" and event.get("agent") == "[DONE]":
                 coordinator_done_event = event
@@ -1337,13 +1345,16 @@ class TStationChatServiceV2:
                 event_data = event.get("data", {})
                 if isinstance(event_data, dict) and event_data.get("assistantResponse"):
                     assistant_response = event_data["assistantResponse"]
+                    source_domain = str(event.get("source_domain", "ui_template")).upper()
                     assistant_msg_event = {
                         "type": "message",
                         "content": assistant_response,
-                        "agent": "[UI TEMPLATE AGENT]",
+                        "agent": f"[{source_domain} AGENT]",
                     }
                     original_message_events.append(assistant_msg_event)
-                    logger.info(f"[COORDINATOR] Captured assistantResponse from UI Template: {assistant_response[:50]}...")
+                    logger.info(
+                        f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
+                    )
                 # Pass through data event to frontend
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
@@ -1358,7 +1369,9 @@ class TStationChatServiceV2:
             ):
                 agent_count += 1
                 if agent_count > 1 and draft_response.strip():
-                    logger.info(f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response")
+                    logger.info(
+                        f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response"
+                    )
                     draft_response = ""
                     original_message_events = []
 
@@ -1430,6 +1443,7 @@ class TStationChatServiceV2:
         if session_id and tool_context_items:
             try:
                 from services.tstation.chat_history_service import get_chat_history_service
+
                 get_chat_history_service().save_tool_context(session_id, tool_context_items)
             except Exception as e:
                 logger.warning(f"[TOOL_CTX] Failed to save tool context: {e}")

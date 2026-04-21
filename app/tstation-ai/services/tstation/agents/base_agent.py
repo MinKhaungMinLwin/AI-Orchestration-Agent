@@ -2,12 +2,20 @@ from abc import ABC
 from collections.abc import Callable
 from typing import TypeVar
 import json
+import logging
+import re
 
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
+from pydantic import BaseModel, ValidationError
 
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 
 
 TOOL_DISPLAY_NAMES: dict[str, str] = {
@@ -65,6 +73,8 @@ class BaseAgent(ABC):
 
     TOOL_TO_AF_MAP: dict[str, str] = {}
     TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
+    RESPONSE_FORMAT: type[BaseModel] | dict | None = None
+    OUTPUT_TEMPLATE: type[BaseModel] | None = None
 
     def __init__(self, model, tools: list | None = None, system_prompt: str | Callable[[], str] = "", name: str = ""):
         self.name = name
@@ -77,6 +87,7 @@ class BaseAgent(ABC):
         return create_agent(
             model=self._model,
             tools=self._tools,
+            response_format=self.RESPONSE_FORMAT,
             debug=True,
             system_prompt=prompt,
             name=self.name,
@@ -96,10 +107,14 @@ class BaseAgent(ABC):
         - message: Agent messages with agent name
         - tool_start: Emitted before a tool runs, with display_name for UI typing indicator
         - tool: Tool execution results with tool name, input, and output
+        - data: Final UI template payload from structured response
         """
         agent = self._build_agent()
         tool_calls_map: dict[str, dict] = {}
         answering_emitted = False
+        prompt_template = self.OUTPUT_TEMPLATE
+        suppress_tokens = prompt_template is not None
+        accumulated_text = ""
 
         yield {"type": "status", "status": "생각 중..."}
 
@@ -111,6 +126,9 @@ class BaseAgent(ABC):
             if mode == "messages":
                 token, _ = chunk
                 if isinstance(token, AIMessageChunk) and token.text:
+                    if suppress_tokens:
+                        accumulated_text += token.text
+                        continue
                     if not answering_emitted:
                         yield {"type": "status", "status": "답변 중..."}
                         answering_emitted = True
@@ -118,13 +136,39 @@ class BaseAgent(ABC):
 
             elif mode == "updates":
                 for node, update in chunk.items():
+                    if "structured_response" in update:
+                        data_event = self._build_data_event(update["structured_response"])
+                        if data_event is not None:
+                            assistant_response = self._get_assistant_response(data_event)
+                            if assistant_response:
+                                if not answering_emitted:
+                                    yield {"type": "status", "status": "답변 중..."}
+                                    answering_emitted = True
+                                yield {"type": "token", "content": assistant_response}
+                                yield {
+                                    "type": "message",
+                                    "content": assistant_response,
+                                    "node": node,
+                                    "agent": self.name,
+                                }
+                            yield data_event
+
                     message = update["messages"][-1]
                     if isinstance(message, AIMessage):
                         if hasattr(message, "tool_calls") and message.tool_calls:
                             for tc in message.tool_calls:
+                                if self._is_internal_structured_tool(tc["name"]):
+                                    continue
                                 tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
                                 display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "답변 중...")
-                                yield {"type": "status", "status": "tool_start", "tool": tc["name"], "display_name": display_name}
+                                yield {
+                                    "type": "status",
+                                    "status": "tool_start",
+                                    "tool": tc["name"],
+                                    "display_name": display_name,
+                                }
+                        if suppress_tokens:
+                            continue
                         yield {
                             "type": "message",
                             "content": message.content,
@@ -132,10 +176,14 @@ class BaseAgent(ABC):
                             "agent": self.name,
                         }
                     elif isinstance(message, ToolMessage):
+                        if self._is_internal_structured_tool(message.name):
+                            continue
                         af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
                         tool_status = "success"
                         try:
-                            tool_result = json.loads(message.content) if isinstance(message.content, str) else message.content
+                            tool_result = (
+                                json.loads(message.content) if isinstance(message.content, str) else message.content
+                            )
                             if isinstance(tool_result, dict):
                                 tool_status = tool_result.get("status", "success")
                         except (json.JSONDecodeError, TypeError):
@@ -150,7 +198,90 @@ class BaseAgent(ABC):
                             "tool": message.name,
                         }
 
+        if prompt_template is not None and accumulated_text:
+            data_event = self._build_data_event_from_text(accumulated_text, prompt_template)
+            if data_event is not None:
+                assistant_response = self._get_assistant_response(data_event)
+                if assistant_response:
+                    if not answering_emitted:
+                        yield {"type": "status", "status": "답변 중..."}
+                        answering_emitted = True
+                    yield {"type": "token", "content": assistant_response}
+                    yield {
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": self.name,
+                    }
+                yield data_event
+
         yield {"type": "token", "content": "\n\n"}
+
+    def _build_data_event(self, structured_response: BaseModel | dict | None) -> dict | None:
+        """Convert structured response into the FE `data` event shape."""
+        if structured_response is None:
+            return None
+
+        payload = (
+            structured_response.model_dump() if isinstance(structured_response, BaseModel) else structured_response
+        )
+        if not isinstance(payload, dict):
+            logger.warning("[%s] Structured response is not a dict — skipping data event", self.name)
+            return None
+
+        if payload.get("type") != "data":
+            logger.warning("[%s] Structured response missing type='data' — skipping", self.name)
+            return None
+
+        if not isinstance(payload.get("template"), str):
+            logger.warning("[%s] Structured response missing template — skipping", self.name)
+            return None
+
+        if not isinstance(payload.get("data"), dict):
+            logger.warning("[%s] Structured response missing data object — skipping", self.name)
+            return None
+
+        return payload
+
+    @staticmethod
+    def _get_assistant_response(data_event: dict) -> str:
+        data = data_event.get("data", {})
+        if not isinstance(data, dict):
+            return ""
+        assistant_response = data.get("assistantResponse")
+        return assistant_response if isinstance(assistant_response, str) else ""
+
+    def _build_data_event_from_text(self, text: str, template_cls: type[BaseModel]) -> dict | None:
+        """Extract a fenced JSON object from `text`, validate it against `template_cls`,
+        and return a `data` event ready to yield. Returns None on any failure.
+        """
+        raw = self._extract_fenced_json(text)
+        if raw is None:
+            logger.warning("[%s] No JSON block found in agent response — skipping data event", self.name)
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("[%s] Invalid JSON in agent response: %s", self.name, exc)
+            return None
+        try:
+            validated = template_cls.model_validate(parsed)
+        except ValidationError as exc:
+            logger.warning(
+                "[%s] Output JSON failed schema validation: %s",
+                self.name,
+                exc.errors(include_url=False),
+            )
+            return None
+        return self._build_data_event(validated)
+
+    @staticmethod
+    def _extract_fenced_json(text: str) -> str | None:
+        matches = _FENCED_JSON_RE.findall(text)
+        return matches[-1] if matches else None
+
+    @staticmethod
+    def _is_internal_structured_tool(tool_name: str) -> bool:
+        return tool_name.startswith("response_format_")
 
     def stream_template(self, messages: list[dict], config: dict | None = None):
         """
@@ -161,6 +292,7 @@ class BaseAgent(ABC):
         """
         import json
         import logging
+
         logger = logging.getLogger(__name__)
         agent = self._build_agent()
 
@@ -199,7 +331,6 @@ class BaseAgent(ABC):
                             "template": template_name,
                             "data": tool_data,
                         }
-
 
         if not tool_called:
             logger.warning("[UI_TEMPLATE] Agent generated no tool calls — templates not rendered")
