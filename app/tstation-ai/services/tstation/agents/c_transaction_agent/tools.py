@@ -65,38 +65,38 @@ def _next_cal_days(n: int = 3) -> list[str]:
     return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(0, n + 1)]
 
 
-def _fetch_store_availability(shop_id: str, cal_days: list[str]) -> dict:
-    """Fetch store detail for multiple cal_days, return dict keyed by cal_day."""
-    availability: dict[str, Any] = {}
-    for cal_day in cal_days:
-        try:
-            response = get_store_detail(client=get_client(), shop_id=shop_id, cal_day=cal_day)
-            if response.parsed is not None:
-                detail = _to_dict(response.parsed)
-                availability[cal_day] = detail.get("time_slots") or detail.get("available_times") or detail
-        except Exception:
-            logger.warning("[_fetch_store_availability] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
-    return availability
+def _fetch_store_detail_once(shop_id: str, cal_day: str) -> dict:
+    """Fetch store_detail for a single (shop_id, cal_day) pair. Returns {} on failure."""
+    try:
+        response = get_store_detail(client=get_client(), shop_id=shop_id, cal_day=cal_day)
+        if response.parsed is not None:
+            return _to_dict(response.parsed)
+    except Exception:
+        logger.warning("[_fetch_store_detail_once] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
+    return {}
 
 
-def _enrich_stores_with_availability(stores: list[dict]) -> list[dict]:
-    """Parallel-fetch 3-day availability for each store and merge into store dicts."""
-    if not stores:
-        return stores
+def _count_available_slots(detail: dict) -> int:
+    """Count non-empty available slots in a store_detail response."""
+    if not isinstance(detail, dict):
+        return 0
+    slots = detail.get("available_slots") or detail.get("time_slots") or []
+    return len(slots) if isinstance(slots, list) else 0
 
-    shop_ids = [s.get("shop_id") for s in stores if s.get("shop_id")]
-    if not shop_ids:
-        return stores
 
-    cal_days = _next_cal_days(0)
-    avail_map: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(shop_ids), 5)) as executor:
-        futures = {executor.submit(_fetch_store_availability, sid, cal_days): sid for sid in shop_ids}
+def _parallel_fetch_store_days(shop_ids: list[str], cal_days: list[str], max_workers: int = 9) -> dict:
+    """Parallel-fetch all (shop_id, cal_day) combinations. Returns {shop_id: {cal_day: detail}}."""
+    results: dict[str, dict[str, dict]] = {sid: {} for sid in shop_ids}
+    pairs = [(sid, day) for sid in shop_ids for day in cal_days]
+    if not pairs:
+        return results
+
+    with ThreadPoolExecutor(max_workers=min(len(pairs), max_workers)) as executor:
+        futures = {executor.submit(_fetch_store_detail_once, sid, day): (sid, day) for sid, day in pairs}
         for future in as_completed(futures):
-            sid = futures[future]
-            avail_map[sid] = future.result()
-
-    return [{**store, "availability": avail_map.get(store.get("shop_id"), {})} for store in stores]
+            sid, day = futures[future]
+            results[sid][day] = future.result()
+    return results
 
 
 def _fetch_order_detail(ord_no: str) -> dict:
@@ -434,8 +434,6 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             )
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
-        if isinstance(data, dict) and isinstance(data.get("stores"), list):
-            data["stores"] = _enrich_stores_with_availability(data["stores"])
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_nearby_stores_tool] Failed")
@@ -534,8 +532,6 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
             )
         logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
-        if isinstance(data, dict) and isinstance(data.get("stores"), list):
-            data["stores"] = _enrich_stores_with_availability(data["stores"])
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_store_list_tool] Failed")
@@ -642,6 +638,118 @@ def get_store_schedule_tool(shop_id: str, days: int = 4):
 
     schedule.sort(key=lambda x: x["cal_day"])
     return _success_response(200, {"shop_id": shop_id, "schedule": schedule})
+
+
+@tool
+def get_multi_store_schedule_tool(
+    shop_id_list: list[str],
+    initial_days: int = 2,
+    extend_days: int = 1,
+):
+    """
+    Get reservation schedule for multiple stores (up to 3) with adaptive day extension.
+
+    Use this for "가장 빨리 방문 가능한 매장" type queries when comparing earliest available
+    slots across multiple stores. Fetches all (shop_id × cal_day) pairs in parallel in ONE tool call.
+
+    Adaptive behavior:
+    - Phase 1: Fetch shop_id_list × initial_days in parallel (default 2 = TODAY, +1).
+    - If EVERY store has zero available_slots across ALL initial days AND extend_days > 0:
+      Phase 2 — extend the window by extend_days and parallel-fetch the new days only.
+    - Returns merged schedule with `extended=true` so the caller can mention the extension.
+
+    Use this INSTEAD OF calling get_store_detail_tool N× M times (N stores × M days).
+
+    Args:
+        shop_id_list (list[str]): Up to 3 shop IDs. Extra IDs are truncated.
+        initial_days (int): Initial days to fetch starting from today (default 2).
+        extend_days (int): Extra days to fetch if initial window has no slots (default 1).
+
+    Example Inputs:
+        - {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
+        - {"shop_id_list": ["BXXXXX", "FXXXXX"], "initial_days": 2, "extend_days": 2}
+
+    Returns:
+        dict: {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": str,
+                        "schedule": [
+                            {"cal_day": "YYYYMMDD", "available_slots": [...], "is_installable": bool, "is_tna_delivery": bool},
+                            ...
+                        ]
+                    },
+                    ...
+                ],
+                "extended": bool,         # True = Phase 2 fallback was triggered
+                "days_fetched": int       # total distinct days fetched
+            }
+        }
+    """
+    logger.info(
+        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, initial_days=%s, extend_days=%s",
+        shop_id_list, initial_days, extend_days,
+    )
+
+    shop_ids = [sid for sid in (shop_id_list or []) if sid][:3]
+    if not shop_ids:
+        return _error_response(None, "invalid_input", "shop_id_list is empty")
+
+    initial_days = max(1, min(initial_days, 7))
+    extend_days = max(0, min(extend_days, 5))
+
+    # Phase 1 — initial window (e.g., 2 days = TODAY, +1)
+    phase1_cal_days = _next_cal_days(initial_days - 1)
+    phase1_results = _parallel_fetch_store_days(shop_ids, phase1_cal_days)
+
+    # Per-store empty check: stores that have zero slots across all initial days
+    stores_without_slots = [
+        sid for sid in shop_ids
+        if not any(
+            _count_available_slots(phase1_results.get(sid, {}).get(day, {})) > 0
+            for day in phase1_cal_days
+        )
+    ]
+
+    merged: dict[str, dict[str, dict]] = phase1_results
+    extended = False
+    all_cal_days = list(phase1_cal_days)
+
+    # Phase 2 — extend ONLY the stores whose initial window is empty.
+    # Fetching per-store preserves correctness (a store that needs day +2 still
+    # gets its +2 data) while avoiding wasted BE calls for stores already filled.
+    if stores_without_slots and extend_days > 0:
+        full_cal_days = _next_cal_days(initial_days + extend_days - 1)
+        phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
+        if phase2_cal_days:
+            phase2_results = _parallel_fetch_store_days(stores_without_slots, phase2_cal_days)
+            for sid in stores_without_slots:
+                merged[sid] = {**phase1_results.get(sid, {}), **phase2_results.get(sid, {})}
+            all_cal_days.extend(phase2_cal_days)
+            extended = True
+
+    # Shape output: one entry per shop with sorted schedule
+    stores_out = []
+    for sid in shop_ids:
+        schedule = []
+        for day in sorted(merged.get(sid, {}).keys()):
+            detail = merged[sid].get(day) or {}
+            schedule.append({
+                "cal_day": day,
+                "available_slots": detail.get("available_slots") or [],
+                "is_installable": detail.get("is_installable", False),
+                "is_tna_delivery": detail.get("is_tna_delivery", False),
+            })
+        stores_out.append({"shop_id": sid, "schedule": schedule})
+
+    return _success_response(200, {
+        "stores": stores_out,
+        "extended": extended,
+        "days_fetched": len(set(all_cal_days)),
+    })
 
 
 # =====================================================
