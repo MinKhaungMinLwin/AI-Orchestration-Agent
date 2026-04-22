@@ -4,8 +4,12 @@ T-Station BE API Client with thread-local token support.
 
 import threading
 
+import httpx
+
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from config.env import settings
+
+_BE_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 
 
 class TstationBeClient:
@@ -35,12 +39,13 @@ class TstationBeClient:
             token: Explicit token. If None, uses stored token.
 
         Returns:
-            AuthenticatedClient with Bearer token.
+            AuthenticatedClient with Bearer token and bounded timeout.
         """
         use_token = token if token is not None else self._current_token
         return AuthenticatedClient(
             base_url=settings.TSTATION_BE_API,
             token=use_token or "",
+            timeout=_BE_HTTP_TIMEOUT,
         )
 
 

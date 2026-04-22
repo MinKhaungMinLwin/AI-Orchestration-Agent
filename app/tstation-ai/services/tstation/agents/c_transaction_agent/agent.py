@@ -12,6 +12,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_store_list_tool,
     get_store_detail_tool,
     get_store_schedule_tool,
+    get_multi_store_schedule_tool,
     save_to_cart_tool,
     quick_order_tool,
     get_order_status_tool,
@@ -109,6 +110,7 @@ Store name examples (for get_store_list_tool store_nm only):
 | get_store_list_tool | Search stores by region name or store name |
 | get_store_detail_tool | Specific single date hours, holidays, reservation slots |
 | get_store_schedule_tool | Reservation slots for TODAY~+3 days in ONE call (use instead of 4× get_store_detail_tool) |
+| get_multi_store_schedule_tool | Reservation slots for UP TO 3 stores × N days in ONE call (use for Flow 3.5 "빠른 방문") |
 | save_to_cart_tool | User chooses cart (no store selected) |
 | quick_order_tool | User selected store, all info confirmed |
 | get_orders_of_user_tool | User asks to see their orders |
@@ -201,20 +203,29 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 Trigger: user intent includes urgency keywords — "빨리", "가장 빠른", "빨리 장착", "빨리 방문", "가장 빠르게", "제일 빨리" etc.
 Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 있는 매장 알려줘"
 
+⚠️ PERFORMANCE RULES (STRICT):
+- MUST use get_multi_store_schedule_tool — NEVER call get_store_detail_tool N×M times per store/day
+- MUST limit store list to 3 stores maximum (limit=3)
+- Do NOT call get_store_schedule_tool per store individually
+
+Steps:
 1. goods_no + qty (if qty unknown → ask user: "몇 개를 확인하시겠습니까?" and STOP)
    ⚠️ Do NOT re-display product info when goods_no is already confirmed. Proceed directly.
 2. Region/store check:
    → provided: use it
    → NOT provided: "방문하시려는 지역이나 매장을 알려주시면 확인해 드릴게요 😊" → STOP
-3. get_store_list_tool(region_code or store_nm) → store list
-   ⚠️ Filter: only include stores with is_installable=true. Exclude non-installable stores from all subsequent steps.
-4. Call ALL in parallel:
+3. get_store_list_tool(region_code or store_nm, limit=3) → store list
+   ⚠️ Filter: only include stores with is_installable=true. Take top 3 installable stores for next steps.
+4. Call ALL THREE in parallel (single agent turn, 3 tools):
    a. get_store_inventory_tool(goods_list, installable shop_id_list only)
    b. get_logistics_inventory_tool(goods_no)
-   c. get_store_detail_tool(each installable shop_id, TODAY ~ +3 days) in parallel
-5. Classify each store:
-   - Store inventory available (todayShopArray/tnaShopArray) → show as "매장재고" with earliest slot
-   - Store inventory unavailable + logistics available → show as "물류배송" with earliest slot (물류창고에서 매장으로 배송 후 장착)
+   c. get_multi_store_schedule_tool(shop_id_list=[top 3 installable shop_ids], initial_days=2, extend_days=1)
+      → This fetches 3 stores × 2 days in parallel. For any store whose 2-day window is empty,
+        the tool auto-extends that store to day +2 (independent per store).
+      → If result.extended=true, mention in final response: "일부 매장은 2일 내 가능 시간이 없어 3일차까지 확인했습니다."
+5. Classify each store from schedule result:
+   - Store inventory available (todayShopArray/tnaShopArray) → show as "매장재고" with earliest slot from schedule
+   - Store inventory unavailable + logistics available → show as "물류배송" with earliest slot
    - Both unavailable → "재고 없음"
 6. Display:
    "[지역] 가장 빠른 방문 가능 매장"
@@ -665,6 +676,7 @@ class TransactionSubAgent(BaseAgent):
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
         "get_store_schedule_tool": "Store",
+        "get_multi_store_schedule_tool": "Store",
         # Cart & Order
         "save_to_cart_tool": "Cart",
         "quick_order_tool": "Quick Order",
@@ -687,6 +699,7 @@ class TransactionSubAgent(BaseAgent):
                 get_store_list_tool,
                 get_store_detail_tool,
                 get_store_schedule_tool,
+                get_multi_store_schedule_tool,
                 save_to_cart_tool,
                 quick_order_tool,
                 get_orders_of_user_tool,
