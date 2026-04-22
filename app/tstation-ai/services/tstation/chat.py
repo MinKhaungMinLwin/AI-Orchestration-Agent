@@ -1138,6 +1138,83 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
+    def _resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
+        """Match a user's list-selection reply against the prior
+        get_nearby_stores_tool / get_store_list_tool result and return the
+        shop_id of the matched store.
+
+        Mirrors _resolve_goods_no_from_selection for stores. When a store list
+        had more than 1 store, `_save_tool_derived_slots` skips shop_id
+        auto-save (can't guess which one). This resolver fills that gap by
+        matching the user's selection reply to the prior list.
+
+        Matching strategy (first hit wins):
+          1. Ordinal at the start ("1.", "5번", "3)") → items[idx-1]
+          2. Token-overlap against shop_nm — only resolves when exactly ONE
+             store has the top score (≥1 token match), to avoid ambiguous
+             resolution when multiple stores share a substring like "한남점".
+
+        Expected tool_context entry shape (from filter_for_context):
+            {"tool": "get_nearby_stores_tool" | "get_store_list_tool",
+             "data": [{"shop_id": "F07782", "shop_nm": "티스테이션 한남점",
+                       "distance_km": 4.59, "addr_base": "..."}],
+             "input": {...}}
+        """
+        if not user_text or not prev_tool_data:
+            return None
+
+        STORE_TOOLS = {"get_nearby_stores_tool", "get_store_list_tool"}
+        items: list[dict] = []
+        for entry in prev_tool_data:
+            if entry.get("tool") not in STORE_TOOLS:
+                continue
+            data = entry.get("data")
+            # Primary shape: filter_for_context stores data as a list directly
+            if isinstance(data, list):
+                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+                break
+            # Defensive fallback: {"stores": [...]} shape (raw tool output)
+            if isinstance(data, dict) and isinstance(data.get("stores"), list):
+                items = [it for it in data["stores"] if isinstance(it, dict)]
+                break
+        if not items:
+            return None
+
+        text = user_text.strip()
+
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        if ordinal_match:
+            idx = int(ordinal_match.group(1)) - 1
+            if 0 <= idx < len(items):
+                shop_id = items[idx].get("shop_id")
+                if shop_id:
+                    return shop_id
+
+        # Token-overlap match against shop_nm. Require a unique top-scoring
+        # store to avoid auto-resolving ambiguous replies like a bare "한남점"
+        # that could match several brands at the same address area.
+        tokens = [
+            t for t in re.findall(r"[A-Za-z가-힣]+", text)
+            if len(t) >= 2
+        ]
+        if tokens:
+            scored: list[tuple[int, dict]] = []
+            for item in items:
+                shop_nm = item.get("shop_nm") or ""
+                score = sum(1 for tok in tokens if tok in shop_nm)
+                if score > 0:
+                    scored.append((score, item))
+            if scored:
+                max_score = max(s for s, _ in scored)
+                top = [item for s, item in scored if s == max_score]
+                if len(top) == 1:
+                    shop_id = top[0].get("shop_id")
+                    if shop_id:
+                        return shop_id
+
+        return None
+
+    @staticmethod
     def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -1258,6 +1335,25 @@ class TStationChatServiceV2:
                     logger.info(
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
                         f"list-selection against prior search_product_tool result"
+                    )
+
+            # 3.9) Resolve shop_id from the user's list-selection reply matched against
+            # the most recent get_nearby_stores_tool / get_store_list_tool result.
+            # `_save_tool_derived_slots` only auto-saves shop_id when the tool returned
+            # exactly 1 store — multi-result lists (nearby stores within radius, region
+            # searches) leave shop_id=None. When the user then picks a store from that
+            # list, STEP 5A Step 4 needs shop_id to call get_store_schedule_tool; without
+            # this resolver the LLM tends to re-run get_store_list_tool and stall at the
+            # location template instead of progressing to datepick.
+            if merged_slots.shop_id is None and prev_tool_data:
+                resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(
+                    last_user_text, prev_tool_data
+                )
+                if resolved_shop_id:
+                    merged_slots.shop_id = resolved_shop_id
+                    logger.info(
+                        f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
+                        f"list-selection against prior store-list tool result"
                     )
 
             # 4) Save merged slots to Redis
