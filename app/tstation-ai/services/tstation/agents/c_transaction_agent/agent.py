@@ -622,7 +622,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
   "data": {{
     "assistantResponse": "<ask user to confirm the order details>",
     "orderInfo": {{
-      "carInfo": "<car_nm (car_no)>",
+      "carInfo": "<car_nm (car_no) | null if car_nm AND car_no are both missing — never emit literal 'null (null)' or 'None (None)'>",
       "product": "<goods_nm (goods_no)>",
       "quantity": <ord_qty>,
       "storeName": "<shop_nm (shop_id)>",
@@ -653,7 +653,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
   "data": {{
     "assistantResponse": "<success or failure message>",
     "orderInfo": {{
-      "carInfo": "<car_nm (car_no)>",
+      "carInfo": "<car_nm (car_no) | null if car_nm AND car_no are both missing — never emit literal 'null (null)' or 'None (None)'>",
       "product": "<goods_nm (goods_no)>",
       "quantity": <ord_qty>,
       "storeName": "<shop_nm (shop_id)>",
