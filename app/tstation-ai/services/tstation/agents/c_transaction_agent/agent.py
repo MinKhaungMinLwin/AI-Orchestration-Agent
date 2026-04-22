@@ -259,18 +259,24 @@ Steps:
    → 0 results: "반경 10km 내 매장이 없어요. 반경 20km로 넓혀드릴까요?"
 3. Show store list → STOP and wait for user to select a store
 
-## ⚠️ STORE SELECTION ROUTING (applies to ALL flows — overrides Flow 4 / Flow 5 General)
-When user selects a single store from a previously shown store list (regardless of the list's source — Flow 3, 3.5, 4, 5.5, 6 STEP 5A), route by CONTEXT, not by the list's origin.
+### ⚠️ STORE SELECTION ROUTING — READ THIS BEFORE CALLING ANY STORE TOOL
+When a user turn is a store-from-list selection (i.e., the PREVIOUS assistant turn showed a store list AND the current user turn is a store name / list index like "한남점", "1번", "5. 티스테이션 한남점"), you MUST route by CONTEXT, regardless of which flow produced the list.
 
 Context signals to check (in priority order):
-1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A → **Flow 6 STEP 5A Step 4**: get_store_schedule_tool(shop_id) → `datepick`
-2. `pending_intent="재고 확인"` OR active stock flow (Flow 3) → **Flow 3 STEP C**: get_store_schedule_tool(shop_id) → `datepick`
-3. User's current or recent turn contains booking/installation keywords (예약, 장착, 방문, 빨리, 주문) → get_store_schedule_tool(shop_id) → `datepick`
-4. User mentions a specific date in this turn → **Flow 5.1**: get_store_detail_tool(shop_id, YYYYMMDD) → `datepick`
-5. None of the above — pure info lookup (유저가 영업시간/주소/전화만 문의) → **Flow 5 General**: get_store_list_tool(store_nm) → `location`
+1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A
+   → **Flow 6 STEP 5A Step 4**: call `get_store_schedule_tool(shop_id)` → `datepick` template
+2. `pending_intent="재고 확인"` OR active stock flow (Flow 3)
+   → **Flow 3 STEP C**: call `get_store_schedule_tool(shop_id)` → `datepick` template
+3. Current or recent user turn contains booking/installation keywords (예약, 장착, 방문, 빨리, 주문, 구매)
+   → call `get_store_schedule_tool(shop_id)` → `datepick` template
+4. User mentions a specific date in this turn
+   → **Flow 5.1**: call `get_store_detail_tool(shop_id, YYYYMMDD)` → `datepick` template
+5. None of the above — pure info lookup only (유저가 영업시간/주소/전화만 문의)
+   → **Flow 5 General**: call `get_store_list_tool(store_nm)` → `location` template
 
-⚠️ NEVER return `location` template (store business hours card) when booking/installation/order context is present.
-⚠️ Default when context is ambiguous → treat as booking context (call get_store_schedule_tool).
+⚠️ **HARD BAN**: When `pending_intent="주문 진행"` is present, you MUST NOT call `get_store_list_tool` for a selected store and MUST NOT return the `location` template. The ONLY acceptable next tool is `get_store_schedule_tool`.
+⚠️ Default when context is ambiguous → treat as booking context (call `get_store_schedule_tool`).
+⚠️ This rule applies across Flow 3, Flow 3.5, Flow 4, Flow 5.5, and Flow 6 STEP 5A — the list's origin does NOT change the routing decision.
 
 
 ### Flow 5 — Store Hours / Reservation
