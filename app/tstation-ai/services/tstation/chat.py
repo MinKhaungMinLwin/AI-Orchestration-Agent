@@ -1040,6 +1040,83 @@ class TStationChatServiceV2:
         return "\n".join(lines)
 
     @staticmethod
+    def _resolve_goods_no_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
+        """Match a user's list-selection reply against the prior search_product_tool
+        result and return the goods_no of the matched item.
+
+        When a previous turn returned multiple products and the user responds with
+        an ordinal ("3.", "3번") or a name + size ("Ventus S2 AS 225/45R18"), this
+        lets the coordinator capture goods_no before any agent runs — so that the
+        subsequent Discovery→Transaction handoff is not blocked by the "goods_no
+        missing in slots" safety check (Discovery may skip calling the search tool
+        when it can resolve the pick from conversation history alone).
+
+        Matching strategy (first hit wins):
+          1. Ordinal at the start of the message → items[idx-1]
+          2. Single item with matching tire_size
+          3. Multiple items with matching tire_size → pick the one whose goods_nm
+             has the highest token overlap (≥2 tokens required to avoid false hits)
+
+        Only the most recent search_product_tool entry is inspected.
+        Returns None when no confident match is found.
+        """
+        if not user_text or not prev_tool_data:
+            return None
+
+        items: list[dict] = []
+        for entry in prev_tool_data:
+            if entry.get("tool") == "search_product_tool":
+                data = entry.get("data")
+                if isinstance(data, dict) and isinstance(data.get("items"), list):
+                    items = [it for it in data["items"] if isinstance(it, dict)]
+                    break
+        if not items:
+            return None
+
+        text = user_text.strip()
+
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        if ordinal_match:
+            idx = int(ordinal_match.group(1)) - 1
+            if 0 <= idx < len(items):
+                goods_no = items[idx].get("goods_no")
+                if goods_no:
+                    return goods_no
+
+        size_match = re.search(r"\d{3}/\d{2}R\d{2}", text)
+        if size_match:
+            target_size = size_match.group(0)
+            same_size = [
+                item for item in items
+                if (item.get("tire_size") or item.get("tireSize") or "") == target_size
+            ]
+
+            if len(same_size) == 1:
+                goods_no = same_size[0].get("goods_no")
+                if goods_no:
+                    return goods_no
+
+            if len(same_size) >= 2:
+                tokens = [
+                    t.lower() for t in re.findall(r"[A-Za-z가-힣]+", text)
+                    if len(t) >= 2
+                ]
+                best_item: dict | None = None
+                best_score = 0
+                for item in same_size:
+                    goods_nm = (item.get("goods_nm") or "").lower()
+                    score = sum(1 for tok in tokens if tok in goods_nm)
+                    if score > best_score:
+                        best_score = score
+                        best_item = item
+                if best_item is not None and best_score >= 2:
+                    goods_no = best_item.get("goods_no")
+                    if goods_no:
+                        return goods_no
+
+        return None
+
+    @staticmethod
     def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -1138,14 +1215,35 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
+            # 3.7) Load accumulated tool context (needed both for goods_no list-pick
+            # resolution below AND for prompt injection in step 6). Loading before
+            # save_slots lets resolved goods_no be persisted in step 4.
+            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+
+            # 3.8) Resolve goods_no from the user's list-selection reply matched against
+            # the most recent search_product_tool result. Without this, Discovery may
+            # hand off ("상품 확인했어요. 바로 재고 확인으로 이어갑니다") without
+            # actually calling a tool in the current turn — leaving goods_no=None in
+            # slots and causing the coordinator's P0 safety check to stop the chain
+            # before Transaction runs.
+            if merged_slots.goods_no is None and prev_tool_data:
+                resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+                    last_user_text, prev_tool_data
+                )
+                if resolved_goods_no:
+                    merged_slots.goods_no = resolved_goods_no
+                    logger.info(
+                        f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
+                        f"list-selection against prior search_product_tool result"
+                    )
+
             # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)
 
             # 5) Build slot context string for agent injection
             slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
 
-            # 6) Load accumulated tool context
-            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+            # 6) Format tool context for prompt injection
             if prev_tool_data:
                 tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
                 # Cap tool context to avoid consuming too much of the context window
