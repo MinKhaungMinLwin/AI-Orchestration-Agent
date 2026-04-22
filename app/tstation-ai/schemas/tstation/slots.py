@@ -49,14 +49,19 @@ class ConversationSlots(BaseModel):
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
     # "order" is listed last because it's the most commitment-heavy and should only
     # be inferred from strong signals ("주문", "구매", "사고 싶어", "사려고", "살래").
-    # Stock pattern is intentionally narrow: only unambiguous inventory terms (재고/입고)
-    # qualify. Generic "있어?/있나요" is ambiguous ("이 상품 있어요?" vs "조용한 타이어 있어요?")
-    # and was dropped to avoid false positives on pure recommendation turns.
+    # Stock pattern covers: 재고/입고 (direct inventory) and 장착 가능 (tire-install
+    # availability — implies stock at a store). The `\s*가능` tail is deliberate:
+    #   - Narrows "장착" so mixed purchase turns like "주문해서 장착하고 싶어요" fall
+    #     through to the `order` pattern instead of being captured as stock.
+    #   - Avoids `장착료 / 장착비 / 공임` (price, not stock).
+    # `방문` is intentionally NOT included: a store visit may be for battery/engine
+    # oil/general maintenance, not tire installation — matching it as "stock" would
+    # mis-route non-tire service questions through the tire inventory flow.
     # Price pattern uses `얼마(?!나)` to avoid matching `얼마나` (degree adverb used in
     # stock/time questions like "재고 얼마나 있어요?" / "얼마나 걸려요?").
     _INTENT_PATTERNS: ClassVar[list[tuple[re.Pattern, "PendingIntent"]]] = [
         (re.compile(r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가"), "price"),
-        (re.compile(r"재고|입고"), "stock"),
+        (re.compile(r"재고|입고|장착\s*가능"), "stock"),
         (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
     ]
 
@@ -65,6 +70,23 @@ class ConversationSlots(BaseModel):
     # because the user is explicitly switching back to discovery.
     _RECOMMEND_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(r"추천|골라줘|알아서|뭐가\s*좋|어떤\s*게\s*좋|괜찮은\s*거"),
+    ]
+
+    # Brand / model keyword patterns. Used by the Coordinator's auto-chain gate to
+    # distinguish "벤투스 S2 얼마?" (product-specific transactional query, should
+    # chain Discovery→Transaction) from "가격 얼마에요?" (no product, should stay
+    # Discovery-only so Discovery can ask which model).
+    # Mirrors Discovery Flow B's translation dictionary (Ventus/Kinergy/Optimo/
+    # Dynapro/Laufenn) plus carried brands (Michelin/Pirelli/Bridgestone/Continental/
+    # Goodyear). Add new brands here if Discovery's brand_cd table grows.
+    _PRODUCT_KEYWORD_PATTERNS: ClassVar[list[re.Pattern]] = [
+        re.compile(
+            r"벤투스|키네르기|옵티모|다이나프로|라우펜|"
+            r"Ventus|Kinergy|Optimo|Dynapro|Laufenn|"
+            r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|"
+            r"한국타이어|Hankook",
+            re.IGNORECASE,
+        ),
     ]
 
     def merge(self, new_slots: "ConversationSlots") -> "ConversationSlots":
@@ -193,6 +215,16 @@ class ConversationSlots(BaseModel):
         when the user is clearly switching back to discovery.
         """
         return any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS)
+
+    @classmethod
+    def has_product_keyword(cls, user_text: str) -> bool:
+        """Return True when the user turn contains a known tire brand/model keyword.
+
+        Used by Coordinator's auto-chain gate to avoid firing on no-product
+        questions like '가격 얼마에요?' (where Discovery should ask which model
+        instead of auto-chaining to Transaction).
+        """
+        return any(pattern.search(user_text) for pattern in cls._PRODUCT_KEYWORD_PATTERNS)
 
     def to_prompt_context(self) -> str:
         """Format slots as a system prompt context string for agent injection.

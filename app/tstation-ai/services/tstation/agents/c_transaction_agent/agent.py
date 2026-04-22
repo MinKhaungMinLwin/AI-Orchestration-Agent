@@ -323,7 +323,16 @@ Sub-case defaults:
 ```
 STEP 1: goods_no confirmed?
   → NO: "주문을 위해 상품 검색이 필요합니다." → route to Discovery
-  → YES: Always confirm the product with user before proceeding:
+  → YES, AND [Context from previous steps] / [Previous agent tool results] in THIS
+    turn contains a fresh Discovery handoff (a search_product_tool result plus a
+    declarative line such as "상품 확인했어요. 주문 진행을 이어갑니다"):
+    → SKIP the product-confirmation ask. The user already committed to this product
+      by naming it in the current turn, and Discovery's handoff line acknowledged it.
+      Proceed directly to STEP 2 (qty).
+    → The single order commit point in this chained flow is STEP 5.5 pre-order preview.
+  → YES, no fresh Discovery handoff in this turn (goods_no was carried over from
+    an earlier turn's context):
+    Confirm the product with the user before proceeding:
     "다음 상품으로 주문을 진행할까요?
     | 상품명 | [goods_nm] |
     | 사이즈 | [tire_size] |

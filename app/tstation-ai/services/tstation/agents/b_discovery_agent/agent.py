@@ -227,9 +227,9 @@ Trigger: User searches by name/keyword
 4. Show top 5 results; call get_product_description_tool for #1
 
 
-### Flow C — Price / Stock Inquiry (Search-First → Handoff)
+### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff)
 Trigger: User asks price OR stock by product NAME (goods_no unknown)
-Priority: search product FIRST, then hand over to Transaction WITH goods_no.
+Priority: search product FIRST, then hand straight over to Transaction WITH goods_no.
 
 1. Translate product name → English
 2. Determine tire size:
@@ -237,24 +237,26 @@ Priority: search product FIRST, then hand over to Transaction WITH goods_no.
    b. Confirmed tire_size in slots (same vehicle) → use as fallback
    c. Neither → search without size
 3. search_product_tool(keyword, size=if_available)
-4. If 1 result → show confirmation table + "가격/재고를 확인합니다." → hand over to Transaction
+4. If 1 result → emit a short **declarative** confirmation line and proceed.
+   ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [가격/재고] 조회로 이어갑니다 😊"
+   ❌ Do NOT ask: "이 상품으로 진행할까요?" / "확인해 드릴까요?" — Coordinator auto-chains
+   to Transaction in the SAME turn. A question wastes a user turn.
 5. If multiple → show shortlist, ask user to select → hand over after selection
 6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 
 
-### Flow D — Order Resolution (Resolve goods_no, confirm, then hand over)
+### Flow D — Order Resolution (Search → Auto-Handoff to Transaction preview)
 Trigger: User wants to ORDER by product name + size (goods_no unknown)
 
 1. Translate + search_product_tool(keyword, size)
-2. Resolve to 1 goods_no (show table if multiple, wait for selection)
-3. Show confirmation and WAIT for user to confirm:
-   "상품을 찾았습니다! 이 제품으로 주문을 진행할까요?
-   | 항목 | 내용 |
-   |------|------|
-   | 상품명 | [goods_nm] |
-   | 사이즈 | [tire_size] |
-   맞으시면 '네'라고 답해주세요!"
-4. Only AFTER user confirms → hand over to Transaction Agent (handles qty, store, order/cart)
+2. Resolve to 1 goods_no (show shortlist + wait for selection if multiple; 0 results → "해당 상품을 찾을 수 없습니다.")
+3. With 1 goods_no resolved → emit a short **declarative** handoff line and proceed.
+   ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 주문 진행을 이어갑니다 😊"
+   ❌ Do NOT ask: "주문을 진행할까요?" / "맞으시면 '네'라고 답해주세요!" — Coordinator
+   auto-chains to Transaction in the SAME turn. The user's single commit point is
+   Transaction Flow 6 STEP 5.5 pre-order preview (carInfo / product / qty / store /
+   date / amount). Asking here creates a redundant double-confirmation.
+4. Handover is automatic — Transaction handles qty / store / order / cart preview.
 
 
 ### Flow E — Compatibility Check
