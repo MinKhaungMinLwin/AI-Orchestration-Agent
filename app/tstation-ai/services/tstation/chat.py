@@ -549,6 +549,7 @@ class StreamingMultiAgentCoordinator:
         tool_context: str | None = None,
         user_id: str | None = None,
         trace_id: str | None = None,
+        skip_decision: bool = False,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -561,6 +562,9 @@ class StreamingMultiAgentCoordinator:
             tool_context: Formatted tool results from previous turn for context preservation
             user_id: User ID for Langfuse tracing
             trace_id: Trace ID to group all LLM calls of this request under one trace
+            skip_decision: When True AND domains has >= 2 entries, skip the
+                `decide_next_action` LLM call between the first and second agent
+                (the chain is pre-committed by the caller — e.g., P0 code gate).
 
         Yields:
             Stream events from all agents in sequence
@@ -736,6 +740,40 @@ class StreamingMultiAgentCoordinator:
                 if domain == MultiAgentDomain.Domain.SUPPORT:
                     logger.info("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
                     break
+
+                # Caller pre-committed the chain (e.g., P0 auto-chain code gate) —
+                # skip the decide_next_action LLM call (saves ~300ms) and proceed
+                # directly to the next domain in `domains`.
+                #
+                # BUT: only proceed if Discovery actually resolved a single goods_no.
+                # `_save_tool_derived_slots` (search_product_tool extractor) only
+                # writes goods_no to slots when the tool returns exactly 1 item;
+                # 0/multiple-result cases leave goods_no=None and Discovery is
+                # already in clarification/selection mode. Chaining Transaction on
+                # top would produce a contradictory "상품 검색이 필요합니다" fallback.
+                if skip_decision and len(domains) >= 2:
+                    goods_no_resolved = False
+                    if session_id:
+                        try:
+                            from services.tstation.chat_history_service import get_chat_history_service
+
+                            post_slots = get_chat_history_service().get_slots(session_id)
+                            goods_no_resolved = post_slots.goods_no is not None
+                        except Exception as e:
+                            logger.warning(
+                                f"[COORDINATOR] Failed to verify goods_no post-Discovery: {e}"
+                            )
+                    if not goods_no_resolved:
+                        logger.info(
+                            "[COORDINATOR] skip_decision=True but Discovery did not resolve "
+                            "goods_no (0 or multiple results) — stopping chain"
+                        )
+                        break
+                    logger.info(
+                        "[COORDINATOR] skip_decision=True — proceeding to next domain "
+                        f"({domains[1].value}) without LLM decision"
+                    )
+                    continue
 
                 decision = decide_next_action(
                     original_messages=messages,
@@ -1002,6 +1040,104 @@ class TStationChatServiceV2:
         return "\n".join(lines)
 
     @staticmethod
+    def _resolve_goods_no_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
+        """Match a user's list-selection reply against the prior search_product_tool
+        result and return the goods_no of the matched item.
+
+        When a previous turn returned multiple products and the user responds with
+        an ordinal ("3.", "3번") or a name + size ("Ventus S2 AS 225/45R18"), this
+        lets the coordinator capture goods_no before any agent runs — so that the
+        subsequent Discovery→Transaction handoff is not blocked by the "goods_no
+        missing in slots" safety check (Discovery may skip calling the search tool
+        when it can resolve the pick from conversation history alone).
+
+        Matching strategy (first hit wins):
+          1. Ordinal at the start of the message → items[idx-1]
+          2. Single item with matching tire_size
+          3. Multiple items with matching tire_size → pick the one whose goods_nm
+             has the highest token overlap (≥2 tokens required to avoid false hits)
+
+        Only the most recent search_product_tool entry is inspected.
+        Returns None when no confident match is found.
+
+        Expected tool_context entry shape (produced by filter_for_context in
+        g_qc_agent/source_filter.py, which is what gets persisted to Redis):
+            {"tool": "search_product_tool",
+             "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
+             "input": {...}}
+        Note: `data` is a LIST directly, and the size field is `tire_size_1`
+        (filter whitelist is {"goods_no", "goods_nm", "tire_size_1", ...}).
+        """
+        if not user_text or not prev_tool_data:
+            return None
+
+        items: list[dict] = []
+        for entry in prev_tool_data:
+            if entry.get("tool") != "search_product_tool":
+                continue
+            data = entry.get("data")
+            # Primary shape: filter_for_context stores data as a list directly
+            if isinstance(data, list):
+                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+                break
+            # Defensive fallback: {"items": [...]} shape (raw tool output)
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                items = [it for it in data["items"] if isinstance(it, dict)]
+                break
+        if not items:
+            return None
+
+        text = user_text.strip()
+
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        if ordinal_match:
+            idx = int(ordinal_match.group(1)) - 1
+            if 0 <= idx < len(items):
+                goods_no = items[idx].get("goods_no")
+                if goods_no:
+                    return goods_no
+
+        size_match = re.search(r"\d{3}/\d{2}R\d{2}", text)
+        if size_match:
+            target_size = size_match.group(0)
+            # filter_for_context keeps `tire_size_1`; include legacy aliases
+            # for safety if another path ever stores the raw field name.
+            same_size = [
+                item for item in items
+                if (
+                    item.get("tire_size_1")
+                    or item.get("tire_size")
+                    or item.get("tireSize")
+                    or ""
+                ) == target_size
+            ]
+
+            if len(same_size) == 1:
+                goods_no = same_size[0].get("goods_no")
+                if goods_no:
+                    return goods_no
+
+            if len(same_size) >= 2:
+                tokens = [
+                    t.lower() for t in re.findall(r"[A-Za-z가-힣]+", text)
+                    if len(t) >= 2
+                ]
+                best_item: dict | None = None
+                best_score = 0
+                for item in same_size:
+                    goods_nm = (item.get("goods_nm") or "").lower()
+                    score = sum(1 for tok in tokens if tok in goods_nm)
+                    if score > best_score:
+                        best_score = score
+                        best_item = item
+                if best_item is not None and best_score >= 2:
+                    goods_no = best_item.get("goods_no")
+                    if goods_no:
+                        return goods_no
+
+        return None
+
+    @staticmethod
     def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -1056,6 +1192,13 @@ class TStationChatServiceV2:
         slot_context = None
         tool_context = None
 
+        # Defaults hoisted above the try block so the P0 auto-chain gate below
+        # can safely inspect them even if slot processing raises.
+        last_user_text = ""
+        regex_slots = ConversationSlots()
+        merged_slots = ConversationSlots()
+        goods_no_resolved_this_turn = False
+
         try:
             chat_history_svc = get_chat_history_service()
 
@@ -1064,7 +1207,6 @@ class TStationChatServiceV2:
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
             # 2) Extract regex-based slots from the LATEST user message only
-            last_user_text = ""
             for msg in reversed(request.messages):
                 if msg.get("role") == "user":
                     last_user_text = msg.get("content", "")
@@ -1095,14 +1237,36 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
+            # 3.7) Load accumulated tool context (needed both for goods_no list-pick
+            # resolution below AND for prompt injection in step 6). Loading before
+            # save_slots lets resolved goods_no be persisted in step 4.
+            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+
+            # 3.8) Resolve goods_no from the user's list-selection reply matched against
+            # the most recent search_product_tool result. Without this, Discovery may
+            # hand off ("상품 확인했어요. 바로 재고 확인으로 이어갑니다") without
+            # actually calling a tool in the current turn — leaving goods_no=None in
+            # slots and causing the coordinator's P0 safety check to stop the chain
+            # before Transaction runs.
+            if merged_slots.goods_no is None and prev_tool_data:
+                resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+                    last_user_text, prev_tool_data
+                )
+                if resolved_goods_no:
+                    merged_slots.goods_no = resolved_goods_no
+                    goods_no_resolved_this_turn = True
+                    logger.info(
+                        f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
+                        f"list-selection against prior search_product_tool result"
+                    )
+
             # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)
 
             # 5) Build slot context string for agent injection
             slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
 
-            # 6) Load accumulated tool context
-            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+            # 6) Format tool context for prompt injection
             if prev_tool_data:
                 tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
                 # Cap tool context to avoid consuming too much of the context window
@@ -1124,6 +1288,87 @@ class TStationChatServiceV2:
         )
         messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
+        # Post-classification redirect: when the user's current-turn reply was a
+        # list-selection that just resolved goods_no (via step 3.8) and a
+        # transactional intent is still pending, the classifier may still pick
+        # [DISCOVERY] alone because the CONTINUATION DETECTION rule treats
+        # list-selection replies as same-domain continuation. But at this point
+        # Discovery has nothing useful to do — it would only emit a handoff line
+        # ("상품 확인했어요. 바로 재고 조회로 이어갑니다") and then decide_next_action
+        # often returns STOP, stranding the user without the actual transactional
+        # answer. Force-route directly to [TRANSACTION] for this narrow case.
+        #
+        # Guard: only when goods_no was resolved THIS turn from a list-selection,
+        # so later "다른 사이즈 보기" / "이 타이어 맞아?" type turns (goods_no carried
+        # but not freshly picked) still go through Discovery normally.
+        if (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.DISCOVERY
+            and goods_no_resolved_this_turn
+            and merged_slots.pending_intent is not None
+        ):
+            logger.info(
+                f"[COORDINATOR] Post-classification redirect: goods_no={merged_slots.goods_no!r} "
+                f"resolved from list-selection + pending_intent={merged_slots.pending_intent!r} "
+                f"→ [DISCOVERY] → [TRANSACTION]"
+            )
+            domains = [MultiAgentDomain.Domain.TRANSACTION]
+
+        # P0 auto-chain code gate: when a transactional intent (price/stock/order)
+        # is outstanding — either expressed THIS turn or inherited from a prior turn
+        # whose tool has not yet fulfilled it — and some product is identifiable
+        # (current turn text OR inherited from prior turns), but no goods_no is yet
+        # confirmed, override the classifier's single-domain [DISCOVERY] pick to
+        # [DISCOVERY, TRANSACTION]. Discovery resolves goods_no via search_product_tool,
+        # then Transaction proceeds (price/inventory/order) in the same user turn —
+        # removing the redundant "네" confirmation step.
+        #
+        # Guard conditions (ALL must hold):
+        #   1. Classifier chose exactly [DISCOVERY] — no override of TX/SUPPORT/LEADING.
+        #   2. `merged_slots.pending_intent` is set — fresh this turn OR inherited
+        #      from an earlier turn whose tool has not yet fulfilled the intent.
+        #      Example: user asks "재고 있어?" in turn 1, search returns multiple
+        #      results, user picks a specific size in turn 2 — the stock intent is
+        #      still pending and should chain to Transaction once goods_no resolves.
+        #      Short replies like "네" do NOT trigger because condition #4 requires
+        #      a real product hint (tire_size / tire_model / brand keyword), which
+        #      a bare "네" never satisfies.
+        #   3. `merged_slots.goods_no is None` — goods_no-known turns stay TX-only.
+        #   4. Product hint present via ONE of:
+        #        a. `merged_slots.tire_size` — current turn OR inherited from a prior
+        #           turn (intentional: user says "225/45R18" then later "가격 얼마?"
+        #           should continue the same product context, not re-ask).
+        #        b. `merged_slots.tire_model` — typically confirmed in prior turns via
+        #           LLM slot extraction; inheriting it is by design.
+        #        c. Brand/model keyword in CURRENT turn text (벤투스/Dynapro/...).
+        #      Pure no-product queries with no prior context ("가격 얼마에요?" on a
+        #      fresh session) stay Discovery-only so Discovery can ask which model.
+        #
+        # Safety: even when the gate fires, the coordinator verifies goods_no was
+        # actually resolved after Discovery before running Transaction (search with
+        # 0/multiple results → chain stops). See StreamingMultiAgentCoordinator.stream().
+        skip_decision = False
+        if (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.DISCOVERY
+            and merged_slots.pending_intent is not None
+            and merged_slots.goods_no is None
+            and (
+                merged_slots.tire_size is not None
+                or merged_slots.tire_model is not None
+                or ConversationSlots.has_product_keyword(last_user_text)
+            )
+        ):
+            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+            skip_decision = True
+            logger.info(
+                f"[COORDINATOR] P0 auto-chain gate triggered: "
+                f"pending_intent={merged_slots.pending_intent!r} "
+                f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
+                f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
+                f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+            )
+
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
@@ -1135,6 +1380,7 @@ class TStationChatServiceV2:
                     tool_context,
                     user_id=request.user_id,
                     trace_id=request.tracing_id,
+                    skip_decision=skip_decision,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1157,6 +1403,7 @@ class TStationChatServiceV2:
                 tool_context,
                 user_id=request.user_id,
                 trace_id=request.tracing_id,
+                skip_decision=skip_decision,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -1198,6 +1445,7 @@ class TStationChatServiceV2:
         tool_context: str | None = None,
         user_id: str | None = None,
         trace_id: str | None = None,
+        skip_decision: bool = False,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
 
@@ -1230,6 +1478,7 @@ class TStationChatServiceV2:
             tool_context=tool_context,
             user_id=user_id,
             trace_id=trace_id,
+            skip_decision=skip_decision,
         ):
             event_type = event.get("type")
 

@@ -327,7 +327,16 @@ Sub-case defaults:
 ```
 STEP 1: goods_no confirmed?
   → NO: "주문을 위해 상품 검색이 필요합니다." → route to Discovery
-  → YES: Always confirm the product with user before proceeding:
+  → YES, AND [Context from previous steps] / [Previous agent tool results] in THIS
+    turn contains a fresh Discovery handoff (a search_product_tool result plus a
+    declarative line such as "상품 확인했어요. 주문 진행을 이어갑니다"):
+    → SKIP the product-confirmation ask. The user already committed to this product
+      by naming it in the current turn, and Discovery's handoff line acknowledged it.
+      Proceed directly to STEP 2 (qty).
+    → The single order commit point in this chained flow is STEP 5.5 pre-order preview.
+  → YES, no fresh Discovery handoff in this turn (goods_no was carried over from
+    an earlier turn's context):
+    Confirm the product with the user before proceeding:
     "다음 상품으로 주문을 진행할까요?
     | 상품명 | [goods_nm] |
     | 사이즈 | [tire_size] |
@@ -555,7 +564,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
         "isAllMyT": <true|false from tool>,
         "todayInstall": <true|false from tool>,
         "tnaDelivery": <true|false from tool>,
-        "description": "**영업일:** <shop_biz_strt_wday>~<shop_biz_end_wday>\n**영업시간:** 주중 <shop_biz_strt_time>~<shop_biz_end_time>, 주말 <shop_sat_strt_time>~<shop_sat_end_time>\n**휴무일:** <holiday or 없음>\n**전화:** <tel_no from tool>"
+        "description": "📍 <road_addr_base> <road_addr_dtl>\n 영업일: <shop_biz_strt_wday>~<shop_biz_end_wday>\n 영업시간: 평일 <shop_biz_strt_time>~<shop_biz_end_time> / 토요일 <shop_sat_strt_time>~<shop_sat_end_time>\n 서비스: <write each that applies: 올마이T if is_all_my_t | 온라인 장착 가능 if is_installable else 온라인 장착 불가 | T바로배송 if tnaDelivery>"
       }}
     ],
     "metadata": [{{"shopId": "<shop_id from tool>"}}]

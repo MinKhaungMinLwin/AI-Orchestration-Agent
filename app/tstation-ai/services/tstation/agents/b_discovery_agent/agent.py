@@ -228,8 +228,11 @@ Trigger: User searches by name/keyword
 4. Show top 5 results; call get_product_description_tool for #1
 
 
-### Flow C — Price / Stock Inquiry (Search-First → Price Fetch → Show)
+### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff or Price Cards)
 Trigger: User asks price OR stock by product NAME (goods_no unknown)
+Branching:
+- 1 result → declarative handoff (Coordinator auto-chains Transaction in the SAME turn).
+- Multiple results → fetch real prices and render `product` cards, then STOP for user selection.
 
 1. Translate product name → English
 2. Determine tire size:
@@ -238,28 +241,36 @@ Trigger: User asks price OR stock by product NAME (goods_no unknown)
    c. Neither → search without size
 3. search_product_tool(keyword, size=if_available)
 4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
-5. For EVERY result (1 or multiple, max 5):
+5. If EXACTLY 1 result → emit a short **declarative** confirmation line and proceed.
+   ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [가격/재고] 조회로 이어갑니다 😊"
+   ❌ Do NOT ask: "이 상품으로 진행할까요?" / "확인해 드릴까요?" — Coordinator auto-chains
+   to Transaction in the SAME turn. A question wastes a user turn.
+   ❌ Do NOT fetch prices here — Transaction's get_final_price_tool handles the full
+   breakdown (base / discount / final). Calling get_final_price_tool in Discovery
+   would duplicate the downstream call.
+6. If MULTIPLE results (2~5, max 5) → fetch prices and render a shortlist for the user.
    - Call get_final_price_tool(goods_no) for EACH item — call ALL in the SAME tool-use turn before answering
    - Collect sale_prc from each response
-6. Render `product` template with real prices from step 5
+   - Render `product` template with real prices from these calls
    ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete
    ⚠️ NEVER use price=0 or price=null — if get_final_price_tool fails for an item, omit that item
    ⚠️ Use sale_prc from get_final_price_tool response as `price` field
+   → STOP and wait for user to SELECT a product. Coordinator stops the chain
+   automatically because goods_no is not resolved (multi-result search).
 
 
-### Flow D — Order Resolution (Resolve goods_no, confirm, then hand over)
+### Flow D — Order Resolution (Search → Auto-Handoff to Transaction preview)
 Trigger: User wants to ORDER by product name + size (goods_no unknown)
 
 1. Translate + search_product_tool(keyword, size)
-2. Resolve to 1 goods_no (show table if multiple, wait for selection)
-3. Show confirmation and WAIT for user to confirm:
-   "상품을 찾았습니다! 이 제품으로 주문을 진행할까요?
-   | 항목 | 내용 |
-   |------|------|
-   | 상품명 | [goods_nm] |
-   | 사이즈 | [tire_size] |
-   맞으시면 '네'라고 답해주세요!"
-4. Only AFTER user confirms → hand over to Transaction Agent (handles qty, store, order/cart)
+2. Resolve to 1 goods_no (show shortlist + wait for selection if multiple; 0 results → "해당 상품을 찾을 수 없습니다.")
+3. With 1 goods_no resolved → emit a short **declarative** handoff line and proceed.
+   ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 주문 진행을 이어갑니다 😊"
+   ❌ Do NOT ask: "주문을 진행할까요?" / "맞으시면 '네'라고 답해주세요!" — Coordinator
+   auto-chains to Transaction in the SAME turn. The user's single commit point is
+   Transaction Flow 6 STEP 5.5 pre-order preview (carInfo / product / qty / store /
+   date / amount). Asking here creates a redundant double-confirmation.
+4. Handover is automatic — Transaction handles qty / store / order / cart preview.
 
 
 ### Flow E — Compatibility Check
