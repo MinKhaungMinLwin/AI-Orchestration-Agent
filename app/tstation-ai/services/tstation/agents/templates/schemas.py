@@ -4,7 +4,7 @@ Each migrated domain agent should use a structured response schema so the model
 returns the final FE payload in a guaranteed shape.
 """
 
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -180,12 +180,12 @@ class LocationDataEvent(BaseModel):
 class ScheduleItem(BaseModel):
     """Visible schedule item for the FE date picker."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
-    cal_day: str = Field(..., min_length=1)
-    available_slots: list[str] = Field(default_factory=list)
-    is_installable: bool
-    is_tna_delivery: bool
+    date: str = Field(..., min_length=1)
+    available: bool
+    availableTimes: list[int] = Field(default_factory=list)
+    index: int
 
 
 class DatepickTemplate(TemplatePayload):
@@ -194,9 +194,9 @@ class DatepickTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "datepick"
 
     assistantResponse: str = Field(..., min_length=1)
-    shopId: str = Field(..., min_length=1)
-    shopName: str = Field(..., min_length=1)
-    schedule: list[ScheduleItem] = Field(..., min_length=1)
+    dates: list[ScheduleItem] = Field(..., min_length=1)
+    selectedDate: Optional[int] = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class DatepickDataEvent(BaseModel):

@@ -547,16 +547,16 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
   "template": "datepick",
   "data": {{
     "assistantResponse": "<short contextual message>",
-    "shopId": "<shop_id from tool>",
-    "shopName": "<shop_nm from tool>",
-    "schedule": [
+    "dates": [
       {{
-        "cal_day": "<YYYYMMDD from tool>",
-        "available_slots": ["<HH>", "<HH>"],
-        "is_installable": <true|false from tool>,
-        "is_tna_delivery": <true|false from tool>
+        "date": "<Korean date string e.g. '2026년 4월 22일 (수)' — convert cal_day YYYYMMDD>",
+        "available": <true if available_slots non-empty, false otherwise>,
+        "availableTimes": [<int hours converted from available_slots strings, e.g. "09"→9, "14"→14>],
+        "index": <0-based position>
       }}
-    ]
+    ],
+    "selectedDate": <index of nearest date with availableTimes non-empty; null if none>,
+    "metadata": {{"shopId": "<shop_id from tool>"}}
   }}
 }}
 ```
