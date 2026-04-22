@@ -577,10 +577,21 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
         "description": "📍 <road_addr_base> <road_addr_dtl>\n 영업일: <shop_biz_strt_wday>~<shop_biz_end_wday>\n 영업시간: 평일 <shop_biz_strt_time>~<shop_biz_end_time> / 토요일 <shop_sat_strt_time>~<shop_sat_end_time>\n 서비스: <write each that applies: 올마이T if is_all_my_t | 온라인 장착 가능 if is_installable else 온라인 장착 불가 | T바로배송 if tnaDelivery>"
       }}
     ],
-    "metadata": [{{"shopId": "<shop_id from tool>"}}]
+    "metadata": [{{"shopId": "<shop_id from tool>"}}],
+    "isBookingFlow": <true|false>
   }}
 }}
 ```
+
+⚠️ `isBookingFlow` rule (FE click routing):
+- Set `true` when this `location` template is shown as PART OF a booking/order/stock flow — i.e., the user is expected to pick a store to advance the flow:
+  • Flow 6 STEP 5A step 3 (order: pick store → datepick)
+  • Flow 3 step 2~3 / Flow 3.5 (stock check → pick store → schedule)
+  • Any context where `pending_intent="주문 진행"` or `"재고 확인"` is set
+- Set `false` for pure info lookups where the card itself IS the answer:
+  • Flow 5 General (단순 매장 정보 조회)
+  • Flow 4 standalone nearby-stores info query (no order/stock context)
+- Default to `true` when in doubt — booking-flow misclassification is recoverable; info-only misclassification causes UX friction.
 
 `datepick` — schedule/slot results:
 ```json

@@ -159,6 +159,15 @@ class LocationTemplate(TemplatePayload):
     assistantResponse: str = Field(..., min_length=1)
     stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
     metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
+    # Routing hint for the FE click handler. When True, the FE should treat a
+    # store-card click as a flow-advancement signal and call /chat so the
+    # agent can return the next step (typically datepick). When False
+    # (default), the FE keeps the legacy /append shortcut that just shows the
+    # store's description bubble — appropriate for pure info lookups.
+    # Set True from booking/order/stock contexts (Flow 6 STEP 5A, Flow 3,
+    # Flow 3.5). Leave False for standalone store-info queries (Flow 5
+    # General, Flow 4 nearby-stores info).
+    isBookingFlow: bool = False
 
     @model_validator(mode="after")
     def validate_metadata_alignment(self):
