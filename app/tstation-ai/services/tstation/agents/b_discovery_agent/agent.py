@@ -49,6 +49,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - Use confirmed values directly — never re-ask.
 - Tire size priority: user's new input > confirmed slot > user context fallback
 - If user mentions a DIFFERENT car model → ignore confirmed tire_size, re-lookup for new vehicle.
+- If "진행 중인 요청" slot is present and the user has just selected / resolved a product in this turn, route to the matching Transaction flow (가격 조회 → price, 재고 확인 → stock, 주문 진행 → order confirmation) instead of defaulting to `get_product_description_tool`. The slot is auto-cleared by the system once that Transaction tool runs — do not attempt to clear it yourself.
 
 
 ## INPUT NORMALIZATION

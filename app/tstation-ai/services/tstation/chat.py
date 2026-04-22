@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Iterator, Optional
+from typing import ClassVar, Iterator, Optional
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -420,11 +420,47 @@ class StreamingMultiAgentCoordinator:
 
         return {"role": "assistant", "content": f"[Context from previous steps]\n" + "\n".join(parts)}
 
+    # Tool → pending_intent that the tool FULFILLS (clears from slots on successful run).
+    # When one of these tools returns a successful result, the matching pending_intent
+    # is considered satisfied and cleared, so later turns don't re-route on a stale intent.
+    _TOOL_TO_FULFILL: ClassVar[dict[str, str]] = {
+        "get_final_price_tool": "price",
+        "get_logistics_inventory_tool": "stock",
+        "get_store_inventory_tool": "stock",
+        "quick_order_tool": "order",
+        "save_to_cart_tool": "order",
+    }
+
     @staticmethod
     def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict, tool_input: dict | None = None):
-        """Persist goods_no, shop_id, and tire_size from successful tool results/inputs to slots."""
+        """Persist goods_no, shop_id, and tire_size from successful tool results/inputs to slots.
+
+        Also clears `pending_intent` when the tool that ran fulfills that intent
+        (see `_TOOL_TO_FULFILL`).
+        """
         from schemas.tstation.slots import ConversationSlots
         from services.tstation.chat_history_service import get_chat_history_service
+
+        # Fulfillment: if this tool satisfies a pending intent AND succeeded, clear it.
+        # Tools return {"status": "success"|"error", ...}; only "success" counts as fulfillment
+        # so a failed price/stock/order lookup still leaves the intent for retry.
+        # Done BEFORE other slot updates so the cleared state is the one we save.
+        fulfilled_intent = StreamingMultiAgentCoordinator._TOOL_TO_FULFILL.get(tool_name)
+        tool_succeeded = isinstance(parsed_data, dict) and parsed_data.get("status") == "success"
+        if fulfilled_intent and tool_succeeded:
+            try:
+                svc = get_chat_history_service()
+                current_slots = svc.get_slots(session_id)
+                if current_slots.pending_intent == fulfilled_intent:
+                    new_slots = current_slots.model_copy()
+                    new_slots.pending_intent = None
+                    svc.save_slots(session_id, new_slots)
+                    logger.info(
+                        f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} "
+                        f"after {tool_name} completed successfully"
+                    )
+            except Exception as e:
+                logger.warning(f"[SLOTS] Failed to clear pending_intent: {e}")
 
         # Map tool names to the slot fields they can provide (from output)
         tool_slot_extractors = {
@@ -1038,6 +1074,26 @@ class TStationChatServiceV2:
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
             logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
+
+            # 3.5) If the user explicitly asked for a recommendation in THIS turn
+            # AND did not also include a fresh transactional keyword, clear any
+            # stale transactional pending_intent from earlier turns.
+            # A mixed turn like "추천해준 것 중 이거 가격 얼마야?" must NOT be cleared —
+            # the fresh "price" extracted this turn wins over the old intent.
+            # merge() only applies non-None values so we can't express "clear" via
+            # regex_slots alone — it has to happen here after the merge.
+            user_asked_for_recommend = ConversationSlots.has_recommend_intent(last_user_text)
+            turn_has_new_transactional = regex_slots.pending_intent is not None
+            if (
+                merged_slots.pending_intent is not None
+                and user_asked_for_recommend
+                and not turn_has_new_transactional
+            ):
+                logger.info(
+                    f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
+                    f"— user switched back to recommendation"
+                )
+                merged_slots.pending_intent = None
 
             # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)

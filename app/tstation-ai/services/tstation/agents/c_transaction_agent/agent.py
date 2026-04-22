@@ -54,6 +54,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
   - ord_qty: show the confirmed value and ask "수량은 [N]개 맞으시죠?"
   - shop_id: always show store list and let user SELECT — never skip store selection
 - Only ask about items listed under [미확인 정보] when needed.
+- If "진행 중인 요청" slot is present, it reflects an intent the user expressed earlier that has not been answered yet (가격 조회 → Flow 1, 재고 확인 → Flow 2/3, 주문 진행 → Flow 6). Proceed with that flow for the confirmed goods_no. The slot is auto-cleared by the system once the matching tool runs — do not clear it yourself.
 
 
 ## GOODS_NO RESOLUTION
@@ -135,9 +136,9 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 
 
 ## STORE HOURS — TOOL SELECTION
-- General weekday / Saturday hours → get_store_list_tool (fields: shop_biz_strt_time, shop_sat_strt_time)
+- General store info (hours, address, phone) → get_store_list_tool → return `location` template with full store info
 - Specific date, Sunday, holiday, reservation slots → get_store_detail_tool(shop_id, YYYYMMDD)
-  - shop_id: call get_store_list_tool first if unknown
+  - shop_id: call get_store_list_tool first if unknown (and return `location` from its result before proceeding)
   - cal_day: ask user for date if not provided (exception: slot check → default to TODAY)
 
 
@@ -254,11 +255,9 @@ Steps:
 
 #### Flow 4.1 — User selects a store from list:
 Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할게요") after store list was shown
-⚠️ This trigger applies to ANY flow where a location list was previously shown (Flow 3, 3.5, 4, 6, etc.)
-1. If shop_id already known from previous context → skip get_store_list_tool
-   Else: get_store_list_tool(store_nm=...) to resolve shop_id
-2. get_store_schedule_tool(shop_id) → return `datepick` template
-   → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
+1. get_store_list_tool(store_nm=...) → return `location` template with the single selected store's full info (name, address, phone, hours, holiday, isAllMyT, todayInstall, tnaDelivery).
+   This is the final response for this turn — do NOT proceed to schedule.
+   → If user then explicitly asks for availability or reservation → proceed to get_store_schedule_tool.
 
 ⚠️ CRITICAL: When user selects a store from a location card/list in ANY booking or installation context:
 - NEVER respond with store business hours text
@@ -268,9 +267,8 @@ Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할�
 
 ### Flow 5 — Store Hours / Reservation
 
-#### General hours (no specific date):
-1. get_store_list_tool → extract shop_biz_strt_time, shop_sat_strt_time
-2. Do NOT guess Sunday/holiday info → redirect: "특정 날짜를 입력해주세요"
+#### General store info (no specific date):
+1. get_store_list_tool(store_nm or region_code) → return `location` template with full store info (name, address, phone, hours, holiday — all from tool result). This is the final response — do NOT ask for a date or redirect.
 
 #### Specific date — user mentions a date (Flow 5.1):
 Trigger: user mentions any specific date ("4월 25일", "이번 주 토요일", "5월 1일", "25일" etc.)
@@ -432,7 +430,7 @@ Examples of correct `assistantResponse` for template tools:
 **`quickReply` tools — full answer goes in `assistantResponse`:**
 - get_final_price_tool → price table (see PRICE TABLE format below)
 - get_logistics_inventory_tool, get_store_inventory_tool → inventory status
-- get_store_detail_tool (hours/holiday only, no slots) → store info text
+- get_store_detail_tool (holiday or no-slot result only) → plain text answer in `assistantResponse`
 - quick_order_tool, save_to_cart_tool → if text-only needed, use orderComplete instead
 - get_orders_of_user_tool, get_order_status_tool → order tracking
 - search_place_tool → intermediate step, no standalone display
@@ -446,9 +444,12 @@ Examples of correct `assistantResponse` for template tools:
 | 공임비 | ₩XX,XXX |
 | **최종 금액** | **₩XXX,XXX** |
 
-**Store detail (single store, no slots — `quickReply`, write in `assistantResponse`):**
-### 매장 정보 — [매장명]
-주소 | 연락처 | 영업시간(평일/토요일) | 휴무일
+**Store detail (single store, no slots — `quickReply`, write in `assistantResponse`, plain text lines, no Markdown):**
+매장명: [shop_nm]
+주소: [shop_addr]
+전화: [tel_no]
+영업시간: 평일 [shop_biz_strt_time]~[shop_biz_end_time] / 토요일 [shop_sat_strt_time]~[shop_sat_end_time]
+휴무일: [holiday info or 없음]
 Empty slots → "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
 
 
