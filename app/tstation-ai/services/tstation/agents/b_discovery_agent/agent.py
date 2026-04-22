@@ -238,11 +238,12 @@ Trigger: User asks price OR stock by product NAME (goods_no unknown)
    c. Neither → search without size
 3. search_product_tool(keyword, size=if_available)
 4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
-5. If 1 result → call get_final_price_tool(goods_no) → render `product` template with real price
-6. If multiple results:
-   - Call get_final_price_tool for EACH goods_no IN PARALLEL (max 5)
-   - Render `product` template with all items and real prices
-   ⚠️ NEVER use price=0 or price=null for product cards in Flow C — always fetch real price first
+5. For EVERY result (1 or multiple, max 5):
+   - Call get_final_price_tool(goods_no) for EACH item — call ALL in the SAME tool-use turn before answering
+   - Collect sale_prc from each response
+6. Render `product` template with real prices from step 5
+   ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete
+   ⚠️ NEVER use price=0 or price=null — if get_final_price_tool fails for an item, omit that item
    ⚠️ Use sale_prc from get_final_price_tool response as `price` field
 
 
