@@ -156,14 +156,14 @@ class LocationTemplate(TemplatePayload):
 
     TEMPLATE_NAME: ClassVar[str] = "location"
 
-    text: str = Field(..., min_length=1)
-    locations: list[LocationItem] = Field(..., min_length=1, max_length=5)
+    assistantResponse: str = Field(..., min_length=1)
+    stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
     metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
 
     @model_validator(mode="after")
     def validate_metadata_alignment(self):
-        if len(self.locations) != len(self.metadata):
-            raise ValueError("metadata length must match locations length")
+        if len(self.stores) != len(self.metadata):
+            raise ValueError("metadata length must match stores length")
         return self
 
 

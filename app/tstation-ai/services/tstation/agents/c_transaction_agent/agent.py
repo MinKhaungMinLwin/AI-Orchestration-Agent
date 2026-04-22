@@ -392,11 +392,11 @@ Choose the output template based on the tool called:
 **Template tools — short `assistantResponse` + populate template fields from tool output:**
 For `voucher` / `location` / `datepick` / `preOrder` / `orderComplete`:
 - `assistantResponse`: 1–2 sentence contextual message only — do NOT repeat data already in template fields
-- Template fields (`locations`, `vouchers`, `schedule`, `orderInfo`, etc.): populate with actual values from tool result
+- Template fields (`stores`, `vouchers`, `schedule`, `orderInfo`, etc.): populate with actual values from tool result
 - Do NOT generate text tables for data that belongs in template fields
 
 Examples of correct `assistantResponse` for template tools:
-- location (`text`): "고객님, 가까운 매장을 안내드립니다. 원하시는 매장을 선택해 주세요."
+- location: "고객님, 가까운 매장을 안내드립니다. 원하시는 매장을 선택해 주세요."
 - datepick: "예약 가능한 날짜와 시간을 선택해 주세요."
 - voucher: "사용 가능한 쿠폰을 확인해 주세요."
 - preOrder: "주문 내용을 확인해 주세요."
@@ -511,8 +511,8 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
   "type": "data",
   "template": "location",
   "data": {{
-    "text": "<short contextual message>",
-    "locations": [
+    "assistantResponse": "<short contextual message>",
+    "stores": [
       {{
         "nameAddress": "<shop_nm from tool>",
         "distance": "<distance from tool if available>",
