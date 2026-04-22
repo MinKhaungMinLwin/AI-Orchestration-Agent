@@ -1176,6 +1176,7 @@ class TStationChatServiceV2:
         last_user_text = ""
         regex_slots = ConversationSlots()
         merged_slots = ConversationSlots()
+        goods_no_resolved_this_turn = False
 
         try:
             chat_history_svc = get_chat_history_service()
@@ -1232,6 +1233,7 @@ class TStationChatServiceV2:
                 )
                 if resolved_goods_no:
                     merged_slots.goods_no = resolved_goods_no
+                    goods_no_resolved_this_turn = True
                     logger.info(
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
                         f"list-selection against prior search_product_tool result"
@@ -1264,6 +1266,32 @@ class TStationChatServiceV2:
             trace_id=request.tracing_id,
         )
         messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+
+        # Post-classification redirect: when the user's current-turn reply was a
+        # list-selection that just resolved goods_no (via step 3.8) and a
+        # transactional intent is still pending, the classifier may still pick
+        # [DISCOVERY] alone because the CONTINUATION DETECTION rule treats
+        # list-selection replies as same-domain continuation. But at this point
+        # Discovery has nothing useful to do — it would only emit a handoff line
+        # ("상품 확인했어요. 바로 재고 조회로 이어갑니다") and then decide_next_action
+        # often returns STOP, stranding the user without the actual transactional
+        # answer. Force-route directly to [TRANSACTION] for this narrow case.
+        #
+        # Guard: only when goods_no was resolved THIS turn from a list-selection,
+        # so later "다른 사이즈 보기" / "이 타이어 맞아?" type turns (goods_no carried
+        # but not freshly picked) still go through Discovery normally.
+        if (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.DISCOVERY
+            and goods_no_resolved_this_turn
+            and merged_slots.pending_intent is not None
+        ):
+            logger.info(
+                f"[COORDINATOR] Post-classification redirect: goods_no={merged_slots.goods_no!r} "
+                f"resolved from list-selection + pending_intent={merged_slots.pending_intent!r} "
+                f"→ [DISCOVERY] → [TRANSACTION]"
+            )
+            domains = [MultiAgentDomain.Domain.TRANSACTION]
 
         # P0 auto-chain code gate: when a transactional intent (price/stock/order)
         # is outstanding — either expressed THIS turn or inherited from a prior turn
