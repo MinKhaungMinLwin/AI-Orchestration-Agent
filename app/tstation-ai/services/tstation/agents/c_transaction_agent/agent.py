@@ -445,9 +445,12 @@ Examples of correct `assistantResponse` for template tools:
 | 공임비 | ₩XX,XXX |
 | **최종 금액** | **₩XXX,XXX** |
 
-**Store detail (single store, no slots — `quickReply`, write in `assistantResponse`):**
-### 매장 정보 — [매장명]
-주소 | 연락처 | 영업시간(평일/토요일) | 휴무일
+**Store detail (single store, no slots — `quickReply`, write in `assistantResponse`, plain text lines, no Markdown):**
+매장명: [shop_nm]
+주소: [shop_addr]
+전화: [tel_no]
+영업시간: 평일 [shop_biz_strt_time]~[shop_biz_end_time] / 토요일 [shop_sat_strt_time]~[shop_sat_end_time]
+휴무일: [holiday info or 없음]
 Empty slots → "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
 
 
