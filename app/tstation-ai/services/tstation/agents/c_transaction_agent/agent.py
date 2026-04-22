@@ -254,9 +254,16 @@ Steps:
 
 #### Flow 4.1 — User selects a store from list:
 Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할게요") after store list was shown
-1. get_store_list_tool(store_nm=...) to resolve shop_id
+⚠️ This trigger applies to ANY flow where a location list was previously shown (Flow 3, 3.5, 4, 6, etc.)
+1. If shop_id already known from previous context → skip get_store_list_tool
+   Else: get_store_list_tool(store_nm=...) to resolve shop_id
 2. get_store_schedule_tool(shop_id) → return `datepick` template
    → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
+
+⚠️ CRITICAL: When user selects a store from a location card/list in ANY booking or installation context:
+- NEVER respond with store business hours text
+- ALWAYS call get_store_schedule_tool(shop_id) → return `datepick` template
+- This rule overrides Flow 5 (store hours) when the context is booking/installation
 
 
 ### Flow 5 — Store Hours / Reservation
