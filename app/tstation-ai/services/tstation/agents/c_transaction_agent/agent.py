@@ -249,9 +249,9 @@ Steps:
 
 #### Flow 4.1 — User selects a store from list:
 Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할게요") after store list was shown
-1. get_store_list_tool(store_nm=...) to resolve shop_id
-2. get_store_schedule_tool(shop_id) → return `datepick` template
-   → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?"
+1. get_store_list_tool(store_nm=...) → return `location` template with the single selected store's full info (name, address, phone, hours, holiday, isAllMyT, todayInstall, tnaDelivery).
+   This is the final response for this turn — do NOT proceed to schedule.
+   → If user then explicitly asks for availability or reservation → proceed to get_store_schedule_tool.
 
 
 ### Flow 5 — Store Hours / Reservation
