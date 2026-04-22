@@ -1574,11 +1574,38 @@ class TStationChatServiceV2:
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        # 2. QC AGENT DISABLED
-        # Keep the final assistant message as-is (after local sanitization) without
-        # invoking the strict QC agent.
+        # 2. QC AGENT
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
+            source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
+
+            if _has_factual_claims(draft_response) and source_data_chunks:
+                try:
+                    from services.tstation.agents.g_qc_agent.agent import invoke_qc
+                    from langchain_litellm import ChatLiteLLM
+                    from config.tracing import build_trace_config
+
+                    qc_llm = ChatLiteLLM(
+                        api_base=settings.AI_GATEWAY_BASE_URL,
+                        api_key=settings.AI_GATEWAY_API_KEY,
+                        model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
+                    )
+                    trace_config = build_trace_config(
+                        run_name="qc_agent",
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        tags=["qc"],
+                    )
+                    qc_result = invoke_qc(qc_llm, user_query, draft_response, source_data, config=trace_config)
+                    if qc_result.strip() and qc_result.strip().upper() != "PASS":
+                        draft_response = qc_result.strip()
+                        logger.info("[QC_LAYER] QC corrected the response")
+                    else:
+                        logger.info("[QC_LAYER] QC passed")
+                except Exception as e:
+                    logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+
             if original_message_events:
                 final_msg_event = original_message_events[-1]
                 final_msg_event["content"] = draft_response
