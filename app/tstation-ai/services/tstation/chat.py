@@ -549,6 +549,7 @@ class StreamingMultiAgentCoordinator:
         tool_context: str | None = None,
         user_id: str | None = None,
         trace_id: str | None = None,
+        skip_decision: bool = False,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -561,6 +562,9 @@ class StreamingMultiAgentCoordinator:
             tool_context: Formatted tool results from previous turn for context preservation
             user_id: User ID for Langfuse tracing
             trace_id: Trace ID to group all LLM calls of this request under one trace
+            skip_decision: When True AND domains has >= 2 entries, skip the
+                `decide_next_action` LLM call between the first and second agent
+                (the chain is pre-committed by the caller — e.g., P0 code gate).
 
         Yields:
             Stream events from all agents in sequence
@@ -736,6 +740,40 @@ class StreamingMultiAgentCoordinator:
                 if domain == MultiAgentDomain.Domain.SUPPORT:
                     logger.info("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
                     break
+
+                # Caller pre-committed the chain (e.g., P0 auto-chain code gate) —
+                # skip the decide_next_action LLM call (saves ~300ms) and proceed
+                # directly to the next domain in `domains`.
+                #
+                # BUT: only proceed if Discovery actually resolved a single goods_no.
+                # `_save_tool_derived_slots` (search_product_tool extractor) only
+                # writes goods_no to slots when the tool returns exactly 1 item;
+                # 0/multiple-result cases leave goods_no=None and Discovery is
+                # already in clarification/selection mode. Chaining Transaction on
+                # top would produce a contradictory "상품 검색이 필요합니다" fallback.
+                if skip_decision and len(domains) >= 2:
+                    goods_no_resolved = False
+                    if session_id:
+                        try:
+                            from services.tstation.chat_history_service import get_chat_history_service
+
+                            post_slots = get_chat_history_service().get_slots(session_id)
+                            goods_no_resolved = post_slots.goods_no is not None
+                        except Exception as e:
+                            logger.warning(
+                                f"[COORDINATOR] Failed to verify goods_no post-Discovery: {e}"
+                            )
+                    if not goods_no_resolved:
+                        logger.info(
+                            "[COORDINATOR] skip_decision=True but Discovery did not resolve "
+                            "goods_no (0 or multiple results) — stopping chain"
+                        )
+                        break
+                    logger.info(
+                        "[COORDINATOR] skip_decision=True — proceeding to next domain "
+                        f"({domains[1].value}) without LLM decision"
+                    )
+                    continue
 
                 decision = decide_next_action(
                     original_messages=messages,
@@ -1056,6 +1094,12 @@ class TStationChatServiceV2:
         slot_context = None
         tool_context = None
 
+        # Defaults hoisted above the try block so the P0 auto-chain gate below
+        # can safely inspect them even if slot processing raises.
+        last_user_text = ""
+        regex_slots = ConversationSlots()
+        merged_slots = ConversationSlots()
+
         try:
             chat_history_svc = get_chat_history_service()
 
@@ -1064,7 +1108,6 @@ class TStationChatServiceV2:
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
             # 2) Extract regex-based slots from the LATEST user message only
-            last_user_text = ""
             for msg in reversed(request.messages):
                 if msg.get("role") == "user":
                     last_user_text = msg.get("content", "")
@@ -1124,6 +1167,53 @@ class TStationChatServiceV2:
         )
         messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
+        # P0 auto-chain code gate: when the user's current turn expresses a fresh
+        # transactional intent (price/stock/order) and some product is identifiable
+        # (current turn text OR inherited from prior turns), but no goods_no is yet
+        # confirmed, override the classifier's single-domain [DISCOVERY] pick to
+        # [DISCOVERY, TRANSACTION]. Discovery resolves goods_no via search_product_tool,
+        # then Transaction proceeds (price/inventory/order) in the same user turn —
+        # removing the redundant "네" confirmation step.
+        #
+        # Guard conditions (ALL must hold):
+        #   1. Classifier chose exactly [DISCOVERY] — no override of TX/SUPPORT/LEADING.
+        #   2. `regex_slots.pending_intent` is set THIS turn (not inherited) — short
+        #      replies like "네" do not trigger.
+        #   3. `merged_slots.goods_no is None` — goods_no-known turns stay TX-only.
+        #   4. Product hint present via ONE of:
+        #        a. `merged_slots.tire_size` — current turn OR inherited from a prior
+        #           turn (intentional: user says "225/45R18" then later "가격 얼마?"
+        #           should continue the same product context, not re-ask).
+        #        b. `merged_slots.tire_model` — typically confirmed in prior turns via
+        #           LLM slot extraction; inheriting it is by design.
+        #        c. Brand/model keyword in CURRENT turn text (벤투스/Dynapro/...).
+        #      Pure no-product queries with no prior context ("가격 얼마에요?" on a
+        #      fresh session) stay Discovery-only so Discovery can ask which model.
+        #
+        # Safety: even when the gate fires, the coordinator verifies goods_no was
+        # actually resolved after Discovery before running Transaction (search with
+        # 0/multiple results → chain stops). See StreamingMultiAgentCoordinator.stream().
+        skip_decision = False
+        if (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.DISCOVERY
+            and regex_slots.pending_intent is not None
+            and merged_slots.goods_no is None
+            and (
+                merged_slots.tire_size is not None
+                or merged_slots.tire_model is not None
+                or ConversationSlots.has_product_keyword(last_user_text)
+            )
+        ):
+            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+            skip_decision = True
+            logger.info(
+                f"[COORDINATOR] P0 auto-chain gate triggered: "
+                f"pending_intent={regex_slots.pending_intent!r}, goods_no=None, "
+                f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
+                f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+            )
+
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
@@ -1135,6 +1225,7 @@ class TStationChatServiceV2:
                     tool_context,
                     user_id=request.user_id,
                     trace_id=request.tracing_id,
+                    skip_decision=skip_decision,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1157,6 +1248,7 @@ class TStationChatServiceV2:
                 tool_context,
                 user_id=request.user_id,
                 trace_id=request.tracing_id,
+                skip_decision=skip_decision,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -1198,6 +1290,7 @@ class TStationChatServiceV2:
         tool_context: str | None = None,
         user_id: str | None = None,
         trace_id: str | None = None,
+        skip_decision: bool = False,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
 
@@ -1230,6 +1323,7 @@ class TStationChatServiceV2:
             tool_context=tool_context,
             user_id=user_id,
             trace_id=trace_id,
+            skip_decision=skip_decision,
         ):
             event_type = event.get("type")
 
