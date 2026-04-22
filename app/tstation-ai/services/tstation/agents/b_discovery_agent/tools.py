@@ -30,6 +30,7 @@ from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_�
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
 
 # Member Car Info
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
@@ -766,3 +767,29 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
     except Exception as e:
         logger.exception("[TOOL][search_youtube_video_tool] Failed")
         return {"status": "error", "reason": str(e), "message": "Failed to search YouTube videos."}
+
+
+@tool
+def get_final_price_tool(goods_no: str, member_type: str | None = None):
+    """Get product final price and discount info.
+
+    Use this after search_product_tool to fetch real price for a specific goods_no.
+
+    Args:
+        goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
+        member_type (str | None): Member type (e.g., 'general', 'PARTNER').
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    """
+    logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
+    try:
+        response = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
+        if response.parsed is None:
+            return {"status": "error", "http_status": response.status_code, "reason": f"HTTP {response.status_code}", "message": "Failed to get product price"}
+        logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
+        return {"status": "success", "http_status": response.status_code, "data": data}
+    except Exception as e:
+        logger.exception("[TOOL][get_final_price_tool] Failed")
+        return {"status": "error", "reason": str(e), "message": "Failed to get product price"}

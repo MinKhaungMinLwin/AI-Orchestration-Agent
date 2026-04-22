@@ -15,6 +15,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
+from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from common.curr_time import get_current_time
 
 
@@ -226,9 +227,8 @@ Trigger: User searches by name/keyword
 4. Show top 5 results; call get_product_description_tool for #1
 
 
-### Flow C — Price / Stock Inquiry (Search-First → Handoff)
+### Flow C — Price / Stock Inquiry (Search-First → Price Fetch → Show)
 Trigger: User asks price OR stock by product NAME (goods_no unknown)
-Priority: search product FIRST, then hand over to Transaction WITH goods_no.
 
 1. Translate product name → English
 2. Determine tire size:
@@ -236,9 +236,13 @@ Priority: search product FIRST, then hand over to Transaction WITH goods_no.
    b. Confirmed tire_size in slots (same vehicle) → use as fallback
    c. Neither → search without size
 3. search_product_tool(keyword, size=if_available)
-4. If 1 result → show confirmation table + "가격/재고를 확인합니다." → hand over to Transaction
-5. If multiple → show shortlist, ask user to select → hand over after selection
-6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+5. If 1 result → call get_final_price_tool(goods_no) → render `product` template with real price
+6. If multiple results:
+   - Call get_final_price_tool for EACH goods_no IN PARALLEL (max 5)
+   - Render `product` template with all items and real prices
+   ⚠️ NEVER use price=0 or price=null for product cards in Flow C — always fetch real price first
+   ⚠️ Use sale_prc from get_final_price_tool response as `price` field
 
 
 ### Flow D — Order Resolution (Resolve goods_no, confirm, then hand over)
@@ -350,7 +354,7 @@ Hard rules:
 - Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
 - Single-car flow (user has exactly 1 registered car): NEVER use `listCar`. Use `quickReply` to confirm or auto-proceed.
 - Car-pick turn (multi-car): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
-- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields. Never invent URLs, prices, ratings, ids.
+- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
   Note: `car_no` is the user-visible license plate (e.g. "12가3456") — it is safe to show.
@@ -472,7 +476,7 @@ Backend → FE mapping for `product` (from `search_product_tool` / `get_products
 | `goods_nm` or `title`            | `title`                                                 |
 | derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`/`""`)         |
 | derive from comfort score        | `comfort` (`"높음"`/`"보통"`/`"낮음"`)                  |
-| `sale_prc`                       | `price` (int)                                           |
+| `sale_prc`                       | `price` (int or null — use `null` if `sale_prc` is missing/0; do NOT use 0 as fallback) |
 | `rate` or `review_rate`          | `rate` (float, 0.0 if missing)                          |
 | `stock_qty`                      | `totalQuantity` (int, 0 if missing)                     |
 | `goods_no`                       | `metadata[i].goodsId`                                   |
@@ -548,6 +552,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_deals_tool": "Price",
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
+        "get_final_price_tool": "Price",
     }
 
     def __init__(self, model):
@@ -567,6 +572,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_events_tool,
                 get_deals_tool,
                 compare_discount_tool,
+                get_final_price_tool,
             ],
             system_prompt=get_discovery_system_prompt,
             name="Discovery Agent",
