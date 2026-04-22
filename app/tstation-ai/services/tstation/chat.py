@@ -17,14 +17,11 @@ from services.tstation.agents.router import (
     discovery_subagent,
     transaction_subagent,
     support_subagent,
-    ui_template_subagent,
-    QC_LLM,
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.agent import invoke_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 
 logger = logging.getLogger(__name__)
@@ -728,13 +725,10 @@ class StreamingMultiAgentCoordinator:
                 if next_domain:
                     domains = [next_domain] + [d for d in domains if d != next_domain]
 
-        # Run UI Template Agent when:
-        # 1. Tools were called with relevant data (QnA or non-support/FAQ tools), OR
-        # 2. Domain agents responded but called NO tools (pure text — UI Template generates quickReply)
-        # NOTE: FE only renders "data" events (not "token"), so UI Template Agent must ALWAYS run
-        # to produce a data event for the FE to display.
-        # SKIP entirely when a domain agent already emitted a direct `data` event
-        # (Phase 0+: domain agents may now produce the FE payload themselves).
+        # Legacy UI Template Agent path is disabled.
+        # Domain agents should emit `data` events directly. If a migrated agent misses a
+        # structured payload, fall back to a minimal quickReply built from the last
+        # assistant response instead of calling the UI Template Agent.
         _has_qna = any(item.get("tool") == "transfer_to_qna_tool" for item in accumulated_tool_data)
         _has_non_support_data = any(
             item.get("tool") not in ("get_faq_tool", "search_faq_rag_tool", "transfer_to_qna_tool")
@@ -743,126 +737,23 @@ class StreamingMultiAgentCoordinator:
         _has_agent_response = bool(accumulated_context)
         _no_tools_called = not accumulated_tool_data
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
+        assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
         if domain_data_event_emitted:
             logger.info("[COORDINATOR] Domain agent emitted data event — skipping UI Template Agent")
         elif _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
             trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
-            logger.info(f"[COORDINATOR] Running UI Template Agent ({trigger_reason})")
-
-            # Try code-based template mapping first (no LLM call)
-            # Skip code mapper when last agent called no tools (e.g., Transaction asking for qty after Discovery found product)
-            # — the product card from Discovery's tools would override Transaction's text question
-            from services.tstation.template_mapper import try_build_template
-
-            # Use the LAST agent's response as assistantResponse (e.g., Transaction's qty question over Discovery's "found product")
-            assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
-            tool_names = [e.get("tool", "") for e in accumulated_tool_data] if accumulated_tool_data else []
-            logger.info(
-                f"[COORDINATOR] Template mapper input: tools={tool_names}, assistant_text_len={len(assistant_text)}, last_agent_called_tools={last_agent_called_tools}"
+            logger.warning(
+                "[COORDINATOR] UI Template Agent disabled — generating fallback quickReply (%s)",
+                trigger_reason,
             )
-            code_template = None  # Disabled: always use LLM UI Template Agent
-            logger.info(
-                f"[COORDINATOR] Template mapper result: {'template=' + code_template.get('template', '') if code_template else 'None (LLM fallback)'}"
-            )
-
-            if code_template:
-                # Code mapper handled it — yield template event directly, skip LLM UI Template Agent
-                yield {
-                    "type": "sub-agent",
-                    "agent": "[UI TEMPLATE AGENT]",
-                    "status": "start",
-                }
-                code_template["source_domain"] = "ui_template"
-                yield code_template
-            else:
-                # Fall through to LLM UI Template Agent for unmapped templates
-                # Build context for UI Template Agent
-                # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context | accumulated_tool_data LAST
-                ui_messages = []
-
-                # 1. slot_context FIRST
-                if slot_context:
-                    ui_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": slot_context,
-                        }
-                    )
-
-                # 2. Original messages WITHOUT conversation context injection
-                # (avoid confusing UI Template Agent with routing next_action instructions)
-                ui_messages.extend(original_messages)
-
-                # 3. Append ALL accumulated context (multi-agent chains may have multiple entries)
-                # e.g., Discovery found product + Transaction asked for quantity
-                for prev_domain, content in accumulated_context.items():
-                    if content and content.strip():
-                        ui_messages.append({"role": "assistant", "content": str(content)})
-                        ui_messages.append({"role": "user", "content": "Continue with next step"})
-
-                # 4. Append tool data summary LAST
-                # Note: each item has {"tool": "...", "data": {"status": "...", "data": {actual_data}}}
-                # The actual data is at item["data"]["data"] (nested inside API response wrapper)
-                # Flatten: extract actual payload from API response wrapper before sending to UI Template Agent
-                flattened_tool_data = [
-                    {
-                        "tool": item["tool"],
-                        "data": item["data"].get("data", {}) if isinstance(item.get("data"), dict) else {},
-                    }
-                    for item in accumulated_tool_data
-                ]
-                tool_summary = json.dumps(flattened_tool_data, ensure_ascii=False, indent=2)
-                ui_messages.append({"role": "assistant", "content": f"[Previous agent tool results]\n{tool_summary}"})
-                ui_messages.append({"role": "user", "content": "Help me generate Template UI"})
-
-                # Log UI Template Agent messages
-                logger.info(
-                    f"[UI_TEMPLATE_MESSAGE] ui_messages: {json.dumps(ui_messages, ensure_ascii=False, indent=2)}"
-                )
-
-                # Yield UI Template Agent start event
-                yield {
-                    "type": "sub-agent",
-                    "agent": "[UI TEMPLATE AGENT]",
-                    "status": "start",
-                }
-
-                # Stream from UI Template Agent (use stream_template to get data events)
-                ui_template_yielded_data = False
-                ui_trace_config = build_trace_config(
-                    run_name="ui_template_agent",
-                    session_id=session_id,
-                    user_id=user_id,
-                    trace_id=trace_id,
-                    tags=["ui_template", "agent"],
-                )
-                for event in ui_template_subagent.stream_template(ui_messages, config=ui_trace_config):
-                    event["source_domain"] = "ui_template"
-                    if event.get("type") == "data":
-                        ui_template_yielded_data = True
-                    yield event
-
-                # Fallback: if UI Template Agent produced no data event, generate quickReply
-                # so the FE (which only renders data events) has something to display
-                if not ui_template_yielded_data:
-                    logger.warning(
-                        "[COORDINATOR] UI Template Agent produced no data event — generating fallback quickReply"
-                    )
-                    yield {
-                        "type": "data",
-                        "template": "quickReply",
-                        "data": {
-                            "assistantResponse": assistant_text,
-                            "quickReplies": [],
-                        },
-                        "source_domain": "ui_template",
-                    }
-
-            # Yield UI Template Agent completion event
             yield {
-                "type": "sub-agent",
-                "agent": "[UI TEMPLATE AGENT]",
-                "status": "done",
+                "type": "data",
+                "template": "quickReply",
+                "data": {
+                    "assistantResponse": assistant_text,
+                    "quickReplies": [],
+                },
+                "source_domain": domain_key if "domain_key" in locals() else "ui_template",
             }
 
         # Final done event
@@ -1378,59 +1269,15 @@ class TStationChatServiceV2:
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        # 2. RUN THE STRICT QC AGENT
-        # - Tool data exists AND draft has factual claims: verify against source data
-        # - No tool data (no tools called): skip QC — nothing to fact-check
-        # - No factual claims (greetings, FAQ): skip QC
+        # 2. QC AGENT DISABLED
+        # Keep the final assistant message as-is (after local sanitization) without
+        # invoking the strict QC agent.
         if draft_response.strip():
-            source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
-            needs_qc = settings.AI_QC_ENABLED and bool(source_data_chunks) and _has_factual_claims(draft_response)
-
-            if needs_qc:
-                yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
-
-                final_qc_text = ""
-                try:
-                    # FIX: Bulk invoke instead of streaming
-                    from config.tracing import build_trace_config
-
-                    qc_trace_config = build_trace_config(
-                        run_name="qc_agent",
-                        session_id=session_id,
-                        user_id=user_id,
-                        trace_id=trace_id,
-                        tags=["qc", "agent"],
-                    )
-                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str, config=qc_trace_config)
-
-                    if qc_result.strip().upper() == "PASS":
-                        final_qc_text = draft_response
-                        logger.info("[QC_AGENT] PASS — draft is factually correct")
-                    else:
-                        final_qc_text = qc_result
-                        logger.info("[QC_AGENT] Corrected draft response")
-
-                except Exception as e:
-                    logger.exception(f"[QC_AGENT] Failed: {e}")
-                    final_qc_text = draft_response  # fallback
-
-                # Sanitize: replace internal jargon with user-friendly fallback
-                final_qc_text = _sanitize_response(final_qc_text)
-
-                # 3. HISTORY & UI SYNC: Yield the final message event with QC'd content
-                # The frontend MUST use this event to overwrite the fast-streamed draft
-                if original_message_events:
-                    final_msg_event = original_message_events[-1]
-                    final_msg_event["content"] = final_qc_text
-                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
-            else:
-                # No factual claims (greetings, FAQ): skip QC, pass draft directly
-                draft_response = _sanitize_response(draft_response)
-                # Yield message event for history sync (not duplicate with token - different purpose)
-                if original_message_events:
-                    final_msg_event = original_message_events[-1]
-                    final_msg_event["content"] = draft_response
-                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+            draft_response = _sanitize_response(draft_response)
+            if original_message_events:
+                final_msg_event = original_message_events[-1]
+                final_msg_event["content"] = draft_response
+                yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
         else:
             # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
             # if they actually contain text. We DO NOT want to save empty assistant
