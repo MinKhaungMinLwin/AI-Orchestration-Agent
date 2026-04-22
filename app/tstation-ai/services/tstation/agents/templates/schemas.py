@@ -140,7 +140,7 @@ class LocationMeta(BaseModel):
 class LocationItem(BaseModel):
     """Visible store card content for the FE."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     nameAddress: str = Field(..., min_length=1)
     distance: str
