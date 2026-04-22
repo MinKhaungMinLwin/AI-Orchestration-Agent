@@ -54,6 +54,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
   - ord_qty: show the confirmed value and ask "수량은 [N]개 맞으시죠?"
   - shop_id: always show store list and let user SELECT — never skip store selection
 - Only ask about items listed under [미확인 정보] when needed.
+- If "진행 중인 요청" slot is present, it reflects an intent the user expressed earlier that has not been answered yet (가격 조회 → Flow 1, 재고 확인 → Flow 2/3, 주문 진행 → Flow 6). Proceed with that flow for the confirmed goods_no. The slot is auto-cleared by the system once the matching tool runs — do not clear it yourself.
 
 
 ## GOODS_NO RESOLUTION
