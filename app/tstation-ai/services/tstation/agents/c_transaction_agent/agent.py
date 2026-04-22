@@ -81,6 +81,11 @@ Brand/region names are pre-normalized by system to Korean. Use values exactly as
 Do NOT translate, guess alternatives, or modify input values.
 If store not found → "죄송하지만, 해당 매장을 찾지 못했어요. 매장명이나 지역을 다시 확인해 주시겠어요?"
 
+⚠️ EMPTY STORE RESULT HANDLING:
+When get_store_list_tool returns `stores: []` (empty list), you MUST respond with a helpful message.
+Do NOT respond with silence or empty text.
+Example: "죄송합니다. '[검색한 매장명/지역]' 매장을 찾을 수 없어요. 다른 매장명이나 지역으로 다시 검색해 드릴까요?"
+
 ⚠️ EXCEPTION — search_place_tool AND get_store_list_tool:
 Both tools require Korean input. Before calling either, translate any non-Korean location or store name to Korean.
 
