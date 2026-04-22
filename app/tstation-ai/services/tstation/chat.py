@@ -1059,17 +1059,31 @@ class TStationChatServiceV2:
 
         Only the most recent search_product_tool entry is inspected.
         Returns None when no confident match is found.
+
+        Expected tool_context entry shape (produced by filter_for_context in
+        g_qc_agent/source_filter.py, which is what gets persisted to Redis):
+            {"tool": "search_product_tool",
+             "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
+             "input": {...}}
+        Note: `data` is a LIST directly, and the size field is `tire_size_1`
+        (filter whitelist is {"goods_no", "goods_nm", "tire_size_1", ...}).
         """
         if not user_text or not prev_tool_data:
             return None
 
         items: list[dict] = []
         for entry in prev_tool_data:
-            if entry.get("tool") == "search_product_tool":
-                data = entry.get("data")
-                if isinstance(data, dict) and isinstance(data.get("items"), list):
-                    items = [it for it in data["items"] if isinstance(it, dict)]
-                    break
+            if entry.get("tool") != "search_product_tool":
+                continue
+            data = entry.get("data")
+            # Primary shape: filter_for_context stores data as a list directly
+            if isinstance(data, list):
+                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+                break
+            # Defensive fallback: {"items": [...]} shape (raw tool output)
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                items = [it for it in data["items"] if isinstance(it, dict)]
+                break
         if not items:
             return None
 
@@ -1086,9 +1100,16 @@ class TStationChatServiceV2:
         size_match = re.search(r"\d{3}/\d{2}R\d{2}", text)
         if size_match:
             target_size = size_match.group(0)
+            # filter_for_context keeps `tire_size_1`; include legacy aliases
+            # for safety if another path ever stores the raw field name.
             same_size = [
                 item for item in items
-                if (item.get("tire_size") or item.get("tireSize") or "") == target_size
+                if (
+                    item.get("tire_size_1")
+                    or item.get("tire_size")
+                    or item.get("tireSize")
+                    or ""
+                ) == target_size
             ]
 
             if len(same_size) == 1:
