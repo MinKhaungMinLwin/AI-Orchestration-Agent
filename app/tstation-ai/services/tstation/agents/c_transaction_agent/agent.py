@@ -54,6 +54,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
   - ord_qty: show the confirmed value and ask "수량은 [N]개 맞으시죠?"
   - shop_id: always show store list and let user SELECT — never skip store selection
 - Only ask about items listed under [미확인 정보] when needed.
+- If "진행 중인 요청" slot is present, it reflects an intent the user expressed earlier that has not been answered yet (가격 조회 → Flow 1, 재고 확인 → Flow 2/3, 주문 진행 → Flow 6). Proceed with that flow for the confirmed goods_no. The slot is auto-cleared by the system once the matching tool runs — do not clear it yourself.
 
 
 ## GOODS_NO RESOLUTION
@@ -80,6 +81,11 @@ ALWAYS get shop_id from tool call result. NEVER recall from memory or infer from
 Brand/region names are pre-normalized by system to Korean. Use values exactly as provided.
 Do NOT translate, guess alternatives, or modify input values.
 If store not found → "죄송하지만, 해당 매장을 찾지 못했어요. 매장명이나 지역을 다시 확인해 주시겠어요?"
+
+⚠️ EMPTY STORE RESULT HANDLING:
+When get_store_list_tool returns `stores: []` (empty list), you MUST respond with a helpful message.
+Do NOT respond with silence or empty text.
+Example: "죄송합니다. '[검색한 매장명/지역]' 매장을 찾을 수 없어요. 다른 매장명이나 지역으로 다시 검색해 드릴까요?"
 
 ⚠️ EXCEPTION — search_place_tool AND get_store_list_tool:
 Both tools require Korean input. Before calling either, translate any non-Korean location or store name to Korean.
@@ -253,6 +259,11 @@ Trigger: user replies with store name (e.g., "역삼점", "역삼점으로 할�
    This is the final response for this turn — do NOT proceed to schedule.
    → If user then explicitly asks for availability or reservation → proceed to get_store_schedule_tool.
 
+⚠️ CRITICAL: When user selects a store from a location card/list in ANY booking or installation context:
+- NEVER respond with store business hours text
+- ALWAYS call get_store_schedule_tool(shop_id) → return `datepick` template
+- This rule overrides Flow 5 (store hours) when the context is booking/installation
+
 
 ### Flow 5 — Store Hours / Reservation
 
@@ -371,6 +382,8 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
    → 1 order: auto call get_order_status_tool
    → multiple: show table, ask which order → then get_order_status_tool
 2. Show: order ID | progress | delivery status | tracking number (+ tracking link if available)
+⚠️ NEVER show 배송번호 (delivery number, e.g. D202604080099605) in the response — this is an internal system ID, not useful to users.
+   Only show: 주문번호, 상품명, 수량, 주문일시, 주문상태, 배송상태, 송장번호, 배송예정일시
 
 
 ### Flow 8 — Coupons
