@@ -434,6 +434,28 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             )
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
+
+        # Truncate to top 5 stores so the LLM's `location` template (max_length=5
+        # per LocationTemplate schema) doesn't fail structured-output validation
+        # and silently drop the entire response. Sort: is_installable=true first
+        # (matters for purchase flows), then by distance_km ascending. Response
+        # shape is preserved.
+        stores = data.get("stores") if isinstance(data, dict) else None
+        if isinstance(stores, list) and len(stores) > 5:
+            original_count = len(stores)
+            sorted_stores = sorted(
+                stores,
+                key=lambda s: (
+                    not bool(s.get("is_installable", False)),
+                    s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
+                ),
+            )
+            data["stores"] = sorted_stores[:5]
+            logger.info(
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 5 (installable-first, distance-asc)",
+                original_count,
+            )
+
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_nearby_stores_tool] Failed")
