@@ -223,7 +223,11 @@ class OrderInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    carInfo: str = Field(..., min_length=1)
+    # carInfo: 사용자가 차량 미등록인 상태로 주문/예약을 진행할 수 있어
+    # optional. FE는 빈 값을 "—"로 그래스풀 처리(chatbox-order-summary.js
+    # valOrDash). required로 두면 LLM이 빈 문자열을 채워 schema validation
+    # 실패 → silent terminator(\n\n)만 emit되어 다음 단계 진행이 막힌다.
+    carInfo: str | None = None
     product: str = Field(..., min_length=1)
     quantity: int = Field(..., ge=0)
     storeName: str = Field(..., min_length=1)
