@@ -302,7 +302,7 @@ def transfer_to_qna_tool(
             - 10034: 이력서접수 (Resume submission)
             If not provided, omit and AI will auto-select.
         inq_tit_nm (str | None): Inquiry title (max 100 chars).
-        ai_summary (str | None): Inquiry content (max 1000 chars).
+        ai_summary (str | None): Inquiry content — key facts only (max 400 chars).
         is_mobile (bool): Use mobile URL if True.
 
     Returns:
