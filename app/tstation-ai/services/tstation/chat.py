@@ -1167,8 +1167,9 @@ class TStationChatServiceV2:
         )
         messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
-        # P0 auto-chain code gate: when the user's current turn expresses a fresh
-        # transactional intent (price/stock/order) and some product is identifiable
+        # P0 auto-chain code gate: when a transactional intent (price/stock/order)
+        # is outstanding — either expressed THIS turn or inherited from a prior turn
+        # whose tool has not yet fulfilled it — and some product is identifiable
         # (current turn text OR inherited from prior turns), but no goods_no is yet
         # confirmed, override the classifier's single-domain [DISCOVERY] pick to
         # [DISCOVERY, TRANSACTION]. Discovery resolves goods_no via search_product_tool,
@@ -1177,8 +1178,14 @@ class TStationChatServiceV2:
         #
         # Guard conditions (ALL must hold):
         #   1. Classifier chose exactly [DISCOVERY] — no override of TX/SUPPORT/LEADING.
-        #   2. `regex_slots.pending_intent` is set THIS turn (not inherited) — short
-        #      replies like "네" do not trigger.
+        #   2. `merged_slots.pending_intent` is set — fresh this turn OR inherited
+        #      from an earlier turn whose tool has not yet fulfilled the intent.
+        #      Example: user asks "재고 있어?" in turn 1, search returns multiple
+        #      results, user picks a specific size in turn 2 — the stock intent is
+        #      still pending and should chain to Transaction once goods_no resolves.
+        #      Short replies like "네" do NOT trigger because condition #4 requires
+        #      a real product hint (tire_size / tire_model / brand keyword), which
+        #      a bare "네" never satisfies.
         #   3. `merged_slots.goods_no is None` — goods_no-known turns stay TX-only.
         #   4. Product hint present via ONE of:
         #        a. `merged_slots.tire_size` — current turn OR inherited from a prior
@@ -1197,7 +1204,7 @@ class TStationChatServiceV2:
         if (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
-            and regex_slots.pending_intent is not None
+            and merged_slots.pending_intent is not None
             and merged_slots.goods_no is None
             and (
                 merged_slots.tire_size is not None
@@ -1209,7 +1216,8 @@ class TStationChatServiceV2:
             skip_decision = True
             logger.info(
                 f"[COORDINATOR] P0 auto-chain gate triggered: "
-                f"pending_intent={regex_slots.pending_intent!r}, goods_no=None, "
+                f"pending_intent={merged_slots.pending_intent!r} "
+                f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
                 f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
             )
