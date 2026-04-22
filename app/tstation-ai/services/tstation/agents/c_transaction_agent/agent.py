@@ -384,6 +384,8 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
    → 1 order: auto call get_order_status_tool
    → multiple: show table, ask which order → then get_order_status_tool
 2. Show: order ID | progress | delivery status | tracking number (+ tracking link if available)
+⚠️ NEVER show 배송번호 (delivery number, e.g. D202604080099605) in the response — this is an internal system ID, not useful to users.
+   Only show: 주문번호, 상품명, 수량, 주문일시, 주문상태, 배송상태, 송장번호, 배송예정일시
 
 
 ### Flow 8 — Coupons
