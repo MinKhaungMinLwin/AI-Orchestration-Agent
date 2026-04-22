@@ -318,6 +318,7 @@ STEP 1: goods_no confirmed?
     | 상품번호 | [goods_no] |
     맞으시면 '네'로 답해주세요. 다른 상품을 원하시면 알려주세요."
     → Wait for user confirmation before STEP 2
+    → If user wants a different product ("다른 상품", "다른 거", "볼게요", etc.) → route to Discovery immediately. Do NOT list or describe products yourself.
 
 STEP 2: ord_qty — always confirm with user
   - Even if ord_qty is in confirmed slots, always ask: "수량은 [N]개 맞으시죠? 변경이 필요하시면 말씀해 주세요."
@@ -531,7 +532,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
         "isAllMyT": <true|false from tool>,
         "todayInstall": <true|false from tool>,
         "tnaDelivery": <true|false from tool>,
-        "description": "<hours and contact from tool>"
+        "description": "**영업일:** <shop_biz_strt_wday>~<shop_biz_end_wday>\n**영업시간:** 주중 <shop_biz_strt_time>~<shop_biz_end_time>, 주말 <shop_sat_strt_time>~<shop_sat_end_time>\n**휴무일:** <holiday or 없음>\n**전화:** <tel_no from tool>"
       }}
     ],
     "metadata": [{{"shopId": "<shop_id from tool>"}}]
