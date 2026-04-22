@@ -17,13 +17,11 @@ from services.tstation.agents.router import (
     discovery_subagent,
     transaction_subagent,
     support_subagent,
-    QC_LLM,
 )
 from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.agent import invoke_qc
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 
 logger = logging.getLogger(__name__)
@@ -1271,59 +1269,15 @@ class TStationChatServiceV2:
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        # 2. RUN THE STRICT QC AGENT
-        # - Tool data exists AND draft has factual claims: verify against source data
-        # - No tool data (no tools called): skip QC — nothing to fact-check
-        # - No factual claims (greetings, FAQ): skip QC
+        # 2. QC AGENT DISABLED
+        # Keep the final assistant message as-is (after local sanitization) without
+        # invoking the strict QC agent.
         if draft_response.strip():
-            source_data_str = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved."
-            needs_qc = settings.AI_QC_ENABLED and bool(source_data_chunks) and _has_factual_claims(draft_response)
-
-            if needs_qc:
-                yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[QC AGENT]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
-
-                final_qc_text = ""
-                try:
-                    # FIX: Bulk invoke instead of streaming
-                    from config.tracing import build_trace_config
-
-                    qc_trace_config = build_trace_config(
-                        run_name="qc_agent",
-                        session_id=session_id,
-                        user_id=user_id,
-                        trace_id=trace_id,
-                        tags=["qc", "agent"],
-                    )
-                    qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data_str, config=qc_trace_config)
-
-                    if qc_result.strip().upper() == "PASS":
-                        final_qc_text = draft_response
-                        logger.info("[QC_AGENT] PASS — draft is factually correct")
-                    else:
-                        final_qc_text = qc_result
-                        logger.info("[QC_AGENT] Corrected draft response")
-
-                except Exception as e:
-                    logger.exception(f"[QC_AGENT] Failed: {e}")
-                    final_qc_text = draft_response  # fallback
-
-                # Sanitize: replace internal jargon with user-friendly fallback
-                final_qc_text = _sanitize_response(final_qc_text)
-
-                # 3. HISTORY & UI SYNC: Yield the final message event with QC'd content
-                # The frontend MUST use this event to overwrite the fast-streamed draft
-                if original_message_events:
-                    final_msg_event = original_message_events[-1]
-                    final_msg_event["content"] = final_qc_text
-                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
-            else:
-                # No factual claims (greetings, FAQ): skip QC, pass draft directly
-                draft_response = _sanitize_response(draft_response)
-                # Yield message event for history sync (not duplicate with token - different purpose)
-                if original_message_events:
-                    final_msg_event = original_message_events[-1]
-                    final_msg_event["content"] = draft_response
-                    yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
+            draft_response = _sanitize_response(draft_response)
+            if original_message_events:
+                final_msg_event = original_message_events[-1]
+                final_msg_event["content"] = draft_response
+                yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
         else:
             # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
             # if they actually contain text. We DO NOT want to save empty assistant
