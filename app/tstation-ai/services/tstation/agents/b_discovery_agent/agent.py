@@ -15,6 +15,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
+from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from common.curr_time import get_current_time
 
 
@@ -227,9 +228,11 @@ Trigger: User searches by name/keyword
 4. Show top 5 results; call get_product_description_tool for #1
 
 
-### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff)
+### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff or Price Cards)
 Trigger: User asks price OR stock by product NAME (goods_no unknown)
-Priority: search product FIRST, then hand straight over to Transaction WITH goods_no.
+Branching:
+- 1 result → declarative handoff (Coordinator auto-chains Transaction in the SAME turn).
+- Multiple results → fetch real prices and render `product` cards, then STOP for user selection.
 
 1. Translate product name → English
 2. Determine tire size:
@@ -237,12 +240,23 @@ Priority: search product FIRST, then hand straight over to Transaction WITH good
    b. Confirmed tire_size in slots (same vehicle) → use as fallback
    c. Neither → search without size
 3. search_product_tool(keyword, size=if_available)
-4. If 1 result → emit a short **declarative** confirmation line and proceed.
+4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+5. If EXACTLY 1 result → emit a short **declarative** confirmation line and proceed.
    ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [가격/재고] 조회로 이어갑니다 😊"
    ❌ Do NOT ask: "이 상품으로 진행할까요?" / "확인해 드릴까요?" — Coordinator auto-chains
    to Transaction in the SAME turn. A question wastes a user turn.
-5. If multiple → show shortlist, ask user to select → hand over after selection
-6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+   ❌ Do NOT fetch prices here — Transaction's get_final_price_tool handles the full
+   breakdown (base / discount / final). Calling get_final_price_tool in Discovery
+   would duplicate the downstream call.
+6. If MULTIPLE results (2~5, max 5) → fetch prices and render a shortlist for the user.
+   - Call get_final_price_tool(goods_no) for EACH item — call ALL in the SAME tool-use turn before answering
+   - Collect sale_prc from each response
+   - Render `product` template with real prices from these calls
+   ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete
+   ⚠️ NEVER use price=0 or price=null — if get_final_price_tool fails for an item, omit that item
+   ⚠️ Use sale_prc from get_final_price_tool response as `price` field
+   → STOP and wait for user to SELECT a product. Coordinator stops the chain
+   automatically because goods_no is not resolved (multi-result search).
 
 
 ### Flow D — Order Resolution (Search → Auto-Handoff to Transaction preview)
@@ -353,7 +367,7 @@ Hard rules:
 - Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
 - Single-car flow (user has exactly 1 registered car): NEVER use `listCar`. Use `quickReply` to confirm or auto-proceed.
 - Car-pick turn (multi-car): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
-- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields. Never invent URLs, prices, ratings, ids.
+- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
   Note: `car_no` is the user-visible license plate (e.g. "12가3456") — it is safe to show.
@@ -475,7 +489,7 @@ Backend → FE mapping for `product` (from `search_product_tool` / `get_products
 | `goods_nm` or `title`            | `title`                                                 |
 | derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`/`""`)         |
 | derive from comfort score        | `comfort` (`"높음"`/`"보통"`/`"낮음"`)                  |
-| `sale_prc`                       | `price` (int)                                           |
+| `sale_prc`                       | `price` (int or null — use `null` if `sale_prc` is missing/0; do NOT use 0 as fallback) |
 | `rate` or `review_rate`          | `rate` (float, 0.0 if missing)                          |
 | `stock_qty`                      | `totalQuantity` (int, 0 if missing)                     |
 | `goods_no`                       | `metadata[i].goodsId`                                   |
@@ -551,6 +565,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_deals_tool": "Price",
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
+        "get_final_price_tool": "Price",
     }
 
     def __init__(self, model):
@@ -570,6 +585,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_events_tool,
                 get_deals_tool,
                 compare_discount_tool,
+                get_final_price_tool,
             ],
             system_prompt=get_discovery_system_prompt,
             name="Discovery Agent",
