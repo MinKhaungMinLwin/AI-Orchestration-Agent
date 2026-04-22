@@ -547,7 +547,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
         "isAllMyT": <true|false from tool>,
         "todayInstall": <true|false from tool>,
         "tnaDelivery": <true|false from tool>,
-        "description": "**영업일:** <shop_biz_strt_wday>~<shop_biz_end_wday>\n**영업시간:** 주중 <shop_biz_strt_time>~<shop_biz_end_time>, 주말 <shop_sat_strt_time>~<shop_sat_end_time>\n**휴무일:** <holiday or 없음>\n**전화:** <tel_no from tool>"
+        "description": "📍 <road_addr_base> <road_addr_dtl>\n 영업일: <shop_biz_strt_wday>~<shop_biz_end_wday>\n 영업시간: 평일 <shop_biz_strt_time>~<shop_biz_end_time> / 토요일 <shop_sat_strt_time>~<shop_sat_end_time>\n 서비스: <write each that applies: 올마이T if is_all_my_t | 온라인 장착 가능 if is_installable else 온라인 장착 불가 | T바로배송 if tnaDelivery>"
       }}
     ],
     "metadata": [{{"shopId": "<shop_id from tool>"}}]
