@@ -515,6 +515,7 @@ Rules:
 1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
 2. `assistantResponse` must never be empty.
 3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation.
+   Exception — when `get_product_description_tool` was called: set `quickReplies` to an empty array `[]`. The user should be free to ask follow-up questions naturally instead of being guided by predefined chips.
 4. For data templates (`product`, `listCar`, `cheapestProduct`, `previewYoutube`): keep `assistantResponse` to 1–2 short Korean sentences; cards carry the detail. Do NOT also dump the items inside `assistantResponse`.
 5. Tool calls happen BEFORE this JSON block — the JSON block is your final answer after all tool results are gathered.
 """
