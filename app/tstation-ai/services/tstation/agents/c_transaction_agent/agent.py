@@ -62,6 +62,13 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 Immediately proceed to PRE-ORDER PREVIEW (Flow 6 STEP 5.5) using the selected date+time as bookingDateTime.
 Do NOT ask "무엇을 도와드릴까요?" or any other clarifying question.
 
+⚠️ PRICE IS MANDATORY for datepick trigger:
+Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
+- Check if a SUCCESSFUL `get_final_price_tool` result exists for the EXACT current `goods_no`.
+- If not → call `get_final_price_tool(goods_no)` in THIS SAME turn before emitting `preOrder`.
+- NEVER emit `preOrder` with `paymentAmount: null` unless STEP D fallback explicitly applies (tool failed or SP=null/0).
+- A datepick selection does NOT exempt you from price resolution. Price MUST be present in the card.
+
 
 ## GOODS_NO RESOLUTION
 Priority: (1) confirmed slot → (2) previous agent tool results → (3) user provides directly
