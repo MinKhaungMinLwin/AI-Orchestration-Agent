@@ -69,7 +69,7 @@ If multiple backend calls do not depend on each other, parallel execution can re
 
 ---
 
-## 6. Tool Result Caching
+## 6. Tool Result Caching ✅ Done
 
 **What is it?**
 Save the result of a tool call (e.g. fetch product price) in Redis. If the same tool is called again with the same input, return the saved result instead of calling the backend again.

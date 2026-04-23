@@ -5,6 +5,7 @@ from typing import Any
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
+from common.tool_cache import tool_cache
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 
 @tool
+@tool_cache(ttl=300)
 def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, brand_cd: str = "HK"):
     """
     상품 검색.
@@ -331,6 +333,7 @@ def get_my_cars_tool(mbr_no: str):
 
 
 @tool
+@tool_cache(ttl=3600)
 def search_car_model_tool(keyword: str, limit: int = 20):
     """
     차량 모델 검색 (car_lnc_cd 조회용).
@@ -373,6 +376,7 @@ def search_car_model_tool(keyword: str, limit: int = 20):
 
 
 @tool
+@tool_cache(ttl=3600)
 def search_car_model_groups_tool(keyword: str):
     """
     차종 모델 그룹 검색 — CAR MODEL DISPLAY step 1.
@@ -418,6 +422,7 @@ def search_car_model_groups_tool(keyword: str):
 
 
 @tool
+@tool_cache(ttl=3600)
 def get_car_trims_tool(car_model_det: str):
     """
     차량 트림 목록 조회 — CAR MODEL DISPLAY step 2.
@@ -460,6 +465,7 @@ def get_car_trims_tool(car_model_det: str):
 
 
 @tool
+@tool_cache(ttl=600)
 def get_product_description_tool(goods_no: str):
     """
     Get product description.
@@ -504,6 +510,7 @@ def get_product_description_tool(goods_no: str):
 
 
 @tool
+@tool_cache(ttl=300)
 def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None, car_lnc_cd: str | None = None, tire_size: str | None = None):
     """
     Product Recommendation
@@ -580,6 +587,7 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand
 
 
 @tool
+@tool_cache(ttl=600)
 def get_events_tool(lang_cd: str = "ko"):
     """이벤트 목록 조회
 
@@ -614,6 +622,7 @@ def get_events_tool(lang_cd: str = "ko"):
 
 
 @tool
+@tool_cache(ttl=600)
 def get_deals_tool():
     """기획전 목록 조회
 

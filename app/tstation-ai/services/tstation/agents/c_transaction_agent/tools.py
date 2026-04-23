@@ -1,4 +1,5 @@
 import logging
+from common.tool_cache import tool_cache
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -135,6 +136,7 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
 # =====================================================
 
 @tool
+@tool_cache(ttl=300)
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """
     Get product price and discount.
@@ -172,6 +174,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
 
 
 @tool
+@tool_cache(ttl=600)
 def get_available_coupons_tool(lang_cd: str = "ko"):
     """
     다운로드 가능 쿠폰 조회.
@@ -343,6 +346,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
 # =====================================================
 
 @tool
+@tool_cache(ttl=3600)
 def search_place_tool(query: str, size: int = 10):
     """
     위치 명칭 검색 (Kakao 키워드 검색)
@@ -463,6 +467,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 
 
 @tool
+@tool_cache(ttl=1800)
 def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 5, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
     """
     Get store list by region and/or store name.
