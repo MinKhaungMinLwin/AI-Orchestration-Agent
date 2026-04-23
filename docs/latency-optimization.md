@@ -89,7 +89,7 @@ Large logs cost CPU time to serialize, memory to build strings, and I/O time to 
 
 ---
 
-## 8. Singleton LLM Instance
+## 8. Singleton LLM Instance ✅ Done
 
 **What is it?**
 Create the AI model object **once** when the server starts, and reuse it for every request. Do not create a new object for each request.

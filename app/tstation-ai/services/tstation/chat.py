@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
     AgentDomain,
+    LLM as _router_llm,
     leading_agent,
     discovery_subagent,
     transaction_subagent,
@@ -316,17 +317,11 @@ class StreamingMultiAgentCoordinator:
         Returns:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
-        from langchain_litellm import ChatLiteLLM
         from langchain_core.messages import SystemMessage
         from config.tracing import build_trace_config
 
-        llm = ChatLiteLLM(
-            api_base=settings.AI_GATEWAY_BASE_URL,
-            api_key=settings.AI_GATEWAY_API_KEY,
-            model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
-        )
-
-        structured_model = llm.with_structured_output(
+        # Reuse singleton LLM from router.py — avoids creating a new object per request
+        structured_model = _router_llm.with_structured_output(
             MultiAgentDomain,
             strict=True,
         )
