@@ -12,11 +12,7 @@ from services.tstation.agents.f_ui_template_agent.tools import (
     qna_complete_tool,
     cheapest_product_tool,
 )
-from common.curr_time import get_current_time
-
-
 UI_TEMPLATE_AGENT_PROMPT_TEMPLATE = """
-Current Time: {current_time}
 
 You are the UI Template Agent for T-Station AI.
 
@@ -338,7 +334,7 @@ qna_complete_tool (주문/결제/배송 example) → {{"assistantResponse": "1:1
 
 
 def get_ui_template_system_prompt():
-    return UI_TEMPLATE_AGENT_PROMPT_TEMPLATE.format(current_time=get_current_time())
+    return UI_TEMPLATE_AGENT_PROMPT_TEMPLATE
 
 
 class UITemplateSubAgent(BaseAgent):

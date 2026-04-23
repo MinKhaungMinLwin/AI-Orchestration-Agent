@@ -16,12 +16,7 @@ from services.tstation.agents.b_discovery_agent.tools import get_product_descrip
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
-from common.curr_time import get_current_time
-
-
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
-{current_time}
-
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
 
@@ -548,7 +543,7 @@ Rules:
 
 
 def get_discovery_system_prompt():
-    return DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+    return DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 class DiscoverySubAgent(BaseAgent):

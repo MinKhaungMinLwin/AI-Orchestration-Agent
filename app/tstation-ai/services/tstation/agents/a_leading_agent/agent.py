@@ -1,14 +1,8 @@
-from common.curr_time import get_current_time
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import QuickReplyDataEvent
 
 
 SYSTEM_PROMPT_TEMPLATE = """
-Current Time Information:
-{current_time}
-
----
-
 You are the Leading Agent of the T-Station AI system.
 
 Internal Name: Leading Agent
@@ -469,7 +463,7 @@ Good quick reply examples:
 
 
 def get_system_prompt():
-    return SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+    return SYSTEM_PROMPT_TEMPLATE
 
 
 class LeadingAgent(BaseAgent):

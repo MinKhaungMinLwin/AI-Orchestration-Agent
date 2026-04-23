@@ -973,8 +973,11 @@ class TStationChatServiceV2:
             messages.insert(last_user_idx, user_context_msg)
             last_user_idx += 1
 
-        # Add Korean prefix to the current user message (now at last_user_idx)
-        messages[last_user_idx]["content"] = f"# Respond in Korean language\n{messages[last_user_idx]['content']}"
+        # Add Korean prefix + current time to the current user message (now at last_user_idx)
+        messages[last_user_idx]["content"] = (
+            f"# Respond in Korean language\n{messages[last_user_idx]['content']}"
+            f"\n\n[current_time: {get_current_time()}]"
+        )
 
         return messages
 

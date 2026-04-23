@@ -5,12 +5,7 @@ from services.tstation.agents.e_support_agent.tools import (
     transfer_to_qna_tool,
 )
 from services.tstation.agents.templates import SupportDataEvent
-from common.curr_time import get_current_time
-
-
 SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE = """
-{current_time}
-
 You are the Support Agent for Hankook Tire. Help customers with warranty, returns, policies, FAQ, and 1:1 inquiry escalation.
 Respond in Korean by default; English if the user writes in English.
 
@@ -120,7 +115,7 @@ Rules:
 
 
 def get_support_system_prompt():
-    return SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+    return SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 class SupportSubAgent(BaseAgent):

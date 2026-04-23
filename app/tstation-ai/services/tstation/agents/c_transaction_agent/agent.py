@@ -18,12 +18,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_order_status_tool,
     get_orders_of_user_tool,
 )
-from common.curr_time import get_current_time
-
-
 TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE = """
-{current_time}
-
 You are the Transaction Agent of T-Station AI (Hankook Tire).
 Handle: pricing, inventory, stores, reservations, ordering, order tracking.
 
@@ -785,7 +780,7 @@ For `orderComplete`:
 
 
 def get_transaction_system_prompt():
-    return TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE.format(current_time=get_current_time())
+    return TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 class TransactionSubAgent(BaseAgent):
