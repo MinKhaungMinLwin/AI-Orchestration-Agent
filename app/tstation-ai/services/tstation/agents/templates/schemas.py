@@ -6,7 +6,7 @@ returns the final FE payload in a guaranteed shape.
 
 from typing import Annotated, ClassVar, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TemplatePayload(BaseModel):
@@ -195,6 +195,11 @@ class ScheduleItem(BaseModel):
     available: bool
     availableTimes: list[int] = Field(default_factory=list)
     index: int
+
+    @field_validator("availableTimes")
+    @classmethod
+    def exclude_noon(cls, v: list[int]) -> list[int]:
+        return [t for t in v if t != 12]
 
 
 class DatepickTemplate(TemplatePayload):
