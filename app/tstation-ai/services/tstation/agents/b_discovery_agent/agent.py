@@ -69,7 +69,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | get_products_recommendations_tool | Recommend tires by tire_size |
 | search_product_tool | User searches by product name/keyword (translate Korean→English first) |
 | get_product_description_tool | Product details, after recommending top product |
-| compare_discount_tool | User asks "cheapest" / price comparison |
+| compare_discount_tool | User asks "cheapest" (cheapest-only) OR price comparison between multiple products |
 | check_compatibility_tool | ONLY if tire_size unknown AND user provides car_no + owner_nm |
 | search_youtube_video_tool | User asks for video reviews — call immediately, no clarification |
 | get_events_tool | User asks about 이벤트 |
@@ -356,7 +356,11 @@ Your ENTIRE response MUST be a single fenced JSON code block, and nothing else.
 Allowed templates: `quickReply`, `product`, `listCar`, `cheapestProduct`, `previewYoutube`.
 
 Template selection rules (apply in order, first match wins):
-1. `compare_discount_tool` was used and returned a cheapest option → `cheapestProduct`.
+1. `compare_discount_tool` was used:
+   - User intent is **comparison** (e.g. "비교해줘", "차이가 뭐야", "어느 게 나아", "둘 다 알려줘") → `quickReply`.
+     In `assistantResponse`: list ALL compared items with their prices/discounts, then conclude which is cheaper and why.
+     Format each item as: "**[상품명]**: 판매가 [sale_prc]원, 할인 [total_discount]원, 최종 [final_unit_price]원 × [quantity]개 = 총 [final_price]원"
+   - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
 3. The current turn needs the user to pick a car AND the user has 2+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar`.
 4. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`.
