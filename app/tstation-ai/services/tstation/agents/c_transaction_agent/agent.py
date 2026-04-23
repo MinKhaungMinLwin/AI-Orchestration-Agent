@@ -455,7 +455,7 @@ STEP D — fallback when price is unavailable:
 • In `assistantResponse` prose, if you mention any price value, it MUST be either
   (a) the computed `paymentAmount` you just placed in the JSON, stated identically, OR
   (b) a verbatim integer copy of the SP or DSC field — no combinations, no rounding.
-  Format as `{integer}원`. No "약", no "정도", no "~".
+  Format as `{{integer}}원`. No "약", no "정도", no "~".
 • Do NOT mention 공임비 / 공임 / wage in `assistantResponse`. It is not part of
   paymentAmount and surfacing it here only confuses the user.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
