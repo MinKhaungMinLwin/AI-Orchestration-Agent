@@ -225,7 +225,12 @@ Trigger: User searches by name/keyword
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
 3. search_product_tool(keyword, size=if_provided, brand_cd=detected)
-4. Show top 5 results; call get_product_description_tool for #1
+4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+5. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
+   - Use sale_prc from each response as the `price` field in the product template
+   - If get_final_price_tool fails for an item → use `null` for price (NEVER use 0)
+   ⚠️ NEVER render the product template before ALL get_final_price_tool calls complete
+6. Render `product` template with real prices. STOP and wait for user to SELECT a product.
 
 
 ### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff or Price Cards)
@@ -489,7 +494,7 @@ Backend → FE mapping for `product` (from `search_product_tool` / `get_products
 | `goods_nm` or `title`            | `title`                                                 |
 | derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`/`""`)         |
 | derive from comfort score        | `comfort` (`"높음"`/`"보통"`/`"낮음"`)                  |
-| `sale_prc`                       | `price` (int or null — use `null` if `sale_prc` is missing/0; do NOT use 0 as fallback) |
+| `sale_prc` from `get_final_price_tool` | `price` (int or null — use `null` if `sale_prc` missing/0; NEVER use 0 as fallback) |
 | `rate` or `review_rate`          | `rate` (float, 0.0 if missing)                          |
 | `stock_qty`                      | `totalQuantity` (int, 0 if missing)                     |
 | `goods_no`                       | `metadata[i].goodsId`                                   |
