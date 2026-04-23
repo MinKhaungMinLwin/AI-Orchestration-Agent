@@ -847,6 +847,82 @@ _INTERNAL_JARGON_PATTERN = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# Rule-Based Routing — fast-path classifier (no LLM call)
+# ---------------------------------------------------------------------------
+
+_GREETING_ONLY_RE = re.compile(
+    r"^[\s!?.]*"
+    r"(안녕|hi|hello|hey|하이|ㅎㅇ|안녕하세요|안녕하십시오|반가워|반갑습니다|xin\s*chào|chào)"
+    r"[\s!?.]*$",
+    re.IGNORECASE,
+)
+
+_SUPPORT_FAST_RE = re.compile(
+    r"환불|반품|보증|품질보증|워런티|warranty|"
+    r"AS\s*신청|A/S|사후\s*서비스|"
+    r"상담원|상담사|사람\s*연결|직원\s*연결|상담\s*연결|1:1\s*문의|1대1\s*문의|"
+    r"불만입니다|짜증나|화나|뭐\s*이런|제대로\s*해|엉망이|이딴",
+    re.IGNORECASE,
+)
+
+_TRANSACTION_FAST_RE = re.compile(
+    r"가격|얼마(?!나)|비용|할인|재고|입고|장착\s*가능|"
+    r"주문|구매|사고\s*싶|사려고|살래|쿠폰|장바구니|"
+    r"매장\s*찾|가까운\s*매장|근처\s*매장|올마이티|all\s*my\s*t",
+    re.IGNORECASE,
+)
+
+
+def _rule_based_classify(
+    last_user_text: str,
+    merged_slots,
+) -> "list[MultiAgentDomain.Domain] | None":
+    """Fast-path domain classifier using regex rules.
+
+    Returns a domain list when intent is unambiguous, or None to fall through
+    to the LLM classifier (classify_multi_intent).
+
+    Cases handled:
+      1. Pure greeting            → [LEADING]
+      2. Clear support keywords   → [SUPPORT]
+      3. goods_no in slots + transactional keyword in text → [TRANSACTION]
+      4. goods_no pattern in text + transactional keyword  → [TRANSACTION]
+    """
+    # DISABLED — set to True to re-enable rule-based routing
+    _RULE_BASED_ROUTING_ENABLED = False
+    if not _RULE_BASED_ROUTING_ENABLED:
+        return None
+
+    text = last_user_text.strip()
+    if not text:
+        return None
+
+    # Case 1: Pure greeting (short, no additional intent)
+    if _GREETING_ONLY_RE.match(text):
+        logger.info("[RULE_ROUTER] Greeting fast-path → LEADING")
+        return [MultiAgentDomain.Domain.LEADING]
+
+    # Case 2: Clear support / escalation keywords
+    if _SUPPORT_FAST_RE.search(text):
+        logger.info(f"[RULE_ROUTER] Support keyword fast-path → SUPPORT: {text[:60]!r}")
+        return [MultiAgentDomain.Domain.SUPPORT]
+
+    # Case 3: goods_no already in slots + transactional keyword in current turn
+    if merged_slots.goods_no and _TRANSACTION_FAST_RE.search(text):
+        logger.info(
+            f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION"
+        )
+        return [MultiAgentDomain.Domain.TRANSACTION]
+
+    # Case 4: goods_no pattern directly written in user text + transactional keyword
+    if re.search(r"G\d{9,}", text) and _TRANSACTION_FAST_RE.search(text):
+        logger.info("[RULE_ROUTER] goods_no literal in text + transactional keyword → TRANSACTION")
+        return [MultiAgentDomain.Domain.TRANSACTION]
+
+    return None
+
+
 def _sanitize_response(text: str) -> str:
     """Replace internal jargon with user-friendly fallback if response has no useful content."""
     stripped = text.strip()
@@ -1504,14 +1580,20 @@ class TStationChatServiceV2:
             slot_context = None
 
         # Domain classification (separate from slot processing — must not fail)
-        # Also injects conversation context (user_behavior, next_action, flow) into messages
-        domains, routing_result = _coordinator.classify_multi_intent(
-            messages,
-            session_id=request.session_id,
-            user_id=request.user_id,
-            trace_id=request.tracing_id,
-        )
-        messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+        # Try rule-based fast-path first; fall back to LLM classifier if undecided.
+        routing_result = None
+        fast_domains = _rule_based_classify(last_user_text, merged_slots)
+        if fast_domains is not None:
+            domains = fast_domains
+            # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+        else:
+            domains, routing_result = _coordinator.classify_multi_intent(
+                messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+            )
+            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
 
         # Post-classification redirect: when the user's current-turn reply was a
         # list-selection that just resolved goods_no (via step 3.8) and a
