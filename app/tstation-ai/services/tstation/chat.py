@@ -1609,7 +1609,7 @@ class TStationChatServiceV2:
                 if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
                 input_data = event.get("input", {})
-                output_data = event.get("output", "")
+                output_data = event.get("out`put", "")
                 source_parts = []
                 if input_data:
                     source_parts.append(f"Input: {json.dumps(input_data, ensure_ascii=False)}")
