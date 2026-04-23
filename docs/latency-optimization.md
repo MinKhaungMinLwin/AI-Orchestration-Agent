@@ -4,7 +4,7 @@ Ways to make the AI chatbot respond faster.
 
 ---
 
-## 1. Rule-Based Routing
+## 1. Rule-Based Routing ✅ Done but disable now
 
 **What is it?**
 For clear cases, skip the AI router and decide which agent to use using simple code rules — keyword matching, session state, or UI signals.
@@ -12,11 +12,14 @@ For clear cases, skip the AI router and decide which agent to use using simple c
 **Why it helps**
 The router (`classify_multi_intent`) makes one full AI call just to pick the right agent. If we already know the answer from context or keywords, this call is unnecessary.
 
-**Examples**
+**What was done**
+Added `_rule_based_classify()` in `chat.py`. It runs before `classify_multi_intent` and returns a domain immediately for 4 clear-intent cases:
+- Pure greeting (안녕/hi/hello) → `[LEADING]`
+- Support keywords (환불/AS/상담원/1:1 문의/불만) → `[SUPPORT]`
+- `goods_no` in slots + transactional keyword (가격/재고/주문) → `[TRANSACTION]`
+- `goods_no` literal in user text + transactional keyword → `[TRANSACTION]`
 
-- User clicks a "주문 조회" button on the UI → the intent is clearly TRANSACTION. The frontend can send `domain_hint: TRANSACTION` in the request → backend skips the router entirely.
-- User types "환불하고 싶어요" → the word "환불" is a clear SUPPORT keyword → route directly to SUPPORT agent, no AI call.
-- User previously said they want to book an appointment, and now types "225/45R18 벤투스" → the system already knows: find the product first (DISCOVERY), then book it (TRANSACTION) → no need to ask the AI router.
+If none match, falls through to the LLM classifier normally.
 
 ---
 
@@ -28,12 +31,9 @@ Use a smaller, faster AI model for tasks that do not need complex reasoning.
 **Why it helps**
 Smaller models respond faster. Not every step needs a powerful model.
 
-**Example**
-The router only needs to pick one of 4 domains (DISCOVERY, TRANSACTION, SUPPORT, LEADING). The QC agent only checks and rewrites a short answer. Both are simple tasks — a smaller model handles them just as well but responds faster than the full-size model used everywhere today.
-
 ---
 
-## 3. Prompt Caching
+## 3. Prompt Caching ✅ Done
 
 **What is it?**
 OpenAI saves (caches) the beginning part of a prompt if it is the same across requests. If the beginning never changes, OpenAI reuses the cached version and responds faster.
@@ -41,8 +41,11 @@ OpenAI saves (caches) the beginning part of a prompt if it is the same across re
 **Why it helps**
 Our agent system prompts are very long. If OpenAI can cache them, each request processes faster and costs less.
 
-**Example**
-Currently, the system prompt starts with: `"Current time: 2026-04-23 11:42:05 — You are TStation AI..."`. Because the timestamp changes every second, OpenAI never sees the same beginning → cache is never used. Fix: move the current time to the end of the user message so the system prompt stays stable and gets cached after the first request.
+**What was done**
+Removed `{current_time}` from the top of all 5 agent system prompts (`a_leading_agent`, `b_discovery_agent`, `c_transaction_agent`, `e_support_agent`, `f_ui_template_agent`). Moved it to the end of the user message in `chat.py` instead. This keeps the system prompt prefix static so OpenAI can cache it.
+
+**Verified**
+Langfuse shows `input_cache_read: 3,584` out of `3,985` input tokens (~90% cache hit) on support_agent calls.
 
 ---
 
@@ -54,9 +57,6 @@ Reuse one shared backend HTTP client instead of creating a new client for each t
 **Why it helps**
 Reusing the client avoids repeated connection setup and makes backend requests faster. Using `ContextVar` also prevents token mix-ups between concurrent users while keeping the fast shared client design safe.
 
-**Example**
-Without sharing: each tool call (e.g. `get_final_price_tool`, `search_product_tool`) creates its own HTTP client → repeated TCP handshakes and auth setup per call. With a shared client: one client is created once, all tool calls reuse it → only one connection setup per server lifecycle.
-
 ---
 
 ## 5. Tool Call Parallelization
@@ -66,9 +66,6 @@ Run independent tool calls at the same time instead of one after another.
 
 **Why it helps**
 If multiple backend calls do not depend on each other, parallel execution can reduce total waiting time from the sum of all calls to roughly the duration of the slowest one.
-
-**Example**
-User asks: "벤투스 S1 evo3 가격이랑 재고 알려줘" → the agent needs to call `get_final_price_tool` AND `get_logistics_inventory_tool`. These two calls do not depend on each other → run them in parallel → total wait time = slowest call, not both added together.
 
 ---
 
@@ -80,9 +77,6 @@ Save the result of a tool call (e.g. fetch product price) in Redis. If the same 
 **Why it helps**
 Each tool call makes an HTTP request to the backend. Calling the same tool twice in one conversation wastes time. Caching avoids the second round-trip.
 
-**Example**
-User asks the price of a tire → system calls `get_final_price_tool` → result saved in Redis for 60 seconds. Two messages later, the user asks the same price again → system reads from Redis instead of calling the backend → response is instant.
-
 ---
 
 ## 7. Reduce Hot-Path Logging
@@ -93,9 +87,6 @@ Reduce or remove large `INFO` logs on the main request path, especially logs tha
 **Why it helps**
 Large logs cost CPU time to serialize, memory to build strings, and I/O time to write them. On a chat system, this happens on every request, so trimming hot-path logs can reduce latency without changing business logic.
 
-**Example**
-Currently, some agents log the full message history (including all past conversation turns) on every request as `INFO`. This means building a large string and writing it to disk on every chat turn. Changing these to `DEBUG` level (disabled in production) removes the overhead without losing anything important.
-
 ---
 
 ## 8. Singleton LLM Instance
@@ -105,6 +96,3 @@ Create the AI model object **once** when the server starts, and reuse it for eve
 
 **Why it helps**
 Creating a new object every request wastes time and memory — it reads config, allocates memory, and may reset the HTTP connection. A single shared object only does this setup once.
-
-**Example**
-Currently, `classify_multi_intent` creates a new `ChatLiteLLM` object on every chat request. Under 100 concurrent users, 100 separate LLM objects are created at the same time. With a singleton, one object is created at server start and shared — no repeated setup cost.
