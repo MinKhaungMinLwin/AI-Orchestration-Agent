@@ -392,6 +392,74 @@ STEP 5B — 장바구니 (user chose option 2):
 
 **STEP 5.5 — Pre-order Preview (MANDATORY — never skip):**
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ PRICE RESOLUTION — MUST run BEFORE emitting `preOrder`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Goal: `orderInfo.paymentAmount` must be the TOTAL payment amount in KRW.
+The FE renders it verbatim with label "결제금액" and does NOT multiply by quantity.
+
+STEP A — fetch price (if not already present for THIS exact goods_no):
+  • If the current session already has a SUCCESSFUL `get_final_price_tool` result
+    for the EXACT `goods_no` being ordered → reuse it. Do NOT re-call.
+  • Otherwise → call `get_final_price_tool(goods_no)` in THIS turn BEFORE emitting
+    `preOrder`. That tool output is the ONE AND ONLY source of truth.
+  • The goods_no must match EXACTLY. A price from a similar/different goods_no is
+    NEVER acceptable, even if the product name looks alike.
+
+STEP B — identify the two required integer fields from the tool output:
+  Let:
+    SP  = tool.data.sale_prc              // 판매가 (per-unit, integer, KRW)
+    DSC = tool.data.extra_fvr_sale_prc    // 할인금액 (per-unit, integer, KRW; may be null/0)
+    QTY = orderInfo.quantity              // integer from the confirmed STEP 2 ord_qty
+
+  Rules for reading fields:
+  • Treat null/missing DSC as 0.
+  • If SP is null / missing / 0 → go to STEP D (fallback).
+  • NEVER use `extra_fvr_sale_per` (percent) for arithmetic. It is display-only.
+  • Do NOT read `wage_prc` or `wage_today_prc`. 공임비 is NOT part of paymentAmount.
+  • NEVER pull any of these fields from a prior turn whose goods_no differs.
+
+STEP C — compute paymentAmount with the EXACT formula:
+
+    unit_final    = SP - DSC                 // per-tire 최종 단가 (공임비 제외)
+    paymentAmount = unit_final * QTY         // 총 결제금액 (integer)
+
+  Arithmetic rules (STRICT — violation is a critical error):
+  • Use ONLY this formula. No other combination of fields.
+  • All operands are plain integers in KRW. Do NOT convert to 만원/천원.
+  • Do NOT round. Do NOT "approximate". Do NOT drop or add trailing zeros.
+  • DSC must be ≤ SP. If your read-in DSC is greater than SP, STOP — you almost certainly
+    mis-read the field (likely picked up `extra_fvr_sale_per` percent value by mistake).
+  • Digit-count check (MANDATORY): `unit_final` must have the same digit count as SP.
+    Example: SP=152000 (6 digits), DSC=10000 → unit_final=142000 (6 digits). If `unit_final`
+    differs from SP's digit count, STOP and recompute.
+  • Multiplication check (MANDATORY): after computing `paymentAmount = unit_final * QTY`,
+    verify by also computing `paymentAmount / QTY` and confirming it equals `unit_final`
+    exactly. If it does not match, STOP and recompute.
+  • Emit `paymentAmount` as a raw JSON integer (no currency symbol, no commas, no quotes).
+
+STEP D — fallback when price is unavailable:
+  Trigger: tool returned `status != "success"`, HTTP 404, or SP is null/missing/0.
+  • Set `paymentAmount: null`.
+  • In `assistantResponse`, append VERBATIM: "가격은 매장 방문 시 안내해드릴게요."
+  • Do NOT guess. Do NOT leave a stale number. Do NOT substitute from another goods_no.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ ANTI-FABRICATION — HARD BANS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• NEVER invent, estimate, round, or infer a price.
+• NEVER reuse a price whose source `goods_no` differs from the current one.
+• NEVER apply `extra_fvr_sale_per` as a percentage discount. Percent math is banned.
+• NEVER output a `paymentAmount` that did not come from STEP C's exact formula on
+  freshly read STEP B fields (or `null` via STEP D).
+• In `assistantResponse` prose, if you mention any price value, it MUST be either
+  (a) the computed `paymentAmount` you just placed in the JSON, stated identically, OR
+  (b) a verbatim integer copy of the SP or DSC field — no combinations, no rounding.
+  Format as `{integer}원`. No "약", no "정도", no "~".
+• Do NOT mention 공임비 / 공임 / wage in `assistantResponse`. It is not part of
+  paymentAmount and surfacing it here only confuses the user.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Show a plain Korean summary BEFORE calling any order tool.
 STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes", "네") in a SEPARATE turn.
 NEVER proceed to order tools in the same turn as showing the preview.
@@ -577,10 +645,21 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
         "description": "📍 <road_addr_base> <road_addr_dtl>\n 영업일: <shop_biz_strt_wday>~<shop_biz_end_wday>\n 영업시간: 평일 <shop_biz_strt_time>~<shop_biz_end_time> / 토요일 <shop_sat_strt_time>~<shop_sat_end_time>\n 서비스: <write each that applies: 올마이T if is_all_my_t | 온라인 장착 가능 if is_installable else 온라인 장착 불가 | T바로배송 if tnaDelivery>"
       }}
     ],
-    "metadata": [{{"shopId": "<shop_id from tool>"}}]
+    "metadata": [{{"shopId": "<shop_id from tool>"}}],
+    "isBookingFlow": <true|false>
   }}
 }}
 ```
+
+⚠️ `isBookingFlow` rule (FE click routing):
+- Set `true` when this `location` template is shown as PART OF a booking/order/stock flow — i.e., the user is expected to pick a store to advance the flow:
+  • Flow 6 STEP 5A step 3 (order: pick store → datepick)
+  • Flow 3 step 2~3 / Flow 3.5 (stock check → pick store → schedule)
+  • Any context where `pending_intent="주문 진행"` or `"재고 확인"` is set
+- Set `false` for pure info lookups where the card itself IS the answer:
+  • Flow 5 General (단순 매장 정보 조회)
+  • Flow 4 standalone nearby-stores info query (no order/stock context)
+- Default to `true` when in doubt — booking-flow misclassification is recoverable; info-only misclassification causes UX friction.
 
 `datepick` — schedule/slot results:
 ```json
@@ -611,7 +690,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
   "data": {{
     "assistantResponse": "<ask user to confirm the order details>",
     "orderInfo": {{
-      "carInfo": "<car_nm (car_no)>",
+      "carInfo": "<car_nm (car_no) | null if car_nm AND car_no are both missing — never emit literal 'null (null)' or 'None (None)'>",
       "product": "<goods_nm (goods_no)>",
       "quantity": <ord_qty>,
       "storeName": "<shop_nm (shop_id)>",
@@ -642,7 +721,7 @@ Your entire response MUST be a single fenced JSON code block, and nothing else.
   "data": {{
     "assistantResponse": "<success or failure message>",
     "orderInfo": {{
-      "carInfo": "<car_nm (car_no)>",
+      "carInfo": "<car_nm (car_no) | null if car_nm AND car_no are both missing — never emit literal 'null (null)' or 'None (None)'>",
       "product": "<goods_nm (goods_no)>",
       "quantity": <ord_qty>,
       "storeName": "<shop_nm (shop_id)>",

@@ -1215,6 +1215,98 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
+    def _resolve_shop_id_from_history_template(user_text: str, history: list[dict]) -> str | None:
+        """Match a user's list-selection reply against the metadata of the most
+        recent assistant message that rendered a `location` template.
+
+        Used as a fallback when prev_tool_data lookup fails (e.g., tool entry
+        was evicted, or filter_for_context never persisted it). The template
+        metadata is the authoritative source of "what stores were actually
+        shown to the user", so matching against it is more robust than against
+        raw tool output.
+
+        Expected history msg shape (from chat_history_service.get_history):
+            {"role": "assistant", "content": "...",
+             "template_data": {"type": "data", "template": "location",
+                               "data": {"stores": [{"nameAddress": "티스테이션 한남점", ...}],
+                                        "metadata": [{"shopId": "F07782"}]}}}
+
+        Matching strategy:
+          1. Ordinal at the start ("1.", "5번", "3)") → metadata[idx-1].shopId
+          2. Token-overlap against stores[].nameAddress — only resolves when
+             exactly ONE store has the top score
+        """
+        if not user_text or not history:
+            return None
+
+        text = user_text.strip()
+
+        # Find the most recent assistant message with a `location` template.
+        # Stop at the first such message; do not fall through to older lists,
+        # because the user's selection refers to the latest one shown.
+        target_template: dict | None = None
+        for msg in reversed(history):
+            if msg.get("role") != "assistant":
+                continue
+            td = msg.get("template_data")
+            if not isinstance(td, dict):
+                continue
+            if td.get("template") != "location":
+                continue
+            inner = td.get("data")
+            if isinstance(inner, dict):
+                target_template = inner
+            break
+
+        if not target_template:
+            return None
+
+        stores = target_template.get("stores") or []
+        metadata = target_template.get("metadata") or []
+        if not isinstance(stores, list) or not isinstance(metadata, list):
+            return None
+        if not stores or len(stores) != len(metadata):
+            return None
+
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        if ordinal_match:
+            idx = int(ordinal_match.group(1)) - 1
+            if 0 <= idx < len(metadata):
+                meta = metadata[idx]
+                if isinstance(meta, dict):
+                    shop_id = meta.get("shopId")
+                    if shop_id:
+                        return shop_id
+
+        tokens = [
+            t for t in re.findall(r"[A-Za-z가-힣]+", text)
+            if len(t) >= 2
+        ]
+        if tokens:
+            scored: list[tuple[int, dict]] = []
+            for store, meta in zip(stores, metadata):
+                if not isinstance(store, dict) or not isinstance(meta, dict):
+                    continue
+                name = (
+                    store.get("nameAddress")
+                    or store.get("name")
+                    or store.get("title")
+                    or ""
+                )
+                score = sum(1 for tok in tokens if tok in name)
+                if score > 0:
+                    scored.append((score, meta))
+            if scored:
+                max_score = max(s for s, _ in scored)
+                top = [meta for s, meta in scored if s == max_score]
+                if len(top) == 1:
+                    shop_id = top[0].get("shopId")
+                    if shop_id:
+                        return shop_id
+
+        return None
+
+    @staticmethod
     def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -1355,6 +1447,40 @@ class TStationChatServiceV2:
                         f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                         f"list-selection against prior store-list tool result"
                     )
+                else:
+                    # Diagnostic: log why prev_tool_data path didn't match.
+                    store_tool_entries = [
+                        e.get("tool") for e in prev_tool_data
+                        if e.get("tool") in ("get_nearby_stores_tool", "get_store_list_tool")
+                    ]
+                    logger.info(
+                        f"[SLOTS] shop_id resolver (tool path) no-match: "
+                        f"user_text={last_user_text[:60]!r}, "
+                        f"store_tool_entries={store_tool_entries}"
+                    )
+
+            # 3.91) Fallback: resolve shop_id from the metadata of the most recent
+            # assistant message that rendered a `location` template. This covers
+            # cases where prev_tool_data is missing or stale (e.g., the prior
+            # multi-store turn hit silent template-validation failure but the
+            # template_data was still persisted by chat_message.stream_chat_response).
+            # template_data shape (from chat_message.py):
+            #   {"type": "data", "template": "location",
+            #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
+            if merged_slots.shop_id is None:
+                try:
+                    history = chat_history_svc.get_history(request.session_id)
+                    resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
+                        last_user_text, history
+                    )
+                    if resolved_shop_id:
+                        merged_slots.shop_id = resolved_shop_id
+                        logger.info(
+                            f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
+                            f"list-selection against last `location` template metadata"
+                        )
+                except Exception as e:
+                    logger.warning(f"[SLOTS] history shop_id fallback failed: {e}")
 
             # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)

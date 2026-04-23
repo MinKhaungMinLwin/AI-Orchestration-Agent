@@ -159,6 +159,15 @@ class LocationTemplate(TemplatePayload):
     assistantResponse: str = Field(..., min_length=1)
     stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
     metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
+    # Routing hint for the FE click handler. When True, the FE should treat a
+    # store-card click as a flow-advancement signal and call /chat so the
+    # agent can return the next step (typically datepick). When False
+    # (default), the FE keeps the legacy /append shortcut that just shows the
+    # store's description bubble — appropriate for pure info lookups.
+    # Set True from booking/order/stock contexts (Flow 6 STEP 5A, Flow 3,
+    # Flow 3.5). Leave False for standalone store-info queries (Flow 5
+    # General, Flow 4 nearby-stores info).
+    isBookingFlow: bool = False
 
     @model_validator(mode="after")
     def validate_metadata_alignment(self):
@@ -214,7 +223,11 @@ class OrderInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    carInfo: str = Field(..., min_length=1)
+    # carInfo: 사용자가 차량 미등록인 상태로 주문/예약을 진행할 수 있어
+    # optional. FE는 빈 값을 "—"로 그래스풀 처리(chatbox-order-summary.js
+    # valOrDash). required로 두면 LLM이 빈 문자열을 채워 schema validation
+    # 실패 → silent terminator(\n\n)만 emit되어 다음 단계 진행이 막힌다.
+    carInfo: str | None = None
     product: str = Field(..., min_length=1)
     quantity: int = Field(..., ge=0)
     storeName: str = Field(..., min_length=1)

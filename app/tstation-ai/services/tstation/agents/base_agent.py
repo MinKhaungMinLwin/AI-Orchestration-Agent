@@ -18,6 +18,17 @@ T = TypeVar("T")
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 
 
+# Validation 실패 시 사용자에게 빈 화면(silent dead-end) 대신 보여줄 안내.
+# OUTPUT_TEMPLATE을 emit하려다 schema 검증이 깨진 경우, FE는 stream 종료
+# 토큰(\n\n)만 받아 "응답 없음"으로 보였다. quickReply로 fallback하면
+# 최소한 사용자가 다음 행동을 선택할 수 있다.
+_VALIDATION_FALLBACK_MESSAGE = (
+    "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
+    "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
+)
+_VALIDATION_FALLBACK_QUICK_REPLIES = ["다시 시도", "상담사 연결", "처음으로"]
+
+
 TOOL_DISPLAY_NAMES: dict[str, str] = {
     # Discovery
     "check_compatibility_tool": "차량-타이어 호환 확인 중...",
@@ -213,8 +224,38 @@ class BaseAgent(ABC):
                         "agent": self.name,
                     }
                 yield data_event
+            else:
+                # _build_data_event_from_text가 이미 error 로그를 남겼다.
+                # 여기서는 빈 \n\n만 보내는 대신 사용자에게 fallback quickReply를
+                # 노출해 silent dead-end UX를 방지한다.
+                if not answering_emitted:
+                    yield {"type": "status", "status": "답변 중..."}
+                    answering_emitted = True
+                yield from self._yield_validation_fallback()
 
         yield {"type": "token", "content": "\n\n"}
+
+    def _yield_validation_fallback(self):
+        """OUTPUT_TEMPLATE 검증 실패 시 사용자 가시 fallback 이벤트 시퀀스.
+
+        성공 경로(token → message → data)와 같은 형태로 emit하여
+        FE/coordinator가 일관되게 처리할 수 있게 한다.
+        """
+        message = _VALIDATION_FALLBACK_MESSAGE
+        yield {"type": "token", "content": message}
+        yield {
+            "type": "message",
+            "content": message,
+            "agent": self.name,
+        }
+        yield {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": message,
+                "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
+            },
+        }
 
     def _build_data_event(self, structured_response: BaseModel | dict | None) -> dict | None:
         """Convert structured response into the FE `data` event shape."""
