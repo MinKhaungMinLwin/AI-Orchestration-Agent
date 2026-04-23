@@ -221,7 +221,7 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
 
     Use this tool when:
     - User asks about their owned coupons
-    - User asks "내 쿠폰", "我的优惠券", "my coupons"
+    - User asks "내 쿠폰", "쿠폰 목록", "my coupons"
 
     Args:
         lang_cd (str): Language code (default: 'ko' for Korean).

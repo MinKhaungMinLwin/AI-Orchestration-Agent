@@ -127,7 +127,7 @@ class AgentDomain(BaseModel):
         - "장바구니에 담아줘"
         - "쿠폰 조회해줘"
         - "내 쿠폰 보여줘"
-        - "받을 수 있는 쿠폰有哪些?"
+        - "받을 수 있는 쿠폰 뭐가 있어?"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")

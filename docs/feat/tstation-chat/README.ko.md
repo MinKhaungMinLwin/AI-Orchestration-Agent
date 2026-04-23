@@ -12,7 +12,7 @@ T-Station AI는 Hankook Tire Korea를 위한 지능형 타이어 쇼핑 어시�
 - ✅ 자동 다중 도메인 분류 (leading, discovery, pricing, order, support)
 - ✅ 스트리밍 및 논-스트리밍 모드 지원
 - ✅ LiteLLM과 LangChain 에이전트 통합
-- ✅ GPT-5.4를 LLM으로 사용 (AI Gateway経由)
+- ✅ GPT-5.4를 LLM으로 사용 (AI Gateway 경유)
 - ✅ Langfuse 추적 통합
 - ✅ 백엔드 API 통합 (Oracle DB)
 - ✅ BaseAgent와 TOOL_TO_AF_MAP을 통한 에이전트 기능 추적
@@ -151,7 +151,7 @@ class BaseAgent(ABC):
 
 ### 2. TStationChatService
 
-모든 채팅 작업을 처리하는メイン 서비스 클래스입니다.
+모든 채팅 작업을 처리하는 메인 서비스 클래스입니다.
 
 #### 메소드
 
