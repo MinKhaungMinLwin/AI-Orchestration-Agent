@@ -2,7 +2,7 @@
 
 ## 🎯 Overview
 
-Bạn đã hoàn thành triển khai RAG cho Support Agent. Hướng dẫn này giới thiệu **cách tích hợp vào luồng chat thực tế** và **điều chỉnh để production**.
+You have completed the RAG implementation for the Support Agent. This guide explains **how to integrate it into the real chat flow** and **how to tune it for production**.
 
 ---
 

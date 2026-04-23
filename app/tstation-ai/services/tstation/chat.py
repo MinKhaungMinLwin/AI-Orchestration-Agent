@@ -451,8 +451,7 @@ class StreamingMultiAgentCoordinator:
                     new_slots.pending_intent = None
                     svc.save_slots(session_id, new_slots)
                     logger.info(
-                        f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} "
-                        f"after {tool_name} completed successfully"
+                        f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
                     )
             except Exception as e:
                 logger.warning(f"[SLOTS] Failed to clear pending_intent: {e}")
@@ -755,9 +754,7 @@ class StreamingMultiAgentCoordinator:
                             post_slots = get_chat_history_service().get_slots(session_id)
                             goods_no_resolved = post_slots.goods_no is not None
                         except Exception as e:
-                            logger.warning(
-                                f"[COORDINATOR] Failed to verify goods_no post-Discovery: {e}"
-                            )
+                            logger.warning(f"[COORDINATOR] Failed to verify goods_no post-Discovery: {e}")
                     if not goods_no_resolved:
                         logger.info(
                             "[COORDINATOR] skip_decision=True but Discovery did not resolve "
@@ -848,7 +845,7 @@ _INTERNAL_JARGON_PATTERN = re.compile(
 
 _GREETING_ONLY_RE = re.compile(
     r"^[\s!?.]*"
-    r"(안녕|hi|hello|hey|하이|ㅎㅇ|안녕하세요|안녕하십시오|반가워|반갑습니다|xin\s*chào|chào)"
+    r"(안녕|hi|hello|hey|하이|ㅎㅇ|안녕하세요|안녕하십시오|반가워|반갑습니다)"
     r"[\s!?.]*$",
     re.IGNORECASE,
 )
@@ -905,9 +902,7 @@ def _rule_based_classify(
 
     # Case 3: goods_no already in slots + transactional keyword in current turn
     if merged_slots.goods_no and _TRANSACTION_FAST_RE.search(text):
-        logger.info(
-            f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION"
-        )
+        logger.info(f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION")
         return [MultiAgentDomain.Domain.TRANSACTION]
 
     # Case 4: goods_no pattern directly written in user text + transactional keyword
@@ -1177,13 +1172,9 @@ class TStationChatServiceV2:
             # filter_for_context keeps `tire_size_1`; include legacy aliases
             # for safety if another path ever stores the raw field name.
             same_size = [
-                item for item in items
-                if (
-                    item.get("tire_size_1")
-                    or item.get("tire_size")
-                    or item.get("tireSize")
-                    or ""
-                ) == target_size
+                item
+                for item in items
+                if (item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize") or "") == target_size
             ]
 
             if len(same_size) == 1:
@@ -1192,10 +1183,7 @@ class TStationChatServiceV2:
                     return goods_no
 
             if len(same_size) >= 2:
-                tokens = [
-                    t.lower() for t in re.findall(r"[A-Za-z가-힣]+", text)
-                    if len(t) >= 2
-                ]
+                tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
                 best_item: dict | None = None
                 best_score = 0
                 for item in same_size:
@@ -1267,10 +1255,7 @@ class TStationChatServiceV2:
         # Token-overlap match against shop_nm. Require a unique top-scoring
         # store to avoid auto-resolving ambiguous replies like a bare "한남점"
         # that could match several brands at the same address area.
-        tokens = [
-            t for t in re.findall(r"[A-Za-z가-힣]+", text)
-            if len(t) >= 2
-        ]
+        tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
         if tokens:
             scored: list[tuple[int, dict]] = []
             for item in items:
@@ -1352,21 +1337,13 @@ class TStationChatServiceV2:
                     if shop_id:
                         return shop_id
 
-        tokens = [
-            t for t in re.findall(r"[A-Za-z가-힣]+", text)
-            if len(t) >= 2
-        ]
+        tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
         if tokens:
             scored: list[tuple[int, dict]] = []
             for store, meta in zip(stores, metadata):
                 if not isinstance(store, dict) or not isinstance(meta, dict):
                     continue
-                name = (
-                    store.get("nameAddress")
-                    or store.get("name")
-                    or store.get("title")
-                    or ""
-                )
+                name = store.get("nameAddress") or store.get("name") or store.get("title") or ""
                 score = sum(1 for tok in tokens if tok in name)
                 if score > 0:
                     scored.append((score, meta))
@@ -1469,11 +1446,7 @@ class TStationChatServiceV2:
             # regex_slots alone — it has to happen here after the merge.
             user_asked_for_recommend = ConversationSlots.has_recommend_intent(last_user_text)
             turn_has_new_transactional = regex_slots.pending_intent is not None
-            if (
-                merged_slots.pending_intent is not None
-                and user_asked_for_recommend
-                and not turn_has_new_transactional
-            ):
+            if merged_slots.pending_intent is not None and user_asked_for_recommend and not turn_has_new_transactional:
                 logger.info(
                     f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
                     f"— user switched back to recommendation"
@@ -1512,9 +1485,7 @@ class TStationChatServiceV2:
             # this resolver the LLM tends to re-run get_store_list_tool and stall at the
             # location template instead of progressing to datepick.
             if merged_slots.shop_id is None and prev_tool_data:
-                resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(
-                    last_user_text, prev_tool_data
-                )
+                resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(last_user_text, prev_tool_data)
                 if resolved_shop_id:
                     merged_slots.shop_id = resolved_shop_id
                     logger.info(
@@ -1524,7 +1495,8 @@ class TStationChatServiceV2:
                 else:
                     # Diagnostic: log why prev_tool_data path didn't match.
                     store_tool_entries = [
-                        e.get("tool") for e in prev_tool_data
+                        e.get("tool")
+                        for e in prev_tool_data
                         if e.get("tool") in ("get_nearby_stores_tool", "get_store_list_tool")
                     ]
                     logger.info(

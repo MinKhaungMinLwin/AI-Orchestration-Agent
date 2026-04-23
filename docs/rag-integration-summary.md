@@ -2,8 +2,8 @@
 
 ## 🎯 Objective Completed
 
-**Yêu cầu gốc:** 
-> "Triển khai RAG để hỗ trợ cho FAQ tool, hướng dẫn từng bước triển khai, test RAG với agent, và tích hợp vào tool + support agent/prompt thật"
+**Original request:**
+> "Implement RAG to support the FAQ tool, provide step-by-step implementation guidance, test RAG with the agent, and integrate it into the real tool + support agent/prompt"
 
 **Status:** ✅ **COMPLETE & PRODUCTION-READY**
 

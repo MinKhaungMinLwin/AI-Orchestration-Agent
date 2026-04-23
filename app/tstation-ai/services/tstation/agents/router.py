@@ -26,20 +26,25 @@ REASONING_LLM = ChatLiteLLM(
 ### Multi-Agent Router
 # Leading Agent
 from services.tstation.agents.a_leading_agent.agent import LeadingAgent
+
 leading_agent = LeadingAgent(REASONING_LLM)
 # Discovery Agent
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
+
 discovery_subagent = DiscoverySubAgent(REASONING_LLM)
 # Transaction Agent (merged PRICING + ORDER)
 from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
+
 transaction_subagent = TransactionSubAgent(REASONING_LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
+
 support_subagent = SupportSubAgent(REASONING_LLM)
 
 # UI Template Agent (uses AI_MODEL for fast template rendering)
 from services.tstation.agents.f_ui_template_agent.agent import UITemplateSubAgent
+
 ui_template_subagent = UITemplateSubAgent(LLM)
 
 # QC Agent LLM (lightweight model, temperature=0.0 for deterministic fact-checking)
@@ -49,6 +54,7 @@ QC_LLM = ChatLiteLLM(
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL}",
     temperature=0.0,
 )
+
 
 ## Router
 class AgentDomain(BaseModel):
@@ -148,7 +154,7 @@ class AgentDomain(BaseModel):
         Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "짜증나", "다른 상담원 연결해줘"
 
         LEADING if:
-        - Just greeting ("hello", "hi", "xin chào", "안녕하세요")
+        - Just greeting ("hello", "hi", "안녕하세요")
         - No clear goal or action requested
         - General capability questions ("what can you do")
         Examples: "Hi", "What can you help me with?", "Hello"

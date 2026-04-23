@@ -42,7 +42,7 @@ class S3Handler:
     # ---------- Validation ----------
     def validate(self, url_or_key: str, allowed_content_type: list[str], max_size: int) -> dict:
         if self._is_presigned_url(url_or_key):
-            # Validate presigned URL bằng HTTP HEAD
+            # Validate the presigned URL with an HTTP HEAD request
             resp = requests.head(url_or_key)
             if resp.status_code != 200:
                 raise ValueError(f"Cannot access presigned URL: {resp.status_code} {resp.text}")

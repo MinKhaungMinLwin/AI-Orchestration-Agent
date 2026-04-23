@@ -2,7 +2,7 @@
 
 ## Overview
 
-Hướng dẫn này giải thích cách triển khai **Retrieval-Augmented Generation (RAG)** cho FAQ Support Agent của T-Station Hankook Tire. RAG cho phép xử lý lượng lớn dữ liệu FAQ mà không bị giới hạn 200 ký tự của API cũ.
+This guide explains how to implement **Retrieval-Augmented Generation (RAG)** for the T-Station Hankook Tire FAQ Support Agent. RAG makes it possible to handle large FAQ datasets without being constrained by the old API's 200-character limit.
 
 ## Architecture
 
