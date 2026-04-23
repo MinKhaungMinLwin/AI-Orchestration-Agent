@@ -34,7 +34,7 @@ Our agent system prompts are very long. If OpenAI can cache them, each request p
 
 ---
 
-## 6. Tool Result Caching ✅ Done
+## 4. Tool Result Caching ✅ Done
 
 **What is it?**
 Save the result of a tool call (e.g. fetch product price) in Redis. If the same tool is called again with the same input, return the saved result instead of calling the backend again.
@@ -44,7 +44,7 @@ Each tool call makes an HTTP request to the backend. Calling the same tool twice
 
 ---
 
-## 8. Singleton LLM Instance ✅ Done
+## 5. Singleton LLM Instance ✅ Done
 
 **What is it?**
 Create the AI model object **once** when the server starts, and reuse it for every request. Do not create a new object for each request.
