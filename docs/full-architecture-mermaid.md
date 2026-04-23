@@ -1,9 +1,9 @@
 # T-Station AI Full Architecture (Mermaid)
 
-This document compiles two important architecture diagrams into one place:
+This document compiles two important architecture diagrams:
 
-1. Overall System Design (service, data, integrations).
-2. AI orchestration + end-to-end tire purchase flow.
+1. Overall System Design (services, data, integrations).
+2. AI orchestration + end-to-end chat flow.
 
 ## 1) Architecture Diagram (System Design)
 
@@ -16,58 +16,52 @@ flowchart TB
       UI --> U
     end
 
-    subgraph AI["tstation-ai FastAPI"]
-      EP[Chat Endpoint<br/>POST /tstation/messages/chat]
-      SESS[Session APIs<br/>/tstation/messages/sessions<br/>/history/{session_id}]
-      CS[TStationChatServiceV2<br/>classify_multi_intent → stream → QC]
-      HS[ChatHistoryService]
+    subgraph AI["tstation-ai FastAPI :9000"]
+      EP[Chat Endpoint<br/>POST /tstation/chat]
+      CS[TStationChatService<br/>StreamingMultiAgentCoordinator]
+      HS[ChatHistoryService<br/>Redis: history / slots / tool_ctx]
       EP --> CS
-      SESS --> HS
       CS --> HS
     end
 
-    subgraph Agents["Multi-Agent Layer (orchestrated by Coordinator)"]
-      CO[StreamingMultiAgentCoordinator<br/>decide_next_action]
-      L[a_leading_agent<br/>no tools]
-      D[b_discovery_agent]
-      T[c_transaction_agent]
-      S[e_support_agent]
-      UT[f_ui_template_agent]
-      CO -->|domain=LEADING| L
-      CO -->|domain=DISCOVERY| D
-      CO -->|domain=TRANSACTION| T
-      CO -->|domain=SUPPORT| S
-      CO -->|after agents, if tool data| UT
+    subgraph Agents["Multi-Agent Layer"]
+      CO[StreamingMultiAgentCoordinator<br/>classify_multi_intent → route → decide_next_action]
+      L[a_leading_agent<br/>no tools — pure LLM]
+      D[b_discovery_agent<br/>product search / compat / price]
+      T[c_transaction_agent<br/>store / booking / orders]
+      S[e_support_agent<br/>FAQ RAG / escalation]
+      UT[f_ui_template_agent<br/>UI card rendering]
+      QC["g_qc_agent<br/>fact-check ⚠️ DISABLED"]
+      CO -->|LEADING| L
+      CO -->|DISCOVERY| D
+      CO -->|TRANSACTION| T
+      CO -->|SUPPORT| S
+      CO -->|tool data & no direct data event| UT
     end
 
-    QC[g_qc_agent<br/>fact-check draft vs tools]
-
     subgraph External
-      LLM[LiteLLM / AI Gateway]
-      REDIS[(Redis: history/slots/tool_ctx)]
-      QDRANT[(Qdrant: RAG)]
-      BE[tstation-be APIs via OpenAPI client]
+      GW[LiteLLM AI Gateway<br/>GPT-5.4-reasoning / GPT-5.4 / GPT-4o-mini]
+      REDIS[(Redis<br/>history / slots / tool_ctx)]
+      QDRANT[(Qdrant<br/>FAQ RAG)]
+      BE[tstation-be APIs<br/>OpenAPI client]
       ORACLE[(Oracle DB)]
-      LANG[Langfuse<br/>global config/tracing]
+      LANG[Langfuse<br/>tracing]
     end
 
     subgraph Ingestion["tstation-ingestion"]
-      ING[Ingestion Service]
+      ING[FAQ Ingestion → Qdrant]
     end
 
-    UI -->|POST /api/tstation/messages/chat SSE| EP
-    UI -->|GET/DELETE session APIs| SESS
-    EP -->|SSE: token/tool/data/message + DONE| UI
+    UI -->|POST /api/tstation/chat SSE| EP
+    EP -->|SSE: token/tool/data/message/DONE| UI
 
-    CS -->|1. classify + inject context| CO
-    CS -->|3. fact-check after CO done| QC
-
-    L --> LLM
-    D --> LLM
-    T --> LLM
-    S --> LLM
-    UT --> LLM
-    QC --> LLM
+    CS --> CO
+    L --> GW
+    D --> GW
+    T --> GW
+    S --> GW
+    UT --> GW
+    QC -.->|disabled| GW
 
     HS --> REDIS
     S --> QDRANT
@@ -75,8 +69,7 @@ flowchart TB
     T --> BE
     S --> BE
     BE --> ORACLE
-    AI -.->|global init| LANG
-
+    AI -.->|tracing| LANG
     ING --> QDRANT
 ```
 
@@ -86,9 +79,9 @@ flowchart TB
 sequenceDiagram
     autonumber
     participant U as User/UI
-    participant API as POST /tstation/messages/chat
+    participant API as POST /tstation/chat
     participant R as Redis
-    participant V2 as TStationChatServiceV2
+    participant CS as TStationChatService
     participant CO as StreamingMultiAgentCoordinator
     participant L as a_leading_agent
     participant D as b_discovery_agent
@@ -97,76 +90,80 @@ sequenceDiagram
     participant UT as f_ui_template_agent
     participant B as tstation-be APIs
     participant QDRANT as Qdrant RAG
-    participant QC as g_qc_agent
 
-    U->>API: Chat request (message, session, access_token, stream)
-    API->>R: save user message to Redis history
-    API->>V2: TStationChatServiceV2.chat(request)
+    U->>API: Chat request (message, session_id, access_token, stream=true)
+    API->>R: save user message to history
+    API->>CS: TStationChatService.chat(request)
 
-    Note over V2: set_tstation_be_token → PII guardrail check
-    V2->>R: load template_data + slots + tool_context
-    V2->>R: merge/save slots
+    Note over CS: set_tstation_be_token → PII guardrail check
+    CS->>R: load history + template_data + slots + tool_context
+    CS->>R: merge/save slots (goods_no, tire_size, shop_id, qty)
 
-    V2->>CO: classify_multi_intent(messages)
-    CO-->>V2: ordered domain list e.g. [DISCOVERY, TRANSACTION]
-    Note over V2: inject CONVERSATION CONTEXT into last user message
+    CS->>CO: classify_multi_intent(messages)
+    CO-->>CS: domain list e.g. [DISCOVERY] + routing context
+    Note over CS: inject CONVERSATION CONTEXT into last user message<br/>(user_behavior, next_action, flow)
 
-    V2->>CO: stream(messages, domains, slot_context, tool_context)
+    CS->>CO: stream(messages, domains, slot_context, tool_context)
 
-    alt domain = LEADING (greeting / unclear intent / small talk)
+    alt domain = LEADING
         CO->>L: stream(enriched_messages)
-        Note over L: No tools — pure LLM conversational response
-        L-->>CO: token stream + message event
+        Note over L: No tools — pure LLM response
+        L-->>CO: token + message events
     end
 
-    alt domain = DISCOVERY (product search, recommendation, compatibility)
+    alt domain = DISCOVERY
         CO->>D: stream(enriched_messages)
-        D->>B: search_product / check_compatibility / get_recommendations / get_description / get_events / get_deals / compare_discount / search_youtube
-        B-->>D: product data (goods_no, tire_size, etc.)
-        D-->>CO: tool events + token stream + message event
-        CO->>R: save slot(goods_no, tire_size, shop_id) from tool output
+        D->>B: search_product / check_compatibility / get_recommendations<br/>get_final_price / get_events / get_deals / compare_discount / search_youtube
+        B-->>D: product + price data
+        D-->>CO: tool events + token + message events
     end
 
-    Note over CO: decide_next_action() — LLM decides STOP or CONTINUE after first agent
+    Note over CO: decide_next_action() — STOP or CONTINUE
+
     alt CONTINUE → TRANSACTION
-        CO->>T: stream(enriched_messages + handover context + accumulated_tool_data)
-        T->>B: get_final_price / get_logistics_inventory / get_store_inventory / get_nearby_stores / quick_order / save_to_cart
-        B-->>T: commerce data + order/cart result
-        T-->>CO: tool events + token stream + message event
-        CO->>R: update tool context
+        CO->>T: stream(enriched_messages + context + accumulated_tool_data)
+        T->>B: get_final_price / get_store_list / get_store_schedule<br/>quick_order / save_to_cart / get_order_status
+        B-->>T: commerce data + order results
+        T-->>CO: tool events + token + message events
     end
 
-    alt domain = SUPPORT (FAQ / warranty / escalation)
+    alt domain = SUPPORT
         CO->>S: stream(enriched_messages)
         S->>B: get_faq / escalate
-        S->>QDRANT: search_faq_rag_tool (RAG)
+        S->>QDRANT: search_faq_rag_tool
         B-->>S: support data
-        S-->>CO: tool events + token stream + message event
-        Note over CO: Support domain → always STOP, skip decide_next_action
+        S-->>CO: tool events + token + message events
+        Note over CO: Support → always STOP
     end
 
-    alt tool data exists AND (non-support tools OR qna transfer)
-        Note over CO,UT: V2 emits waiting event before UT starts
-        CO->>UT: stream_template(ui_messages + accumulated_tool_data)
-        UT-->>CO: data events (UI templates for frontend)
+    alt agent called tools AND no direct data event emitted
+        CO->>UT: stream(messages + accumulated_tool_data)
+        UT-->>CO: data events (UI templates for FE)
     end
 
-    CO-->>V2: all events (tokens intercepted by V2; tool/data/sub-agent passed through)
+    CO-->>CS: all events streamed
 
-    Note over V2: QC Layer — called by V2, NOT by Coordinator
-    alt tool data exists AND draft has factual claims
-        V2->>QC: stream_qc(user_query, draft_response, source_data)
-        alt QC PASS
-            QC-->>V2: "PASS" → keep draft as final
-        else QC CORRECT
-            QC-->>V2: corrected token stream → override draft
-        end
-    else no factual claims (greeting, FAQ only)
-        Note over V2: skip QC — pass draft directly
-    end
+    Note over CS: QC DISABLED — skip fact-check
+    CS->>CS: _sanitize_response() — remove backend jargon
 
-    V2->>R: save tool_context_items for next turn
-    V2-->>U: SSE: agent_flow / sub-agent / tool / token / data / message events
-    V2-->>U: {"type": "DONE"}
-    V2-->>U: data: [DONE]
+    CS->>R: save tool_context_items for next turn
+    CS-->>U: SSE: agent_flow / sub-agent / tool / token / data / message events
+    CS-->>U: {"type": "DONE"}
+    CS-->>U: data: [DONE]
+```
+
+## 3) SSE Event Schema (FE Contract)
+
+```
+data: {"type": "agent_flow",  "agent": "[응답 생성 중]",   "status": "processing"}
+data: {"type": "status",      "status": "생각 중..."}
+data: {"type": "status",      "status": "tool_start", "tool": "search_product_tool", "display_name": "상품 검색 중..."}
+data: {"type": "agent_flow",  "agent": "[PRICE AF]",        "status": "success"}
+data: {"type": "token",       "content": "안녕하세요..."}
+data: {"type": "tool",        "tool": "get_final_price_tool", "input": {...}, "output": "..."}
+data: {"type": "message",     "content": "...", "agent": "[TRANSACTION AGENT]"}
+data: {"type": "data",        "template": "product", "data": {"assistantResponse": "...", "meta": {...}, "items": [...]}}
+data: {"type": "sub-agent",   "agent": "[DONE]",            "status": "success"}
+data: {"type": "DONE"}
+data: [DONE]
 ```

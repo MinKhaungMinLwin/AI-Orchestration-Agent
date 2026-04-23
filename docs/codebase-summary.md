@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a summary of the T-Station AI codebase structure. The project consists of three main components.
+T-Station AI is a conversational commerce chatbot for Hankook Tire Korea. Multi-agent architecture built with FastAPI + LangGraph, streaming SSE responses to frontend.
 
 ## Service Ports
 
@@ -23,24 +23,35 @@ tstation-ai/
 │   │   │   ├── router.py         # Main router
 │   │   │   └── tstation/        # Chat endpoints
 │   │   ├── common/               # Shared utilities
-│   │   ├── config/               # Configuration
+│   │   │   ├── jwt_utils.py      # JWT for BE token
+│   │   │   ├── curr_time.py      # Current time helper
+│   │   │   ├── detect_language.py
+│   │   │   └── tstation_be_api_client/  # Generated OpenAPI client
+│   │   ├── config/               # Configuration (env.py, tracing.py)
 │   │   ├── schemas/              # Pydantic models
-│   │   ├── services/
-│   │   │   └── tstation/
-│   │   │       ├── agents/      # AI Agents
-│   │   │       │   ├── base_agent.py      # Base class
-│   │   │       │   ├── a_leading_agent/
-│   │   │       │   ├── b_discovery_agent/
-│   │   │       │   ├── c_transaction_agent/
-│   │   │       │   ├── e_support_agent/
-│   │   │       │   └── router.py
-│   │   │       └── chat.py
-│   │   └── main.py              # Entry point
-│   ├── tstation-be/             # Backend service
-│   │   ├── app/routers/        # API routers
-│   │   └── main.py
-│   └── tstation-ui-demo/        # Demo UI
-│       └── Home.py
+│   │   └── services/
+│   │       └── tstation/
+│   │           ├── agents/      # AI Agents
+│   │           │   ├── base_agent.py          # Base class (streaming + events)
+│   │           │   ├── router.py              # LLM instances + agent singletons
+│   │           │   ├── a_leading_agent/       # Greeting / unclear intent
+│   │           │   ├── b_discovery_agent/     # Product search, recommendations
+│   │           │   ├── c_transaction_agent/   # Price, store, booking, orders
+│   │           │   ├── e_support_agent/       # FAQ, warranty, escalation (RAG)
+│   │           │   ├── f_ui_template_agent/   # UI card rendering
+│   │           │   ├── g_qc_agent/            # QC fact-check (DISABLED)
+│   │           │   └── templates/             # Pydantic schemas for FE templates
+│   │           ├── common/
+│   │           │   ├── pii_guardrail.py       # PII check before processing
+│   │           │   └── tstation_be_client.py  # BE token injection
+│   │           ├── chat_history_service.py    # Redis history/slots/tool_context
+│   │           ├── chat.py                    # Main coordinator + stream pipeline
+│   │           └── template_mapper.py         # tool → UI template mapping
+│   ├── tstation-be-openapi.json               # OpenAPI spec for BE
+│   ├── tstation-ingestion/       # FAQ ingestion into Qdrant
+│   └── tstation-ui-demo/         # Streamlit demo UI
+├── docker/
+│   └── config/llm/conf-gateway.yaml  # LiteLLM gateway model config
 ├── docs/                        # Documentation
 └── pyproject.toml
 ```
@@ -49,107 +60,118 @@ tstation-ai/
 
 ### BaseAgent (base_agent.py)
 
-All agents inherit from the `BaseAgent` class:
+All agents inherit from `BaseAgent`:
 
 ```python
 class BaseAgent(ABC):
-    TOOL_TO_AF_MAP: dict[str, str] = {}  # Tool to Agent Function mapping
+    TOOL_TO_AF_MAP: dict[str, str] = {}      # Tool → AF display name
+    TOOL_TO_TEMPLATE_MAP: dict[str, str] = {} # Tool → UI template type
+    RESPONSE_FORMAT: type[BaseModel] | None = None
+    OUTPUT_TEMPLATE: Any = None               # Structured output template
 
-    def __init__(self, model, tools, system_prompt, name):
-        ...
-
-    def stream(self, messages: list[dict]):
-        # Yields agent_flow, token, message, tool events
-        ...
+    def stream(self, messages: list[dict], config=None):
+        # Yields: status, agent_flow, token, message, tool_start, tool, data events
 ```
 
 ### Agent Classes
 
-| Agent | Directory | AF (Agent Functions) |
-|-------|-----------|---------------------|
-| Leading | a_leading_agent/ | Orchestrator |
-| Discovery | b_discovery_agent/ | Product Compatibility, Product Recommendation, Product Description |
-| Transaction | c_transaction_agent/ | Orders, purchase intent, price, stock, store |
-| Support | e_support_agent/ | Policies, warranty, FAQ |
+| Agent | Purpose | Model |
+|-------|---------|-------|
+| a_leading_agent | Greeting, unclear intent, small talk | GPT-5.4-reasoning |
+| b_discovery_agent | Product search, recommendations, compatibility, price | GPT-5.4-reasoning |
+| c_transaction_agent | Price, store, booking, orders, cart, order tracking | GPT-5.4-reasoning |
+| e_support_agent | FAQ (RAG), warranty, escalation | GPT-5.4-reasoning |
+| f_ui_template_agent | Renders UI cards (product, location, datepick, preorder) | GPT-5.4 |
+| g_qc_agent | Fact-check draft vs tool data — **DISABLED** | GPT-4o-mini |
 
-### Agent Flow Streaming
-
-The streaming API yields events:
-
-```python
-# Agent start
-{"type": "agent_flow", "agent": "[Discovery Agent]", "status": "success"}
-
-# Agent Function execution
-{"type": "agent_flow", "agent": "[Product Compatibility AF]", "status": "success/error"}
-
-# Token
-{"type": "token", "content": "..."}
-
-# Tool result
-{"type": "tool", "content": "...", "tool": "tool_name"}
-```
-
-### TOOL_TO_AF_MAP Example (Discovery Agent)
+### Agent Flow Events
 
 ```python
-TOOL_TO_AF_MAP = {
-    "get_compatibility_tool": "Product Compatibility",
-    "post_vehicle_verify_owner_tool": "Product Compatibility",
-    "get_compatible_product_tool": "Product Compatibility",
-    "get_user_vehicles_tool": "Product Compatibility",
-    "get_products_recommendations_tool": "Product Recommendation",
-    "get_product_description_tool": "Product Description",
-}
+{"type": "status",      "status": "생각 중..."}
+{"type": "status",      "status": "tool_start", "tool": "search_product_tool", "display_name": "상품 검색 중..."}
+{"type": "agent_flow",  "agent": "[PRICE AF]", "status": "success"}
+{"type": "token",       "content": "안녕하세요..."}
+{"type": "tool",        "tool": "get_final_price_tool", "input": {...}, "output": "..."}
+{"type": "message",     "content": "...", "agent": "[TRANSACTION AGENT]"}
+{"type": "data",        "template": "product", "data": {...}}
+{"type": "sub-agent",   "agent": "[DONE]", "status": "success"}
+{"type": "DONE"}
 ```
 
-## Streamlit UI (tstation-ui-demo)
+### Multi-Agent Coordinator (chat.py)
 
-The demo UI displays agent flow at the top of chat:
+`StreamingMultiAgentCoordinator` orchestrates all agents:
 
-- Each step shown as colored badge (green for success, red for error)
-- Steps connected with arrows
-- Left-aligned with flexbox
+1. `classify_multi_intent()` → classify user message into domain(s)
+2. Inject `CONVERSATION CONTEXT` (user_behavior, next_action, flow) into last user message
+3. Route to agent(s) sequentially
+4. `decide_next_action()` after each agent: STOP or CONTINUE
+5. (Optional) `f_ui_template_agent` for UI card rendering
+6. Local `_sanitize_response()` — remove backend jargon
+7. QC Agent: **DISABLED** (controlled by `# QC AGENT DISABLED` in chat.py)
+8. Yield final SSE stream to FE
+
+### State Management (Redis)
+
+| Key type | Content | Managed by |
+|----------|---------|-----------|
+| Chat history | Full conversation messages | `chat_history_service.py` |
+| Slots | goods_no, tire_size, shop_id, quantity, intent | `chat.py` slot extractor |
+| Tool context | Last tool outputs (filter_for_context) | `g_qc_agent/source_filter.py` |
+| Template data | UI card data attached to assistant messages | `chat_history_service.py` |
+
+### UI Templates (FE Contract)
+
+Agents output structured `data` events:
+
+| Template | Agent | Trigger |
+|----------|-------|---------|
+| `product` | b_discovery | Product search/recommendations |
+| `location` | c_transaction | Store list |
+| `datepick` | c_transaction | Booking schedule |
+| `preorder` | c_transaction | Pre-order preview |
+| `orderComplete` | c_transaction | Order confirmed |
+| `voucher` | c_transaction | Coupon list |
+| `listCar` | b_discovery | Car model selection |
+| `youtube` | b_discovery | Video search results |
+| `quickReply` | any | Suggested replies |
+
+## LLM Configuration
+
+| Env var | Default | Usage |
+|---------|---------|-------|
+| AI_MODEL | gpt-5.4 | UI Template Agent, router |
+| AI_MODEL_REASONING | gpt-5.4-reasoning | All main sub-agents |
+| AI_QC_MODEL | gpt-4o-mini | QC Agent (disabled) |
+| AI_DEFAULT_PROVIDER | openai | LiteLLM provider prefix |
+| AI_GATEWAY_BASE_URL | http://ai-gateway:8000/v1 | Internal LiteLLM proxy |
 
 ## Key Dependencies
 
 ### tstation-ai
-- fastapi, uvicorn
-- langchain, langchain-litellm
-- qdrant-client
-- celery, redis
-- langfuse
-
-### tstation-be
-- fastapi
-- oracledb
-- sqlalchemy
+- `fastapi`, `uvicorn` — API server
+- `langchain`, `langchain-litellm` — Agent framework + LLM
+- `qdrant-client` — Vector store for FAQ RAG
+- `celery`, `redis` — Queue + conversation history
+- `langfuse` — Tracing + observability
+- `pydantic-settings` — Config management
 
 ### tstation-ui-demo
-- streamlit
-- requests
+- `streamlit` — Demo UI
 
 ## API Endpoints
 
 ### T-Station AI
-- POST /tstation/chat - Main chat endpoint (supports streaming)
-- GET /tstation/chat/example_questions/{language} - Example questions
+- `POST /tstation/chat` — Main chat endpoint (SSE streaming)
+- `GET /tstation/chat/example_questions/{language}` — Example questions
 
 ### Monitoring
-- GET /health - Health check
-- GET /metrics - Prometheus metrics
-
-## Configuration
-
-Environment variables in `.env`:
-- ENV (local, dev, staging, prod)
-- AI_DEFAULT_PROVIDER
-- REDIS_URL
-- AWS_BEARER_TOKEN_BEDROCK
+- `GET /health` — Health check
+- `GET /metrics` — Prometheus metrics
 
 ## Development
 
 - Python 3.12
-- Package manager: uv
-- Linting: ruff
-- Task runner: just
+- Package manager: `uv`
+- Linting: `ruff`
+- Task runner: `just`

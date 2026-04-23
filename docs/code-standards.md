@@ -11,7 +11,7 @@
 - Descriptive names that indicate purpose
 
 ### Code Organization
-- Keep files under 200 lines
+- Keep files under 300 lines where possible
 - Split large files into focused modules
 - Use composition over inheritance
 
@@ -46,20 +46,24 @@ app/
 │   ├── common/               # Shared utilities
 │   ├── config/               # Configuration
 │   ├── schemas/              # Pydantic models
-│   ├── services/
-│   │   └── tstation/
-│   │       ├── agents/      # AI Agents
-│   │       │   ├── base_agent.py      # Base class
-│   │       │   ├── a_leading_agent/
-│   │       │   ├── b_discovery_agent/
-│   │       │   ├── c_transaction_agent/
-│   │       │   ├── d_order_agent/
-│   │       │   ├── e_support_agent/
-│   │       │   └── router.py
-│   │       └── chat.py
-│   └── main.py
-├── tstation-be/             # Backend service
-└── tstation-ui-demo/        # Demo UI
+│   └── services/
+│       └── tstation/
+│           ├── agents/      # AI Agents
+│           │   ├── base_agent.py          # Base class
+│           │   ├── router.py              # LLM instances + agent singletons
+│           │   ├── a_leading_agent/
+│           │   ├── b_discovery_agent/
+│           │   ├── c_transaction_agent/
+│           │   ├── e_support_agent/
+│           │   ├── f_ui_template_agent/
+│           │   ├── g_qc_agent/
+│           │   └── templates/             # FE template Pydantic schemas
+│           ├── common/
+│           ├── chat_history_service.py
+│           ├── chat.py
+│           └── template_mapper.py
+├── tstation-be-openapi.json  # OpenAPI spec (generated BE client)
+└── tstation-ui-demo/         # Streamlit demo UI
 ```
 
 ---
@@ -67,17 +71,18 @@ app/
 ## Agent Architecture
 
 ### Directory Naming
-Use prefix ordering (a_, b_, c_, ...) to control import order:
+Use prefix ordering (a_, b_, c_, ...) to indicate domain:
 
 ```
 agents/
 ├── base_agent.py            # Base class with streaming + TOOL_TO_AF_MAP
-├── a_leading_agent/        # Orchestrator
-├── b_discovery_agent/      # Recommendations
-├── c_transaction_agent/    # Orders
-├── d_order_agent/         # Order management
-├── e_support_agent/       # Policies
-└── router.py               # Domain router
+├── a_leading_agent/        # Greeting / unclear intent
+├── b_discovery_agent/      # Product search, recommendations, compatibility
+├── c_transaction_agent/    # Price, store, booking, orders
+├── e_support_agent/        # FAQ, warranty, escalation
+├── f_ui_template_agent/    # UI card rendering
+├── g_qc_agent/             # QC fact-check (optional, currently disabled)
+└── router.py               # Domain router + LLM singletons
 ```
 
 ### BaseAgent Implementation
@@ -98,90 +103,115 @@ class MyAgent(BaseAgent):
             model=model,
             tools=[tool1, tool2],
             system_prompt=MY_PROMPT,
-            name="Agent Display Name",
+            name="[MY AGENT]",
         )
 ```
 
-### TOOL_TO_AF_MAP
+### Agent System Prompts
 
-Define a mapping from tool names to Agent Functions:
+- System prompts define all flows the agent handles
+- Use numbered flows: `Flow 1`, `Flow 2`, etc.
+- Each flow has numbered steps
+- Keep rules explicit to avoid LLM hallucination
+- Use `⚠️` markers for critical/override rules
 
-```python
-TOOL_TO_AF_MAP = {
-    "get_compatibility_tool": "Product Compatibility",
-    "post_vehicle_verify_owner_tool": "Product Compatibility",
-    "get_products_recommendations_tool": "Product Recommendation",
-    "get_product_description_tool": "Product Description",
-}
-```
+### Tools
 
-### Streaming Events
-
-Agents yield events via the `stream()` method:
-
-| Event Type | Fields | Description |
-|------------|--------|-------------|
-| agent_flow | agent, status | Agent/AF name with success/error |
-| token | content | AI response token |
-| message | content, node, agent | Full agent message |
-| tool | content, node, tool | Tool execution result |
-
----
-
-## API Design
-
-### Request/Response Models
-Use Pydantic models:
+Each agent has a `tools.py` file. Tools use LangChain `@tool` decorator:
 
 ```python
-class ChatRequest(BaseModel):
-    session_id: str
-    user_id: str
-    messages: List[Message]
-    stream: bool = False
-    tracing_id: Optional[str] = None
+from langchain_core.tools import tool
+
+@tool
+def my_tool(param: str) -> str:
+    """Clear docstring describing what the tool does."""
+    ...
 ```
 
----
-
-## Testing
-
-- Use pytest
-- Follow AAA pattern (Arrange, Act, Assert)
-- Mock external services
+- Tool return format: JSON string or dict
+- Include `status: "success" | "error"` in returns
+- Parallel fetch with `ThreadPoolExecutor` for multi-item lookups
 
 ---
 
-## Linting & Formatting
+## UI Template System
 
-```bash
-just lint    # Check code
-just fmt     # Format code
-```
-
----
-
-## Documentation
-
-Use Google-style docstrings:
+Agents emit structured `data` events for FE rendering. Templates defined in `templates/schemas.py`:
 
 ```python
-def function_name(param: str) -> str:
-    """Short description.
+class ProductItem(BaseModel):
+    goods_no: str
+    name: str
+    price: Optional[int] = Field(None, ge=0)
+    ...
 
-    Args:
-        param: Description
+class ProductDataEvent(BaseModel):
+    type: Literal["data"] = "data"
+    template: Literal["product"] = "product"
+    data: ProductTemplate
+```
 
-    Returns:
-        Description
-    """
-    pass
+Rules:
+- `assistantResponse` field is the text shown in chat
+- Agent must populate ALL required fields
+- `price: Optional[int]` — omit if price unavailable (never use 0)
+
+---
+
+## Streaming SSE Contract
+
+Events yielded by agents (base_agent.py) and coordinator (chat.py):
+
+```
+data: {"type": "status",     "status": "생각 중..."}
+data: {"type": "agent_flow", "agent": "[DISCOVERY AGENT]", "status": "success"}
+data: {"type": "token",      "content": "..."}
+data: {"type": "tool",       "tool": "search_product_tool", "input": {...}, "output": "..."}
+data: {"type": "message",    "content": "...", "agent": "[DISCOVERY AGENT]"}
+data: {"type": "data",       "template": "product", "data": {...}}
+data: {"type": "sub-agent",  "agent": "[DONE]", "status": "success"}
+data: {"type": "DONE"}
+data: [DONE]
+```
+
+- `token` events stream in real-time (TTFT)
+- `message` events are held until after QC, then yielded last (history sync)
+- `data` events pass through immediately (UI card rendering)
+
+---
+
+## LLM Models
+
+| Use case | Model | Notes |
+|----------|-------|-------|
+| Main sub-agents | `gpt-5.4-reasoning` | Deep reasoning for complex flows |
+| UI template rendering | `gpt-5.4` | Fast template mapping |
+| Router classification | `gpt-5.4` | Classify domain |
+| QC Agent | `gpt-4o-mini` | Lightweight fact-check |
+
+Configure via env vars: `AI_MODEL`, `AI_MODEL_REASONING`, `AI_QC_MODEL`
+
+---
+
+## Environment Variables
+
+Key variables in `.env`:
+
+```env
+AI_DEFAULT_PROVIDER=openai
+AI_GATEWAY_BASE_URL=http://ai-gateway:8000/v1
+AI_GATEWAY_API_KEY=...
+AI_MODEL=gpt-5.4
+AI_MODEL_REASONING=gpt-5.4-reasoning
+AI_QC_MODEL=gpt-4o-mini
 ```
 
 ---
 
-## Security
+## Development
 
-- Require API key for protected endpoints
-- Never commit secrets
-- Use environment variables for credentials
+- Python 3.12
+- Package manager: `uv`
+- Linting: `ruff`
+- Task runner: `just`
+- Tracing: Langfuse (all LLM calls traced with session/user/trace IDs)
