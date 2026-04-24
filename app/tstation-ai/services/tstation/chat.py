@@ -1422,8 +1422,15 @@ class TStationChatServiceV2:
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load existing slots from Redis
-            existing_slots = chat_history_svc.get_slots(request.session_id)
+            # 1) Parallel Redis reads — fetch slots, tool context, and history in one round
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=3) as _pool:
+                _f_slots   = _pool.submit(chat_history_svc.get_slots, request.session_id)
+                _f_tools   = _pool.submit(chat_history_svc.get_tool_context, request.session_id)
+                _f_history = _pool.submit(chat_history_svc.get_history, request.session_id)
+            existing_slots = _f_slots.result()
+            prev_tool_data = _f_tools.result()
+            _prefetched_history = _f_history.result()
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
             # 2) Extract regex-based slots from the LATEST user message only
@@ -1452,11 +1459,6 @@ class TStationChatServiceV2:
                     f"— user switched back to recommendation"
                 )
                 merged_slots.pending_intent = None
-
-            # 3.7) Load accumulated tool context (needed both for goods_no list-pick
-            # resolution below AND for prompt injection in step 6). Loading before
-            # save_slots lets resolved goods_no be persisted in step 4.
-            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
 
             # 3.8) Resolve goods_no from the user's list-selection reply matched against
             # the most recent search_product_tool result. Without this, Discovery may
@@ -1515,9 +1517,8 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    history = chat_history_svc.get_history(request.session_id)
                     resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
-                        last_user_text, history
+                        last_user_text, _prefetched_history
                     )
                     if resolved_shop_id:
                         merged_slots.shop_id = resolved_shop_id
