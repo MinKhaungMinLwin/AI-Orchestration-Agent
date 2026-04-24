@@ -1722,6 +1722,15 @@ class TStationChatServiceV2:
         skip_decision: bool = False,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
+        from config.env import settings as _s
+        logger.info(
+            "[REQUEST_CONFIG] "
+            f"model={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
+            f"reasoning_model={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_REASONING} | "
+            f"qc_model={_s.AI_DEFAULT_PROVIDER}/{_s.AI_QC_MODEL} | "
+            f"qc_enabled={_s.AI_QC_ENABLED} | "
+            f"session_id={session_id!r}"
+        )
 
         draft_response = ""
         source_data_chunks = []

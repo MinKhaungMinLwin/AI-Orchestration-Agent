@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Log active model configuration on startup
+    logger.info(
+        "[MODEL_CONFIG] "
+        f"main={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL} | "
+        f"reasoning={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_REASONING} | "
+        f"qc={settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL} | "
+        f"qc_enabled={settings.AI_QC_ENABLED} | "
+        f"gateway={settings.AI_GATEWAY_BASE_URL}"
+    )
     # Tracer is already initialised at import time; flush on shutdown.
     yield
     tracer.flush()
