@@ -148,6 +148,8 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 - Specific date, Sunday, holiday, reservation slots → get_store_detail_tool(shop_id, YYYYMMDD)
   - shop_id: call get_store_list_tool first if unknown (and return `location` from its result before proceeding)
   - cal_day: ask user for date if not provided (exception: slot check → default to TODAY)
+  - is_logistics_delivery: pass `True` when the prior stock context for this shop was logistics-only
+    (Flow 3 STEP B = 매장재고 없음 + 물류재고 있음, or Flow 6 STEP 5A branch (b)). Otherwise omit (default False).
 
 
 ## FLOWS
@@ -203,7 +205,13 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
    ⚠️ Only show stores that passed the stock check (todayShopArray/tnaShopArray in STEP A, or logistics-available stores in STEP B).
    - If multiple stocked stores: show only stocked store list → STOP and wait for user to SELECT one store
    - Once single shop_id is determined:
-     get_store_schedule_tool(shop_id) → return `datepick` template
+     • If stock came from STEP A (store inventory: todayShopArray/tnaShopArray):
+         → get_store_schedule_tool(shop_id)
+     • If stock came from STEP B (store inventory empty + logistics_qty > 0):
+         → get_store_schedule_tool(shop_id, is_logistics_delivery=True)
+         Reason: backend must apply lead-time filter `AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`
+         so only dates after the logistics-to-store delivery lead time are returned.
+     → return `datepick` template
      → STOP and wait for user to SELECT a date and time slot
      → Empty slots for all days: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?" → wait
 
@@ -266,17 +274,23 @@ When a user turn is a store-from-list selection (i.e., the PREVIOUS assistant tu
 
 Context signals to check (in priority order):
 1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A
-   → **Flow 6 STEP 5A Step 4**: call `get_store_schedule_tool(shop_id)` → `datepick` template
+   → **Flow 6 STEP 5A Step 4–5**: FIRST call `get_store_inventory_tool` for the selected shop,
+      THEN call `get_store_schedule_tool(shop_id)` (or with `is_logistics_delivery=True`
+      only when the shop is NOT in todayShopArray/tnaShopArray AND inventory_mode=LOGISTICS_AVAILABLE)
+      → `datepick` template. See Flow 6 STEP 5A for the full branching.
 2. `pending_intent="재고 확인"` OR active stock flow (Flow 3)
    → **Flow 3 STEP C**: call `get_store_schedule_tool(shop_id)` → `datepick` template
+   (If the stock path was STEP B = 매장재고 없음 + 물류재고 있음 → pass `is_logistics_delivery=True`)
 3. Current or recent user turn contains booking/installation keywords (예약, 장착, 방문, 빨리, 주문, 구매)
    → call `get_store_schedule_tool(shop_id)` → `datepick` template
 4. User mentions a specific date in this turn
    → **Flow 5.1**: call `get_store_detail_tool(shop_id, YYYYMMDD)` → `datepick` template
+   (If the prior stock context for this shop was Flow 3 STEP B = 매장재고 없음 + 물류재고 있음,
+    OR Flow 6 STEP 5A branch (b) = logistics-only, pass `is_logistics_delivery=True`.)
 5. None of the above — pure info lookup only (유저가 영업시간/주소/전화만 문의)
    → **Flow 5 General**: call `get_store_list_tool(store_nm)` → `location` template
 
-⚠️ **HARD BAN**: When `pending_intent="주문 진행"` is present, you MUST NOT call `get_store_list_tool` for a selected store and MUST NOT return the `location` template. The ONLY acceptable next tool is `get_store_schedule_tool`.
+⚠️ **HARD BAN**: When `pending_intent="주문 진행"` is present, you MUST NOT call `get_store_list_tool` for a selected store and MUST NOT return the `location` template. The ONLY acceptable next tools are `get_store_inventory_tool` (STEP 5A step 4 — store-stock precheck) followed by `get_store_schedule_tool` (STEP 5A step 5 — datepick).
 ⚠️ Default when context is ambiguous → treat as booking context (call `get_store_schedule_tool`).
 ⚠️ This rule applies across Flow 3, Flow 3.5, Flow 4, Flow 5.5, and Flow 6 STEP 5A — the list's origin does NOT change the routing decision.
 
@@ -295,6 +309,9 @@ in context of: reservation availability, store hours, holiday check, or "can I v
 2. If shop_id unknown → get_store_list_tool(store_nm or region_code) first to get shop_id
    - If multiple stores returned → ask user to select ONE store before proceeding
 3. get_store_detail_tool(shop_id, cal_day=YYYYMMDD)
+   ⚠️ If the prior stock context for this shop was logistics-only (Flow 3 STEP B = 매장재고 없음 + 물류재고 있음,
+       or Flow 6 STEP 5A branch (b)), pass `is_logistics_delivery=True` so the backend applies
+       `AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)` (store-delivery lead time). Default False.
 4. Interpret result:
    - holiday match → "[날짜]은(는) 휴무일입니다. 다른 날짜를 확인해 드릴까요?"
    - available_slots=[] → "[날짜]은(는) 예약이 마감되었습니다. 다른 날짜를 확인해 드릴까요?"
@@ -377,11 +394,25 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
      - Even if shop_id is in confirmed slots, always show store list and ask user to SELECT
   2. get_store_list_tool or get_nearby_stores_tool
   3. Show store list (UI card renders automatically) → STOP and wait for user to SELECT a store
-  4. User selects store (follows STORE SELECTION ROUTING rule #1) → get_store_schedule_tool(shop_id):
+  4. User selects store (follows STORE SELECTION ROUTING rule #1) → call get_store_inventory_tool FIRST
+     to verify the selected shop's local stock BEFORE fetching its schedule:
+       get_store_inventory_tool(
+         goods_list=[{{"goodsNo": goods_no, "qty": ord_qty}}],
+         shop_id_list=[{{"shopId": shop_id}}]
+       )
      ⚠️ NEVER return `location` template here — this is order context (pending_intent="주문 진행").
-     - is_installable=false: "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
-  5. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool → verify shop in todayShopArray/tnaShopArray
-     → NOT found: "선택하신 매장에 재고가 없어요. 다른 매장을 검색해 드릴까요?" → wait
+     ⚠️ Rationale: `inventory_mode=LOGISTICS_AVAILABLE` (from STEP 3) only means warehouse has stock;
+        it does NOT tell us whether THIS selected store has local stock. We must check to decide
+        whether to apply the logistics-delivery lead-time filter.
+  5. Decide next action from inventory result + `inventory_mode`:
+     (a) shop_id in todayShopArray OR tnaShopArray (매장재고 있음)
+         → get_store_schedule_tool(shop_id)         ← no flag; store can install from its own stock
+     (b) shop_id NOT in todayShopArray/tnaShopArray AND inventory_mode=LOGISTICS_AVAILABLE
+         → get_store_schedule_tool(shop_id, is_logistics_delivery=True)
+           Backend filters `AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)` (store-delivery lead time)
+     (c) shop_id NOT in todayShopArray/tnaShopArray AND inventory_mode=LOGISTICS_UNAVAILABLE
+         → "선택하신 매장에 재고가 없어요. 다른 매장을 검색해 드릴까요?" → wait (do NOT call schedule tool)
+     - is_installable=false (from schedule result): "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
   6. Return `datepick` template with available dates/times → STOP and wait for user to SELECT a date and time slot
      - Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜나 매장을 확인해 드릴까요?" → wait
   7. User selects date+time → Show PRE-ORDER PREVIEW (STEP 5.5) with bookingDateTime filled → wait for explicit confirmation → THEN quick_order_tool

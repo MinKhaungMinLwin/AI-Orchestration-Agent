@@ -66,10 +66,20 @@ def _next_cal_days(n: int = 3) -> list[str]:
     return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(0, n + 1)]
 
 
-def _fetch_store_detail_once(shop_id: str, cal_day: str) -> dict:
-    """Fetch store_detail for a single (shop_id, cal_day) pair. Returns {} on failure."""
+def _fetch_store_detail_once(shop_id: str, cal_day: str, is_logistics_delivery: bool = False) -> dict:
+    """Fetch store_detail for a single (shop_id, cal_day) pair. Returns {} on failure.
+
+    When ``is_logistics_delivery=True``, the backend applies
+    ``AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` so only slots after the
+    store-delivery lead time are returned (store-inventory empty + logistics-inventory available).
+    """
     try:
-        response = get_store_detail(client=get_client(), shop_id=shop_id, cal_day=cal_day)
+        response = get_store_detail(
+            client=get_client(),
+            shop_id=shop_id,
+            cal_day=cal_day,
+            is_logistics_delivery=is_logistics_delivery,
+        )
         if response.parsed is not None:
             return _to_dict(response.parsed)
     except Exception:
@@ -86,7 +96,12 @@ def _count_available_slots(detail: dict) -> int:
 
 
 def _parallel_fetch_store_days(shop_ids: list[str], cal_days: list[str], max_workers: int = 9) -> dict:
-    """Parallel-fetch all (shop_id, cal_day) combinations. Returns {shop_id: {cal_day: detail}}."""
+    """Parallel-fetch all (shop_id, cal_day) combinations. Returns {shop_id: {cal_day: detail}}.
+
+    Used by Flow 3.5 (fastest-store search) where per-store logistics state is intentionally
+    ignored — a store without local stock is simply deprioritized by having a later earliest slot,
+    not by applying the lead-time filter.
+    """
     results: dict[str, dict[str, dict]] = {sid: {} for sid in shop_ids}
     pairs = [(sid, day) for sid in shop_ids for day in cal_days]
     if not pairs:
@@ -566,7 +581,7 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
 
 
 @tool
-def get_store_detail_tool(shop_id: str, cal_day: str):
+def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: bool = False):
     """
     Get store details and reservation availability.
 
@@ -582,10 +597,14 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
     Args:
         shop_id (str): Store ID.
         cal_day (str): Query date in YYYYMMDD format.
+        is_logistics_delivery (bool): Set True when the store has NO store inventory but logistics
+            inventory IS available (Flow 3 STEP B case). Backend then filters time slots with
+            ``AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` so only dates after the
+            store-delivery lead time are returned. Default False (매장재고 있음 케이스).
 
     Example Inputs:
         - {"shop_id": "BXXXXX", "cal_day": "20260401"}
-        - {"shop_id": "BXXXXX", "cal_day": "20250225"}
+        - {"shop_id": "BXXXXX", "cal_day": "20250225", "is_logistics_delivery": true}
         - {"shop_id": "FXXXXX", "cal_day": "20260320"}
         - {"shop_id": "FXXXXX", "cal_day": "20260401"}
         - {"shop_id": "CXXXXX", "cal_day": "20250225"}
@@ -594,10 +613,18 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
         Response data includes is_installable field.
     """
-    logger.info("[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s", shop_id, cal_day)
+    logger.info(
+        "[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s, is_logistics_delivery=%s",
+        shop_id, cal_day, is_logistics_delivery,
+    )
 
     try:
-        response = get_store_detail(client=get_client(), shop_id=shop_id, cal_day=cal_day)
+        response = get_store_detail(
+            client=get_client(),
+            shop_id=shop_id,
+            cal_day=cal_day,
+            is_logistics_delivery=is_logistics_delivery,
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -612,7 +639,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str):
 
 
 @tool
-def get_store_schedule_tool(shop_id: str, days: int = 4):
+def get_store_schedule_tool(shop_id: str, days: int = 4, is_logistics_delivery: bool = False):
     """
     Get store reservation schedule for a range of days starting from today (parallel fetch).
 
@@ -622,10 +649,14 @@ def get_store_schedule_tool(shop_id: str, days: int = 4):
     Args:
         shop_id (str): Store ID.
         days (int): Number of days to fetch starting from today (default 4 = TODAY, +1, +2, +3).
+        is_logistics_delivery (bool): Set True when the store has NO store inventory but logistics
+            inventory IS available (Flow 3 STEP B case). Backend filters out dates earlier than
+            ``FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` (store-delivery lead time). Default False.
 
     Example Inputs:
         - {"shop_id": "BXXXXX"}
         - {"shop_id": "FXXXXX", "days": 4}
+        - {"shop_id": "BXXXXX", "is_logistics_delivery": true}
 
     Returns:
         dict: {
@@ -639,12 +670,24 @@ def get_store_schedule_tool(shop_id: str, days: int = 4):
             }
         }
     """
-    logger.info("[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s", shop_id, days)
+    logger.info(
+        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s, is_logistics_delivery=%s",
+        shop_id, days, is_logistics_delivery,
+    )
     cal_days = _next_cal_days(days - 1)
 
     schedule = []
     with ThreadPoolExecutor(max_workers=days) as executor:
-        futures = {executor.submit(get_store_detail, client=get_client(), shop_id=shop_id, cal_day=cal_day): cal_day for cal_day in cal_days}
+        futures = {
+            executor.submit(
+                get_store_detail,
+                client=get_client(),
+                shop_id=shop_id,
+                cal_day=cal_day,
+                is_logistics_delivery=is_logistics_delivery,
+            ): cal_day
+            for cal_day in cal_days
+        }
         for future in as_completed(futures):
             cal_day = futures[future]
             try:
