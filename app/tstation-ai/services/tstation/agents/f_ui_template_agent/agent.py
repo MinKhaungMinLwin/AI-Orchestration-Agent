@@ -277,7 +277,7 @@ quick_reply_tool → {{"assistant_response": "반품 정책에 대해 안내드�
 
 (CASE 2 — unsupported template, data formatted in assistant_response)
 quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세요.", "quickReplies": ["매장 방문할게", "배송으로 받을래"], "reason": "No template exists for visit-method selection; options rendered as quick replies."}}
-quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "4개"], "reason": "No template exists for quantity selection; options rendered as quick replies."}}
+quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "3개", "4개"], "reason": "No template exists for quantity selection; always offer all four options (1/2/3/4개)."}}
 
 list_product_tool → {{"assistantResponse": "고객님, 차량에 맞는 타이어를 찾았어요. 원하시는 제품을 선택해 주세요 😊", "items": [
   {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/H46201ko.png", "title": "Ventus S2 AS", "tires": "고급형", "comfort": "높음", "price": 118700, "rate": 4.5, "totalQuantity": 0}},

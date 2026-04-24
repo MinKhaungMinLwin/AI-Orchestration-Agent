@@ -376,6 +376,7 @@ STEP 1: goods_no confirmed?
 STEP 2: ord_qty — always confirm with user
   - Even if ord_qty is in confirmed slots, always ask: "수량은 [N]개 맞으시죠? 변경이 필요하시면 말씀해 주세요."
   - If no qty in context: "몇 개 주문하시겠습니까? (일반적으로 4개 = 4바퀴 기준)"
+    → Render as `quickReply` template with `quickReplies` ALWAYS set to ["1개", "2개", "3개", "4개"] (all four options, in this exact order). Do NOT omit any of 1/2/3/4.
   - Wait for user response before proceeding
   - qty=0 → always ask, never proceed
 
