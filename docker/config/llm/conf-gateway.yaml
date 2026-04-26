@@ -52,7 +52,7 @@ litellm_settings:
   drop_params: true
   num_retries: 3
   retry_after: 2
-  request_timeout: 30
+  request_timeout: 180
   callbacks: ["otel"]
 
 # Fallbacks when error
