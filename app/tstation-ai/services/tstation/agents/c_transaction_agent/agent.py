@@ -5,6 +5,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_available_coupons_tool,
     get_my_coupons_tool,
+    issue_coupon_tool,
     get_logistics_inventory_tool,
     get_store_inventory_tool,
     search_place_tool,
@@ -117,6 +118,7 @@ Store name examples (for get_store_list_tool store_nm only):
 | get_final_price_tool | User asks for price (goods_no required) |
 | get_available_coupons_tool | User asks "받을 수 있는 쿠폰", "available coupons" |
 | get_my_coupons_tool | User asks "내 쿠폰", "my coupons" |
+| issue_coupon_tool | User wants to download/receive a coupon — goods_no for 최저가 혜택 쿠폰 묶음, cpn_no for specific coupon |
 | get_logistics_inventory_tool | Check warehouse stock |
 | get_store_inventory_tool | Check stock at specific store(s) |
 | search_place_tool | User mentions address or landmark near stores |
@@ -523,11 +525,37 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 
 
 ### Flow 8 — Coupons
+
+조회:
 - "받을 수 있는 쿠폰" → get_available_coupons_tool
 - "내 쿠폰" → get_my_coupons_tool
 - Ambiguous → call both
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
+
+발급 (issue_coupon_tool):
+- 트리거 키워드: "쿠폰 받아줘", "다운로드", "쿠폰 받기", "발급해줘", "혜택쿠폰 적용", "이 쿠폰 받을래"
+- 분기 규칙 (XOR — 정확히 한 인자만 사용):
+  • cpn_no 모드: 사용자가 cpn_no 를 명시하거나 직전 voucher 카드의 특정 cpn_no 컨텍스트가 명확하면
+    → issue_coupon_tool(cpn_no="...")
+  • goods_no 모드: 사용자가 goods_no(또는 goods_nm)에 대한 "최저가/혜택 쿠폰" 을 요청하면
+    → issue_coupon_tool(goods_no="...")
+  • 두 인자를 동시에 넘기지 말 것
+  • 어느 쪽도 명확하지 않으면 발급 호출 전에 사용자에게 되묻기
+
+⚠️ 모호한 지칭 처리 ("이/그/저 쿠폰 받아줘"):
+- 직전 voucher 결과의 cpn_no 만 사용. 절대 추측/조작/재구성 금지.
+- 직전 voucher 결과에 쿠폰이 1개만 있었으면 → 그 cpn_no 로 즉시 호출
+- 여러 개였으면 → quickReply 로 "어떤 쿠폰을 발급해 드릴까요?" 되묻고 STOP
+- 직전 컨텍스트에 voucher 결과가 없으면 → "어떤 쿠폰을 말씀하시는지 알려주세요" 로 되묻기
+
+응답 코드 매핑 (자연어 응답으로 처리, 새 템플릿 미사용 — quickReply 로 응답):
+- 전체 code = "100" + 모든 per-coupon code = "100" → "쿠폰이 발급되었어요 😊"
+- 전체 code = "100" + 일부 per-coupon code = "900" → "일부 쿠폰은 이미 보유 중이거나 발급 대상이 아니에요." (성공한 쿠폰명 함께 안내)
+- 전체 code = "700" / "800" → "쿠폰 발급 정보가 부족해요. 다시 시도해 주세요."
+- 전체 code = "400" / "900" → "쿠폰 발급에 실패했어요. 잠시 후 다시 시도해 주세요."
+- 발급 후에는 quickReply 템플릿으로 마무리 (voucher 카드 재렌더링 X)
+- ⚠️ 사용자에게 내부 코드(100/900) 또는 백엔드 필드명(maxCpn/extraCpn 등) 노출 금지
 
 
 ## RESPONSE RULE
@@ -543,6 +571,7 @@ Choose the output template based on the tool called:
 | Tool(s) | Template |
 |---------|----------|
 | get_available_coupons_tool, get_my_coupons_tool | `voucher` |
+| issue_coupon_tool | `quickReply` |
 | get_store_list_tool, get_nearby_stores_tool | `location` |
 | get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
 | quick_order_tool, save_to_cart_tool | `orderComplete` |
@@ -830,6 +859,8 @@ class TransactionSubAgent(BaseAgent):
         "get_final_price_tool": "Price",
         "get_available_coupons_tool": "Price",
         "get_my_coupons_tool": "Price",
+        # Coupon Issue
+        "issue_coupon_tool": "Coupon Issue",
         # Inventory
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
@@ -855,6 +886,7 @@ class TransactionSubAgent(BaseAgent):
                 get_final_price_tool,
                 get_available_coupons_tool,
                 get_my_coupons_tool,
+                issue_coupon_tool,
                 get_logistics_inventory_tool,
                 get_store_inventory_tool,
                 search_place_tool,
