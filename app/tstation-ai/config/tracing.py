@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from typing import Any
 
 from config.env import Environment, settings
@@ -17,11 +17,25 @@ tracer = Langfuse(
     # Debug
     debug=True if settings.ENV == Environment.LOCAL else False,
 )
-tracer.auth_check()
-# Stateless handler — per-run context is supplied via RunnableConfig metadata.
-langfuse_handler = CallbackHandler()
+_tracing_enabled = False
 
-logger.info(f"Enabled tracing with project '{settings.LANGFUSE_PROJECT_NAME}', environment '{settings.ENV}'")
+try:
+    tracer.auth_check()
+    _tracing_enabled = True
+    logger.info(
+        "Enabled tracing with project '%s', environment '%s'",
+        settings.LANGFUSE_PROJECT_NAME,
+        settings.ENV,
+    )
+except Exception as exc:
+    # Langfuse should never block API startup in container environments.
+    logger.warning(
+        "Langfuse unavailable during startup; continuing without tracing callbacks: %s",
+        exc,
+    )
+
+# Stateless handler — per-run context is supplied via RunnableConfig metadata.
+langfuse_handler = CallbackHandler() if _tracing_enabled else None
 
 
 def build_trace_config(
@@ -51,10 +65,9 @@ def build_trace_config(
     if extra_metadata:
         metadata.update(extra_metadata)
 
-    config: dict[str, Any] = {
-        "callbacks": [langfuse_handler],
-        "metadata": metadata,
-    }
+    config: dict[str, Any] = {"metadata": metadata}
+    if langfuse_handler is not None:
+        config["callbacks"] = [langfuse_handler]
     if run_name:
         config["run_name"] = run_name
     return config
