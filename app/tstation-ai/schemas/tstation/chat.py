@@ -44,8 +44,8 @@ class TStationChatRequest(BaseModel):
                 "session_id": "test_session_id_123",
                 "access_token": "your-access-token-here",
                 "user_info": {"location": {
-                        "xpos": 123.456,
-                        "ypos": 789.012,
+                        "xpos": None,
+                        "ypos": None,
                     }
                 },
 

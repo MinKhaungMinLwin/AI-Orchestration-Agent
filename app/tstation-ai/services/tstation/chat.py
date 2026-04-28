@@ -996,6 +996,16 @@ class TStationChatServiceV2:
         if request.user_info:
             user_info = {**(user_info or {}), **request.user_info}
 
+        def _has_valid_location(location: dict | None) -> bool:
+            if not isinstance(location, dict):
+                return False
+            xpos = location.get("xpos")
+            ypos = location.get("ypos")
+            return isinstance(xpos, (int, float)) and isinstance(ypos, (int, float))
+
+        if user_info and not _has_valid_location(user_info.get("location")):
+            user_info = {k: v for k, v in user_info.items() if k != "location"}
+
         # Build USER CONTEXT message if user_info available
         user_context_msg = None
         if user_info:

@@ -18,7 +18,13 @@ class ChatMessageRequest(BaseModel):
                 "content": "타이어 추천해주세요",
                 "session_id": "test_session_id_12345",
                 "stream": False,
-                "user_info": {"tire_size": "225/45R17"}
+                "user_info": {
+                    "tire_size": "225/45R17",
+                    "location": {
+                        "xpos": None,
+                        "ypos": None
+                    }
+                }
             }
         }
     }
