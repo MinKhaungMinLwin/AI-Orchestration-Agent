@@ -17,7 +17,7 @@ T = TypeVar("T", bound="RecommendationResponse")
 class RecommendationResponse:
     """
     Attributes:
-        rcmd_type (str): 추천 타입 (tstation | discount | value)
+        rcmd_type (str): 추천 타입
         total (int): 반환된 상품 수
         items (list[RcmdGoodsItem]):
     """
