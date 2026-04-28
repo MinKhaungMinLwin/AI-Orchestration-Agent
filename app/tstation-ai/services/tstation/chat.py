@@ -1739,6 +1739,7 @@ class TStationChatServiceV2:
         original_message_events = []  # Hold message events to sync history
         coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
+        last_active_domain: str | None = None  # Track last domain agent that produced the final response (for G-Eval)
 
         user_query = ""
         for msg in reversed(messages):
@@ -1854,6 +1855,10 @@ class TStationChatServiceV2:
                     )
                     draft_response = ""
                     original_message_events = []
+                # Capture the most recent domain agent — this is whose output gets G-Eval scored.
+                _agent_label = event.get("agent", "")
+                if _agent_label.startswith("[") and _agent_label.endswith(" AGENT]"):
+                    last_active_domain = _agent_label[1:-len(" AGENT]")].lower()
 
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -1874,6 +1879,24 @@ class TStationChatServiceV2:
             for msg_event in original_message_events:
                 if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
                     yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
+
+        # 3. G-EVAL SHADOW SCORING (fire-and-forget, off-thread, no user-facing effect)
+        # Submit AFTER the user-visible response is finalized. The executor is bounded and
+        # all exceptions are swallowed inside the worker — eval failures must never affect
+        # the request path. Disabled by default; gated by AI_GEVAL_ENABLED.
+        try:
+            from services.tstation.agents.h_eval_agent.executor import submit_geval
+
+            submit_geval(
+                domain=last_active_domain,
+                user_query=user_query,
+                draft_response=draft_response,
+                source_data="\n\n".join(source_data_chunks),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            logger.warning(f"[GEVAL] Failed to enqueue scoring: {exc}")
 
         # 4. PERSIST TOOL CONTEXT for next turn (only overwrite when new tool results exist)
         if session_id and tool_context_items:

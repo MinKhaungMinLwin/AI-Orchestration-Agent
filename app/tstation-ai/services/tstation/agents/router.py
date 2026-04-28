@@ -55,6 +55,15 @@ QC_LLM = ChatLiteLLM(
     temperature=0.0,
 )
 
+# G-Eval LLM (separate instance even if it points at the same model as QC, so
+# the eval path never contends for tokens with QC if both are enabled).
+EVAL_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_GEVAL_MODEL or settings.AI_QC_MODEL}",
+    temperature=0.0,
+)
+
 
 ## Router
 class AgentDomain(BaseModel):

@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     AI_MODEL_REASONING: str
     AI_QC_MODEL: str
     AI_QC_ENABLED: bool = True
+    # G-Eval shadow scoring (LLM-as-judge on domain agent replies, reported to Langfuse)
+    AI_GEVAL_ENABLED: bool = False
+    AI_GEVAL_MODEL: str = ""
+    AI_GEVAL_SAMPLE_RATE: float = 1.0
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str
