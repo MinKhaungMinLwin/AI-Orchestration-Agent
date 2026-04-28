@@ -42,18 +42,8 @@ from services.tstation.agents.e_support_agent.agent import SupportSubAgent
 
 support_subagent = SupportSubAgent(REASONING_LLM)
 
-# UI Template Agent (uses AI_MODEL for fast template rendering)
-from services.tstation.agents.f_ui_template_agent.agent import UITemplateSubAgent
-
-ui_template_subagent = UITemplateSubAgent(LLM)
-
-# QC Agent LLM (lightweight model, temperature=0.0 for deterministic fact-checking)
-QC_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL}",
-    temperature=0.0,
-)
+# UI Template Agent disabled — template rendering is handled by code mapper.
+# QC Agent disabled — kept out of runtime path.
 
 
 ## Router
