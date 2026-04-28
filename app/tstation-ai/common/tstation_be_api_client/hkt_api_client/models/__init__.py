@@ -11,6 +11,9 @@ from .car_trim_item import CarTrimItem
 from .car_trim_response import CarTrimResponse
 from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
+from .coupon_issue_response import CouponIssueResponse
+from .coupon_result_item import CouponResultItem
+from .cpn_coupon_issue_request import CpnCouponIssueRequest
 from .deal_item import DealItem
 from .deal_list_response import DealListResponse
 from .discount_price_item import DiscountPriceItem
@@ -21,6 +24,7 @@ from .event_item import EventItem
 from .event_list_response import EventListResponse
 from .faq_item import FaqItem
 from .faq_list_response import FaqListResponse
+from .goods_coupon_issue_request import GoodsCouponIssueRequest
 from .goods_item import GoodsItem
 from .http_validation_error import HTTPValidationError
 from .logistics_request import LogisticsRequest
@@ -73,6 +77,9 @@ __all__ = (
     "CarTrimResponse",
     "ChatHistoryResponse",
     "CompatibilityResponse",
+    "CouponIssueResponse",
+    "CouponResultItem",
+    "CpnCouponIssueRequest",
     "DealItem",
     "DealListResponse",
     "DiscountPriceItem",
@@ -83,6 +90,7 @@ __all__ = (
     "EventListResponse",
     "FaqItem",
     "FaqListResponse",
+    "GoodsCouponIssueRequest",
     "GoodsItem",
     "HTTPValidationError",
     "LogisticsRequest",
