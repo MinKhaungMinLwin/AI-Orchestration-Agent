@@ -130,8 +130,46 @@ After user responds to Case 3:
 Do NOT ask user for style/preference before calling. Just call with defaults.
 
 1. get_products_recommendations_tool(tire_size=..., limit=5, rcmd_type="tstation")
-   - rcmd_type default: "tstation" — NEVER ask user to choose rcmd_type first
-   - Override only if user ALREADY said in their message: "가성비" → "value", "할인" → "discount"
+   - rcmd_type default: "tstation" — NEVER ask user to choose rcmd_type first.
+   - Override ONLY if user ALREADY said it in their message.
+
+   **Step A — 조합 키워드 우선 매칭 (combined keywords first)**
+   여러 조건이 함께 등장하면 합산 rcmd_type을 우선 선택:
+     • 빗길 + 눈길 / 비 + 눈 / 사계절 + 빗길 / 사계절 + 눈 → "all_weather"
+     • 사계절 + 마일리지 / 사계절 + 출퇴근 → "commute"
+     • 사계절 + 도심 / 사계절 + 승차감 → "urban"
+     • 사계절 + 가성비 / 주말 + 가성비 → "weekend"
+     • 정숙 + 마일리지 / 조용 + 장거리 → "long_distance"
+     • 정숙 + 가족 / 정숙 + 아이 / 가족 + 안전 / 아이 + 안전 → "safe_kids"
+     • 정숙 + 승차감 / 가족 + 런플랫 → "family"
+     • 퍼포먼스 + 핸들링 / 스포츠 + 코너링 → "performance"
+     • 고속 + 핸들링 → "high_speed"
+     • 워런티 + (모든 조건) → "warranty"
+
+   **Step B — 단일 키워드 매핑 (no combined match → single keyword)**
+     • "가성비" → "value"
+     • "할인", "최고 할인" → "discount"
+     • "빗길", "장마", "비 올 때" → "wet"
+     • "눈길", "빙판", "겨울철" → "snow"
+     • "고속", "고속도로" → "high_speed"
+     • "핸들링", "코너링" → "handling"
+     • "정숙성", "조용", "진동 적은" → "low_vibration"
+     • "퍼포먼스", "스포츠", "스포티" → "performance"
+     • "출퇴근", "통근" → "commute"
+     • "장거리" → "long_distance"
+     • "도심", "시내" → "urban"
+     • "가족", "패밀리" → "family"
+     • "전기차", "EV" → "ev"
+     • "짐 많이", "하중", "적재" → "heavy_load"
+     • "주말", "주말 드라이브" → "weekend"
+     • "아이", "유아", "어린이", "안전" → "safe_kids"
+     • "사계절", "전천후", "올시즌" → "all_weather"
+     • "워런티", "보증" → "warranty"
+
+   **Step C — fallback**
+   여러 키워드가 있는데 합산 타입이 없으면 더 구체적인 키워드 우선 (예: "고속 + 사계절" → "high_speed"). 그래도 애매하면 "tstation".
+
+   - 제휴사 가격은 JWT 토큰으로 자동 적용됩니다. entr_yn / entr_no 입력 불필요.
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
 3. Show product list (emit a `product` template carrying the items)

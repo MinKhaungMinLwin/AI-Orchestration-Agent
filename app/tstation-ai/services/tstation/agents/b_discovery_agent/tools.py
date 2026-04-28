@@ -511,31 +511,48 @@ def get_product_description_tool(goods_no: str):
 
 @tool
 @tool_cache(ttl=300)
-def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand_cd: str = "HK", entr_yn: str = "n", entr_no: str | None = None, car_lnc_cd: str | None = None, tire_size: str | None = None):
+def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand_cd: str = "HK", car_lnc_cd: str | None = None, tire_size: str | None = None):
     """
     Product Recommendation
 
     Returns the top N products based on the selected recommendation type (rcmd_type).
 
+    제휴 회원 여부(entr_yn) 및 제휴사 번호(entr_no)는 JWT 토큰에서 자동 추출됩니다.
+    Tool 호출 시 별도로 입력하지 않습니다.
+
     **API UPDATE: 차량 정보로 추천 가능합니다**
     - car_lnc_cd: 차량 런칭 코드 (car_lnc_cd 입력 시 tire_size보다 우선 적용)
     - tire_size: 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
 
-    Recommendation types:
-    - tstation: T-Station recommended products
-      (TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10) sorted by highest,
-      from PR_GOODS_RCMD_SUM)
+    **기존 타입 (전용 SQL)**
+    - tstation: 티스테이션 추천
+      (TOT_SCR (FST_DISP_YN='Y'면 ×10) 높은 순, PR_GOODS_RCMD_SUM)
+    - discount: 최고 할인율
+      (EXTRA_FVR_SALE_PER 높은 순, PR_GOODS_DSCNT_PRC_INFO)
+    - value: 가성비 Good
+      (할인가 ≤ 200,000원, 수명·연비 높은 순, PR_GOODS_DSCNT_PRC_INFO + PR_GOODS_RCMD_SUM)
 
-    - discount: Highest discount rate
-      (sorted by highest EXTRA_FVR_SALE_PER, from PR_GOODS_DSCNT_PRC_INFO)
-
-    - value: Best value products
-      (discounted price ≤ 200,000 KRW, sorted by high durability and fuel efficiency,
-      from PR_GOODS_DSCNT_PRC_INFO + PR_GOODS_RCMD_SUM)
+    **신규 타입 (베이스 템플릿 + 설정 기반, 제휴 회원이면 제휴사 가격 자동 적용)**
+    - wet: 빗길에 강한 타이어 (WET 높은 순)
+    - snow: 눈길/빙판 (T_SNOW, T_ICE 높은 순)
+    - high_speed: 고속 주행 (T_HIGHSPD 높은 순)
+    - handling: 핸들링 (T_HIGH_HAND_AVG 높은 순)
+    - low_vibration: 진동 적은 / 정숙성 (T_COM_SIL_AVG, T_COM_CVS 높은 순)
+    - performance: 퍼포먼스 / 스포츠 (GOODS_PFM_NM='SPORT' + T_HIGH_HAND_AVG 높은 순)
+    - commute: 출퇴근 (SEASON_NM='사계절' + T_MILG_CVS 높은 순)
+    - long_distance: 장거리 (T_COM_SIL_AVG / T_COM_CVS / T_MILG_CVS 높은 순)
+    - urban: 도심 주행 (SEASON_NM='사계절' + GOODS_PFM_NM='COMFORT')
+    - family: 가족용 (GOODS_PFM_NM IN ('COMFORT','RUNFLAT'))
+    - ev: 전기차용 (CAR_KND_NM='전기차')
+    - heavy_load: 짐 많이 싣는 차 (T_WGT_IDX, T_WGT_IDX_KG 높은 순)
+    - weekend: 주말용 (SEASON_NM='사계절' + PRC_GRD_NM='스탠다드', T_TRAY_WARE 높은 순)
+    - safe_kids: 아이 태우는 안전 (T_RLX_ISN_YN='O' + 정숙·하중 높은 순)
+    - all_weather: 눈길/비 전천후 (WET / T_SNOW / T_ICE 높은 순)
+    - warranty: 워런티 가능 상품 (ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y', WRT_GRTE_TERM 긴 순)
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 5, maximum is 100.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -544,20 +561,19 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
-        entr_yn (str, optional): Affiliate site (y/n). Default is n.
-        entr_no (str | None, optional): Affiliate number (required if entr_yn=y).
         car_lnc_cd (str | None, optional): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
         tire_size (str | None, optional): 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
 
     Example Inputs:
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "entr_yn": "n", "entr_no": None, "car_lnc_cd": None, "tire_size": None}
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX", "tire_size": None}
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK", "car_lnc_cd": None, "tire_size": "245/45R18"}
+        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
+        - {"rcmd_type": "wet", "limit": 5, "brand_cd": "HK", "tire_size": "245/45R18"}
+        - {"rcmd_type": "ev", "limit": 5, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX"}
+        - {"rcmd_type": "warranty", "limit": 5, "brand_cd": "HK"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, entr_yn=%s, entr_no=%s, car_lnc_cd=%s, tire_size=%s", rcmd_type, limit, brand_cd, entr_yn, entr_no, car_lnc_cd, tire_size)
+    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s", rcmd_type, limit, brand_cd, car_lnc_cd, tire_size)
 
     try:
         response = get_products_recommendations(
@@ -565,8 +581,6 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand
             rcmd_type=rcmd_type,
             limit=limit,
             brand_cd=brand_cd,
-            entr_yn=entr_yn,
-            entr_no=entr_no,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
         )
