@@ -1,4 +1,4 @@
-services:
+﻿services:
   # === Proxy - NGINX (Public-facing, bridges to internal-net) ===
   nginx:
     image: nginx:alpine
@@ -39,9 +39,9 @@ services:
       - internal-net
     depends_on:
       tstation-ai:
-        condition: service_started
+        condition: service_healthy
       tstation-ui-demo:
-        condition: service_started
+        condition: service_healthy
 
   # === AI Gateway ===
   ai-gateway:
@@ -126,7 +126,7 @@ services:
       redis-conversation-management:
         condition: service_started
       langfuse-server:
-        condition: service_started
+        condition: service_healthy
 
   # === Vector Database ===
   qdrant:
