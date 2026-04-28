@@ -60,6 +60,26 @@ class Settings(BaseSettings):
     REDIS_CONVERSATION_MANAGEMENT_PASSWORD: str
     REDIS_CONVERSATION_MANAGEMENT_URL: str
 
+    ### -------------------------------
+    # Chat Content Encryption (AES-256-GCM)
+    ### -------------------------------
+    CHAT_ENCRYPTION_ENABLED: bool = Field(
+        default=False,
+        description="Enable AES-256-GCM encryption for chat history at rest",
+    )
+    CHAT_ENCRYPTION_MODE: str = Field(
+        default="local",
+        description="Encryption backend: 'local' (env key) or 'kms' (AWS KMS envelope)",
+    )
+    CHAT_ENCRYPTION_LOCAL_KEY: str = Field(
+        default="",
+        description="Base64-encoded 32-byte AES-256 key (local mode only)",
+    )
+    CHAT_ENCRYPTION_KMS_KEY_ID: str = Field(
+        default="",
+        description="AWS KMS key ARN/alias/id (kms mode only)",
+    )
+
 
 ### -------------------------------
     # Queue System

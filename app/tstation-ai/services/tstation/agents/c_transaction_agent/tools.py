@@ -22,6 +22,14 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_available_coupons_api_prices_coupons_available_get import sync_detailed as get_available_coupons
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_my_coupons_api_prices_coupons_mine_get import sync_detailed as get_my_coupons
 
+# COUPON AF — 쿠폰 발급
+from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_goods_api_coupons_issue_goods_post import sync_detailed as issue_coupon_by_goods
+from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_cpn_api_coupons_issue_cpn_post import sync_detailed as issue_coupon_by_cpn
+from common.tstation_be_api_client.hkt_api_client.models import (
+    GoodsCouponIssueRequest,
+    CpnCouponIssueRequest,
+)
+
 # INVENTORY AF
 from common.tstation_be_api_client.hkt_api_client.api.inventory_af_재고_조회.get_logistics_inventory_api_inventory_logistics_post import sync_detailed as get_logistics_inventory
 from common.tstation_be_api_client.hkt_api_client.api.inventory_af_재고_조회.get_store_inventory_api_inventory_store_post import sync_detailed as get_store_inventory
@@ -263,6 +271,76 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
     except Exception as e:
         logger.exception("[TOOL][get_my_coupons_tool] Failed")
         return _error_response(None, str(e), "Failed to get my coupons")
+
+
+@tool
+def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
+    """
+    쿠폰 발급 (다운로드).
+
+    두 가지 모드를 지원합니다 — 정확히 한쪽만 입력해야 합니다 (XOR):
+    - goods_no 모드: 상품에 해당하는 최저가 혜택 쿠폰(상품쿠폰 + 결제쿠폰) 묶음 발급
+    - cpn_no 모드: 지정된 쿠폰번호 단일 발급
+
+    회원번호(mbrNo)와 제휴사번호(entrNo)는 BE 가 JWT 토큰에서 자동으로 채웁니다 —
+    이 도구에서는 절대 사용자 식별 정보를 인자로 받지 않습니다.
+
+    Use this tool when:
+    - User asks to receive/download a coupon ("쿠폰 받아줘", "다운로드", "쿠폰 받기", "발급해줘")
+    - User wants the lowest-price benefit coupon for a specific product (use goods_no)
+    - User explicitly references a coupon number from a prior voucher card (use cpn_no)
+    - DO NOT pass both arguments — choose exactly one based on user intent
+
+    Args:
+        goods_no (str | None): 상품 번호. cpn_no 와 동시에 입력 불가.
+        cpn_no (str | None): 쿠폰 번호. goods_no 와 동시에 입력 불가.
+
+    Example Inputs:
+        - {"goods_no": "G000000314254"}        # 상품 기준 최저가 혜택 쿠폰 묶음 발급
+        - {"cpn_no": "C00000123"}              # 특정 쿠폰 단일 발급
+
+    Returns:
+        dict: {"status": "success", "http_status": 200, "data": {
+            "code": "100|400|700|800|900",
+            "message": <str|null>,
+            "max_cpn":   {"cpn_no", "code", "message", "cpn_issu_no"} | null,  # goods 모드: 상품쿠폰
+            "extra_cpn": {"cpn_no", "code", "message", "cpn_issu_no"} | null,  # goods 모드: 결제쿠폰
+            "single_cpn":{"cpn_no", "code", "message", "cpn_issu_no"} | null   # cpn 모드: 단일 쿠폰
+        }}
+        per-coupon code: 100=발급 성공, 900=발급 실패(이미 보유 또는 대상 아님)
+    """
+    logger.info(
+        "[TOOL][issue_coupon_tool] Called with: goods_no=%s, cpn_no=%s",
+        goods_no, cpn_no,
+    )
+
+    # XOR 검증
+    if (goods_no is None) == (cpn_no is None):
+        return _error_response(
+            None,
+            "InvalidArguments",
+            "issue_coupon_tool requires exactly one of goods_no or cpn_no",
+        )
+
+    try:
+        if goods_no is not None:
+            body = GoodsCouponIssueRequest(goods_no=goods_no)
+            response = issue_coupon_by_goods(client=get_client(), body=body)
+        else:
+            body = CpnCouponIssueRequest(cpn_no=cpn_no)
+            response = issue_coupon_by_cpn(client=get_client(), body=body)
+
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to issue coupon",
+            )
+        logger.info("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][issue_coupon_tool] Failed")
+        return _error_response(None, str(e), "Failed to issue coupon")
 
 
 # =====================================================
