@@ -4,6 +4,11 @@ Chat History Service - Redis-based conversation management.
 Stores messages as JSON in sorted sets (chat:tmpl:{session_id}).
 Session management per user_id from JWT token.
 Slot persistence per session for conversation context tracking.
+
+Retention: sliding TTL of CHAT_HISTORY_TTL_SECONDS (1 week). Each state-changing
+operation refreshes TTL on the session's keys (tmpl, meta, user session set),
+so active conversations stay alive while inactive sessions auto-expire after
+1 week of no writes. Tool context has its own shorter TTL (see save_tool_context).
 """
 import json
 import logging
@@ -15,6 +20,7 @@ from schemas.tstation.slots import ConversationSlots
 
 import redis
 
+from common.crypto import get_crypto_service
 from common.jwt_utils import decode_jwt, get_user_info_from_token
 from config.env import settings
 
@@ -47,6 +53,10 @@ META_KEY = "chat:meta:{session_id}"
 # Custom messages with template_data (sorted set)
 TEMPLATE_MESSAGES_KEY = "chat:tmpl:{session_id}"
 
+# Maximum chat history retention (sliding TTL). Refreshed on every write so
+# active sessions stay alive; inactive sessions auto-expire after this window.
+CHAT_HISTORY_TTL_SECONDS = 7 * 24 * 60 * 60  # 1 week
+
 
 def _get_session_set_key(user_id: str) -> str:
     """Get Redis key for user's session set."""
@@ -68,11 +78,51 @@ def _get_template_messages_key(session_id: str) -> str:
     return TEMPLATE_MESSAGES_KEY.format(session_id=session_id)
 
 
+def _decode_template_data(value, crypto):
+    """Decode stored template_data into a dict.
+
+    Handles three storage shapes during the migration window:
+    - None  -> None
+    - dict  -> legacy plaintext, return as-is
+    - str   -> encrypted (or legacy JSON string); decrypt then json.loads
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        plaintext = crypto.decrypt(value)
+        try:
+            return json.loads(plaintext)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[CHAT_HISTORY] Failed to parse template_data after decrypt")
+            return None
+    return None
+
+
 class ChatHistoryService:
     """Service for managing chat history via Redis."""
 
     def __init__(self, redis_client: Optional[redis.Redis] = None):
         self.redis = redis_client or get_redis_client()
+
+    def _refresh_session_ttl(self, session_id: str, user_id: Optional[str] = None) -> None:
+        """Refresh sliding 1-week TTL on a session's Redis keys.
+
+        Called after every write so that active sessions persist indefinitely
+        while sessions idle for more than CHAT_HISTORY_TTL_SECONDS auto-expire.
+        EXPIRE on a non-existent key is a safe no-op in Redis.
+        """
+        meta_key = _get_meta_key(session_id)
+        if user_id is None:
+            user_id = self.redis.hget(meta_key, "user_id")
+
+        pipe = self.redis.pipeline()
+        pipe.expire(_get_template_messages_key(session_id), CHAT_HISTORY_TTL_SECONDS)
+        pipe.expire(meta_key, CHAT_HISTORY_TTL_SECONDS)
+        if user_id:
+            pipe.expire(_get_session_set_key(user_id), CHAT_HISTORY_TTL_SECONDS)
+        pipe.execute()
 
     def decode_token(self, access_token: str) -> Optional[dict]:
         """Decode JWT token and return user info."""
@@ -106,6 +156,8 @@ class ChatHistoryService:
             "last_message": "",
         })
 
+        self._refresh_session_ttl(session_id, user_id=user_id)
+
         logger.info(f"[CHAT_HISTORY] Created session {session_id} for user {user_id}")
         return session_id
 
@@ -131,6 +183,7 @@ class ChatHistoryService:
                 "updated_at": datetime.now().isoformat(),
                 "last_message": "",
             })
+            self._refresh_session_ttl(session_id, user_id=user_id)
             return session_id
 
         # Session belongs to different user - create new
@@ -148,31 +201,40 @@ class ChatHistoryService:
         """
         msg_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
+        crypto = get_crypto_service()
+        encrypted_template = (
+            crypto.encrypt(json.dumps(template_data, ensure_ascii=False))
+            if template_data is not None
+            else None
+        )
         msg_json = json.dumps({
             "msg_id": msg_id,
             "role": role,
-            "content": content,
-            "template_data": template_data,
+            "content": crypto.encrypt(content),
+            "template_data": encrypted_template,
             "created_at": now,
         })
         # Score = timestamp for ordering
         score = datetime.now().timestamp()
         self.redis.zadd(_get_template_messages_key(session_id), {msg_json: score})
 
-        # Update metadata
+        # Update metadata (last_message preview is also encrypted)
         meta_key = _get_meta_key(session_id)
         self.redis.hset(meta_key, mapping={
             "updated_at": now,
-            "last_message": content[:100],
+            "last_message": crypto.encrypt(content[:100]) or "",
         })
+
+        self._refresh_session_ttl(session_id)
 
         logger.info(f"[CHAT_HISTORY] Saved {role} message to session {session_id}" +
                   (f" with template_data" if template_data is not None else ""))
         return msg_id
 
     def get_history(self, session_id: str) -> List[dict]:
-        """Get all messages for a session from sorted set."""
+        """Get all messages for a session from sorted set (decrypts content & template_data)."""
         messages = []
+        crypto = get_crypto_service()
 
         # Get messages from custom template sorted set
         tmpl_key = _get_template_messages_key(session_id)
@@ -184,9 +246,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": data.get("content", ""),
+                    "content": crypto.decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": data.get("template_data"),
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
@@ -204,9 +266,10 @@ class ChatHistoryService:
         return messages
 
     def list_sessions(self, user_id: str) -> List[dict]:
-        """List all sessions for a user."""
+        """List all sessions for a user (decrypts last_message preview)."""
         session_set_key = _get_session_set_key(user_id)
         session_ids = self.redis.smembers(session_set_key)
+        crypto = get_crypto_service()
 
         sessions = []
         for session_id in session_ids:
@@ -216,7 +279,7 @@ class ChatHistoryService:
             if meta:
                 sessions.append({
                     "session_id": session_id,
-                    "last_message": meta.get("last_message", ""),
+                    "last_message": crypto.decrypt(meta.get("last_message", "")) or "",
                     "updated_at": meta.get("updated_at", ""),
                 })
             else:
@@ -298,34 +361,46 @@ class ChatHistoryService:
         # Trim to max
         merged = merged[:self._MAX_TOOL_CONTEXT_ITEMS]
 
-        self.redis.set(key, json.dumps(merged, ensure_ascii=False))
+        crypto = get_crypto_service()
+        plaintext_blob = json.dumps(merged, ensure_ascii=False)
+        self.redis.set(key, crypto.encrypt(plaintext_blob))
         self.redis.expire(key, 7200)
         logger.info(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
                      f"= {len(merged)} total tool results for session {session_id}")
 
     def get_tool_context(self, session_id: str) -> list[dict]:
-        """Load accumulated structured tool results."""
+        """Load accumulated structured tool results (decrypts blob)."""
         key = f"chat:tool_ctx:{session_id}"
         raw = self.redis.get(key)
         if raw:
+            crypto = get_crypto_service()
+            plaintext = crypto.decrypt(raw)
             try:
-                return json.loads(raw)
+                return json.loads(plaintext)
             except (json.JSONDecodeError, TypeError):
                 logger.warning(f"[TOOL_CTX] Failed to parse tool context for session {session_id}")
         return []
 
     def save_slots(self, session_id: str, slots: ConversationSlots) -> None:
-        """Save conversation slots to session metadata."""
+        """Save conversation slots to session metadata (encrypted)."""
         meta_key = _get_meta_key(session_id)
-        self.redis.hset(meta_key, "slots", slots.model_dump_json())
+        crypto = get_crypto_service()
+        encrypted = crypto.encrypt(slots.model_dump_json()) or ""
+        self.redis.hset(meta_key, "slots", encrypted)
+        self._refresh_session_ttl(session_id)
         logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
 
     def get_slots(self, session_id: str) -> ConversationSlots:
-        """Load conversation slots from session metadata."""
+        """Load conversation slots from session metadata (decrypts)."""
         meta_key = _get_meta_key(session_id)
         raw = self.redis.hget(meta_key, "slots")
         if raw:
-            return ConversationSlots.model_validate_json(raw)
+            crypto = get_crypto_service()
+            plaintext = crypto.decrypt(raw)
+            try:
+                return ConversationSlots.model_validate_json(plaintext)
+            except (ValueError, TypeError) as exc:
+                logger.warning(f"[CHAT_HISTORY] Failed to parse slots for session {session_id}: {exc}")
         return ConversationSlots()
 
 
