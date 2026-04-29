@@ -109,6 +109,39 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 
+# Whitelist of fields kept in product items returned to the LLM. Everything
+# else is stripped to keep tool-result payload compact (~10x reduction on a
+# 5-item recommendation turn). Detail content (descriptions, full reviews) is
+# still reachable via get_product_description_tool when the user explicitly asks.
+_TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
+    # Identity
+    "goods_no", "goods_nm", "title",
+    # Visual / pricing
+    "image_url", "price", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    # Scoring used for sort priority and rcmd_type matching
+    "tot_scr",
+    "t_comfort", "t_silence", "t_life_span", "t_fuel_eff_convert",
+    "wet", "t_snow", "t_ice",
+    "t_highspd", "t_highspd_cd", "t_high_hand_avg",
+    "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
+    "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
+    # Categorical attributes referenced by the agent / template_mapper
+    "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
+    # Rating shown on cards
+    "rating_avg", "rate", "comfort",
+})
+
+
+def _slim_product_item(item: dict) -> dict:
+    """Strip noise fields from a product item before returning to the LLM.
+
+    Drops pc_prod_remark_desc, pc_prod_tech_desc, slogan, images (full array),
+    reviews, nested rating object, and any unknown future bloat. Keeps only
+    fields in _TRIM_KEEP_FIELDS.
+    """
+    return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+
+
 def _fetch_description(goods_no: str) -> dict:
     """Fetch product description for a single goods_no, return merged fields or empty dict on failure."""
     try:
@@ -130,13 +163,18 @@ def _fetch_description(goods_no: str) -> dict:
 
 
 def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
-    """Parallel-fetch descriptions for each item and merge into item dicts."""
+    """Parallel-fetch descriptions for each item, merge into item dicts, then slim.
+
+    Enrichment fetch is preserved so future field needs can be served by
+    widening _TRIM_KEEP_FIELDS — the LLM-visible payload is filtered to
+    that whitelist to prevent context bloat (HTML descs, reviews, etc.).
+    """
     if not items:
         return items
 
     goods_nos = [item.get("goods_no") for item in items if item.get("goods_no")]
     if not goods_nos:
-        return items
+        return [_slim_product_item(item) for item in items]
 
     desc_map: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(len(goods_nos), 5)) as executor:
@@ -145,7 +183,10 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
             gno = futures[future]
             desc_map[gno] = future.result()
 
-    return [{**item, **desc_map.get(item.get("goods_no"), {})} for item in items]
+    return [
+        _slim_product_item({**item, **desc_map.get(item.get("goods_no"), {})})
+        for item in items
+    ]
 
 
 @tool
