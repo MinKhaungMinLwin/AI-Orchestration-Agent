@@ -747,6 +747,7 @@ class StreamingMultiAgentCoordinator:
         user_id: str | None = None,
         trace_id: str | None = None,
         skip_decision: bool = False,
+        slot_context_with_intent: str | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -754,7 +755,8 @@ class StreamingMultiAgentCoordinator:
         Args:
             messages: Original user messages
             domains: Pre-classified domains (optional, will classify if not provided)
-            slot_context: Formatted slot context string to inject into agent messages
+            slot_context: Formatted slot context string (WITHOUT pending_intent block).
+                Default for Discovery / Support / Leading agents.
             session_id: Session ID for persisting tool-derived slots (goods_no, shop_id)
             tool_context: Formatted tool results from previous turn for context preservation
             user_id: User ID for Langfuse tracing
@@ -762,6 +764,14 @@ class StreamingMultiAgentCoordinator:
             skip_decision: When True AND domains has >= 2 entries, skip the
                 `decide_next_action` LLM call between the first and second agent
                 (the chain is pre-committed by the caller — e.g., P0 code gate).
+            slot_context_with_intent: Slot context WITH pending_intent block.
+                Injected ONLY for the Transaction agent — that agent acts directly
+                on the intent (Flow 1 price / Flow 2-3 stock / Flow 6 order).
+                Discovery / Support / Leading must route purely from prior
+                conversation context, never from a stale intent slot, so they keep
+                receiving `slot_context` (no intent block) instead.
+                When None (no pending_intent set), Transaction also receives plain
+                `slot_context`.
 
         Yields:
             Stream events from all agents in sequence
@@ -802,11 +812,23 @@ class StreamingMultiAgentCoordinator:
             enriched_messages = []
 
             # 1. slot_context FIRST
-            if slot_context:
+            # Per-domain slot context: only the Transaction agent sees the
+            # `[사용자의 진행 중인 요청]` block, since it is the only agent that
+            # acts directly on the intent slot. Other agents would otherwise let
+            # a stale intent silently override their conversation-history-based
+            # routing (e.g., Discovery would emit "바로 가격 조회로 이어갑니다"
+            # on a recommendation pick instead of calling
+            # `get_product_description_tool`).
+            if domain == MultiAgentDomain.Domain.TRANSACTION and slot_context_with_intent:
+                domain_slot_context = slot_context_with_intent
+            else:
+                domain_slot_context = slot_context
+
+            if domain_slot_context:
                 enriched_messages.append(
                     {
                         "role": "assistant",
-                        "content": slot_context,
+                        "content": domain_slot_context,
                     }
                 )
 
@@ -912,7 +934,11 @@ class StreamingMultiAgentCoordinator:
                     if tool_output:
                         try:
                             parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
-                            accumulated_tool_data.append({"tool": event.get("tool", ""), "data": parsed})
+                            accumulated_tool_data.append({
+                                "tool": event.get("tool", ""),
+                                "input": event.get("input", {}),
+                                "data": parsed,
+                            })
 
                             # Persist tool-derived goods_no, shop_id, and tire_size to slots
                             if session_id and isinstance(parsed, dict):
@@ -921,7 +947,11 @@ class StreamingMultiAgentCoordinator:
                                 )
 
                         except (json.JSONDecodeError, TypeError):
-                            accumulated_tool_data.append({"tool": event.get("tool", ""), "data": tool_output})
+                            accumulated_tool_data.append({
+                                "tool": event.get("tool", ""),
+                                "input": event.get("input", {}),
+                                "data": tool_output,
+                            })
 
             # Yield agent completion event
             yield {
@@ -1645,6 +1675,7 @@ class TStationChatServiceV2:
 
         domains = None
         slot_context = None
+        slot_context_with_intent = None
         tool_context = None
 
         # Defaults hoisted above the try block so the P0 auto-chain gate below
@@ -1804,8 +1835,19 @@ class TStationChatServiceV2:
             # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)
 
-            # 5) Build slot context string for agent injection
-            slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
+            # 5) Build slot context strings for agent injection.
+            # `slot_context` (no pending_intent) is the default for all agents — Discovery,
+            # Support, and Leading must route purely from prior conversation context, never
+            # from a coordinator-set intent slot, so a stale "가격" / "재고" intent from an
+            # earlier turn does not silently force a Transaction handoff on a recommendation
+            # pick. `slot_context_with_intent` is the full version, injected ONLY for the
+            # Transaction agent which acts directly on the intent (Flow 1 / 2 / 6 routing).
+            slot_context = merged_slots.to_prompt_context(include_pending_intent=False) if merged_slots.has_any() else None
+            slot_context_with_intent = merged_slots.to_prompt_context(include_pending_intent=True) if merged_slots.has_any() else None
+            # When pending_intent is unset both strings are equal — collapse so the
+            # downstream coordinator only injects one block.
+            if slot_context_with_intent == slot_context:
+                slot_context_with_intent = None
 
             # 6) Format tool context for prompt injection
             if prev_tool_data:
@@ -1818,6 +1860,7 @@ class TStationChatServiceV2:
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
             slot_context = None
+            slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
         # Try rule-based fast-path first; fall back to LLM classifier if undecided.
@@ -1928,6 +1971,7 @@ class TStationChatServiceV2:
                     user_id=request.user_id,
                     trace_id=request.tracing_id,
                     skip_decision=skip_decision,
+                    slot_context_with_intent=slot_context_with_intent,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1951,6 +1995,7 @@ class TStationChatServiceV2:
                 user_id=request.user_id,
                 trace_id=request.tracing_id,
                 skip_decision=skip_decision,
+                slot_context_with_intent=slot_context_with_intent,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -1993,6 +2038,7 @@ class TStationChatServiceV2:
         user_id: str | None = None,
         trace_id: str | None = None,
         skip_decision: bool = False,
+        slot_context_with_intent: str | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -2035,6 +2081,7 @@ class TStationChatServiceV2:
             user_id=user_id,
             trace_id=trace_id,
             skip_decision=skip_decision,
+            slot_context_with_intent=slot_context_with_intent,
         ):
             event_type = event.get("type")
 

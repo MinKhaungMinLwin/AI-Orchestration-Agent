@@ -226,7 +226,7 @@ class ConversationSlots(BaseModel):
         """
         return any(pattern.search(user_text) for pattern in cls._PRODUCT_KEYWORD_PATTERNS)
 
-    def to_prompt_context(self) -> str:
+    def to_prompt_context(self, include_pending_intent: bool = True) -> str:
         """Format slots as a system prompt context string for agent injection.
 
         Emits up to two blocks:
@@ -235,6 +235,14 @@ class ConversationSlots(BaseModel):
         - [사용자의 진행 중인 요청] — pending_intent, emitted as an independent hint.
           Does NOT carry the "do not re-ask" instruction, because intent alone is not
           confirmed entity data and an agent may still need to clarify product/store.
+
+        Args:
+            include_pending_intent: When True (default), the
+                [사용자의 진행 중인 요청] block is emitted. When False, that block
+                is suppressed — used for agents that must route purely from prior
+                conversation context (Discovery / Support / Leading); only the
+                Transaction agent acts directly on the intent slot.
+
         Returns empty string when no slot is set.
         """
         entity_label_map = {
@@ -271,7 +279,7 @@ class ConversationSlots(BaseModel):
                 ])
             )
 
-        if self.pending_intent is not None:
+        if include_pending_intent and self.pending_intent is not None:
             intent_ko = intent_label_map.get(self.pending_intent, self.pending_intent)
             blocks.append(
                 f"[사용자의 진행 중인 요청: {intent_ko}]\n"
