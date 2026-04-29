@@ -160,22 +160,6 @@ class MultiAgentDomain(BaseModel):
             "Always provide a value."
         ),
     )
-    next_action: str = Field(
-        description=(
-            "The specific action the target agent should perform immediately based on conversation state. "
-            "Be concrete — reference tool name and key param if possible. "
-            "Examples: 'match car_no 123가4566 from previous car list → extract tire_size_fr → call get_products_recommendations_tool', "
-            "'user already has goods_no from context → call get_final_price_tool directly', "
-            "'call get_my_cars_tool with mbr_no from user context', "
-            "'call get_products_recommendations_tool AGAIN with rcmd_type=\"weekend\" (new scenario), reuse tire_size from slots — do NOT filter previous wet results'. "
-            "⚠️ When the user provides a NEW scenario keyword after a previous recommendation, "
-            "next_action MUST instruct the agent to RE-CALL get_products_recommendations_tool with "
-            "the new rcmd_type, NOT to filter or pick from the previous list. Phrases like "
-            "'filter previous list', 'pick weekend-friendly items from previous wet list' are "
-            "FORBIDDEN — they cause incorrect recommendations. "
-            "Use 'proceed normally' if action is obvious from the user message alone."
-        ),
-    )
     flow: str = Field(
         description=(
             "One-line summary of the conversation journey so far. "
@@ -200,10 +184,10 @@ class MultiAgentDomain(BaseModel):
 class _SlimMultiAgentDomain(BaseModel):
     """First-turn slim classification schema.
 
-    Drops user_behavior / next_action / flow narrative fields — they only
-    carry signal once prior conversation history exists. On a fresh session
-    they would be placeholders ("fresh start — no prior context"), so we
-    skip generating them to save output tokens on every first message.
+    Drops user_behavior / flow narrative fields — they only carry signal
+    once prior conversation history exists. On a fresh session they would
+    be placeholders ("fresh start — no prior context"), so we skip
+    generating them to save output tokens on every first message.
     """
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -213,7 +197,9 @@ class _SlimMultiAgentDomain(BaseModel):
 
 
 # Module-level singletons — avoid re-wrapping LLM per request.
-# DECISION_LLM (small/fast model) is sufficient for routing classification.
+# DECISION_LLM (small/fast) is sufficient for routing classification since the
+# schemas are descriptive only — no prescriptive `next_action` field that would
+# require recalling tool signatures (which the small model used to hallucinate).
 _multi_intent_model = _decision_llm.with_structured_output(MultiAgentDomain, strict=True)
 _slim_intent_model = _decision_llm.with_structured_output(_SlimMultiAgentDomain, strict=True)
 
@@ -228,12 +214,11 @@ Produce 4 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
-4. next_action — the concrete action the agent should take immediately (e.g. "match car_no 123가4566 from car list → extract tire_size_fr → call get_products_recommendations_tool")
-5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+4. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 
-IMPORTANT: user_behavior and next_action must reflect the FULL conversation context, not just the current message.
+IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
-identify WHAT they are responding to and set next_action accordingly.
+identify WHAT they are responding to in user_behavior. The agent will pick the actual tool to call based on its own flow rules — do NOT prescribe specific tool names or parameters here.
 
 ⚠️ CRITICAL — RE-RECOMMENDATION INTENT (replaces "filter previous list" default):
 When ANY previous turn in this conversation produced a tire recommendation list
@@ -265,19 +250,17 @@ PREV=CUR escape (do NOT mark as RE-RECOMMENDATION):
 In RE-RECOMMENDATION cases:
   - user_behavior MUST be like: "requesting NEW recommendation with different scenario (X)"
     or "requesting fresh search to replace previous list"
-  - next_action MUST be: "call get_products_recommendations_tool AGAIN with rcmd_type=<X>
-    (new scenario), reuse tire_size from slots — do NOT filter previous results"
   - NEVER write 'filter previous tire list', 'pick from previous list',
     'select X-friendly items from previous Y list' — these phrases push the agent
-    into wrong behavior.
+    into wrong behavior. The Discovery agent has its own Branch A/B logic that
+    reads user_behavior to decide whether to re-call the recommendation tool.
 
 Worked example 1 (with 다시 keyword):
   - Previous: get_products_recommendations_tool(rcmd_type="wet") returned 4 items
   - Current user message: "주말 나들이용으로 다시"
   - CORRECT user_behavior: "requesting new recommendation with weekend scenario after previous wet recommendation"
-  - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='weekend', reuse tire_size — NEW result replaces previous wet list"
-  - WRONG (do NOT write): "selecting weekend-suitable items from previous tire list"
-  - WRONG (do NOT write): "filter previous recommendations for weekend use"
+  - WRONG user_behavior: "selecting weekend-suitable items from previous tire list"
+  - WRONG user_behavior: "filter previous recommendations for weekend use"
 
 Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
   - Earlier turn: get_products_recommendations_tool(rcmd_type="ev") returned 4 items (235/55R19)
@@ -286,16 +269,14 @@ Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
   - PREV rcmd_type = "ev"; user mentions "패밀리/가족" + "사계절" — clearly
     different scenario family from "ev" → RE-RECOMMENDATION applies.
   - CORRECT user_behavior: "requesting NEW recommendation with family + 사계절 scenario; previous rcmd_type='ev' no longer matches"
-  - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='family' via combined-key match (사계절+가족), reuse tire_size 235/55R19 — NEW result replaces previous EV list"
-  - WRONG: "filter previous EV list for family-friendly all-season options"
-  - WRONG: "pick 사계절 candidates from previous list"
+  - WRONG user_behavior: "filter previous EV list for family-friendly all-season options"
+  - WRONG user_behavior: "pick 사계절 candidates from previous list"
 
 Worked example 3 (PREV=CUR escape — NOT re-recommendation):
   - Previous: get_products_recommendations_tool(rcmd_type="ev") returned 4 items
   - Current user message: "이 EV 타이어 중에서 18인치로"
   - "EV" matches PREV; "이 중에서" is a demonstrative → continuation, NOT re-recommendation.
   - user_behavior: "filtering previous EV recommendation list by size 18인치"
-  - next_action: "filter the existing list — no new tool call needed"
 
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
@@ -496,12 +477,12 @@ class StreamingMultiAgentCoordinator:
         """Classify user message into one or more domains.
 
         First turn (no prior history) uses a slim schema + slim prompt to skip
-        narrative fields the small router model would otherwise generate as
-        placeholders. Multi-turn keeps the full schema + prompt because
-        user_behavior / next_action / flow carry real signal once history exists.
+        narrative fields. Multi-turn keeps the full schema + prompt because
+        user_behavior / flow carry real signal once history exists.
 
-        Both paths use DECISION_LLM (small/fast model) — routing is a
-        low-reasoning task that does not need the Sonnet-tier main LLM.
+        Both paths use DECISION_LLM (small/fast model) — routing is a low-reasoning
+        task and the schemas are descriptive only, so the small model has no
+        prescriptive tool-signature field to hallucinate in.
 
         Returns:
             (domains, routing_result) — domains for backward compat, full result for context injection.
@@ -540,14 +521,13 @@ class StreamingMultiAgentCoordinator:
                     reason=raw_result.reason,
                     domains=raw_result.domains,
                     user_behavior="",
-                    next_action="",
                     flow="",
                 )
             else:
                 result = raw_result
 
             logger.info(
-                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}"
+                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, flow={result.flow!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -558,7 +538,7 @@ class StreamingMultiAgentCoordinator:
 
     @staticmethod
     def _inject_conversation_context(messages: list[dict], routing: MultiAgentDomain | None) -> list[dict]:
-        """Inject conversation context (user_behavior, next_action, flow) above the Korean instruction
+        """Inject conversation context (user_behavior, flow) above the Korean instruction
         in the last user message.
 
         The current last user message already has the format:
@@ -568,7 +548,6 @@ class StreamingMultiAgentCoordinator:
         After injection:
             ## CONVERSATION CONTEXT
             - User behavior: ...
-            - Next action: ...
             - Flow so far: ...
 
             # Respond in Korean language
@@ -581,8 +560,6 @@ class StreamingMultiAgentCoordinator:
         context_parts = []
         if routing.user_behavior:
             context_parts.append(f"- User behavior: {routing.user_behavior}")
-        if routing.next_action:
-            context_parts.append(f"- Next action: {routing.next_action}")
         if routing.flow:
             context_parts.append(f"- Flow so far: {routing.flow}")
 
