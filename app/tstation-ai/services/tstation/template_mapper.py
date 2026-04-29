@@ -100,10 +100,14 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
-                "tires": _get_str(row, "tires"),
-                "comfort": _get_str(row, "comfort"),
+                # FE renders these as tag chips (primary/secondary) only when truthy.
+                # Tool output has no `tires` field, and `comfort` arrives as a numeric
+                # score (e.g. 5.0); stringifying it produced a label that looked like a
+                # rating. Skip both — keep the cards clean (FE still shows the rate stars).
+                "tires": "",
+                "comfort": "",
                 "price": int(_get_num(row, "price", "extra_fvr_sale_prc", default=0)),
-                "rate": float(_get_num(row, "rate", default=0.0)),
+                "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
                 "description": "",
             })
@@ -331,19 +335,24 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
 
 
 def _summarize(full_text: str, template: str, item_count: int) -> str:
-    """Domain Agent 텍스트에서 첫 문장만 추출하거나, 기본 안내를 반환한다."""
+    """Domain Agent 텍스트에서 첫 문장만 추출하거나, 기본 안내를 반환한다.
+
+    PROSE MODE 도입 후 LLM이 1–2문장의 짧은 prose("...찾았어요. ...선택해 주세요 😊")를
+    내보내는데, 첫 문장에서 자르면 후반부 + 마지막 emoji가 사라진다. 길이가 120자
+    이하라면 그대로 유지하고, 그보다 길 때만 첫 문장 컷을 적용한다.
+    """
     text = (full_text or "").strip()
     if not text:
         return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count)
 
-    # 첫 문장 추출 (줄바꿈 또는 문장 부호 기준, 120자 이내)
+    if len(text) <= 120:
+        return text
+
+    # 길면 첫 문장으로 컷 (줄바꿈 또는 문장 부호 기준)
     for sep in ["\n", ".\n", "!\n", "?\n", ". ", "! ", "? "]:
         idx = text.find(sep)
         if 0 < idx <= 120:
             return text[: idx + 1].strip()
-
-    if len(text) <= 120:
-        return text
 
     return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count)
 
