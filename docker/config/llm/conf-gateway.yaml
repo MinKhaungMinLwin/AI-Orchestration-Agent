@@ -8,6 +8,20 @@ model_list:
       api_key: "os.environ/OPENAI_API_KEY"
       reasoning_effort: "medium"
 
+  - model_name: gpt-5.4-reasoning-low
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "low"
+
+  - model_name: gpt-5.4-reasoning-minimal
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "minimal"
+
   - model_name: gpt-5.4
     litellm_params:
       model: openai/gpt-5.4
