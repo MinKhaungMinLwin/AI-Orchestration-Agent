@@ -21,6 +21,7 @@ class ProductSearchItem:
         tire_size_2 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_2)
         score (int | Unset): 검색 관련도 점수 Default: 0.
         match_type (str | Unset): 매칭 유형 (exact/prefix/partial/alias) Default: 'none'.
+        image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
     """
 
     goods_no: str
@@ -29,6 +30,7 @@ class ProductSearchItem:
     tire_size_2: None | str | Unset = UNSET
     score: int | Unset = 0
     match_type: str | Unset = "none"
+    image_url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -52,6 +54,12 @@ class ProductSearchItem:
 
         match_type = self.match_type
 
+        image_url: None | str | Unset
+        if isinstance(self.image_url, Unset):
+            image_url = UNSET
+        else:
+            image_url = self.image_url
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -68,6 +76,8 @@ class ProductSearchItem:
             field_dict["score"] = score
         if match_type is not UNSET:
             field_dict["match_type"] = match_type
+        if image_url is not UNSET:
+            field_dict["image_url"] = image_url
 
         return field_dict
 
@@ -100,6 +110,15 @@ class ProductSearchItem:
 
         match_type = d.pop("match_type", UNSET)
 
+        def _parse_image_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        image_url = _parse_image_url(d.pop("image_url", UNSET))
+
         product_search_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
@@ -107,6 +126,7 @@ class ProductSearchItem:
             tire_size_2=tire_size_2,
             score=score,
             match_type=match_type,
+            image_url=image_url,
         )
 
         product_search_item.additional_properties = d
