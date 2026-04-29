@@ -116,6 +116,8 @@ def _success_response(http_status: int, data: Any) -> dict:
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
     "goods_no", "goods_nm", "title",
+    # Tire size — used by the agent to differentiate same-name SKUs in card titles
+    "tire_size_1", "tire_size_2",
     # Visual / pricing
     "image_url", "price", "extra_fvr_sale_prc", "extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching
@@ -143,19 +145,28 @@ def _slim_product_item(item: dict) -> dict:
 
 
 def _fetch_description(goods_no: str) -> dict:
-    """Fetch product description for a single goods_no, return merged fields or empty dict on failure."""
+    """Fetch product description and return flat fields the LLM whitelist keeps.
+
+    The description endpoint returns nested `images: [{img_path_nm, thnl_path_nm}, ...]`
+    and `rating: {review_count, rating_avg}` objects. The LLM whitelist
+    (`_TRIM_KEEP_FIELDS`) keeps only flat fields, so we flatten here:
+      - `image_url` ← first image's full URL (img_path_nm > thnl_path_nm fallback)
+      - `rating_avg` / `rate` ← rating.rating_avg (rate is the FE alias)
+    """
     try:
         response = get_product_description(client=get_client(), goods_no=goods_no)
         if response.parsed is None:
             return {}
         desc = _to_dict(response.parsed)
+        images = desc.get("images") or []
+        first_image = images[0] if images else {}
+        image_url = first_image.get("img_path_nm") or first_image.get("thnl_path_nm") or ""
+        rating = desc.get("rating") or {}
+        rating_avg = rating.get("rating_avg") or 0
         return {
-            "pc_prod_remark_desc": desc.get("pc_prod_remark_desc"),
-            "pc_prod_tech_desc": desc.get("pc_prod_tech_desc"),
-            "slogan": desc.get("slogan"),
-            "images": desc.get("images"),
-            "rating": desc.get("rating"),
-            "reviews": desc.get("reviews"),
+            "image_url": image_url,
+            "rating_avg": rating_avg,
+            "rate": rating_avg,
         }
     except Exception:
         logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)

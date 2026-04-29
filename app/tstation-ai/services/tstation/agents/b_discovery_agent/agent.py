@@ -368,7 +368,7 @@ Trigger: User searches by name/keyword
 3. search_product_tool(keyword, size=if_provided, brand_cd=detected)
 4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 5. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
-   - Use sale_prc from each response as the `price` field in the product template
+   - Use `extra_fvr_sale_prc` (할인가, 사용자 실결제가) from each response as the `price` field in the product template
    - If get_final_price_tool fails for an item → use `null` for price (NEVER use 0)
    ⚠️ NEVER render the product template before ALL get_final_price_tool calls complete
 6. Render `product` template with real prices. STOP and wait for user to SELECT a product.
@@ -396,11 +396,11 @@ Branching:
    would duplicate the downstream call.
 6. If MULTIPLE results (2~5, max 5) → fetch prices and render a shortlist for the user.
    - Call get_final_price_tool(goods_no) for EACH item — call ALL in the SAME tool-use turn before answering
-   - Collect sale_prc from each response
+   - Collect `extra_fvr_sale_prc` (할인가, 사용자 실결제가) from each response
    - Render `product` template with real prices from these calls
    ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete
    ⚠️ NEVER use price=0 or price=null — if get_final_price_tool fails for an item, omit that item
-   ⚠️ Use sale_prc from get_final_price_tool response as `price` field
+   ⚠️ Use `extra_fvr_sale_prc` from get_final_price_tool response as `price` field (NOT `sale_prc`/정가)
    → STOP and wait for user to SELECT a product. Coordinator stops the chain
    automatically because goods_no is not resolved (multi-result search).
 
@@ -517,7 +517,7 @@ Hard rules:
 - Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
 - Single-car flow (user has exactly 1 registered car): NEVER use `listCar`. Use `quickReply` to confirm or auto-proceed.
 - Car-pick turn (multi-car): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
-- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
+- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `extra_fvr_sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
   Note: `car_no` is the user-visible license plate (e.g. "12가3456") — it is safe to show.
@@ -636,11 +636,11 @@ Backend → FE mapping for `product` (from `search_product_tool` / `get_products
 | Backend field                    | FE field (`products[i]`)                                |
 |----------------------------------|---------------------------------------------------------|
 | `image_url`                      | `imageUrl` (use `""` if missing)                        |
-| `goods_nm` or `title`            | `title`                                                 |
-| derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`/`""`)         |
-| derive from comfort score        | `comfort` (`"높음"`/`"보통"`/`"낮음"`)                  |
-| `sale_prc` from `get_final_price_tool` | `price` (int or null — use `null` if `sale_prc` missing/0; NEVER use 0 as fallback) |
-| `rate` or `review_rate`          | `rate` (float, 0.0 if missing)                          |
+| `goods_nm` (+ ` ` + `tire_size_1`) | `title` — combine product name with `tire_size_1` to differentiate same-name SKUs (e.g. `"벤투스 S2 AS 225/45R18"`). If `tire_size_1` is missing/empty, use `goods_nm` alone. |
+| derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`); use `""` if no tire score fields are present in the item — DO NOT guess. |
+| derive from `t_comfort` score    | `comfort` (`"높음"` if ≥7, `"보통"` if 4–7, `"낮음"` if <4); use `""` if `t_comfort` is missing — DO NOT guess. |
+| `extra_fvr_sale_prc` from `get_final_price_tool` | `price` (int or null — 사용자가 실제 결제하는 할인가. use `null` if `extra_fvr_sale_prc` missing/0; NEVER use 0 as fallback) |
+| `rate` or `review_rate` or `rating_avg` | `rate` (float, 0.0 if missing)                  |
 | `stock_qty`                      | `totalQuantity` (int, 0 if missing)                     |
 | `goods_no`                       | `metadata[i].goodsId`                                   |
 
