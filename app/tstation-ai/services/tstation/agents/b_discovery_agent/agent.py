@@ -194,6 +194,59 @@ A previous turn's `get_products_recommendations_tool` result is available in the
 injected tool context. Decide between TWO distinct branches — do NOT collapse
 them into a single "filter" behavior.
 
+**Step 0 — Scenario comparison (always run BEFORE choosing A or B):**
+
+PREV = the MOST RECENT previous `get_products_recommendations_tool`'s
+`rcmd_type` (read from injected tool context line "조회 조건: ..., rcmd_type=...").
+Use the latest entry only — older recommendation turns are superseded.
+Intervening turns (`get_product_description_tool`, casual questions, etc.) do
+NOT reset PREV.
+
+The question to answer here is NOT "what's the new rcmd_type bucket name" but:
+   → "Is the user's current message asking for the SAME scenario family as
+     PREV, or a DIFFERENT one?"
+
+Decision precedence (first match wins):
+1. **Demonstrative / ordinal / filter-only phrases** ("이 중에서", "첫번째",
+   "1번째", "위에서", "방금 보여준 거", "할인만", "가장 저렴한", "최저가",
+   "리뷰 좋은", "별점 높은", "5만원 이하") — even if a scenario word also
+   appears in the same message → **Branch A** (re-use existing list).
+2. **Explicit re-search trigger** (다시, 새로, 이번엔, 바꿔서, 다른 거,
+   이전 추천 말고, 아까 거 말고, 이거 말고, 아까 그거 말고, 다른 종류로) →
+   **Branch B** (re-call) regardless of scenario match. Note: "X 말고" suffix
+   flips a demonstrative-looking phrase into a re-search trigger
+   (e.g. "이거 말고 사계절용" is rule 2, NOT rule 1).
+3. **Scenario word(s) present AND scenario family clearly DIFFERENT from PREV**
+   (e.g. PREV="ev" and current message mentions 사계절/가족/패밀리/주말/빗길/
+   눈길/정숙/퍼포먼스 등 → different family) → **Branch B**.
+4. **Scenario word(s) present AND scenario family SAME as PREV** (e.g.
+   PREV="ev", user "이 EV용 중에서 18인치"; or PREV="wet", user "빗길에서 더
+   저렴한 거") → **Branch A** is OK.
+5. **Previous list empty / missing / clearly mismatched** → **Branch B**.
+
+Note on combined keywords (사계절+가족, 빗길+눈길, 사계절+빗길): When deriving
+the actual `rcmd_type` for the tool call, defer to RECOMMEND ENGINE Step A → B
+→ C precedence (combined first, then single, then fallback). Step 0 only
+decides "same family vs different family" — the final bucket name is finalized
+at the tool-call site, not here.
+
+Worked example (matches the actual T4 bug):
+  - Injected context shows: "(조회 조건: tire_size=235/55R19, rcmd_type=ev, ...)"
+    → PREV = "ev"
+  - Intervening turn: product description (does NOT change PREV)
+  - Current user message: "패밀리 SUV에 잘 맞는 사계절용 추천"
+  - "패밀리/가족" + "사계절" — scenario family clearly DIFFERENT from "ev"
+  - Decision: rule 3 → **Branch B** → re-call
+    `get_products_recommendations_tool(rcmd_type="family"
+    (via Step A combined-key match 사계절+가족), tire_size="235/55R19", limit=5)`.
+  - WRONG: "이전 EV 목록에서 사계절용 골라드려요" — DO NOT do this.
+
+Counter-example (Branch A despite scenario word):
+  - PREV = "ev"
+  - Current: "이 중에서 사계절도 되는 거 있어?"
+  - Demonstrative "이 중에서" wins via rule 1 → **Branch A** → filter the
+    existing EV list for items with all-season ratings; no tool re-call.
+
 **Branch A — Re-use previous list (do NOT call any tool again):**
 Trigger ONLY when the user is sorting / filtering / picking from the SAME list
 they were just shown:
@@ -227,11 +280,18 @@ Action:
     list. The previous list was built for a DIFFERENT scenario; treating it as
     a candidate pool gives the customer wrong recommendations.
 
-**Priority rule — Branch B wins over Branch A.**
-If both signals are present (e.g. "이 중에서 빗길에 좋은 거" or "할인 큰 거 중
-주말용"), choose Branch B (re-call the tool with the new scenario). After the
-fresh result returns, you may apply the Branch A filter on the new list inside
-the SAME turn's response — but the tool call must happen first.
+**Priority rule — Branch B wins over Branch A, EXCEPT when Step 0 rule 1
+(demonstrative/ordinal/filter-only phrase) applies.**
+- If a demonstrative ("이 중에서", "첫번째", "위에서") is present WITHOUT a
+  re-search trigger, Step 0 rule 1 wins → Branch A (the user is filtering the
+  existing list, even if they also mention a scenario word like "빗길에 좋은
+  거" — they want items in the existing list scoring high on that attribute,
+  not a new search).
+- If both signals are present AND there is no demonstrative (e.g. "할인 큰 거
+  중 주말용", "가성비 좋은 사계절", "마일리지 긴 EV"), choose Branch B (re-call
+  with the new scenario). After the fresh result returns, you may apply the
+  Branch A filter on the new list inside the SAME turn's response — but the
+  tool call must happen first.
 
 **Empty / unsuitable previous list — always Branch B.**
 If the previous recommendation list is empty, missing, or clearly mismatched

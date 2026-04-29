@@ -222,14 +222,33 @@ If the user is responding to a previous agent question (e.g. selecting a car, co
 identify WHAT they are responding to and set next_action accordingly.
 
 ⚠️ CRITICAL — RE-RECOMMENDATION INTENT (replaces "filter previous list" default):
-When the previous turn produced a tire recommendation list AND the current user message
-contains EITHER (a) a NEW scenario keyword (빗길, 눈길, 사계절, 고속, 핸들링, 정숙,
-퍼포먼스, 출퇴근, 장거리, 도심, 가족, 전기차, 짐 많이, 주말, 아이/안전, 가성비,
-워런티, 통근, 스포츠 등) OR (b) a re-search trigger ("다시", "새로", "이번엔",
-"바꿔서", "다른 거", "이전 추천 말고", "아까 거 말고", "다른 종류로"),
+When ANY previous turn in this conversation produced a tire recommendation list
+(via get_products_recommendations_tool — even if it was several turns ago, NOT
+just the immediately previous turn; intervening turns like product description
+or unrelated questions do NOT reset this) AND the current user message contains
+EITHER:
+  (a) a NEW scenario keyword (빗길, 눈길, 사계절, 고속, 핸들링, 정숙, 퍼포먼스,
+      출퇴근, 장거리, 도심, 가족/패밀리, 전기차/EV, SUV, 짐 많이, 주말,
+      아이/안전, 가성비, 워런티, 통근, 스포츠 등) whose scenario family is
+      DIFFERENT from the previous tool's rcmd_type, OR
+  (b) a re-search trigger ("다시", "새로", "이번엔", "바꿔서", "다른 거",
+      "이전 추천 말고", "아까 거 말고", "이거 말고", "아까 그거 말고",
+      "다른 종류로"),
 the user is requesting a NEW recommendation, NOT filtering the previous list.
 
-In this case:
+⚠️ The 다시 keyword is OPTIONAL. A new scenario alone is enough — even an
+explicit "추천" request like "패밀리 SUV에 잘 맞는 사계절용 추천" after a
+previous "전기차용" recommendation is RE-RECOMMENDATION, not filtering.
+
+PREV=CUR escape (do NOT mark as RE-RECOMMENDATION):
+  - If the user's scenario word matches the SAME scenario family as PREV
+    (e.g. PREV rcmd_type="ev" and user says "이 EV용 중에서 18인치"), this is
+    a continuation/filter, not a re-recommendation. Do NOT trigger this rule.
+  - If the user uses a demonstrative/ordinal/filter-only phrase ("이 중에서",
+    "첫번째", "할인만", "가장 저렴한") — even if a scenario word also appears
+    — treat as filter, not re-recommendation.
+
+In RE-RECOMMENDATION cases:
   - user_behavior MUST be like: "requesting NEW recommendation with different scenario (X)"
     or "requesting fresh search to replace previous list"
   - next_action MUST be: "call get_products_recommendations_tool AGAIN with rcmd_type=<X>
@@ -238,13 +257,31 @@ In this case:
     'select X-friendly items from previous Y list' — these phrases push the agent
     into wrong behavior.
 
-Worked example:
+Worked example 1 (with 다시 keyword):
   - Previous: get_products_recommendations_tool(rcmd_type="wet") returned 4 items
   - Current user message: "주말 나들이용으로 다시"
   - CORRECT user_behavior: "requesting new recommendation with weekend scenario after previous wet recommendation"
   - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='weekend', reuse tire_size — NEW result replaces previous wet list"
   - WRONG (do NOT write): "selecting weekend-suitable items from previous tire list"
   - WRONG (do NOT write): "filter previous recommendations for weekend use"
+
+Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
+  - Earlier turn: get_products_recommendations_tool(rcmd_type="ev") returned 4 items (235/55R19)
+  - Intervening turn: get_product_description_tool (description only — does NOT reset PREV)
+  - Current user message: "패밀리 SUV에 잘 맞는 사계절용 추천"
+  - PREV rcmd_type = "ev"; user mentions "패밀리/가족" + "사계절" — clearly
+    different scenario family from "ev" → RE-RECOMMENDATION applies.
+  - CORRECT user_behavior: "requesting NEW recommendation with family + 사계절 scenario; previous rcmd_type='ev' no longer matches"
+  - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='family' via combined-key match (사계절+가족), reuse tire_size 235/55R19 — NEW result replaces previous EV list"
+  - WRONG: "filter previous EV list for family-friendly all-season options"
+  - WRONG: "pick 사계절 candidates from previous list"
+
+Worked example 3 (PREV=CUR escape — NOT re-recommendation):
+  - Previous: get_products_recommendations_tool(rcmd_type="ev") returned 4 items
+  - Current user message: "이 EV 타이어 중에서 18인치로"
+  - "EV" matches PREV; "이 중에서" is a demonstrative → continuation, NOT re-recommendation.
+  - user_behavior: "filtering previous EV recommendation list by size 18인치"
+  - next_action: "filter the existing list — no new tool call needed"
 
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
