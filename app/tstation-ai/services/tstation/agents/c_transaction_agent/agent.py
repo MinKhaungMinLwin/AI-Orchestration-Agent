@@ -298,7 +298,11 @@ Context signals to check (in priority order):
    (If the prior stock context for this shop was Flow 3 STEP B = 매장재고 없음 + 물류재고 있음,
     OR Flow 6 STEP 5A branch (b) = logistics-only, pass `is_logistics_delivery=True`.)
 5. None of the above — pure info lookup only (유저가 영업시간/주소/전화만 문의)
-   → **Flow 5 General**: call `get_store_list_tool(store_nm)` → `location` template
+   → **Flow 5 General**: call `get_store_list_tool(store_nm)` to fetch the
+      base record, then immediately follow up with
+      `get_store_detail_tool(shop_id, cal_day=TODAY in YYYYMMDD)` in the SAME
+      turn so the description carries 휴무일/전화/T바로배송. Return `location`
+      template. (For multi-result region queries skip the detail call.)
 
 ⚠️ **HARD BAN**: When `pending_intent="주문 진행"` is present, you MUST NOT call `get_store_list_tool` for a selected store and MUST NOT return the `location` template. The ONLY acceptable next tools are `get_store_inventory_tool` (STEP 5A step 4 — store-stock precheck) followed by `get_store_schedule_tool` (STEP 5A step 5 — datepick).
 ⚠️ Default when context is ambiguous → treat as booking context (call `get_store_schedule_tool`).
@@ -309,7 +313,17 @@ Context signals to check (in priority order):
 
 #### General store info (no specific date) — info-only lookup:
 Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION ROUTING above).
-1. get_store_list_tool(store_nm or region_code) → return `location` template with full store info (name, address, phone, hours, holiday — all from tool result). This is the final response — do NOT ask for a date or redirect.
+
+1. `get_store_list_tool(store_nm or region_code)` — fetch the matching store(s).
+2. **If the user is asking about ONE specific store** (single shop name, or selecting one store from a previous list — i.e., the result has exactly one shop_id or a known shop_id), IMMEDIATELY follow up in THIS SAME TURN with:
+   `get_store_detail_tool(shop_id=<matched_shop_id>, cal_day=<TODAY in YYYYMMDD>)`
+   ⚠️ Reason: the list endpoint omits 휴무일·전화번호·T바로배송 — the detail
+   endpoint is the ONLY source for those fields. Without this enrichment the
+   location card description is incomplete.
+   ⚠️ For region-only queries that legitimately return multiple stores, skip
+   the detail call (would be N× wasted requests) and return the list as-is.
+3. Return a `location` template — final response. The system merges list +
+   detail data into the description. Do NOT ask for a date or redirect.
 
 #### Specific date — user mentions a date (Flow 5.1):
 Trigger: user mentions any specific date ("4월 25일", "이번 주 토요일", "5월 1일", "25일" etc.)
@@ -681,6 +695,9 @@ MANDATORY OUTPUT FORMAT
 - `get_store_list_tool` / `get_nearby_stores_tool` — **ONLY when the tool returned ≥1 store** (store-list card).
   Skip PROSE MODE (use JSON `quickReply`) when the result is empty so you can actually deliver the
   "죄송합니다. '[검색어]' 매장을 찾을 수 없어요." message — there is no card to attach prose to.
+  ⚠️ If you ALSO called `get_store_detail_tool` in the same turn for description enrichment
+  (Flow 5 General single-store info lookup), you stay in PROSE MODE — the system merges both
+  tool results into one location card.
 - `get_store_schedule_tool` — **ONLY when at least one date in the schedule has available slots**.
   When ALL days are empty/closed, use JSON `quickReply` to deliver
   "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?".

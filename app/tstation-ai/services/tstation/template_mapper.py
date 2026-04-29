@@ -42,11 +42,14 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
 
 # Booking-flow signals: tools that imply the customer is mid-purchase, not just
 # browsing for store info. Used by `_map_location` to set `isBookingFlow`.
+# Notably excludes `get_store_detail_tool` — Flow 5 General now calls it as a
+# description-enrichment companion to `get_store_list_tool` (info-only intent),
+# so its presence is not a booking signal. Date-specific schedule/detail flows
+# either trip the schedule mapper first (datepick) or are guarded out earlier.
 _BOOKING_SIGNAL_TOOLS = frozenset({
     "get_store_inventory_tool",
     "get_logistics_inventory_tool",
     "get_store_schedule_tool",
-    "get_store_detail_tool",
     "get_multi_store_schedule_tool",
     "get_final_price_tool",
     "save_to_cart_tool",
@@ -361,6 +364,29 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # 확인되었습니다…"), not a `location` card with the full list. Defer to LLM.
     if "get_store_inventory_tool" in called_tools:
         return None
+    # Flow 3 STEP C / Flow 5.1 (date-specific) → datepick after detail. If
+    # `get_store_schedule_tool` ran, the datepick mapper already wins via
+    # priority; for `get_store_detail_tool` with a single shop + non-empty
+    # slots, the agent emits its own datepick JSON (mapper has no cal_day in
+    # response). Don't second-guess by also producing a location card.
+    if "get_store_schedule_tool" in called_tools:
+        return None
+
+    # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
+    # `get_store_detail_tool` carries the rich fields the list endpoint omits
+    # (tel_no, holiday, is_tna_delivery), so when the agent calls both in the
+    # same turn — explicitly the "store info / store selection" flow — we merge
+    # them into a single richer description. The detail response itself does
+    # NOT include shop_id, so we correlate via the tool's input `args.shop_id`.
+    detail_by_shop_id: dict[str, dict] = {}
+    for entry in _find_entries(tool_data_list, "get_store_detail_tool"):
+        args = entry.get("args") or {}
+        shop_id = _get_str(args, "shop_id") if isinstance(args, dict) else ""
+        if not shop_id:
+            continue
+        raw = _unwrap(entry)
+        if isinstance(raw, dict):
+            detail_by_shop_id[shop_id] = raw
 
     items, metadata = [], []
     for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool"):
@@ -377,27 +403,41 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             if not shop_id:
                 continue
 
+            detail = detail_by_shop_id.get(shop_id, {})
+
             road_base = _get_str(row, "road_addr_base")
             road_dtl = _get_str(row, "road_addr_dtl")
             road_full = " ".join(p for p in [road_base, road_dtl] if p).strip()
             detail_addr = road_full or _get_str(row, "addr_base", "addr_dtl")
 
-            biz_strt_wday = _get_str(row, "shop_biz_strt_wday")
-            biz_end_wday = _get_str(row, "shop_biz_end_wday")
+            # Detail endpoint overrides the list endpoint where overlapping (it
+            # is the more authoritative source for is_all_my_t / is_installable
+            # at lookup time).
+            is_all_my_t = bool(detail.get("is_all_my_t", row.get("is_all_my_t", False)))
+            is_installable = bool(detail.get("is_installable", row.get("is_installable", False)))
+            is_tna_delivery = bool(detail.get("is_tna_delivery", False))
+
+            biz_strt_wday = _get_str(detail, "shop_biz_strt_wday") or _get_str(row, "shop_biz_strt_wday")
+            biz_end_wday = _get_str(detail, "shop_biz_end_wday") or _get_str(row, "shop_biz_end_wday")
             biz_wday = f"{biz_strt_wday}~{biz_end_wday}" if biz_strt_wday and biz_end_wday else ""
 
-            biz_strt_time = _get_str(row, "shop_biz_strt_time")
-            biz_end_time = _get_str(row, "shop_biz_end_time")
-            sat_strt_time = _get_str(row, "shop_sat_strt_time")
-            sat_end_time = _get_str(row, "shop_sat_end_time")
+            biz_strt_time = _get_str(detail, "shop_biz_strt_time") or _get_str(row, "shop_biz_strt_time")
+            biz_end_time = _get_str(detail, "shop_biz_end_time") or _get_str(row, "shop_biz_end_time")
+            sat_strt_time = _get_str(detail, "shop_sat_strt_time") or _get_str(row, "shop_sat_strt_time")
+            sat_end_time = _get_str(detail, "shop_sat_end_time") or _get_str(row, "shop_sat_end_time")
             biz_weekday_str = f"평일 {biz_strt_time}~{biz_end_time}" if biz_strt_time and biz_end_time else ""
             biz_sat_str = f"토요일 {sat_strt_time}~{sat_end_time}" if sat_strt_time and sat_end_time else ""
             biz_hours = " / ".join(p for p in [biz_weekday_str, biz_sat_str] if p)
 
+            tel_no = _get_str(detail, "tel_no")
+            holiday = _get_str(detail, "holiday")
+
             services: list[str] = []
-            if row.get("is_all_my_t"):
+            if is_all_my_t:
                 services.append("올마이T")
-            services.append("온라인 장착 가능" if row.get("is_installable") else "온라인 장착 불가")
+            services.append("온라인 장착 가능" if is_installable else "온라인 장착 불가")
+            if is_tna_delivery:
+                services.append("T바로배송")
             services_text = " | ".join(services)
 
             description_lines: list[str] = []
@@ -407,6 +447,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 description_lines.append(f"영업일: {biz_wday}")
             if biz_hours:
                 description_lines.append(f"영업시간: {biz_hours}")
+            if holiday:
+                description_lines.append(f"휴무일: {holiday}")
+            if tel_no:
+                description_lines.append(f"전화: {tel_no}")
             if services_text:
                 description_lines.append(f"서비스: {services_text}")
             description = "\n ".join(description_lines)
@@ -414,17 +458,17 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             distance_km = row.get("distance_km")
             distance_str = f"{distance_km:.1f}km" if isinstance(distance_km, (int, float)) else ""
 
+            # `todayInstall` is the today-only variant of stock availability.
+            # The list endpoint cannot tell us; the detail endpoint signals it
+            # only indirectly via `available_slots` for cal_day=TODAY. Leave
+            # False — over-claiming "today install" is worse than understating.
             items.append({
-                "nameAddress": _get_str(row, "shop_nm", default=shop_id),
+                "nameAddress": _get_str(detail, "shop_nm") or _get_str(row, "shop_nm", default=shop_id),
                 "distance": distance_str,
                 "detailAddress": detail_addr,
-                "isAllMyT": bool(row.get("is_all_my_t", False)),
-                # `todayInstall` / `tnaDelivery` are populated by store-detail endpoints,
-                # not by the list/nearby endpoints — leave False here. The agent's
-                # JSON-mode `location` template also relies on tool fields and would
-                # not synthesize these from list responses.
+                "isAllMyT": is_all_my_t,
                 "todayInstall": False,
-                "tnaDelivery": False,
+                "tnaDelivery": is_tna_delivery,
                 "description": description,
             })
             metadata.append({"shopId": shop_id})
@@ -433,15 +477,13 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     items, metadata = items[:5], metadata[:5]
 
-    # `isBookingFlow` controls FE click routing (True → /chat, False → /append).
-    # The mapper cannot see the coordinator's `pending_intent`, so it cannot
-    # distinguish a pure Flow 5 info lookup from a Flow 6 STEP 5A booking
-    # `get_store_list_tool` call when both run alone in their turn. Per prompt
-    # guidance ("Default to true when in doubt — booking-flow misclassification
-    # is recoverable; info-only misclassification causes UX friction.") we
-    # default to True. Info-only Flow 5 will round-trip through /chat (mild
-    # friction); booking flows critically need True to advance.
-    is_booking_flow = True
+    # `isBookingFlow` controls FE click routing (True → /chat to advance the
+    # flow; False → /append, just renders the description bubble). True only
+    # when this turn explicitly carries a transactional signal — inventory,
+    # schedule, price, cart, or order tool ran together with the store list.
+    # Pure Flow 4/5 info lookups stay False so clicking a card surfaces the
+    # rich description without spuriously advancing to a date picker.
+    is_booking_flow = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
 
     short = _summarize(assistant_text, "location", len(items))
     return {

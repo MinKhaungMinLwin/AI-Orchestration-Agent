@@ -307,10 +307,18 @@ class BaseAgent(ABC):
                                 tool_status = tool_result.get("status", "success")
                         except (json.JSONDecodeError, TypeError):
                             pass
-                        if tool_result is not None:
-                            accumulated_tool_data.append({"tool": message.name, "data": tool_result})
-                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
                         tool_input = tool_calls_map.get(message.tool_call_id, {})
+                        if tool_result is not None:
+                            # Capture input args alongside the result so the
+                            # template mapper can correlate same-turn tool calls
+                            # by shop_id / cal_day (e.g., merge get_store_detail
+                            # data into a get_store_list location card).
+                            accumulated_tool_data.append({
+                                "tool": message.name,
+                                "data": tool_result,
+                                "args": tool_input.get("args", {}),
+                            })
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
