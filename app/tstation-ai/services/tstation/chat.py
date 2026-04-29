@@ -1056,7 +1056,16 @@ _coordinator = StreamingMultiAgentCoordinator()
 
 
 def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
-    """Append template_data from Redis to assistant messages."""
+    """Append template_data from Redis to the MOST RECENT matching assistant message only.
+
+    Older assistant turns with template_data used to be enriched too, which
+    inflated the LLM input by 200–1000 tokens per past card across long
+    multi-turn conversations. The Discovery prompt explicitly instructs the
+    model to use only the LATEST recommendation list, and the BE-filtered
+    tool_context (loaded as a separate system message) already preserves
+    older-turn data. Keeping only turn_age=0 here avoids the duplication
+    while preserving the common "이중에서 / 1번째" reference path.
+    """
     if not session_id:
         return messages
 
@@ -1075,11 +1084,13 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
         if not template_map:
             return messages
 
-        # Append template_data to matching assistant messages
-        for msg in messages:
-            if msg.get("role") == "assistant" and msg["content"] in template_map:
+        # Enrich only the most recent matching assistant message.
+        # Walk in reverse so the first hit is turn_age=0; older matches are skipped.
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant" and msg.get("content") in template_map:
                 template_str = json.dumps(template_map[msg["content"]], ensure_ascii=False)
                 msg["content"] += f"\n\n[이전 선택된 상품 데이터]\n{template_str}"
+                break
 
         return messages
 
