@@ -64,6 +64,37 @@ stop-local:
         down
 
 ### Deployment ###
+
+# Hardcoded list of known-stale compose project names that should be swept
+# before every deployment. Add to this list as you discover more orphans.
+# Do NOT add the current deployment's project name or any active deployment.
+KNOWN_ORPHAN_PROJECTS := "tstation-agent-dev tstation-agent docker"
+
+# Sweep up orphaned compose projects with old PROJECT_NAME values.
+# Uses `docker rm -f` because `compose down` can fail silently on stale state.
+# Skip with: SKIP_CLEAN_ORPHANS=1 just start
+clean-orphans:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "${SKIP_CLEAN_ORPHANS:-0}" = "1" ]; then
+        echo "SKIP_CLEAN_ORPHANS=1 → skipping orphan cleanup"
+        exit 0
+    fi
+    echo "Sweeping orphan compose projects..."
+    for proj in {{KNOWN_ORPHAN_PROJECTS}}; do
+        if [ "$proj" = "{{PROJECT_NAME}}-{{ENV}}" ]; then
+            echo "  '$proj' matches current deployment — skipping"
+            continue
+        fi
+        cids=$(docker ps -aq --filter "label=com.docker.compose.project=$proj" 2>/dev/null || true)
+        if [ -n "$cids" ]; then
+            n=$(echo $cids | wc -w)
+            echo "  Removing $n container(s) from orphan '$proj'"
+            docker rm -f $cids >/dev/null
+        fi
+    done
+    echo "Orphan cleanup done."
+
 precreate-remote:
     @echo "Building Docker images without cache for ENVIRONMENT: {{ENV}}"
     docker compose --env-file .env \
@@ -78,7 +109,7 @@ stop-remote:
         down
 
 
-start-remote: precreate-remote stop-remote
+start-remote: clean-orphans precreate-remote stop-remote
     @echo "Starting PROJECT '{{PROJECT_NAME}}' with ENVIRONMENT: {{ENV}}"
     docker compose --env-file .env \
         -p {{PROJECT_NAME}}-{{ENV}} \
