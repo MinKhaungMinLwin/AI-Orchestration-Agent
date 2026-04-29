@@ -2,9 +2,13 @@
 Code-based template mapper — replaces LLM UI Template Agent for deterministic tool→template conversion.
 
 Maps domain agent tool outputs directly to FE template format without an LLM call.
-Handles 7 "easy" templates; remaining 4 (location, datepick, preOrder, orderComplete)
-fall through to the LLM UI Template Agent.
+Handles 9 templates (product, listCar, voucher, qnaComplete, cheapestProduct,
+previewYoutube, location, datepick, event); remaining 2 (preOrder, orderComplete)
+fall through to the LLM UI Template Agent because they require cross-tool context
+(car info + price + store + booking time) that the mapper cannot reconstruct from
+a single tool output.
 """
+import datetime
 import logging
 from typing import Any
 
@@ -29,7 +33,28 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # "get_events_tool": "event",
     # previewYoutube
     "search_youtube_video_tool": "previewYoutube",
+    # location
+    "get_store_list_tool": "location",
+    "get_nearby_stores_tool": "location",
+    # datepick
+    "get_store_schedule_tool": "datepick",
 }
+
+# Booking-flow signals: tools that imply the customer is mid-purchase, not just
+# browsing for store info. Used by `_map_location` to set `isBookingFlow`.
+_BOOKING_SIGNAL_TOOLS = frozenset({
+    "get_store_inventory_tool",
+    "get_logistics_inventory_tool",
+    "get_store_schedule_tool",
+    "get_store_detail_tool",
+    "get_multi_store_schedule_tool",
+    "get_final_price_tool",
+    "save_to_cart_tool",
+    "quick_order_tool",
+})
+
+# Korean short weekday labels used for datepick `date` strings.
+_WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 
 _MY_COUPON_LINK = {
     "pc": "https://wwwqa.tstation.com/mypage/tstation/coupon/couponList",
@@ -80,6 +105,15 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
 def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
     """Filter accumulated_tool_data by tool name."""
     return [e for e in tool_data_list if e.get("tool", "") in tool_names]
+
+
+def _yyyymmdd_to_korean_date(s: str) -> str:
+    """'20260422' → '2026년 4월 22일 (수)'. Returns the input unchanged on parse failure."""
+    try:
+        dt = datetime.datetime.strptime(s, "%Y%m%d")
+    except (ValueError, TypeError):
+        return s
+    return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
 
 
 # ── 1. product ──────────────────────────────────────────────────────────────────
@@ -314,6 +348,181 @@ def _map_preview_youtube(tool_data_list: list[dict], assistant_text: str) -> dic
     }}
 
 
+# ── 8. location ─────────────────────────────────────────────────────────────────
+
+def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    called_tools = {e.get("tool", "") for e in tool_data_list}
+    # Flow 3.5 (빠른 방문) calls store_list + multi_store_schedule and renders a
+    # comparison table as `quickReply`, not a `location` card. Defer to LLM.
+    if "get_multi_store_schedule_tool" in called_tools:
+        return None
+    # Flow 3 STEP A calls store_list + store_inventory in the same turn and
+    # emits a text-only `quickReply` describing stock status ("매장에 재고가
+    # 확인되었습니다…"), not a `location` card with the full list. Defer to LLM.
+    if "get_store_inventory_tool" in called_tools:
+        return None
+
+    items, metadata = [], []
+    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool"):
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+        stores = raw.get("stores")
+        if not isinstance(stores, list):
+            continue
+        for row in stores:
+            if not isinstance(row, dict):
+                continue
+            shop_id = _get_str(row, "shop_id")
+            if not shop_id:
+                continue
+
+            road_base = _get_str(row, "road_addr_base")
+            road_dtl = _get_str(row, "road_addr_dtl")
+            road_full = " ".join(p for p in [road_base, road_dtl] if p).strip()
+            detail_addr = road_full or _get_str(row, "addr_base", "addr_dtl")
+
+            biz_strt_wday = _get_str(row, "shop_biz_strt_wday")
+            biz_end_wday = _get_str(row, "shop_biz_end_wday")
+            biz_wday = f"{biz_strt_wday}~{biz_end_wday}" if biz_strt_wday and biz_end_wday else ""
+
+            biz_strt_time = _get_str(row, "shop_biz_strt_time")
+            biz_end_time = _get_str(row, "shop_biz_end_time")
+            sat_strt_time = _get_str(row, "shop_sat_strt_time")
+            sat_end_time = _get_str(row, "shop_sat_end_time")
+            biz_weekday_str = f"평일 {biz_strt_time}~{biz_end_time}" if biz_strt_time and biz_end_time else ""
+            biz_sat_str = f"토요일 {sat_strt_time}~{sat_end_time}" if sat_strt_time and sat_end_time else ""
+            biz_hours = " / ".join(p for p in [biz_weekday_str, biz_sat_str] if p)
+
+            services: list[str] = []
+            if row.get("is_all_my_t"):
+                services.append("올마이T")
+            services.append("온라인 장착 가능" if row.get("is_installable") else "온라인 장착 불가")
+            services_text = " | ".join(services)
+
+            description_lines: list[str] = []
+            if road_full:
+                description_lines.append(f"📍 {road_full}")
+            if biz_wday:
+                description_lines.append(f"영업일: {biz_wday}")
+            if biz_hours:
+                description_lines.append(f"영업시간: {biz_hours}")
+            if services_text:
+                description_lines.append(f"서비스: {services_text}")
+            description = "\n ".join(description_lines)
+
+            distance_km = row.get("distance_km")
+            distance_str = f"{distance_km:.1f}km" if isinstance(distance_km, (int, float)) else ""
+
+            items.append({
+                "nameAddress": _get_str(row, "shop_nm", default=shop_id),
+                "distance": distance_str,
+                "detailAddress": detail_addr,
+                "isAllMyT": bool(row.get("is_all_my_t", False)),
+                # `todayInstall` / `tnaDelivery` are populated by store-detail endpoints,
+                # not by the list/nearby endpoints — leave False here. The agent's
+                # JSON-mode `location` template also relies on tool fields and would
+                # not synthesize these from list responses.
+                "todayInstall": False,
+                "tnaDelivery": False,
+                "description": description,
+            })
+            metadata.append({"shopId": shop_id})
+
+    if not items:
+        return None
+    items, metadata = items[:5], metadata[:5]
+
+    # `isBookingFlow` controls FE click routing (True → /chat, False → /append).
+    # The mapper cannot see the coordinator's `pending_intent`, so it cannot
+    # distinguish a pure Flow 5 info lookup from a Flow 6 STEP 5A booking
+    # `get_store_list_tool` call when both run alone in their turn. Per prompt
+    # guidance ("Default to true when in doubt — booking-flow misclassification
+    # is recoverable; info-only misclassification causes UX friction.") we
+    # default to True. Info-only Flow 5 will round-trip through /chat (mild
+    # friction); booking flows critically need True to advance.
+    is_booking_flow = True
+
+    short = _summarize(assistant_text, "location", len(items))
+    return {
+        "type": "data",
+        "template": "location",
+        "data": {
+            "stores": items,
+            "metadata": metadata,
+            "isBookingFlow": is_booking_flow,
+            "assistantResponse": short,
+        },
+    }
+
+
+# ── 9. datepick ─────────────────────────────────────────────────────────────────
+
+def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Map `get_store_schedule_tool` output to a `datepick` event.
+
+    Only handles the schedule tool (single shop, multi-day, response carries cal_day).
+    `get_store_detail_tool` is intentionally skipped — its response does not include
+    cal_day, and reconstructing it from input args is not currently supported by
+    BaseAgent's tool-result accumulator.
+    """
+    entries = _find_entries(tool_data_list, "get_store_schedule_tool")
+    if not entries:
+        return None
+    raw = _unwrap(entries[-1])
+    if not isinstance(raw, dict):
+        return None
+
+    schedule = raw.get("schedule")
+    shop_id = _get_str(raw, "shop_id")
+    if not shop_id or not isinstance(schedule, list) or not schedule:
+        return None
+
+    dates: list[dict] = []
+    selected_idx: int | None = None
+    for i, entry in enumerate(schedule):
+        if not isinstance(entry, dict):
+            continue
+        cal_day = _get_str(entry, "cal_day")
+        if not cal_day:
+            continue
+        slots = entry.get("available_slots") or []
+        # If this date is not installable at this store, treat slots as empty
+        # (the FE schema validator also drops noon=12 separately).
+        if not entry.get("is_installable", False):
+            available_times: list[int] = []
+        else:
+            available_times = [int(s) for s in slots if isinstance(s, str) and s.isdigit()]
+        available = bool(available_times)
+        dates.append({
+            "date": _yyyymmdd_to_korean_date(cal_day),
+            "available": available,
+            "availableTimes": available_times,
+            "index": i,
+        })
+        if selected_idx is None and available:
+            selected_idx = i
+
+    if not dates:
+        return None
+    # All days empty → let the LLM emit the "no slots" friendly quickReply
+    # ("현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?").
+    if selected_idx is None:
+        return None
+
+    short = _summarize(assistant_text, "datepick", len(dates))
+    return {
+        "type": "data",
+        "template": "datepick",
+        "data": {
+            "dates": dates,
+            "selectedDate": selected_idx,
+            "metadata": {"shopId": shop_id},
+            "assistantResponse": short,
+        },
+    }
+
+
 # ── Common builder ──────────────────────────────────────────────────────────────
 
 def _build_event(template: str, data: dict, assistant_text: str, item_count: int) -> dict:
@@ -331,6 +540,8 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
     "event": "현재 진행 중인 이벤트 {n}개를 안내드립니다.",
     "previewYoutube": "관련 영상 {n}개를 안내드립니다.",
     "qnaComplete": "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요.",
+    "location": "고객님, 매장 {n}곳을 안내드립니다. 원하시는 매장을 선택해 주세요.",
+    "datepick": "예약 가능한 날짜와 시간을 선택해 주세요.",
 }
 
 
@@ -370,6 +581,9 @@ _MAPPERS: dict[str, Any] = {
     "compare_discount_tool": _map_cheapest_product,
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
+    "get_store_list_tool": _map_location,
+    "get_nearby_stores_tool": _map_location,
+    "get_store_schedule_tool": _map_datepick,
 }
 
 
@@ -383,10 +597,20 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         return None
 
     # When multiple tools are called, pick the most important UI template.
-    # Priority: product > listCar > voucher > cheapestProduct > previewYoutube > qnaComplete
-    # This handles cases like: get_my_cars → get_products_recommendations → compare_discount
-    # where product cards should be shown, not cheapestProduct.
+    # Priority order is intentional:
+    #   datepick > product > listCar > voucher > cheapestProduct > previewYoutube
+    #   > qnaComplete > location
+    # - datepick is the terminal step in store-stock/booking flows; if the agent
+    #   produced a schedule in this turn, that's the answer (regardless of any
+    #   earlier store_list call this turn).
+    # - location is intermediate (user still has to pick a store), so it sits at
+    #   the bottom — almost any other mapped tool that ran in the same turn
+    #   represents a more advanced step.
+    # - This also handles: get_my_cars → get_products_recommendations →
+    #   compare_discount, where product cards should be shown, not
+    #   cheapestProduct.
     _PRIORITY = [
+        ("get_store_schedule_tool", _map_datepick),
         ("search_product_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
         ("get_my_cars_tool", _map_list_car),
@@ -396,6 +620,8 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("compare_discount_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
+        ("get_nearby_stores_tool", _map_location),
+        ("get_store_list_tool", _map_location),
     ]
 
     called_tools = {e.get("tool", "") for e in accumulated_tool_data}
