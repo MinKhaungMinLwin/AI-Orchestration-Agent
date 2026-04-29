@@ -404,7 +404,7 @@
       LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-Admin}
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-changeme123}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://$(hostname):3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://$(hostname -i | awk '{print $1}'):3000/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
