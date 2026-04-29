@@ -225,6 +225,7 @@ class BaseAgent(ABC):
         prompt_template = self.OUTPUT_TEMPLATE
         suppress_tokens = prompt_template is not None
         accumulated_text = ""
+        accumulated_tool_data: list[dict] = []
         response_streamer = _AssistantResponseStreamer() if suppress_tokens else None
 
         yield {"type": "status", "status": "생각 중..."}
@@ -297,6 +298,7 @@ class BaseAgent(ABC):
                             continue
                         af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
                         tool_status = "success"
+                        tool_result: Any = None
                         try:
                             tool_result = (
                                 json.loads(message.content) if isinstance(message.content, str) else message.content
@@ -305,6 +307,8 @@ class BaseAgent(ABC):
                                 tool_status = tool_result.get("status", "success")
                         except (json.JSONDecodeError, TypeError):
                             pass
+                        if tool_result is not None:
+                            accumulated_tool_data.append({"tool": message.name, "data": tool_result})
                         yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
                         tool_input = tool_calls_map.get(message.tool_call_id, {})
                         yield {
@@ -314,6 +318,29 @@ class BaseAgent(ABC):
                             "node": node,
                             "tool": message.name,
                         }
+
+        # Phase 2B: prefer code-based template mapping over LLM fenced JSON.
+        # When a deterministically-mappable tool was used, build the data event
+        # in code from accumulated_tool_data — saves the LLM from emitting the
+        # full FE JSON payload (the dominant 2nd-call output token cost).
+        code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
+        if code_event is not None:
+            assistant_response = self._get_assistant_response(code_event)
+            already_streamed = response_streamer is not None and response_streamer.streamed_any
+            if assistant_response:
+                if not answering_emitted:
+                    yield {"type": "status", "status": "답변 중..."}
+                    answering_emitted = True
+                if not already_streamed:
+                    yield {"type": "token", "content": assistant_response}
+                yield {
+                    "type": "message",
+                    "content": assistant_response,
+                    "agent": self.name,
+                }
+            yield code_event
+            yield {"type": "token", "content": "\n\n"}
+            return
 
         if prompt_template is not None and accumulated_text:
             data_event = self._build_data_event_from_text(accumulated_text, prompt_template)
@@ -353,7 +380,30 @@ class BaseAgent(ABC):
                         },
                     }
                 else:
-                    yield from self._yield_validation_fallback()
+                    # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
+                    # template_mapper couldn't build a card — e.g., zero-result
+                    # search where the model honored the "prose mode" rule but
+                    # the mapper found no items to render. Treat the raw text
+                    # as the assistant's prose answer rather than showing the
+                    # generic validation-failure apology.
+                    prose_only = accumulated_text.strip()
+                    if prose_only and self._extract_fenced_json(accumulated_text) is None:
+                        yield {"type": "token", "content": prose_only}
+                        yield {
+                            "type": "message",
+                            "content": prose_only,
+                            "agent": self.name,
+                        }
+                        yield {
+                            "type": "data",
+                            "template": "quickReply",
+                            "data": {
+                                "assistantResponse": prose_only,
+                                "quickReplies": [],
+                            },
+                        }
+                    else:
+                        yield from self._yield_validation_fallback()
 
         yield {"type": "token", "content": "\n\n"}
 
@@ -452,6 +502,30 @@ class BaseAgent(ABC):
     @staticmethod
     def _is_internal_structured_tool(tool_name: str) -> bool:
         return tool_name.startswith("response_format_")
+
+    @staticmethod
+    def _try_code_template(
+        accumulated_tool_data: list[dict],
+        response_streamer: "_AssistantResponseStreamer | None",
+        accumulated_text: str,
+    ) -> dict | None:
+        """Attempt deterministic FE-template construction from tool outputs.
+
+        Returns a `data` event dict if any tool in accumulated_tool_data has a
+        registered code mapper AND the mapper produced a valid event.
+        Returns None to signal "fall through to fenced-JSON path".
+        """
+        if not accumulated_tool_data:
+            return None
+        from services.tstation.template_mapper import _MAPPERS, try_build_template
+        if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
+            return None
+        prose = (
+            response_streamer.streamed_text
+            if response_streamer is not None and response_streamer.streamed_any
+            else accumulated_text
+        )
+        return try_build_template(accumulated_tool_data, prose)
 
     def stream_template(self, messages: list[dict], config: dict | None = None):
         """

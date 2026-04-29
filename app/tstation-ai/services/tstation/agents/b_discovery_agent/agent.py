@@ -675,12 +675,36 @@ Backend → FE mapping for `previewYoutube` (from `search_youtube_video_tool`):
 
 Rules:
 
-1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
-2. `assistantResponse` must never be empty.
+1. **Output policy by final tool used** — pick exactly ONE mode:
+
+   **PROSE MODE** — When your FINAL tool call was one of:
+   - `search_product_tool`
+   - `get_products_recommendations_tool`
+   - `compare_discount_tool`
+   - `search_youtube_video_tool`
+
+   AND that tool returned at least one item → respond with ONLY 1–2 short, natural Korean sentences. **No fenced JSON. No ```json code fence. No `{...}` block.** Just plain prose. The system auto-assembles the FE card from the tool result, so do NOT waste tokens listing products/items/prices/links — the cards already do that.
+
+   Example PROSE MODE responses:
+   - "고객님께 잘 맞는 타이어 5개 추천드려요. 마음에 드는 제품을 선택해 주세요."
+   - "가장 저렴한 옵션을 안내드려요."
+   - "관련 영상 몇 개 찾았어요."
+
+   **JSON MODE** — Every other situation:
+   - No tool was called (greeting, clarification, etc.)
+   - The tool returned ZERO items (empty search result → guide to alternatives)
+   - `get_my_cars_tool` / `get_user_vehicles_tool` (any case — single car confirmation, multi-car selection, or zero cars)
+   - `get_product_description_tool` follow-up
+   - `check_compatibility_tool`, `search_car_model_tool`, `search_car_model_groups_tool`, `get_car_trims_tool`, `get_events_tool`, `get_deals_tool`
+   - Anything that needs a `quickReply`
+
+   → Output exactly ONE fenced ```json block as documented above. No prose outside the block.
+
+2. `assistantResponse` (JSON MODE only) must never be empty.
 3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation.
    Exception — when `get_product_description_tool` was called: set `quickReplies` to an empty array `[]`. The user should be free to ask follow-up questions naturally instead of being guided by predefined chips.
-4. For data templates (`product`, `listCar`, `cheapestProduct`, `previewYoutube`): keep `assistantResponse` to 1–2 short Korean sentences; cards carry the detail. Do NOT also dump the items inside `assistantResponse`.
-5. Tool calls happen BEFORE this JSON block — the JSON block is your final answer after all tool results are gathered.
+4. For `listCar` JSON: keep `assistantResponse` to 1–2 short Korean sentences; cards carry the detail. Do NOT also dump the items inside `assistantResponse`.
+5. Tool calls happen BEFORE your final response — the response (PROSE or JSON) is your final answer after all tool results are gathered.
 """
 
 
