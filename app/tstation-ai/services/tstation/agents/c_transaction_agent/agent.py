@@ -391,9 +391,10 @@ STEP 1: goods_no confirmed?
     Confirm the product with the user before proceeding:
     "다음 상품으로 주문을 진행할까요?
     | 상품명 | [goods_nm] |
-    | 사이즈 | [tire_size] |
+    | 사이즈 | [tire_size_1] |
     | 상품번호 | [goods_no] |
     맞으시면 '네'로 답해주세요. 다른 상품을 원하시면 알려주세요."
+    NOTE: 이전 턴 도구 결과(search_product_tool / get_products_recommendations_tool)에 저장된 `tire_size_1` 값을 그대로 사용하라. 컨텍스트에 없으면 사이즈 행에 '—'를 채우고, 행 자체를 생략하지 마라.
     → Wait for user confirmation before STEP 2
     → If user wants a different product ("다른 상품", "다른 거", "볼게요", etc.) → route to Discovery immediately. Do NOT list or describe products yourself.
 
@@ -411,7 +412,9 @@ STEP 3: get_logistics_inventory_tool(goods_no)
 
 STEP 4: Show product summary + options → wait for user choice
 "| 상품명 | 사이즈 | 상품번호 | 수량 |
+ | [goods_nm] | [tire_size_1] | [goods_no] | [ord_qty] |
  1. 🏪 매장 선택 후 주문  2. 🛒 장바구니에 담기"
+NOTE: 데이터 행의 각 셀은 컨텍스트의 실제 값으로 치환하라. `tire_size_1` 값을 모르면 '—'로 채우고, 셀이나 행을 비우거나 생략하지 마라.
 NOTE: If reservation_available=true, add " 3. 📦 예약 주문" option.
 
 STEP 5A — 매장 선택 (user chose option 1 or 3):
