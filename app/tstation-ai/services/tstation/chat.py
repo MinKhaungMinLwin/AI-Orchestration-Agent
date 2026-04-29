@@ -1675,6 +1675,44 @@ class TStationChatServiceV2:
             # save_slots lets resolved goods_no be persisted in step 4.
             prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
 
+            # 3.7.5) Recommendation-flow stale-clear.
+            # If the most recent product-listing tool in the conversation is
+            # `get_products_recommendations_tool` AND the current turn carries no
+            # fresh transactional keyword, the customer is browsing recommendations
+            # — any inherited transactional `pending_intent` from a much earlier
+            # turn is stale and must NOT be allowed to redirect a bare product-name
+            # selection (e.g. "1. 벤투스 S2 AS") into the Transaction auto-chain
+            # (P0 gate at step 4 below). Without this, picking a product after a
+            # recommendation list silently calls `get_final_price_tool` instead of
+            # `get_product_description_tool`, which surprises the user.
+            #
+            # Step 3.5 above only fires when the user explicitly re-asks for a
+            # recommendation in this turn. Step 3.7.5 covers the implicit case
+            # where the user just *continues* the recommendation flow by picking.
+            #
+            # Search-triggered flows (`search_product_tool` is the most recent
+            # listing tool, fired because the user said e.g. "벤투스 가격") are
+            # intentionally left untouched so the auto-chain still runs once
+            # goods_no resolves — that's the design behind the P0 gate.
+            if (
+                merged_slots.pending_intent is not None
+                and not turn_has_new_transactional
+                and prev_tool_data
+            ):
+                most_recent_listing_tool: str | None = None
+                for entry in reversed(prev_tool_data):
+                    tool = entry.get("tool")
+                    if tool in ("search_product_tool", "get_products_recommendations_tool"):
+                        most_recent_listing_tool = tool
+                        break
+                if most_recent_listing_tool == "get_products_recommendations_tool":
+                    logger.info(
+                        f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
+                        f"— most recent list source is get_products_recommendations_tool "
+                        f"(user is in recommendation flow, not transactional)"
+                    )
+                    merged_slots.pending_intent = None
+
             # 3.8) Resolve goods_no from the user's list-selection reply matched against
             # the most recent search_product_tool result. Without this, Discovery may
             # hand off ("상품 확인했어요. 바로 재고 확인으로 이어갑니다") without
