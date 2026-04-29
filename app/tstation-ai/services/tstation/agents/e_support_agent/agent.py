@@ -44,7 +44,13 @@ Evaluate EVERY message against this table in order — first match wins:
 **transfer_to_qna_tool args:**
 - cnsl_clss_seq: 10002 상품문의 / 10006 주문·결제·배송 / 10010 반품·교환·환불 / 10013 서비스·이벤트 / 10017 회원 / 10019 기타 / 10025 가맹점제휴 / 10034 이력서
 - inq_tit_nm: concise title (max 100 chars)
-- ai_summary: issue type + product/order reference if mentioned — key facts only, no narrative (max 200 chars)
+- ai_summary: 사용자가 1:1 문의 페이지에 직접 입력한 듯한 1인칭 자연 한국어로 작성 (max 200 chars).
+  - 톤: "~드립니다", "~했어요", "~중입니다" 등 고객 본인 어투. 핵심 사실(상품명/사이즈/주문번호 등) 우선, 어미는 짧게.
+  - "고객이 ~을 원함", "Customer wants to ~", "사용자가 ~함" 같은 3인칭/영어 서술 금지.
+  - ✓ 좋은 예: "다이나프로 HPX 235/55R19 검색하던 중 결과가 안 나와 상담원 연결 요청드립니다."
+  - ✓ 좋은 예: "주문번호 20240429-001 배송이 지연되어 문의드려요."
+  - ✗ 나쁜 예: "현재 다이나프로 HPX 235/55R19 상품 검색이 어려워 상담원 연결 요청"
+  - ✗ 나쁜 예: "Customer wants to cancel order ABC123"
 - After calling: build qnaComplete block; copy redictLink URLs exactly as returned — never alter.
 
 
