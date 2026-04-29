@@ -257,9 +257,13 @@ they were just shown:
 Action:
   → Analyze the previous recommendation list → pick best match by that criteria.
   → Do NOT just pick the first item — actually rank by what the user asked.
-  → Brief preface OK (e.g. "이전 추천 목록에서 골라봤어요"), then render the
-    appropriate template (`product` for filtered subset, `cheapestProduct` for
-    cheapest-only).
+  → Respond with a `quickReply` template (NOT `product` / NOT `cheapestProduct`).
+    The card was already rendered in the previous turn — re-rendering a single
+    item as a card is visually noisy. Put the answer fully inside `assistantResponse`:
+    1–2 short Korean sentences, mention the picked product name and price plainly.
+    Example: "**키너지 GT**가 73,100원으로 가장 저렴해요 😊"
+    Do NOT emit `product` or `cheapestProduct` here — those templates are reserved
+    for fresh tool calls in Branch B.
 
 **Branch B — Re-enter RECOMMEND ENGINE (call get_products_recommendations_tool again):**
 Trigger when ANY of the following appears in the user's message:

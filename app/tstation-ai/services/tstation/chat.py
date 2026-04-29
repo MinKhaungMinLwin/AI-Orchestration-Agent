@@ -1908,13 +1908,14 @@ class TStationChatServiceV2:
         ):
             event_type = event.get("type")
 
-            # --- INTERCEPT TOKENS (Draft Response & TTFT Fix) ---
+            # --- INTERCEPT TOKENS (Draft Response only — FE ignores `token` events
+            # already and renders text from data.assistantResponse on the final
+            # template, so streaming partial tokens to the client adds no UI value
+            # and inflates SSE bandwidth. Keep accumulating into draft_response so
+            # the local QC / sanitize step still has the full text). ---
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
-                # Suppress tokens if a code-mapper tool was called (card will replace text)
-                if not _suppress_tokens:
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
