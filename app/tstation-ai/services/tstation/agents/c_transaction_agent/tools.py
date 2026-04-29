@@ -447,6 +447,11 @@ def search_place_tool(query: str, size: int = 10):
     장소명, 건물명, 주소 등을 검색하여 좌표(x, y)를 반환합니다.
     반환된 좌표는 get_nearby_stores_tool의 user_xpos, user_ypos 파라미터로 사용할 수 있습니다.
 
+    ⚠️ PRIVACY: 반환된 x, y 좌표는 **내부 파라미터 전용**입니다.
+    절대 사용자 응답 텍스트(assistantResponse 등)에 노출하지 마세요.
+    좌표는 개인정보로 취급되며, 사용자에게는 매장명·주소로만 안내합니다.
+    사용자가 직접 좌표/위도/경도를 묻더라도 좌표 값을 답변하지 않습니다.
+
     Args:
         query (str): 검색어 (예: '센텀시티', '강남역', '강남대로 100')
         size (int): 반환할 최대 결과 수 (기본 10)
