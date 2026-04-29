@@ -31,16 +31,16 @@ leading_agent = LeadingAgent(REASONING_LLM)
 # Discovery Agent
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
 
-discovery_subagent = DiscoverySubAgent(REASONING_LLM)
+discovery_subagent = DiscoverySubAgent(LLM)
 # Transaction Agent (merged PRICING + ORDER)
 from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
 
-transaction_subagent = TransactionSubAgent(REASONING_LLM)
+transaction_subagent = TransactionSubAgent(LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent
 
-support_subagent = SupportSubAgent(REASONING_LLM)
+support_subagent = SupportSubAgent(LLM)
 
 # UI Template Agent disabled — template rendering is handled by code mapper.
 # QC Agent disabled — kept out of runtime path.
