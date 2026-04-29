@@ -119,6 +119,35 @@ def _yyyymmdd_to_korean_date(s: str) -> str:
     return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
 
 
+def _normalize_time(s: str) -> str:
+    """Normalize a BE business-hours value to ``HH:MM``.
+
+    The store endpoints return inconsistent shapes — sometimes ``"09:00"``,
+    sometimes just ``"09"`` — which produces awkward mixed output like
+    ``평일 09~19 / 토요일 09:00~16:00``. Pad single-hour, ``"H"`` (e.g. ``"9"``)
+    and ``"HHMM"`` (e.g. ``"0930"``) shapes; pass through anything else
+    unchanged so we never silently mangle a value we don't recognise.
+    """
+    s = (s or "").strip()
+    if not s:
+        return s
+    if ":" in s:
+        h, _, m = s.partition(":")
+        try:
+            return f"{int(h):02d}:{int(m):02d}"
+        except ValueError:
+            return s
+    if s.isdigit():
+        try:
+            if len(s) <= 2:
+                return f"{int(s):02d}:00"
+            if len(s) == 4:
+                return f"{int(s[:2]):02d}:{int(s[2:]):02d}"
+        except ValueError:
+            return s
+    return s
+
+
 # ── 1. product ──────────────────────────────────────────────────────────────────
 
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
@@ -421,10 +450,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             biz_end_wday = _get_str(detail, "shop_biz_end_wday") or _get_str(row, "shop_biz_end_wday")
             biz_wday = f"{biz_strt_wday}~{biz_end_wday}" if biz_strt_wday and biz_end_wday else ""
 
-            biz_strt_time = _get_str(detail, "shop_biz_strt_time") or _get_str(row, "shop_biz_strt_time")
-            biz_end_time = _get_str(detail, "shop_biz_end_time") or _get_str(row, "shop_biz_end_time")
-            sat_strt_time = _get_str(detail, "shop_sat_strt_time") or _get_str(row, "shop_sat_strt_time")
-            sat_end_time = _get_str(detail, "shop_sat_end_time") or _get_str(row, "shop_sat_end_time")
+            biz_strt_time = _normalize_time(_get_str(detail, "shop_biz_strt_time") or _get_str(row, "shop_biz_strt_time"))
+            biz_end_time = _normalize_time(_get_str(detail, "shop_biz_end_time") or _get_str(row, "shop_biz_end_time"))
+            sat_strt_time = _normalize_time(_get_str(detail, "shop_sat_strt_time") or _get_str(row, "shop_sat_strt_time"))
+            sat_end_time = _normalize_time(_get_str(detail, "shop_sat_end_time") or _get_str(row, "shop_sat_end_time"))
             biz_weekday_str = f"평일 {biz_strt_time}~{biz_end_time}" if biz_strt_time and biz_end_time else ""
             biz_sat_str = f"토요일 {sat_strt_time}~{sat_end_time}" if sat_strt_time and sat_end_time else ""
             biz_hours = " / ".join(p for p in [biz_weekday_str, biz_sat_str] if p)
