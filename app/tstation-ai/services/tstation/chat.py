@@ -13,7 +13,6 @@ from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
     AgentDomain,
-    LLM as _router_llm,
     DECISION_LLM as _decision_llm,
     leading_agent,
     discovery_subagent,
@@ -196,6 +195,27 @@ class MultiAgentDomain(BaseModel):
             self.Domain.LEADING: leading_agent,
         }
         return [agent_map[d] for d in self.domains if d in agent_map]
+
+
+class _SlimMultiAgentDomain(BaseModel):
+    """First-turn slim classification schema.
+
+    Drops user_behavior / next_action / flow narrative fields — they only
+    carry signal once prior conversation history exists. On a fresh session
+    they would be placeholders ("fresh start — no prior context"), so we
+    skip generating them to save output tokens on every first message.
+    """
+
+    reason: str = Field(description="Reason for the classification, using english")
+    domains: list[MultiAgentDomain.Domain] = Field(
+        description="List of domains detected in the request, ordered by priority"
+    )
+
+
+# Module-level singletons — avoid re-wrapping LLM per request.
+# DECISION_LLM (small/fast model) is sufficient for routing classification.
+_multi_intent_model = _decision_llm.with_structured_output(MultiAgentDomain, strict=True)
+_slim_intent_model = _decision_llm.with_structured_output(_SlimMultiAgentDomain, strict=True)
 
 
 def prompt_router_multi() -> str:
@@ -404,6 +424,56 @@ Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "
 """
 
 
+def prompt_router_slim() -> str:
+    """First-turn classifier prompt.
+
+    Continuation / re-recommendation / bare re-trigger rules are dropped
+    because there is no prior conversation context to leverage on a fresh
+    session. Use only when the message history contains a single user message.
+    """
+    return """
+You are a domain classifier for T-Station AI (Hankook Tire).
+Classify the user's FIRST message into EXACTLY ONE domain.
+
+DOMAINS:
+- TRANSACTION: Price / stock / buy / order / cart when goods_no (G + 12 digits)
+  is already in the message; store search by location or name
+  (강남, 근처, 올마이티, All My T); reservation slots; order tracking; coupon inquiry.
+- DISCOVERY: Product search by name or keyword; tire recommendation;
+  vehicle-tire compatibility; product specs / features; review videos;
+  price / stock / buy with PRODUCT NAME ONLY (no goods_no yet — Discovery
+  resolves goods_no first).
+- SUPPORT: Warranty, returns, refund policy, maintenance guidance,
+  1:1 문의, 상담원 연결, customer complaints (짜증 / 엉망 / 제대로 해 등).
+- LEADING: Pure greeting; unclear or empty intent; bare re-trigger words
+  ("다시", "또") with no other anchor.
+
+KEY RULES:
+- Message contains "G" + 12 digits → TRANSACTION
+- Product NAME only (벤투스 / 다이나프로 / Ventus / Dynapro / ...) with
+  price / stock / buy → DISCOVERY
+- Vehicle number (e.g., "12가3456") with tire request → DISCOVERY
+- 추천 / 맞는 타이어 / 어떤 타이어 → DISCOVERY
+- 매장 / 가까운 / 근처 / 올마이티 / All My T → TRANSACTION
+- 환불 / 반품 / 보증 / 워런티 / 1:1 문의 / 상담원 → SUPPORT
+- Aggressive or complaint tone (짜증 / 엉망 / 화나 / 뭐 이런) → SUPPORT
+- Pure greeting (안녕 / hi / hello) → LEADING
+
+EXAMPLES:
+- "안녕하세요" → LEADING
+- "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
+- "벤투스 S2 가격 얼마야?" → DISCOVERY
+- "G012345678901 가격" → TRANSACTION
+- "강남 근처 매장 찾아줘" → TRANSACTION
+- "올마이티 매장" → TRANSACTION
+- "보증 정책 알려줘" → SUPPORT
+- "상담원 연결해주세요" → SUPPORT
+- "12가3456 타이어 추천" → DISCOVERY
+
+Output: domains (list with EXACTLY ONE domain) + reason (english).
+"""
+
+
 class StreamingMultiAgentCoordinator:
     """Orchestrates multiple agents with streaming support."""
 
@@ -425,30 +495,57 @@ class StreamingMultiAgentCoordinator:
     ) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
         """Classify user message into one or more domains.
 
+        First turn (no prior history) uses a slim schema + slim prompt to skip
+        narrative fields the small router model would otherwise generate as
+        placeholders. Multi-turn keeps the full schema + prompt because
+        user_behavior / next_action / flow carry real signal once history exists.
+
+        Both paths use DECISION_LLM (small/fast model) — routing is a
+        low-reasoning task that does not need the Sonnet-tier main LLM.
+
         Returns:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
         from langchain_core.messages import SystemMessage
         from config.tracing import build_trace_config
 
-        # Reuse singleton LLM from router.py — avoids creating a new object per request
-        structured_model = _router_llm.with_structured_output(
-            MultiAgentDomain,
-            strict=True,
-        )
+        # First turn = single user message, no prior conversation history.
+        is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
 
         try:
-            system_msg = SystemMessage(content=prompt_router_multi())
+            if is_first_turn:
+                structured_model = _slim_intent_model
+                system_msg = SystemMessage(content=prompt_router_slim())
+                run_name = "classify_multi_intent_slim"
+            else:
+                structured_model = _multi_intent_model
+                system_msg = SystemMessage(content=prompt_router_multi())
+                run_name = "classify_multi_intent"
+
             all_messages = [system_msg] + list(messages)
 
             trace_config = build_trace_config(
-                run_name="classify_multi_intent",
+                run_name=run_name,
                 session_id=session_id,
                 user_id=user_id,
                 trace_id=trace_id,
-                tags=["router", "classify_multi_intent"],
+                tags=["router", run_name],
             )
-            result: MultiAgentDomain = structured_model.invoke(all_messages, config=trace_config)
+            raw_result = structured_model.invoke(all_messages, config=trace_config)
+
+            # Normalize slim result to MultiAgentDomain for downstream compat.
+            # Empty narrative fields short-circuit _inject_conversation_context.
+            if is_first_turn:
+                result = MultiAgentDomain(
+                    reason=raw_result.reason,
+                    domains=raw_result.domains,
+                    user_behavior="",
+                    next_action="",
+                    flow="",
+                )
+            else:
+                result = raw_result
+
             logger.info(
                 f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}"
             )
