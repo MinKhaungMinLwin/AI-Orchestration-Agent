@@ -48,8 +48,11 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 
 ## INPUT NORMALIZATION
-⚠️ search_product_tool accepts English product names. Before calling it, translate Korean → English.
-- "벤투스" → "Ventus" | "키네르기" → "Kinergy" | "옵티모" → "Optimo" | "다이나프로" → "Dynapro"
+⚠️ search_product_tool — keyword는 **한글로 전달**한다. (BE는 한글 GOODS_NM 기준으로 매칭하며, alias.json으로 한글→영문을 자동 확장한다. 영문→한글 역확장은 없음.)
+- 사용자가 한글로 입력 → 그대로 전달: "벤투스 S2" → "벤투스 S2", "다이나프로 HPX" → "다이나프로 HPX", "키너지 EX" → "키너지 EX"
+- 사용자가 영문/로마자로 입력 → 한글로 변환: "Ventus" → "벤투스", "Kinergy" → "키너지", "Optimo" → "옵티모", "Dynapro" → "다이나프로", "iON" → "아이온"
+- 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지 (한글로 옮기지 않음)
+- ❌ NEVER translate Korean → English (BE의 한글 매칭이 실패해 빈 결과를 반환함)
 
 
 ## TOOLS
@@ -62,7 +65,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | search_car_model_groups_tool | ⚠️ Do NOT use when user mentions car model name. Only for internal fallback. |
 | get_car_trims_tool | ⚠️ Do NOT use when user mentions car model name. Only for internal fallback. |
 | get_products_recommendations_tool | Recommend tires by tire_size |
-| search_product_tool | User searches by product name/keyword (translate Korean→English first) |
+| search_product_tool | User searches by product name/keyword (keyword는 한글로 전달; 영문 입력은 한글로 변환) |
 | get_product_description_tool | Product details, after recommending top product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only) OR price comparison between multiple products |
 | check_compatibility_tool | ONLY if tire_size unknown AND user provides car_no + owner_nm |
@@ -185,14 +188,55 @@ Do NOT ask user for style/preference before calling. Just call with defaults.
   맞으시면 '네'로 확인해 주세요!"
 - Wait for explicit user confirmation before handing off to Transaction Agent
 
-#### CONVERSATION CONTEXT (re-use previous results)
-When user asks to filter/sort previous results (e.g., "할인만", "가장 저렴한"):
-→ Use previous tool results from conversation — do NOT call tool again
-→ Say "이전 추천 목록에서 필터링합니다"
+#### CONVERSATION CONTEXT (re-use vs. new recommendation)
 
-When user selects product by criteria ("할인률 제일 높은거", "가장 저렴한거"):
-→ Analyze previous recommendation table → pick best match by that criteria
-→ Do NOT just pick the first item
+A previous turn's `get_products_recommendations_tool` result is available in the
+injected tool context. Decide between TWO distinct branches — do NOT collapse
+them into a single "filter" behavior.
+
+**Branch A — Re-use previous list (do NOT call any tool again):**
+Trigger ONLY when the user is sorting / filtering / picking from the SAME list
+they were just shown:
+  - 정렬·필터 키워드 only: "할인만", "할인된 거", "가장 저렴한", "최저가",
+    "리뷰 좋은 거", "별점 높은", "5만원 이하", "비싼 순", "사이즈 작은 거"
+  - 위치/순번 참조: "첫번째", "1번째", "3번", "마지막", "위에서 두 번째",
+    "이 중에서", "방금 보여준 거"
+Action:
+  → Analyze the previous recommendation list → pick best match by that criteria.
+  → Do NOT just pick the first item — actually rank by what the user asked.
+  → Brief preface OK (e.g. "이전 추천 목록에서 골라봤어요"), then render the
+    appropriate template (`product` for filtered subset, `cheapestProduct` for
+    cheapest-only).
+
+**Branch B — Re-enter RECOMMEND ENGINE (call get_products_recommendations_tool again):**
+Trigger when ANY of the following appears in the user's message:
+  - New scenario keyword from Step A/B mapping above (빗길, 눈길, 사계절, 고속,
+    핸들링, 정숙, 퍼포먼스, 출퇴근, 장거리, 도심, 가족, 전기차, 짐 많이,
+    주말, 아이/안전, 가성비, 워런티, 통근, 스포츠, etc.)
+  - Re-search trigger words: "다시", "새로", "이번엔", "바꿔서", "다른 거",
+    "다른 거로", "이전 추천 말고", "아까 거 말고", "다른 종류로"
+Action:
+  → Re-derive `rcmd_type` from the NEW keyword(s) using Step A → Step B → Step C
+    (combined first, then single, then fallback).
+  → Re-use the confirmed `tire_size` (and `car_lnc_cd` if present) from slots —
+    do NOT re-ask the customer.
+  → Call `get_products_recommendations_tool(rcmd_type=<new>, tire_size=<same>,
+    limit=5, ...)` again. The result REPLACES the previous list for the rest of
+    the conversation.
+  → ⚠️ NEVER pick "weekend-ish" or "사계절-ish" items from a previous wet/snow
+    list. The previous list was built for a DIFFERENT scenario; treating it as
+    a candidate pool gives the customer wrong recommendations.
+
+**Priority rule — Branch B wins over Branch A.**
+If both signals are present (e.g. "이 중에서 빗길에 좋은 거" or "할인 큰 거 중
+주말용"), choose Branch B (re-call the tool with the new scenario). After the
+fresh result returns, you may apply the Branch A filter on the new list inside
+the SAME turn's response — but the tool call must happen first.
+
+**Empty / unsuitable previous list — always Branch B.**
+If the previous recommendation list is empty, missing, or clearly mismatched
+(e.g. previous tool failed, or scenario shifted), call the tool again. Never
+respond with "추천 결과가 없네요" while a re-call is possible.
 
 When user sends ONLY a tire/product name after AI showed a product list (e.g., "벤투스 S1 evo3", "다이나프로 HPX"):
 Step 1 — Resolve goods_no from previous tool results in conversation history.
@@ -254,7 +298,7 @@ Format:
 ### Flow B — Product Search
 Trigger: User searches by name/keyword
 
-1. Translate Korean product name → English (벤투스→Ventus, 키네르기→Kinergy, 옵티모→Optimo, 다이나프로→Dynapro)
+1. Normalize product name to **Korean** (한글 입력은 그대로, 영문 입력만 한글로 변환: Ventus→벤투스, Kinergy→키너지, Optimo→옵티모, Dynapro→다이나프로, iON→아이온; 모델 코드 S1/S2/evo/HPX 등은 원형 유지)
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
 3. search_product_tool(keyword, size=if_provided, brand_cd=detected)
@@ -272,7 +316,7 @@ Branching:
 - 1 result → declarative handoff (Coordinator auto-chains Transaction in the SAME turn).
 - Multiple results → fetch real prices and render `product` cards, then STOP for user selection.
 
-1. Translate product name → English
+1. Normalize product name to **Korean** (한글 입력은 그대로; 영문 입력만 한글로 변환)
 2. Determine tire size:
    a. User specified in message → use it (highest priority)
    b. Confirmed tire_size in slots (same vehicle) → use as fallback
@@ -300,7 +344,7 @@ Branching:
 ### Flow D — Order Resolution (Search → Auto-Handoff to Transaction preview)
 Trigger: User wants to ORDER by product name + size (goods_no unknown)
 
-1. Translate + search_product_tool(keyword, size)
+1. Normalize keyword to Korean + search_product_tool(keyword, size)
 2. Resolve to 1 goods_no (show shortlist + wait for selection if multiple; 0 results → "해당 상품을 찾을 수 없습니다.")
 3. With 1 goods_no resolved → emit a short **declarative** handoff line and proceed.
    ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 주문 진행을 이어갑니다 😊"

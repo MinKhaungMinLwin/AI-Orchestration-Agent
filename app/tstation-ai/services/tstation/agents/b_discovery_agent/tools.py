@@ -200,15 +200,20 @@ def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, b
     - User searches for a specific tire by name/keyword
     - Resolving goods_no for price/stock/order handoff (Flow C/D)
 
-    Important: Translate Korean product names to English before calling.
-    - 벤투스→Ventus, 키네르기→Kinergy, 옵티모→Optimo, 다이나프로→Dynapro, 에보→evo
+    Important: keyword는 **한글로 전달**한다. BE는 한글 GOODS_NM에 LIKE 매칭하고
+    alias.json으로 한글→영문을 자동 확장한다 (영문→한글 역확장은 없음).
+    - 사용자가 한글로 입력 → 그대로 전달 (벤투스 S2, 다이나프로 HPX, 키너지 EX 등)
+    - 사용자가 영문/로마자로 입력 → 한글로 변환 후 전달 (Ventus→벤투스, Kinergy→키너지,
+      Optimo→옵티모, Dynapro→다이나프로, iON→아이온)
+    - 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지
+    - ❌ NEVER translate Korean → English (BE 한글 매칭 실패)
 
     Brand detection: Set brand_cd from product name (MC=Michelin, PI=Pirelli, BS=Bridgestone,
     CT=Continental, GY=Goodyear, LF=Laufenn). Default: HK.
     Unsupported brands (금호, 넥센 etc.) → decline, do not search.
 
     Args:
-        keyword (str): 검색할 제품명 키워드 — English name preferred (예: 'Ventus S2', 'Kinergy EX')
+        keyword (str): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX')
         limit (int): 반환할 최대 상품 수 Default: 20.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
         brand_cd (str): 브랜드 코드. Default: HK.
@@ -222,9 +227,9 @@ def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, b
 
     Example Inputs:
         - {"keyword": "벤투스 S2", "limit": 5, "size": "225/45R17"}
-        - {"keyword": "Ventus S2", "limit": 5, "size": "2254517"}
+        - {"keyword": "다이나프로 HPX", "limit": 5, "size": "235/55R19"}
         - {"keyword": "Pilot Sport", "limit": 5, "brand_cd": "MC"}
-        - {"keyword": "s1-evo", "limit": 5}
+        - {"keyword": "s1 evo3", "limit": 5}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
