@@ -1,21 +1,23 @@
-# Model Evaluation — LLM-as-Judge
+# Model Evaluation - LLM-as-Judge
 
-Experiment framework to compare response quality and latency across different LLM models for tstation-ai.
+Experiment framework to compare response quality and latency across different LLM models for `tstation-ai`.
 
 ## How it works
 
-```
-1. Run BASELINE    → collect responses using gpt-5.4-reasoning-medium (current prod model)
-2. Swap model      → change AI_MODEL_REASONING in .env, restart container (no rebuild)
-3. Run EXPERIMENT  → collect responses using experiment model
-4. Judge           → LLM-as-Judge scores experiment vs baseline
+```text
+1. Run BASELINE    -> collect responses using baseline model
+2. Swap model      -> change AI_MODEL_REASONING in .env, restart container
+3. Run EXPERIMENT  -> collect responses using experiment model
+4. Judge           -> LLM-as-Judge scores experiment vs baseline
 ```
 
-## Available models (from docker/config/llm/conf-gateway.yaml)
+## Available models
+
+From `docker/config/llm/conf-gateway.yaml`.
 
 | model_name | Description |
 |---|---|
-| `gpt-5.4-reasoning` | gpt-5.4 + reasoning_effort=medium **(BASELINE)** |
+| `gpt-5.4-reasoning` | gpt-5.4 + reasoning_effort=medium (baseline) |
 | `gpt-5.4` | gpt-5.4 no reasoning |
 | `gpt-5.3` | gpt-5.3 |
 | `gpt-5.2` | gpt-5.2 |
@@ -23,66 +25,92 @@ Experiment framework to compare response quality and latency across different LL
 | `gpt-5.0` | gpt-5.0 |
 | `gpt-4o-mini` | gpt-4o-mini |
 
+## Step 1 - Collect baseline responses
 
-## Step 1 — Collect baseline responses
+Make sure root `.env` has the baseline model, for example:
 
-Make sure `.env` has `AI_MODEL_REASONING=gpt-5.4-reasoning`.
+```text
+AI_MODEL_REASONING=gpt-5.4-reasoning
+```
+
+Run baseline:
 
 ```powershell
-docker run --rm --network docker_internal-net -v "c:/Users/ngvda/Desktop/BLUE_ DRAGON_PROJECT/tstation-ai/eval:/eval" python:3.12-slim bash -c "pip install httpx -q && python /eval/run_eval.py responses --api-url http://tstation-ai:8000 --api-key YOUR_JWT_TOKEN --run-name baseline --model gpt-5.4-reasoning --limit 10"
+docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace python:3.12-slim bash -c "pip install httpx -q && python -m eval.run_eval responses --api-url http://tstation-ai:8000 --jwt-token YOUR_JWT_TOKEN --run-name baseline --model gpt-5.4-reasoning --judge-api-url http://ai-gateway:8000/v1 --judge-api-key YOUR_JUDGE_API_KEY --limit 10"
 ```
 
-Saves to: `eval/results/baseline.json`  
+Saves to: `eval/results/baseline.json`
 
+Notes:
+- `baseline` now uses `eval/test_cases_from_excel.json` by default.
+- Progress logs are printed through `eval.response_runner`.
 
-## Step 2 — Swap model (no rebuild needed)
+## Step 2 - Swap model
 
-Change `AI_MODEL_REASONING` in `.env`:
+Change root `.env`:
+
+```text
+AI_MODEL_REASONING=gpt-4o-mini
 ```
-AI_MODEL_REASONING=gpt-5.4 or 5.3 or smaller models
-```
 
-Recreate container (fast, ~5 seconds, no image rebuild):
+Restart only `tstation-ai`:
+
 ```powershell
 docker compose -f docker/docker-compose.yml up -d tstation-ai
 ```
 
-Verify new model in logs:
-```powershell
-docker logs docker-tstation-ai-1 --tail 5
-# Should show: [MODEL_CONFIG] reasoning=openai/gpt-5.4 | ...
-```
-
-## Step 3 — Collect experiment responses
+Verify the model loaded:
 
 ```powershell
-docker run --rm --network docker_internal-net -v "c:/Users/ngvda/Desktop/BLUE_ DRAGON_PROJECT/tstation-ai/eval:/eval" python:3.12-slim bash -c "pip install httpx -q && python /eval/run_eval.py responses --api-url http://tstation-ai:8000 --api-key YOUR_JWT_TOKEN --run-name exp_gpt4omini --model gpt-5.1 --limit 10"
+docker compose -f docker/docker-compose.yml logs tstation-ai --tail 20
 ```
 
-Saves to: `eval/results/exp_gpt54_no_reasoning.json`
+Look for:
 
+```text
+[MODEL_CONFIG] main=openai/... | reasoning=openai/gpt-4o-mini | ...
+```
 
-## Step 4 — Judge (compare baseline vs experiment)
-
-Judge calls AI Gateway internally (must run on same Docker network):
+Or inspect the env directly:
 
 ```powershell
-docker run --rm --network docker_internal-net -v "c:/Users/ngvda/Desktop/BLUE_ DRAGON_PROJECT/tstation-ai/eval:/eval" python:3.12-slim bash -c "pip install httpx -q && python /eval/run_eval.py judge --judge-api-url http://ai-gateway:8000/v1 --judge-api-key LLM_api_key --baseline baseline --experiment exp_gpt54_no_reasoning"
+docker compose -f docker/docker-compose.yml exec tstation-ai printenv AI_MODEL_REASONING
 ```
 
-Saves to: `eval/results/judge_results.json`
+## Step 3 - Collect experiment responses
 
+Run experiment:
+
+```powershell
+docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace python:3.12-slim bash -c "pip install httpx -q && python -m eval.run_eval responses --api-url http://tstation-ai:8000 --jwt-token YOUR_JWT_TOKEN --run-name experiment --model gpt-4o-mini --judge-api-url http://ai-gateway:8000/v1 --judge-api-key YOUR_JUDGE_API_KEY --limit 10"
+```
+
+Saves to: `eval/results/experiment.json`
+
+Notes:
+- `experiment` now also uses `eval/test_cases_from_excel.json` by default.
+- If needed, you can override the file explicitly with `--test-cases-file test_cases_from_excel.json`.
+
+## Step 4 - Judge baseline vs experiment
+
+Judge calls AI Gateway internally and must run on the same Docker network:
+
+```powershell
+docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace python:3.12-slim bash -c "pip install httpx -q && python -m eval.run_eval judge --judge-api-url http://ai-gateway:8000/v1 --judge-api-key YOUR_JUDGE_API_KEY --baseline baseline --experiment experiment"
+```
+
+Saves to: `eval/results/judgment_baseline_vs_experiment_*.json`
 
 ## Scoring
 
-Judge LLM returns float scores 0.0–1.0. Binarized at threshold 0.5:
+Judge LLM returns float scores `0.0-1.0`. Binarized at threshold `0.5`:
 
 | Raw score | Binary | Meaning |
-|-----------|--------|---------|
-| > 0.5 | 1 (PASS) | Acceptable |
-| ≤ 0.5 | 0 (FAIL) | Not acceptable |
+|---|---|---|
+| `> 0.5` | `1 (PASS)` | Acceptable |
+| `<= 0.5` | `0 (FAIL)` | Not acceptable |
 
-- **faithfulness**: does the response avoid hallucination?
-- **correctness**: does the response convey the same info as baseline?
+- `faithfulness`: does the response avoid hallucination?
+- `correctness`: does the response convey the same info as baseline?
 
-**PASS** = faithfulness > 0.5 AND correctness > 0.5
+`PASS` = `faithfulness > 0.5` and `correctness > 0.5`
