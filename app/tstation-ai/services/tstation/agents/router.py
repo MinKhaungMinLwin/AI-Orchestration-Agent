@@ -23,6 +23,14 @@ REASONING_LLM = ChatLiteLLM(
     streaming=True,
 )
 
+# Lightweight LLM for routing/decision tasks (gpt-4o-mini class via AI_QC_MODEL).
+# Use for short structured outputs where reasoning depth is not needed.
+DECISION_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL}",
+)
+
 ### Multi-Agent Router
 # Leading Agent
 from services.tstation.agents.a_leading_agent.agent import LeadingAgent

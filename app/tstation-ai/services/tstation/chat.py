@@ -14,6 +14,7 @@ from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
     AgentDomain,
     LLM as _router_llm,
+    DECISION_LLM as _decision_llm,
     leading_agent,
     discovery_subagent,
     transaction_subagent,
@@ -39,10 +40,12 @@ class AgentDecision(BaseModel):
     reason: str = Field(description="Reason for decision, using english")
 
 
-def prompt_router() -> str:
-    return dedent(f"""
-    Current Time: {get_current_time()}
+# Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
+_decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 
+
+def prompt_router() -> str:
+    return dedent("""
     You are a domain classifier and decision engine for T-Station AI.
 
     MODE 1 - Initial Classification: Classify user message into ONE domain.
@@ -85,17 +88,10 @@ def decide_next_action(
     user_id: str | None = None,
     trace_id: str | None = None,
 ) -> AgentDecision:
-    from langchain_litellm import ChatLiteLLM
     from langchain_core.messages import SystemMessage, HumanMessage
     from config.tracing import build_trace_config
 
-    llm = ChatLiteLLM(
-        api_base=settings.AI_GATEWAY_BASE_URL,
-        api_key=settings.AI_GATEWAY_API_KEY,
-        model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
-    )
-
-    structured_model = llm.with_structured_output(AgentDecision)
+    structured_model = _decision_structured_model
 
     user_message = ""
     for msg in reversed(original_messages):
@@ -204,9 +200,7 @@ class MultiAgentDomain(BaseModel):
 
 def prompt_router_multi() -> str:
     """Classification prompt that detects multi-intent with flow sequences and conversation context."""
-    return f"""
-Current Time: {get_current_time()}
-
+    return """
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
