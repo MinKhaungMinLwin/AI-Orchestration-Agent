@@ -157,7 +157,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # robust way (parallel completion order is non-deterministic).
     price_map: dict[str, int] = {}
     for entry in _find_entries(tool_data_list, "get_final_price_tool"):
-        goods_no = (entry.get("input") or {}).get("goods_no")
+        # base_agent.py populates `args` (line 319); chat.py path uses `input`.
+        # Accept both so the mapper works in either invocation path.
+        goods_no = (entry.get("args") or entry.get("input") or {}).get("goods_no")
         if not goods_no:
             continue
         price_data = _unwrap(entry)

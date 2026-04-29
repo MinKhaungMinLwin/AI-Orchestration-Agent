@@ -308,7 +308,8 @@ Step 1 — Resolve goods_no from previous tool results in conversation history.
 
 Step 2 — Act based on what user asked BEFORE the product list was shown:
   - Prior: stock inquiry (재고, 입고 keywords) → hand off to Transaction Agent for stock check
-  - Prior: price inquiry (가격, 얼마, 할인 keywords) → hand off to Transaction Agent for price check
+  - Prior: price inquiry (가격, 얼마, 할인 keywords) → call get_product_description_tool → show detail.
+    (가격은 이미 이전 product 카드에 노출되어 있으므로 다시 가격 조회로 핸드오프하지 말고 상세 정보로 응답한다.)
   - Prior: tire recommendation (get_products_recommendations_tool was called) → call get_product_description_tool → show detail
   - No prior context → call get_product_description_tool → show brief description only
 
