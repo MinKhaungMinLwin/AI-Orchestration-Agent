@@ -155,7 +155,13 @@ class MultiAgentDomain(BaseModel):
             "Examples: 'selecting car from list shown in previous turn', "
             "'providing car number to resolve vehicle', "
             "'confirming product selection', 'responding to recommendation', "
+            "'requesting NEW recommendation with different scenario (e.g. 빗길 → 주말)', "
+            "'requesting fresh search to replace previous list', "
             "'fresh start — first message'. "
+            "⚠️ When the user provides a NEW scenario keyword (빗길/눈길/사계절/주말/정숙성/"
+            "출퇴근/가족/전기차 등) OR re-search trigger ('다시', '새로', '이전 추천 말고') "
+            "AFTER a previous recommendation, the user is NOT 'filtering' or 'selecting from "
+            "previous list' — they want a NEW recommendation. Write user_behavior accordingly. "
             "Always provide a value."
         ),
     )
@@ -165,7 +171,13 @@ class MultiAgentDomain(BaseModel):
             "Be concrete — reference tool name and key param if possible. "
             "Examples: 'match car_no 123가4566 from previous car list → extract tire_size_fr → call get_products_recommendations_tool', "
             "'user already has goods_no from context → call get_final_price_tool directly', "
-            "'call get_my_cars_tool with mbr_no from user context'. "
+            "'call get_my_cars_tool with mbr_no from user context', "
+            "'call get_products_recommendations_tool AGAIN with rcmd_type=\"weekend\" (new scenario), reuse tire_size from slots — do NOT filter previous wet results'. "
+            "⚠️ When the user provides a NEW scenario keyword after a previous recommendation, "
+            "next_action MUST instruct the agent to RE-CALL get_products_recommendations_tool with "
+            "the new rcmd_type, NOT to filter or pick from the previous list. Phrases like "
+            "'filter previous list', 'pick weekend-friendly items from previous wet list' are "
+            "FORBIDDEN — they cause incorrect recommendations. "
             "Use 'proceed normally' if action is obvious from the user message alone."
         ),
     )
@@ -208,6 +220,31 @@ Produce 4 outputs:
 IMPORTANT: user_behavior and next_action must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
 identify WHAT they are responding to and set next_action accordingly.
+
+⚠️ CRITICAL — RE-RECOMMENDATION INTENT (replaces "filter previous list" default):
+When the previous turn produced a tire recommendation list AND the current user message
+contains EITHER (a) a NEW scenario keyword (빗길, 눈길, 사계절, 고속, 핸들링, 정숙,
+퍼포먼스, 출퇴근, 장거리, 도심, 가족, 전기차, 짐 많이, 주말, 아이/안전, 가성비,
+워런티, 통근, 스포츠 등) OR (b) a re-search trigger ("다시", "새로", "이번엔",
+"바꿔서", "다른 거", "이전 추천 말고", "아까 거 말고", "다른 종류로"),
+the user is requesting a NEW recommendation, NOT filtering the previous list.
+
+In this case:
+  - user_behavior MUST be like: "requesting NEW recommendation with different scenario (X)"
+    or "requesting fresh search to replace previous list"
+  - next_action MUST be: "call get_products_recommendations_tool AGAIN with rcmd_type=<X>
+    (new scenario), reuse tire_size from slots — do NOT filter previous results"
+  - NEVER write 'filter previous tire list', 'pick from previous list',
+    'select X-friendly items from previous Y list' — these phrases push the agent
+    into wrong behavior.
+
+Worked example:
+  - Previous: get_products_recommendations_tool(rcmd_type="wet") returned 4 items
+  - Current user message: "주말 나들이용으로 다시"
+  - CORRECT user_behavior: "requesting new recommendation with weekend scenario after previous wet recommendation"
+  - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='weekend', reuse tire_size — NEW result replaces previous wet list"
+  - WRONG (do NOT write): "selecting weekend-suitable items from previous tire list"
+  - WRONG (do NOT write): "filter previous recommendations for weekend use"
 
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
@@ -273,7 +310,46 @@ TRANSACTION when:
 ⚠️ "buy/order/purchase" with goods_no already in context → TRANSACTION directly.
 
 SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry
-LEADING when: greeting, unclear intent
+LEADING when: greeting, unclear intent, OR bare ambiguous re-trigger (see below)
+
+====================================================
+AMBIGUOUS RE-TRIGGER → LEADING
+====================================================
+
+If the user's message is essentially ONLY a bare re-trigger / re-search word with
+NO other meaningful context, classify as LEADING so the leading agent can ask the
+user to clarify what they want to redo.
+
+Bare re-trigger words (alone or with trivial padding only):
+  - "다시", "다시요", "다시 해줘", "다시 보여줘", "다시 찾아줘", "다시 알려줘"
+  - "새로", "새로 해줘", "새로 찾아줘"
+  - "다른 거", "다른 거로", "바꿔서", "이번엔", "또"
+
+A message qualifies as "bare re-trigger" when it does NOT include ANY of the
+following alongside the re-trigger word:
+  - 시나리오 / 사용 키워드: 빗길, 눈길, 사계절, 고속, 핸들링, 정숙, 퍼포먼스,
+    출퇴근, 장거리, 도심, 가족, 전기차, 짐, 주말, 아이/안전, 가성비, 워런티,
+    통근, 스포츠, 사이즈, 차종, 가격, 재고, 매장, 주문, 배송, 워런티, 환불 등
+  - 상품명 / 브랜드명: 벤투스, 키네르기, 옵티모, 다이나프로, 라우펜, Ventus,
+    Kinergy, Optimo, Dynapro, Laufenn, Michelin, Pirelli, Bridgestone,
+    Continental, Goodyear, 한국타이어, Hankook
+  - 차량번호 패턴: {{vehicle_number}} (예: "12가3456")
+  - 구체적 의도 동사: 추천, 검색, 찾, 알려, 비교, 보여, 확인, 사고, 살래
+
+Examples:
+- "다시" → LEADING (bare, no context)
+- "다시 해줘" → LEADING (bare)
+- "다른 거 보여줘" → LEADING (bare; "보여줘" is generic, no domain anchor)
+- "이전 추천 말고" → LEADING (bare re-trigger only)
+- "주말 나들이용으로 다시" → DISCOVERY (has scenario keyword "주말")
+- "벤투스 S2 다시 알려줘" → DISCOVERY/TRANSACTION (has product name)
+- "가격 다시 알려줘" → 이전 컨텍스트의 도메인 그대로 (TRANSACTION if goods_no
+  known, DISCOVERY otherwise — "가격" is a clear domain anchor)
+- "다시 추천해줘" → DISCOVERY (has explicit intent verb "추천")
+
+⚠️ This rule overrides CONTINUATION DETECTION below for bare re-triggers — a
+bare re-trigger is NOT a valid continuation; it's an ambiguous request that
+needs clarification before any agent runs.
 
 ====================================================
 CONTINUATION DETECTION
@@ -288,6 +364,10 @@ Examples:
 - Previous: Discovery showed tires → User: "벤투스 S2 AS" → DISCOVERY (same domain continues)
 - Previous: Transaction showed stores → User: "한남점" → TRANSACTION (same domain continues)
 - Previous: Transaction showed schedule → User: "내일 10시" → TRANSACTION (same domain continues)
+
+⚠️ Exception: If the user's short reply is a BARE re-trigger word (다시 / 새로 /
+다른 거 alone, no other anchors), do NOT classify as continuation — route to
+LEADING per AMBIGUOUS RE-TRIGGER rule above.
 
 Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
 """
@@ -1078,11 +1158,22 @@ class TStationChatServiceV2:
         }
 
         lines = [
-            "[대화 중 조회한 데이터 — 고객이 이 내용을 참조할 수 있습니다]",
-            "아래는 이번 대화에서 tool로 조회한 실제 결과입니다 (최신순).",
-            "고객이 '18인치', '아까 19인치', '첫번째', '가장 저렴한 것' 등으로 참조하면",
-            "아래 데이터에서 해당 조건에 정확히 매칭되는 항목을 찾아 응답하세요.",
-            "절대로 아래 데이터에 없는 상품/매장/가격을 만들어내지 마세요.",
+            "[대화 중 조회한 데이터 — 참조용 (최신순)]",
+            "아래는 이번 대화에서 tool로 조회한 실제 결과입니다.",
+            "",
+            "사용 규칙:",
+            "A) 고객이 *이전 결과를 가리키는 경우* (예: '첫번째', '아까 18인치',",
+            "   '가장 저렴한 것', '이 중에서') → 아래 데이터에서 매칭되는 항목으로 응답하세요.",
+            "B) 고객이 *새 조건/시나리오를 제시*하거나(예: '빗길', '주말', '사계절',",
+            "   '정숙성', '눈길' 등 새 사용 시나리오) *재시도를 요청*하는 경우",
+            "   (예: '다시', '새로', '이번엔', '바꿔서', '다른 거', '이전 추천 말고')",
+            "   → 적절한 tool을 다시 호출해 새 결과를 받아오세요. 아래 데이터에",
+            "   *갇히지 마세요*. 이전 시나리오의 결과 안에서 새 시나리오 답을",
+            "   *추정해 고르지 마세요* — 잘못된 추천이 됩니다.",
+            "",
+            "환각 금지: 가격·상품번호·재고 같은 *사실 데이터*를 *지어내지* 마세요.",
+            "단, 신규 tool 호출로 새 데이터를 가져오는 것은 정상이며 권장되는 동작입니다.",
+            "tool 결과만이 신뢰할 수 있는 사실의 출처입니다.",
             "",
         ]
 
