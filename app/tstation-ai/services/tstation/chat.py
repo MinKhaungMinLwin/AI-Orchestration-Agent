@@ -394,8 +394,26 @@ If the previous agent showed a list and asked user to SELECT (cars, tires, store
 Examples:
 - Previous: Discovery showed car list → User: "제타" → DISCOVERY (same domain continues)
 - Previous: Discovery showed tires → User: "벤투스 S2 AS" → DISCOVERY (same domain continues)
+- Previous: Discovery showed tires → User: "1. 벤투스 S2 AS" → DISCOVERY (ordinal prefix
+  does NOT change domain; the user is still picking a tire from the recommendation list,
+  not placing an order)
+- Previous: Discovery showed tires → User: "1번", "3", "첫번째" → DISCOVERY (pure ordinal)
 - Previous: Transaction showed stores → User: "한남점" → TRANSACTION (same domain continues)
 - Previous: Transaction showed schedule → User: "내일 10시" → TRANSACTION (same domain continues)
+
+⚠️ HARD RULE — Tire pick from a Discovery recommendation/search list stays in DISCOVERY.
+Even when user_behavior reads "confirming product selection" or "user picked a tire", the
+correct domain is DISCOVERY (so `get_product_description_tool` runs and the customer sees
+the product detail card with the closing "원하시면 이어서 가격, 재고, 주문 진행까지 도와
+드릴게요" offer). DO NOT route to TRANSACTION unless the user's CURRENT message itself
+contains an explicit transactional verb — "주문", "구매", "살래", "결제", "장바구니",
+"가격", "얼마", "재고", "예약", "매장". A bare product name (with or without an ordinal
+"1." / "1번") is NEVER a transactional trigger by itself, even though it confirms a pick.
+
+⚠️ Do NOT analogize "한남점 선택할게 → TRANSACTION" (store selection in an order flow) to
+product selection. They are different: store selection happens AFTER goods_no is locked
+in, so it advances Flow 6; tire selection happens BEFORE goods_no is locked in, so it
+just resolves goods_no inside Discovery. Stay in DISCOVERY for tire picks.
 
 ⚠️ Exception: If the user's short reply is a BARE re-trigger word (다시 / 새로 /
 다른 거 alone, no other anchors), do NOT classify as continuation — route to
