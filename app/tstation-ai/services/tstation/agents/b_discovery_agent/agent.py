@@ -368,9 +368,12 @@ Trigger: User searches by name/keyword
 3. search_product_tool(keyword, size=if_provided, brand_cd=detected)
 4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 5. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
-   - Use `extra_fvr_sale_prc` (할인가, 사용자 실결제가) from each response as the `price` field in the product template
-   - If get_final_price_tool fails for an item → use `null` for price (NEVER use 0)
-   ⚠️ NEVER render the product template before ALL get_final_price_tool calls complete
+   - For EACH price response, extract the **`extra_fvr_sale_prc`** integer
+     (할인가, 사용자 실결제가) from `data` and put it into the matching item's `price` field.
+   - Worked example: response `{"data": {"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "wage_prc": 0, "wage_today_prc": 0, ...}}`
+     → `products[i].price = 316200`. Never 405900, never 0.
+   - If get_final_price_tool fails for an item → use `null` for price (NEVER use 0).
+   ⚠️ NEVER render the product template before ALL get_final_price_tool calls complete.
 6. Render `product` template with real prices. STOP and wait for user to SELECT a product.
 
 
@@ -396,11 +399,20 @@ Branching:
    would duplicate the downstream call.
 6. If MULTIPLE results (2~5, max 5) → fetch prices and render a shortlist for the user.
    - Call get_final_price_tool(goods_no) for EACH item — call ALL in the SAME tool-use turn before answering
-   - Collect `extra_fvr_sale_prc` (할인가, 사용자 실결제가) from each response
-   - Render `product` template with real prices from these calls
-   ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete
-   ⚠️ NEVER use price=0 or price=null — if get_final_price_tool fails for an item, omit that item
-   ⚠️ Use `extra_fvr_sale_prc` from get_final_price_tool response as `price` field (NOT `sale_prc`/정가)
+   - For EACH price response, extract the **`extra_fvr_sale_prc`** integer
+     (할인가, 사용자 실결제가) from the response's `data` object and put that
+     EXACT integer into the matching item's `price` field.
+   - **Worked example (follow this literally):**
+     get_final_price_tool returns:
+       `{"status": "success", "data": {"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "extra_fvr_sale_per": 22.0, "wage_prc": 0, "wage_today_prc": 0}}`
+     → set `products[i].price = 316200`.
+     ❌ Do NOT use 405900 (sale_prc / 정가).
+     ❌ Do NOT use 0 (wage_prc, wage_today_prc).
+     ❌ Do NOT subtract anything — `extra_fvr_sale_prc` is already the final discounted price.
+   - Render `product` template with real prices from these calls.
+   ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete.
+   ⚠️ The `price` field MUST be `extra_fvr_sale_prc` from `data`. Never `sale_prc`, `wage_prc`, `wage_today_prc`, or 0.
+   ⚠️ If `extra_fvr_sale_prc` is genuinely missing/0 for an item, OMIT that item from the products list — do NOT show with price=0.
    → STOP and wait for user to SELECT a product. Coordinator stops the chain
    automatically because goods_no is not resolved (multi-result search).
 

@@ -151,6 +151,26 @@ def _normalize_time(s: str) -> str:
 # ── 1. product ──────────────────────────────────────────────────────────────────
 
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    # Build goods_no → 할인가(extra_fvr_sale_prc) lookup from any get_final_price_tool
+    # calls in this turn. Discovery's Flow B/C invokes get_final_price_tool in
+    # parallel for each search result; pairing by `input.goods_no` is the only
+    # robust way (parallel completion order is non-deterministic).
+    price_map: dict[str, int] = {}
+    for entry in _find_entries(tool_data_list, "get_final_price_tool"):
+        goods_no = (entry.get("input") or {}).get("goods_no")
+        if not goods_no:
+            continue
+        price_data = _unwrap(entry)
+        if not isinstance(price_data, dict):
+            continue
+        # Prefer extra_fvr_sale_prc (사용자 실결제 할인가); fall back to sale_prc (정가)
+        # only if discount price missing/0.
+        price = int(_get_num(price_data, "extra_fvr_sale_prc", default=0))
+        if not price:
+            price = int(_get_num(price_data, "sale_prc", default=0))
+        if price:
+            price_map[goods_no] = price
+
     items, metadata = [], []
     for entry in _find_entries(tool_data_list, "search_product_tool", "get_products_recommendations_tool"):
         raw = _unwrap(entry)
@@ -160,9 +180,12 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            goods_no = _get_str(row, "goods_no")
             goods_nm = _get_str(row, "goods_nm", "title")
             tire_size = _get_str(row, "tire_size_1", "tire_size_2")
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
+            # Price priority: matched get_final_price_tool result > inline row field.
+            price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
@@ -172,12 +195,12 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 # rating. Skip both — keep the cards clean (FE still shows the rate stars).
                 "tires": "",
                 "comfort": "",
-                "price": int(_get_num(row, "price", "extra_fvr_sale_prc", default=0)),
+                "price": price,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
                 "description": "",
             })
-            metadata.append({"goodsId": _get_str(row, "goods_no")})
+            metadata.append({"goodsId": goods_no})
     if not items:
         return None
     items, metadata = items[:5], metadata[:5]
