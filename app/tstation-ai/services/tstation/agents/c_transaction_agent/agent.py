@@ -467,33 +467,46 @@ STEP A — fetch price (if not already present for THIS exact goods_no):
   • The goods_no must match EXACTLY. A price from a similar/different goods_no is
     NEVER acceptable, even if the product name looks alike.
 
-STEP B — identify the two required integer fields from the tool output:
+STEP B — identify the required integer fields from the tool output:
   Let:
-    SP  = tool.data.sale_prc              // 판매가 (per-unit, integer, KRW)
-    DSC = tool.data.extra_fvr_sale_prc    // 할인금액 (per-unit, integer, KRW; may be null/0)
-    QTY = orderInfo.quantity              // integer from the confirmed STEP 2 ord_qty
+    SP    = tool.data.sale_prc              // 판매가 / 정가 (per-unit, integer, KRW)
+    FINAL = tool.data.extra_fvr_sale_prc    // 할인 적용된 최종 단가 (per-unit, integer, KRW; may be null/0)
+    DSC   = SP - FINAL                      // 실제 할인 금액 (per-unit, computed; clamp to 0 if negative)
+    QTY   = orderInfo.quantity              // integer from the confirmed STEP 2 ord_qty
+
+  ⚠️ FIELD MEANING (CRITICAL — common source of inverted price/discount bugs):
+  • `extra_fvr_sale_prc` is NOT the discount amount. It is the FINAL DISCOUNTED PRICE
+    that the customer actually pays per tire (사용자 실결제가).
+  • The actual discount AMOUNT is `sale_prc - extra_fvr_sale_prc` — never read it
+    directly from a backend field.
+  • Worked example: `{"sale_prc": 62425, "extra_fvr_sale_prc": 47450}` →
+    SP=62425, FINAL=47450, DSC=14975. NEVER swap these.
 
   Rules for reading fields:
-  • Treat null/missing DSC as 0.
+  • Treat null/missing FINAL as equal to SP (no discount → DSC=0).
   • If SP is null / missing / 0 → go to STEP D (fallback).
+  • If FINAL > SP (data anomaly) → treat FINAL as SP and DSC=0; do NOT invert.
   • NEVER use `extra_fvr_sale_per` (percent) for arithmetic. It is display-only.
   • Do NOT read `wage_prc` or `wage_today_prc`. 공임비 is NOT part of paymentAmount.
   • NEVER pull any of these fields from a prior turn whose goods_no differs.
 
 STEP C — compute paymentAmount with the EXACT formula:
 
-    unit_final    = SP - DSC                 // per-tire 최종 단가 (공임비 제외)
+    unit_final    = FINAL                    // per-tire 최종 단가 (공임비 제외) — already discounted
     paymentAmount = unit_final * QTY         // 총 결제금액 (integer)
 
   Arithmetic rules (STRICT — violation is a critical error):
-  • Use ONLY this formula. No other combination of fields.
+  • Use ONLY this formula. paymentAmount = extra_fvr_sale_prc × QTY. No other combination of fields.
+  • Do NOT compute `paymentAmount = (SP - extra_fvr_sale_prc) * QTY` — that gives the
+    discount total, not the payment amount. This is the exact bug that swaps
+    "할인" and "최종 금액" in the price table.
   • All operands are plain integers in KRW. Do NOT convert to 만원/천원.
   • Do NOT round. Do NOT "approximate". Do NOT drop or add trailing zeros.
-  • DSC must be ≤ SP. If your read-in DSC is greater than SP, STOP — you almost certainly
-    mis-read the field (likely picked up `extra_fvr_sale_per` percent value by mistake).
-  • Digit-count check (MANDATORY): `unit_final` must have the same digit count as SP.
-    Example: SP=152000 (6 digits), DSC=10000 → unit_final=142000 (6 digits). If `unit_final`
-    differs from SP's digit count, STOP and recompute.
+  • FINAL must be ≤ SP. If FINAL > SP, STOP — you almost certainly mis-read a field
+    (likely picked up `extra_fvr_sale_per` percent value by mistake).
+  • Digit-count check (MANDATORY): `unit_final` must have the same digit count as SP
+    (or one less — only when the discount drops a leading digit, e.g. SP=10x,xxx → FINAL=9x,xxx).
+    Example: SP=62425 (5 digits), FINAL=47450 (5 digits) → unit_final=47450 ✓.
   • Multiplication check (MANDATORY): after computing `paymentAmount = unit_final * QTY`,
     verify by also computing `paymentAmount / QTY` and confirming it equals `unit_final`
     exactly. If it does not match, STOP and recompute.
@@ -514,8 +527,9 @@ STEP D — fallback when price is unavailable:
 • NEVER output a `paymentAmount` that did not come from STEP C's exact formula on
   freshly read STEP B fields (or `null` via STEP D).
 • In `assistantResponse` prose, if you mention any price value, it MUST be either
-  (a) the computed `paymentAmount` you just placed in the JSON, stated identically, OR
-  (b) a verbatim integer copy of the SP or DSC field — no combinations, no rounding.
+  (a) the computed `paymentAmount` (= FINAL × QTY) you just placed in the JSON, stated identically, OR
+  (b) a verbatim integer copy of the SP (`sale_prc`) or FINAL (`extra_fvr_sale_prc`) field, OR
+  (c) the computed DSC = SP - FINAL (per-unit) or its × QTY total — no other combinations, no rounding.
   Format as `{{integer}}원`. No "약", no "정도", no "~".
 • Do NOT mention 공임비 / 공임 / wage in `assistantResponse`. It is not part of
   paymentAmount and surfacing it here only confuses the user.
@@ -626,6 +640,20 @@ Examples of correct `assistantResponse` for template tools:
 | 할인 | -₩XXX,XXX |
 | 공임비 | ₩XX,XXX |
 | **최종 금액** | **₩XXX,XXX** |
+
+⚠️ Field mapping for the price table (read STEP B definitions):
+  • 기본가     = SP × QTY                   (= sale_prc × QTY)
+  • 할인       = -(DSC × QTY) = -((SP - FINAL) × QTY)   ← always a NEGATIVE display
+  • 공임비     = wage_prc × QTY              (display only — NOT in paymentAmount)
+  • 최종 금액  = FINAL × QTY + (wage_prc × QTY)   (= extra_fvr_sale_prc × QTY + 공임비)
+    Note: paymentAmount in `preOrder` excludes 공임비, but the user-facing 최종 금액
+    in this price table INCLUDES 공임비. Keep them consistent with their definitions.
+
+⚠️ NEVER swap "할인" and "최종 금액". Self-check before emitting:
+  • 최종 금액 should be the LARGEST positive number in the table (≥ 공임비).
+  • 할인 should be displayed with a leading minus sign and represents money saved
+    versus 기본가, so 기본가 + 할인 + 공임비 == 최종 금액 must hold (할인 is negative).
+  • If 할인 ≥ 최종 금액 in absolute value, you have inverted the fields. STOP and recompute.
 
 **Store detail (single store, no slots — `quickReply`, write in `assistantResponse`, plain text lines, no Markdown):**
 매장명: [shop_nm]
