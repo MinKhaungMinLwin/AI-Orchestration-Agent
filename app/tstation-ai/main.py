@@ -22,9 +22,10 @@ async def lifespan(app: FastAPI):
     # Log active model configuration on startup
     logger.info(
         "[MODEL_CONFIG] "
-        f"main={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL} | "
-        f"reasoning={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_REASONING} | "
-        f"qc={settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL} | "
+        f"default={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL} | "
+        f"leading={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_LEADING_AGENT} | "
+        f"transaction={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_TRANSACTION_AGENT} | "
+        f"qc={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT} | "
         f"qc_enabled={settings.AI_QC_ENABLED} | "
         f"gateway={settings.AI_GATEWAY_BASE_URL}"
     )

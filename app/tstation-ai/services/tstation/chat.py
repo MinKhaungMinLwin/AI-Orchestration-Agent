@@ -2062,9 +2062,10 @@ class TStationChatServiceV2:
         from config.env import settings as _s
         logger.info(
             "[REQUEST_CONFIG] "
-            f"model={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
-            f"reasoning_model={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_REASONING} | "
-            f"qc_model={_s.AI_DEFAULT_PROVIDER}/{_s.AI_QC_MODEL} | "
+            f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
+            f"leading={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_LEADING_AGENT} | "
+            f"transaction={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_TRANSACTION_AGENT} | "
+            f"qc={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_QC_AGENT} | "
             f"qc_enabled={_s.AI_QC_ENABLED} | "
             f"session_id={session_id!r}"
         )
