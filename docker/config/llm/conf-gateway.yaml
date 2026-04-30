@@ -1,6 +1,47 @@
 model_list:
   ## API Model
   # LLM
+  - model_name: gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+
+  - model_name: gpt-5.5-reasoning
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "medium"
+
+  - model_name: gpt-5.5-reasoning-low
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "low"
+
+  - model_name: gpt-5.5-reasoning-none
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "none"
+
+  - model_name: gpt-5.5-reasoning-high
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "high"
+
+  - model_name: gpt-5.5-reasoning-xhigh
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "xhigh"
+
   - model_name: gpt-5.4-reasoning
     litellm_params:
       model: openai/gpt-5.4
@@ -85,6 +126,12 @@ litellm_settings:
 # Fallbacks when error
 fallbacks:
   - bedrock-claude-haiku-4-5: []
+  - gpt-5.5: ["gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-5.0"]
+  - gpt-5.5-reasoning: ["gpt-5.4-reasoning", "gpt-5.4"]
+  - gpt-5.5-reasoning-low: ["gpt-5.4-reasoning-low", "gpt-5.4"]
+  - gpt-5.5-reasoning-none: ["gpt-5.4-reasoning-minimal", "gpt-5.4"]
+  - gpt-5.5-reasoning-high: ["gpt-5.4-reasoning", "gpt-5.4"]
+  - gpt-5.5-reasoning-xhigh: ["gpt-5.5-reasoning-high", "gpt-5.4-reasoning", "gpt-5.4"]
   - gpt-5.4: ["gpt-5.2", "gpt-5.1", "gpt-5.0"]
   - gpt-5.2: ["gpt-5.1", "gpt-5.0"]
   - gpt-5.1: ["gpt-5.0"]
