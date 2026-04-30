@@ -522,8 +522,14 @@ class BaseAgent(ABC):
         Returns a `data` event dict if any tool in accumulated_tool_data has a
         registered code mapper AND the mapper produced a valid event.
         Returns None to signal "fall through to fenced-JSON path".
+
+        If the LLM emitted an explicit fenced JSON block, defer to it — the
+        agent has chosen its own template (e.g. comparison intent → quickReply
+        instead of the default cheapestProduct mapper).
         """
         if not accumulated_tool_data:
+            return None
+        if BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
         if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
