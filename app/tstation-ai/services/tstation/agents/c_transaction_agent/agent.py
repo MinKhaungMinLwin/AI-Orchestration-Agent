@@ -426,7 +426,10 @@ STEP 1: goods_no confirmed?
     | 사이즈 | [tire_size_1] |
     | 상품번호 | [goods_no] |
     맞으시면 '네'로 답해주세요. 다른 상품을 원하시면 알려주세요."
-    NOTE: 이전 턴 도구 결과(search_product_tool / get_products_recommendations_tool)에 저장된 `tire_size_1` 값을 그대로 사용하라. 컨텍스트에 없으면 사이즈 행에 '—'를 채우고, 행 자체를 생략하지 마라.
+    NOTE — 사이즈 해석 우선순위 (반드시 이 순서로 시도):
+      1. 이전 턴 도구 결과(search_product_tool / get_products_recommendations_tool)의 해당 goods_no 항목에서 `tire_size_1` 값 추출.
+      2. (1)에서 못 찾으면 [확인된 고객 정보]의 슬롯 `타이어 사이즈` 값 사용 — 추천 엔진은 이 사이즈 기준으로 호출되었으므로 동일한 사이즈로 봐도 안전.
+      3. 그래도 없으면 사이즈 행에 '—'를 채우고, 행 자체를 생략하지 마라.
     → Wait for user confirmation before STEP 2
     → If user wants a different product ("다른 상품", "다른 거", "볼게요", etc.) → route to Discovery immediately. Do NOT list or describe products yourself.
 
@@ -446,7 +449,7 @@ STEP 4: Show product summary + options → wait for user choice
 "| 상품명 | 사이즈 | 상품번호 | 수량 |
  | [goods_nm] | [tire_size_1] | [goods_no] | [ord_qty] |
  1. 🏪 매장 선택 후 주문  2. 🛒 장바구니에 담기"
-NOTE: 데이터 행의 각 셀은 컨텍스트의 실제 값으로 치환하라. `tire_size_1` 값을 모르면 '—'로 채우고, 셀이나 행을 비우거나 생략하지 마라.
+NOTE: 데이터 행의 각 셀은 컨텍스트의 실제 값으로 치환하라. `tire_size_1` 값 해석 순서는 STEP 1의 사이즈 해석 우선순위(상품 도구 결과 → 슬롯 `타이어 사이즈` → '—')와 동일. 셀이나 행을 비우거나 생략하지 마라.
 NOTE: If reservation_available=true, add " 3. 📦 예약 주문" option.
 
 STEP 5A — 매장 선택 (user chose option 1 or 3):
@@ -549,6 +552,36 @@ STEP D — fallback when price is unavailable:
   • Set `paymentAmount: null`.
   • In `assistantResponse`, append VERBATIM: "가격은 매장 방문 시 안내해드릴게요."
   • Do NOT guess. Do NOT leave a stale number. Do NOT substitute from another goods_no.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ CAR INFO RESOLUTION — for `preOrder.orderInfo.carInfo` and `orderComplete.orderInfo.carInfo`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Goal: emit `carInfo` as `"car_nm (car_no)"` whenever the customer is using a registered
+or identified vehicle in the current order journey. Do NOT silently emit `null` just because
+the immediate previous turn does not mention the car.
+
+Resolution priority (try in order, first hit wins):
+  1. **Discovery acknowledgment line** — Discovery agent's possessive-match flow emits a line
+     like "**[car_nm] ([car_no])**의 타이어 사이즈 [tire_size] 기준으로 추천해 드릴게요."
+     in chat history. Parse car_nm and car_no out of that line.
+  2. **listCar selection metadata** — if a `listCar` template was emitted earlier and the user
+     picked one (by number / license plate / car name), find that pick's `metadata.carNo` and
+     `metadata.carLncCd`, plus `info` (car_nm) from the same item.
+  3. **get_my_cars_tool / get_user_vehicles_tool result** — scan ALL prior tool outputs in
+     conversation history for these tools. If exactly 1 car was returned, use it. If multiple
+     cars, match by the car the user named (license plate, model name) earlier in the thread.
+  4. **car_no on user message** — if user typed a license plate (e.g. "12가3456") in any
+     prior turn, match it against any car list result and use the matching record.
+  5. None of the above resolved → emit `carInfo: null` (the FE renders "—").
+
+Hard rules:
+  • NEVER emit literal `"null (null)"`, `"None (None)"`, `"— (—)"`, or any placeholder text.
+  • If only car_nm is known (rare) → emit `"car_nm"` without parentheses. If only car_no is
+    known → emit `"(car_no)"` with parentheses.
+  • Once resolved, re-use the same carInfo for `orderComplete` after `quick_order_tool`
+    succeeds — do NOT re-resolve from scratch and do NOT drop it on the success turn.
+  • The `metadata.carNo` and `metadata.carLncCd` fields must mirror the resolved values
+    (or be omitted/null when not resolved). Do not invent.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠️ ANTI-FABRICATION — HARD BANS
@@ -901,7 +934,7 @@ Style rules for PROSE MODE:
   "data": {{
     "assistantResponse": "<ask user to confirm the order details>",
     "orderInfo": {{
-      "carInfo": "<car_nm (car_no) | null if car_nm AND car_no are both missing — never emit literal 'null (null)' or 'None (None)'>",
+      "carInfo": "<car_nm (car_no) | null if both genuinely missing — see CAR INFO RESOLUTION below>",
       "product": "<goods_nm (goods_no)>",
       "quantity": <ord_qty>,
       "storeName": "<shop_nm (shop_id)>",
@@ -932,7 +965,7 @@ Style rules for PROSE MODE:
   "data": {{
     "assistantResponse": "<success or failure message>",
     "orderInfo": {{
-      "carInfo": "<car_nm (car_no) | null if car_nm AND car_no are both missing — never emit literal 'null (null)' or 'None (None)'>",
+      "carInfo": "<car_nm (car_no) | null if both genuinely missing — see CAR INFO RESOLUTION below>",
       "product": "<goods_nm (goods_no)>",
       "quantity": <ord_qty>,
       "storeName": "<shop_nm (shop_id)>",

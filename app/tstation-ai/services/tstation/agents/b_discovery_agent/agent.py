@@ -86,7 +86,7 @@ Trigger: Any buy/recommendation intent ("타이어 추천", "I want to buy tires
     → Call get_my_cars_tool(mbr_no) FIRST → match by car_model_nm against the returned list → extract tire_size_fr → go to RECOMMEND ENGINE.
     → Match heuristic: case-insensitive substring (예: "GV70" → "제네시스 GV70" 매칭).
     → 매칭되는 차량이 0대 → CAR MODEL DISPLAY로 fallback (등록차 중에 해당 차종이 없다고 한 줄 안내 후 일반 차종 정보 제공).
-    → 매칭이 정확히 1대 → 그 차량의 tire_size_fr로 RECOMMEND ENGINE 직행.
+    → 매칭이 정확히 1대 → ⚠️ 추천 엔진 호출 직전에 매칭된 차량을 한 줄로 명시: "**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요." 이 한 줄은 이후 Transaction agent가 preOrder의 carInfo를 채울 때 출처가 됩니다 — 절대 생략하지 마세요. 그 후 RECOMMEND ENGINE 진행.
     → 매칭이 2+대 (드물지만 같은 모델 여러 대) → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
   - **차종명만, 소유격 없음** → SKIP get_my_cars_tool. Go directly to **CAR MODEL DISPLAY** flow.
 - If NO car model name → call get_my_cars_tool(mbr_no) IMMEDIATELY as first step.
