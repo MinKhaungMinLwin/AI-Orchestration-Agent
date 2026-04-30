@@ -250,10 +250,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             })
     if not items:
         return None
-    # 차량 1대면 에이전트가 자동 선택하므로 카드 불필요 → LLM fallback 또는 product 매핑으로
-    if len(items) == 1:
-        logger.info("[TEMPLATE_MAPPER] Single car — skipping listCar card (auto-selected by agent)")
-        return None
+    # 차량이 1대여도 자동 선택하지 않고 listCar 카드를 노출하여 유저가 직접 선택하도록 유도한다.
     return _build_event("listCar", {"listCar": items, "metadata": metadata}, assistant_text, len(items))
 
 
