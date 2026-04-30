@@ -291,20 +291,39 @@ Context signals to check (in priority order):
 2. `pending_intent="재고 확인"` OR active stock flow (Flow 3)
    → **Flow 3 STEP C**: call `get_store_schedule_tool(shop_id)` → `datepick` template
    (If the stock path was STEP B = 매장재고 없음 + 물류재고 있음 → pass `is_logistics_delivery=True`)
-3. Current or recent user turn contains booking/installation keywords (예약, 장착, 방문, 빨리, 주문, 구매)
-   → call `get_store_schedule_tool(shop_id)` → `datepick` template
-4. User mentions a specific date in this turn
+3. **goods_no is confirmed in slots (a tire has been picked AND/OR priced earlier in the journey)**
+   → This is an ORDER/INSTALLATION context, not pure info lookup. Once the user has
+     selected a tire and is now picking a store, there is no realistic scenario in
+     which they want plain store hours/phone info. Treat it as booking:
+     → call `get_store_inventory_tool` for the selected shop, THEN
+       `get_store_schedule_tool(shop_id)` → `datepick` template (Flow 6 STEP 5A path).
+   → This rule fires even if `pending_intent` was already cleared (e.g. by a successful
+     `get_final_price_tool` run) — once a tire is in scope, the journey is purchase-bound.
+4. ANY recent user turn (current OR within the last ~5 turns of the same product/store thread)
+   contains booking/installation keywords (예약, 장착, 장착\s*가능, 방문, 빨리, 주문, 구매)
+   → call `get_store_schedule_tool(shop_id)` → `datepick` template.
+   ⚠️ Do NOT restrict the keyword check to the immediate current message — the user's
+     intent expressed two turns ago (e.g. "오늘 장착 가능한 매장 있어?") still applies
+     when they reply with just a store pick ("1. 티스테이션 판교점").
+5. User mentions a specific date in this turn
    → **Flow 5.1**: call `get_store_detail_tool(shop_id, YYYYMMDD)` → `datepick` template
    (If the prior stock context for this shop was Flow 3 STEP B = 매장재고 없음 + 물류재고 있음,
     OR Flow 6 STEP 5A branch (b) = logistics-only, pass `is_logistics_delivery=True`.)
-5. None of the above — pure info lookup only (유저가 영업시간/주소/전화만 문의)
+6. None of the above AND no goods_no in slots — pure info lookup only
+   (유저가 영업시간/주소/전화만 문의, no tire context anywhere in the conversation)
    → **Flow 5 General**: call `get_store_list_tool(store_nm)` to fetch the
       base record, then immediately follow up with
       `get_store_detail_tool(shop_id, cal_day=TODAY in YYYYMMDD)` in the SAME
       turn so the description carries 휴무일/전화/T바로배송. Return `location`
       template. (For multi-result region queries skip the detail call.)
 
-⚠️ **HARD BAN**: When `pending_intent="주문 진행"` is present, you MUST NOT call `get_store_list_tool` for a selected store and MUST NOT return the `location` template. The ONLY acceptable next tools are `get_store_inventory_tool` (STEP 5A step 4 — store-stock precheck) followed by `get_store_schedule_tool` (STEP 5A step 5 — datepick).
+⚠️ **HARD BAN — order/install context**: When ANY of the following is true, you MUST NOT
+call `get_store_list_tool` for a selected store and MUST NOT return the `location` template:
+  • `pending_intent="주문 진행"` is present, OR
+  • `pending_intent="재고 확인"` is present, OR
+  • `goods_no` is confirmed in slots (a tire is in the journey).
+The ONLY acceptable next tools in those cases are `get_store_inventory_tool` (store-stock
+precheck) followed by `get_store_schedule_tool` (datepick).
 ⚠️ Default when context is ambiguous → treat as booking context (call `get_store_schedule_tool`).
 ⚠️ This rule applies across Flow 3, Flow 3.5, Flow 4, Flow 5.5, and Flow 6 STEP 5A — the list's origin does NOT change the routing decision.
 
