@@ -738,7 +738,7 @@ Rules:
    **PROSE MODE** — When your FINAL tool call was one of:
    - `search_product_tool` (≥1 item returned)
    - `get_products_recommendations_tool` (≥1 item returned)
-   - `compare_discount_tool` (≥1 item returned)
+   - `compare_discount_tool` (≥1 item returned) — **ONLY when user intent is cheapest-only** ("제일 싼", "최저가", "가장 저렴한"). Comparison intent ("비교해줘", "차이", "어느 게 나아", "둘 다") MUST stay in JSON MODE → `quickReply`.
    - `search_youtube_video_tool` (≥1 video returned)
    - `get_my_cars_tool` / `get_user_vehicles_tool` — **ONLY when the tool returned 2+ cars** (multi-car selection list). 1-car or 0-car cases stay in JSON MODE (see below).
 
