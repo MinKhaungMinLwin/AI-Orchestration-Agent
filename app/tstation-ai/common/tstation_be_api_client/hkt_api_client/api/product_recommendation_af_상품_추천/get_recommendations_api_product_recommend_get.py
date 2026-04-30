@@ -125,8 +125,9 @@ def sync_detailed(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
-        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
-        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
+            우선 적용
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -192,8 +193,9 @@ def sync(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
-        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
-        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
+            우선 적용
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -254,8 +256,9 @@ async def asyncio_detailed(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
-        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
-        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
+            우선 적용
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -319,8 +322,9 @@ async def asyncio(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
-        car_lnc_cd (None | str | Unset): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
-        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용)
+        car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
+        tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
+            우선 적용
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

@@ -482,16 +482,30 @@ def search_place_tool(query: str, size: int = 10):
 
 
 @tool
-def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float = 10.0, svc_codes: List[str] | None = None, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
+def get_nearby_stores_tool(
+    user_xpos: float,
+    user_ypos: float,
+    radius_km: float = 10.0,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+):
     """
     Get nearby stores.
 
     Retrieve stores within specified radius (default 10km) based on customer coordinates,
     including distance (km) from customer location.
 
-    Response stores include is_installable field:
+    Response stores include is_installable / is_imported_car fields:
     - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
     - is_installable=false: 매장은 온라인 쇼핑 장착 불가
+    - is_imported_car=true: 수입차 특화점 (SHOP_SPCL_SVC_SCT_CD '216' 보유)
+    - is_imported_car=false: 일반 매장
+
+    ⚠️ 수입차 특화점 필터 규칙 (imported_car_only):
+    사용자가 "수입차 특화점", "수입차 전문매장", "수입차 전문점", "수입차 매장",
+    "외제차 특화점", "외제차 전문매장" 등을 언급하면 imported_car_only=True 로 설정하세요.
 
     Args:
         user_xpos (float): Customer current X coordinate (longitude).
@@ -502,6 +516,8 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             Example: ["101", "102"]
         all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
             Default: False.
+        imported_car_only (bool): If True, only return imported-car specialty stores
+            (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216'). Default: False.
         chl_sct_cd (str | None): Channel section code for shop type filtering.
             F = T'Station (티스테이션)
             S = The Tire Shop (더타이어샵)
@@ -510,13 +526,18 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
     Example Inputs:
         - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "svc_codes": ["101", "102"]}
         - {"user_xpos": 126.9780, "user_ypos": 37.5665, "radius_km": 20, "chl_sct_cd": "F"}
+        - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "imported_car_only": true}
         - {"user_xpos": 103.8198, "user_ypos": 1.3521, "radius_km": 20, "chl_sct_cd": "S"}
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
-        Response data includes is_installable field per store.
+        Response data includes is_installable and is_imported_car fields per store.
     """
-    logger.info("[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, all_my_t_only=%s, chl_sct_cd=%s", user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, chl_sct_cd)
+    logger.info(
+        "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
+        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
+        user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+    )
 
     try:
         response = get_store_list(
@@ -526,6 +547,7 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
             radius_km=radius_km,
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
         )
         if response.parsed is None:
@@ -566,7 +588,14 @@ def get_nearby_stores_tool(user_xpos: float, user_ypos: float, radius_km: float 
 
 @tool
 @tool_cache(ttl=1800)
-def get_store_list_tool(region_code: str | None = None, store_nm: str | None = None, limit: int = 5, all_my_t_only: bool = False, chl_sct_cd: str | None = None):
+def get_store_list_tool(
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    limit: int = 5,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+):
     """
     Get store list by region and/or store name.
 
@@ -591,15 +620,24 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
     해당 매장 결과에는 is_all_my_t 필드가 포함됩니다.
     is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그를 표시하세요.
 
+    ⚠️ 수입차 특화점 필터 규칙 (imported_car_only):
+    사용자가 아래 표현 중 하나라도 사용하면 imported_car_only=True 로 설정하세요:
+    - "수입차 특화점", "수입차 전문매장", "수입차 전문점"
+    - "수입차 매장", "수입차 정비소", "외제차 특화점", "외제차 전문매장"
+    백엔드는 ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장만 반환합니다.
+    응답의 is_imported_car=true 인 매장은 매장명 옆에 "[수입차 특화점]" 태그를 표시하세요.
+
     ⚠️ 매장 타입 필터 규칙 (chl_sct_cd):
     사용자가 특정 매장 타입을 언급하면 chl_sct_cd 를 설정하세요:
     - "티스테이션", "t'station", "T'Station", "티스테" → chl_sct_cd="F"
     - "더타이어샵", "the tire shop", "The Tire Shop", "타이어샵" → chl_sct_cd="S"
     일반 매장 검색(특정 타입 미언급)은 chl_sct_cd=None (기본값, 전체 매장).
 
-    Response stores include is_installable field:
+    Response stores include is_installable / is_imported_car fields:
     - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
     - is_installable=false: 매장은 온라인 쇼핑 장착 불가
+    - is_imported_car=true: 수입차 특화점 (SHOP_SPCL_SVC_SCT_CD '216' 보유)
+    - is_imported_car=false: 일반 매장
 
     Args:
         region_code (str | None): Geographic region keyword — Korean city, district, or neighborhood.
@@ -610,6 +648,8 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         limit (int): Maximum number of stores to return (default 5).
         all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
             Default: False.
+        imported_car_only (bool): If True, only return imported-car specialty stores
+            (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216'). Default: False.
         chl_sct_cd (str | None): Channel section code for shop type filtering.
             F = T'Station (티스테이션)
             S = The Tire Shop (더타이어샵)
@@ -631,6 +671,12 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
         # User says "all my T 매장" → all_my_t_only=True
         - {"region_code": None, "store_nm": None, "limit": 5, "all_my_t_only": True}
 
+        # User says "수입차 전문매장 찾아줘" → imported_car_only=True
+        - {"region_code": None, "store_nm": None, "limit": 5, "imported_car_only": True}
+
+        # User says "강남 수입차 특화점" → region + imported_car_only
+        - {"region_code": "강남", "store_nm": None, "limit": 5, "imported_car_only": True}
+
         # User says "내주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
         - {"region_code": None, "store_nm": None, "limit": 5, "chl_sct_cd": "F"}
 
@@ -639,16 +685,28 @@ def get_store_list_tool(region_code: str | None = None, store_nm: str | None = N
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
-        Response data includes is_installable field per store.
+        Response data includes is_installable and is_imported_car fields per store.
     """
     # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
-    logger.info("[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, all_my_t_only=%s, chl_sct_cd=%s", region_code, store_nm, limit, all_my_t_only, chl_sct_cd)
+    logger.info(
+        "[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
+        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
+        region_code, store_nm, limit, all_my_t_only, imported_car_only, chl_sct_cd,
+    )
 
     try:
-        response = get_store_list(client=get_client(), region_code=region_code, store_nm=store_nm, limit=limit, all_my_t_only=all_my_t_only, chl_sct_cd=chl_sct_cd)
+        response = get_store_list(
+            client=get_client(),
+            region_code=region_code,
+            store_nm=store_nm,
+            limit=limit,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -671,11 +729,13 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
     Retrieve store information and available reservation time slots (hourly)
     based on store ID and date.
 
-    Response includes is_installable and is_tna_delivery fields:
+    Response includes is_installable, is_tna_delivery, is_imported_car fields:
     - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
     - is_installable=false: 매장은 온라인 쇼핑 장착 불가
     - is_tna_delivery=true: T바로배송(한국타이어 퀵배송) 가능 매장
     - is_tna_delivery=false: T바로배송 불가 매장
+    - is_imported_car=true: 수입차 특화점 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD '216' 보유)
+    - is_imported_car=false: 일반 매장
 
     Args:
         shop_id (str): Store ID.

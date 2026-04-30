@@ -152,6 +152,10 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 
 "all my T" / "올마이티" filter → all_my_t_only=True in get_store_list_tool
 
+"수입차 특화점" / "수입차 전문매장" / "수입차 전문점" / "수입차 매장" / "외제차 특화점" / "외제차 전문매장" filter
+→ imported_car_only=True in get_store_list_tool / get_nearby_stores_tool
+- 결과의 is_imported_car=true 매장은 응답 시 매장명 옆에 "[수입차 특화점]" 태그를 표시
+
 
 ## STORE HOURS — TOOL SELECTION
 - General store info (hours, address, phone) → get_store_list_tool → return `location` template with full store info

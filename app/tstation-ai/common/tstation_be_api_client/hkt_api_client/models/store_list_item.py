@@ -19,6 +19,8 @@ class StoreListItem:
         shop_nm (None | str | Unset): 매장명
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
         is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
+        is_imported_car (bool | Unset): 수입차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default:
+            False.
         addr_base (None | str | Unset): 일반주소
         addr_dtl (None | str | Unset): 일반주소
         road_addr_base (None | str | Unset): 도로명주소
@@ -36,6 +38,7 @@ class StoreListItem:
     shop_nm: None | str | Unset = UNSET
     is_all_my_t: bool | Unset = False
     is_installable: bool | Unset = False
+    is_imported_car: bool | Unset = False
     addr_base: None | str | Unset = UNSET
     addr_dtl: None | str | Unset = UNSET
     road_addr_base: None | str | Unset = UNSET
@@ -61,6 +64,8 @@ class StoreListItem:
         is_all_my_t = self.is_all_my_t
 
         is_installable = self.is_installable
+
+        is_imported_car = self.is_imported_car
 
         addr_base: None | str | Unset
         if isinstance(self.addr_base, Unset):
@@ -141,6 +146,8 @@ class StoreListItem:
             field_dict["is_all_my_t"] = is_all_my_t
         if is_installable is not UNSET:
             field_dict["is_installable"] = is_installable
+        if is_imported_car is not UNSET:
+            field_dict["is_imported_car"] = is_imported_car
         if addr_base is not UNSET:
             field_dict["addr_base"] = addr_base
         if addr_dtl is not UNSET:
@@ -183,6 +190,8 @@ class StoreListItem:
         is_all_my_t = d.pop("is_all_my_t", UNSET)
 
         is_installable = d.pop("is_installable", UNSET)
+
+        is_imported_car = d.pop("is_imported_car", UNSET)
 
         def _parse_addr_base(data: object) -> None | str | Unset:
             if data is None:
@@ -288,6 +297,7 @@ class StoreListItem:
             shop_nm=shop_nm,
             is_all_my_t=is_all_my_t,
             is_installable=is_installable,
+            is_imported_car=is_imported_car,
             addr_base=addr_base,
             addr_dtl=addr_dtl,
             road_addr_base=road_addr_base,
