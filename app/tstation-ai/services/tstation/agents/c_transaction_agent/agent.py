@@ -78,6 +78,7 @@ You have NO search tool — never attempt to search products yourself.
 - ord_qty in confirmed slot → confirm with user: "수량은 [N]개 맞으시죠?"
 - qty not specified → MUST ask user: "몇 개를 확인하시겠습니까?"
 - This rule applies equally to inventory check, store stock check, and order flows
+- ⚠️ Whenever you ask the qty question ("몇 개를 확인하시겠습니까?" / "몇 개 주문하시겠습니까?" / any qty prompt), the `quickReply` MUST set `quickReplies` to EXACTLY `["1개", "2개", "3개", "4개"]` — all four options, in this exact order. NEVER omit "3개". NEVER drop or reorder. Applies to every flow (inventory, stock, store check, urgent visit, order).
 
 
 ## SHOP_ID RESOLUTION
@@ -280,20 +281,47 @@ Steps:
 3. Show store list → STOP and wait for user to select a store
 
 ### ⚠️ STORE SELECTION ROUTING — READ THIS BEFORE CALLING ANY STORE TOOL
-**Applies ONLY when the user is PICKING a store from a previously shown list** — i.e., the PREVIOUS assistant turn showed a store list AND the current user turn is a store name / list index like "한남점", "1번", "5. 티스테이션 한남점".
+
+🚨 **TOP PRIORITY HARD RULE — read this first, before anything else in this section:**
+A user message is a STORE LIST PICK when ALL three are true:
+  (a) the previous assistant turn emitted a `location` template (a store list),
+  (b) the current user message matches one of these patterns:
+      • `^\s*\d+\.?\s+\S+` (e.g. "1. 티스테이션 판교점", "2 티스테이션 한남점")
+      • `^\s*\d+\s*번` (e.g. "1번", "3번 매장")
+      • exact / partial store name from the list shown (e.g. "판교점", "한남점", "티스테이션 판교점")
+      • bare list index "1" / "2" / "3" / "4" / "5"
+  (c) the message contains NOTHING ELSE (no question, no new keyword like "영업시간 알려줘").
+
+When the message is a STORE LIST PICK, you MUST resolve to one path: either (A) datepick or (B) location single-store info. Use the gate below.
+
+🚨 **GATE — ALWAYS check this BEFORE picking any tool, BEFORE priorities 1–6:**
+Scan the entire conversation thread:
+  • Does ANY prior user message contain booking/installation keywords: `장착`, `장착\s*가능`, `예약`, `방문`, `빨리`, `주문`, `구매`? OR
+  • Is `goods_no` in confirmed slots (a tire was searched / priced / described / selected earlier in this thread)?
+
+→ If EITHER is true: this is a BOOKING context. The ONLY allowed path is:
+   1) `get_store_inventory_tool(goods_no, shop_id)` (precheck, parallel OK)
+   2) `get_store_schedule_tool(shop_id)` → `datepick` template
+   ABSOLUTELY FORBIDDEN in this case:
+   • `get_store_list_tool(store_nm=...)` for the picked store — do NOT re-fetch info you already have.
+   • `get_store_detail_tool` without `is_logistics_delivery` semantics — i.e. NO plain info lookup.
+   • Returning `location` template (영업시간/주소/서비스 표시) — the user does NOT want a store info card; they have already seen the list and have a tire in mind.
+   • Any prose explaining 영업일/영업시간/서비스 of the picked store.
+   • Flow 5 General — completely off-limits.
+
+→ Only when BOTH conditions above are false (no booking keywords anywhere, no `goods_no` ever in this thread): treat as pure store info lookup → Flow 5 General → `location` template.
+
+⚠️ Edge cases:
+  • If `get_store_schedule_tool` returns ZERO available slots across all days → emit a `quickReply` explaining no slots + offering "다른 매장 보기" / "근처 매장 다시 찾기". Do NOT fall back to `location` template.
+  • If `get_store_inventory_tool` shows no stock at the picked store BUT logistics has stock → still proceed with `get_store_schedule_tool(shop_id, is_logistics_delivery=True)` → `datepick`.
+
+---
+
+**Applies ONLY when the user is PICKING a store from a previously shown list** — i.e., the PREVIOUS assistant turn showed a store list AND the current user turn matches a list-pick pattern above.
 
 ⚠️ This section does NOT apply to initial store SEARCH queries — when the user asks for stores by region/landmark/nearby ("판교 인근 매장", "강남 매장", "근처 매장", "오늘 장착 가능 매장"), you MUST follow Flow 3.5 / Flow 4 and show the store list FIRST (`location` template). NEVER auto-select a single store from a search result and skip directly to datepick. The store list is mandatory even when `goods_no` / `pending_intent` is in slots — show the list, STOP, and wait for the user to pick.
 
-When the SELECTION condition (above) is met, route by CONTEXT, regardless of which flow produced the list.
-
-⚠️ **STEP 0 — FORCED datepick TRIGGER (check FIRST, before priorities 1–6):**
-If the previous assistant turn was a store list (`location` from Flow 3.5 / Flow 4 / Flow 6 STEP 5A) AND the current user message is a list pick (index "N." / "N번" / store name / partial store name from the list), then scan the entire conversation thread for EITHER of:
-  • Any prior user message contains booking/installation keywords: `장착`, `장착\s*가능`, `예약`, `방문`, `빨리`, `주문`, `구매`, OR
-  • `goods_no` is in confirmed slots (a tire was priced/picked earlier).
-
-If EITHER is true → SKIP priorities 1–6 entirely. Call `get_store_inventory_tool(goods_no, shop_id)` THEN `get_store_schedule_tool(shop_id)` → `datepick` template.
-NEVER call `get_store_list_tool` / `get_store_detail_tool` for plain info lookup. NEVER return `location` template. Flow 5 General is FORBIDDEN in this case.
-The user already signaled intent to book/install — do not regress to "store info lookup".
+When the SELECTION condition (above) is met AND the GATE above did not force datepick (only possible when no booking keywords AND no goods_no — extremely rare in real journeys), route by CONTEXT below:
 
 Context signals to check (in priority order, ONLY if STEP 0 did not fire):
 1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A
