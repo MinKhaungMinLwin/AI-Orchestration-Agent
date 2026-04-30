@@ -286,7 +286,16 @@ Steps:
 
 When the SELECTION condition (above) is met, route by CONTEXT, regardless of which flow produced the list.
 
-Context signals to check (in priority order):
+⚠️ **STEP 0 — FORCED datepick TRIGGER (check FIRST, before priorities 1–6):**
+If the previous assistant turn was a store list (`location` from Flow 3.5 / Flow 4 / Flow 6 STEP 5A) AND the current user message is a list pick (index "N." / "N번" / store name / partial store name from the list), then scan the entire conversation thread for EITHER of:
+  • Any prior user message contains booking/installation keywords: `장착`, `장착\s*가능`, `예약`, `방문`, `빨리`, `주문`, `구매`, OR
+  • `goods_no` is in confirmed slots (a tire was priced/picked earlier).
+
+If EITHER is true → SKIP priorities 1–6 entirely. Call `get_store_inventory_tool(goods_no, shop_id)` THEN `get_store_schedule_tool(shop_id)` → `datepick` template.
+NEVER call `get_store_list_tool` / `get_store_detail_tool` for plain info lookup. NEVER return `location` template. Flow 5 General is FORBIDDEN in this case.
+The user already signaled intent to book/install — do not regress to "store info lookup".
+
+Context signals to check (in priority order, ONLY if STEP 0 did not fire):
 1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A
    → **Flow 6 STEP 5A Step 4–5**: FIRST call `get_store_inventory_tool` for the selected shop,
       THEN call `get_store_schedule_tool(shop_id)` (or with `is_logistics_delivery=True`
