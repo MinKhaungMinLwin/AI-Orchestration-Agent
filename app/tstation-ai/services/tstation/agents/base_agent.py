@@ -29,6 +29,105 @@ _VALIDATION_FALLBACK_MESSAGE = (
 _VALIDATION_FALLBACK_QUICK_REPLIES = ["다시 시도", "상담사 연결", "처음으로"]
 
 
+class _AssistantResponseStreamer:
+    """OUTPUT_TEMPLATE 응답에서 `assistantResponse` 값만 토큰 단위로 흘려보내는
+    state machine. 이게 없으면 LeadingAgent처럼 fenced JSON을 출력하는 agent는
+    JSON이 닫힐 때까지 모든 토큰을 버퍼링하므로, 사용자는 답이 다 만들어질 때까지
+    스피너만 본다 (체감 latency의 핵심 원인).
+    """
+
+    _KEY = '"assistantResponse"'
+    _ESCAPE_MAP = {'"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+
+    def __init__(self):
+        self._buf = ""
+        self._state = "SEARCHING"
+        self._streamed_text = ""
+
+    @property
+    def streamed_any(self) -> bool:
+        return bool(self._streamed_text)
+
+    @property
+    def streamed_text(self) -> str:
+        return self._streamed_text
+
+    @property
+    def finished(self) -> bool:
+        return self._state == "DONE"
+
+    def feed(self, chunk: str) -> str:
+        out: list[str] = []
+        self._buf += chunk
+        while True:
+            if self._state == "SEARCHING":
+                idx = self._buf.find(self._KEY)
+                if idx < 0:
+                    # key가 청크 경계에 걸칠 수 있으니 끝부분만 남긴다.
+                    keep = len(self._KEY) - 1
+                    if len(self._buf) > keep:
+                        self._buf = self._buf[-keep:]
+                    break
+                self._buf = self._buf[idx + len(self._KEY):]
+                self._state = "AWAIT_COLON"
+            elif self._state == "AWAIT_COLON":
+                idx = self._buf.find(":")
+                if idx < 0:
+                    break
+                self._buf = self._buf[idx + 1:]
+                self._state = "AWAIT_QUOTE"
+            elif self._state == "AWAIT_QUOTE":
+                idx = self._buf.find('"')
+                if idx < 0:
+                    break
+                self._buf = self._buf[idx + 1:]
+                self._state = "INSIDE"
+            elif self._state == "INSIDE":
+                emitted, consumed, finished = self._decode_inside(self._buf)
+                if emitted:
+                    out.append(emitted)
+                self._buf = self._buf[consumed:]
+                if finished:
+                    self._state = "DONE"
+                break
+            else:
+                self._buf = ""
+                break
+        result = "".join(out)
+        if result:
+            self._streamed_text += result
+        return result
+
+    @classmethod
+    def _decode_inside(cls, s: str) -> tuple[str, int, bool]:
+        out: list[str] = []
+        i = 0
+        n = len(s)
+        while i < n:
+            ch = s[i]
+            if ch == '"':
+                return ("".join(out), i + 1, True)
+            if ch == "\\":
+                if i + 1 >= n:
+                    break
+                esc = s[i + 1]
+                if esc == "u":
+                    if i + 6 > n:
+                        break
+                    try:
+                        out.append(chr(int(s[i + 2:i + 6], 16)))
+                    except ValueError:
+                        out.append(s[i:i + 6])
+                    i += 6
+                    continue
+                out.append(cls._ESCAPE_MAP.get(esc, esc))
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return ("".join(out), i, False)
+
+
 TOOL_DISPLAY_NAMES: dict[str, str] = {
     # Discovery
     "check_compatibility_tool": "차량-타이어 호환 확인 중...",
@@ -126,6 +225,8 @@ class BaseAgent(ABC):
         prompt_template = self.OUTPUT_TEMPLATE
         suppress_tokens = prompt_template is not None
         accumulated_text = ""
+        accumulated_tool_data: list[dict] = []
+        response_streamer = _AssistantResponseStreamer() if suppress_tokens else None
 
         yield {"type": "status", "status": "생각 중..."}
 
@@ -139,6 +240,12 @@ class BaseAgent(ABC):
                 if isinstance(token, AIMessageChunk) and token.text:
                     if suppress_tokens:
                         accumulated_text += token.text
+                        streamed = response_streamer.feed(token.text)
+                        if streamed:
+                            if not answering_emitted:
+                                yield {"type": "status", "status": "답변 중..."}
+                                answering_emitted = True
+                            yield {"type": "token", "content": streamed}
                         continue
                     if not answering_emitted:
                         yield {"type": "status", "status": "답변 중..."}
@@ -191,6 +298,7 @@ class BaseAgent(ABC):
                             continue
                         af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
                         tool_status = "success"
+                        tool_result: Any = None
                         try:
                             tool_result = (
                                 json.loads(message.content) if isinstance(message.content, str) else message.content
@@ -199,8 +307,18 @@ class BaseAgent(ABC):
                                 tool_status = tool_result.get("status", "success")
                         except (json.JSONDecodeError, TypeError):
                             pass
-                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
                         tool_input = tool_calls_map.get(message.tool_call_id, {})
+                        if tool_result is not None:
+                            # Capture input args alongside the result so the
+                            # template mapper can correlate same-turn tool calls
+                            # by shop_id / cal_day (e.g., merge get_store_detail
+                            # data into a get_store_list location card).
+                            accumulated_tool_data.append({
+                                "tool": message.name,
+                                "data": tool_result,
+                                "args": tool_input.get("args", {}),
+                            })
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
@@ -209,15 +327,42 @@ class BaseAgent(ABC):
                             "tool": message.name,
                         }
 
+        # Phase 2B: prefer code-based template mapping over LLM fenced JSON.
+        # When a deterministically-mappable tool was used, build the data event
+        # in code from accumulated_tool_data — saves the LLM from emitting the
+        # full FE JSON payload (the dominant 2nd-call output token cost).
+        code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
+        if code_event is not None:
+            assistant_response = self._get_assistant_response(code_event)
+            already_streamed = response_streamer is not None and response_streamer.streamed_any
+            if assistant_response:
+                if not answering_emitted:
+                    yield {"type": "status", "status": "답변 중..."}
+                    answering_emitted = True
+                if not already_streamed:
+                    yield {"type": "token", "content": assistant_response}
+                yield {
+                    "type": "message",
+                    "content": assistant_response,
+                    "agent": self.name,
+                }
+            yield code_event
+            yield {"type": "token", "content": "\n\n"}
+            return
+
         if prompt_template is not None and accumulated_text:
             data_event = self._build_data_event_from_text(accumulated_text, prompt_template)
+            already_streamed = response_streamer is not None and response_streamer.streamed_any
             if data_event is not None:
                 assistant_response = self._get_assistant_response(data_event)
                 if assistant_response:
                     if not answering_emitted:
                         yield {"type": "status", "status": "답변 중..."}
                         answering_emitted = True
-                    yield {"type": "token", "content": assistant_response}
+                    # 점진적 streaming으로 이미 prose를 보낸 경우 token 재전송은
+                    # 화면에 응답이 두 번 쌓이게 만든다.
+                    if not already_streamed:
+                        yield {"type": "token", "content": assistant_response}
                     yield {
                         "type": "message",
                         "content": assistant_response,
@@ -231,7 +376,42 @@ class BaseAgent(ABC):
                 if not answering_emitted:
                     yield {"type": "status", "status": "답변 중..."}
                     answering_emitted = True
-                yield from self._yield_validation_fallback()
+                if already_streamed:
+                    # prose는 이미 흘러갔으므로 fallback 메시지 중복 송출은 피하고
+                    # 마무리용 quickReply chips만 추가한다.
+                    yield {
+                        "type": "data",
+                        "template": "quickReply",
+                        "data": {
+                            "assistantResponse": response_streamer.streamed_text,
+                            "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
+                        },
+                    }
+                else:
+                    # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
+                    # template_mapper couldn't build a card — e.g., zero-result
+                    # search where the model honored the "prose mode" rule but
+                    # the mapper found no items to render. Treat the raw text
+                    # as the assistant's prose answer rather than showing the
+                    # generic validation-failure apology.
+                    prose_only = accumulated_text.strip()
+                    if prose_only and self._extract_fenced_json(accumulated_text) is None:
+                        yield {"type": "token", "content": prose_only}
+                        yield {
+                            "type": "message",
+                            "content": prose_only,
+                            "agent": self.name,
+                        }
+                        yield {
+                            "type": "data",
+                            "template": "quickReply",
+                            "data": {
+                                "assistantResponse": prose_only,
+                                "quickReplies": [],
+                            },
+                        }
+                    else:
+                        yield from self._yield_validation_fallback()
 
         yield {"type": "token", "content": "\n\n"}
 
@@ -330,6 +510,36 @@ class BaseAgent(ABC):
     @staticmethod
     def _is_internal_structured_tool(tool_name: str) -> bool:
         return tool_name.startswith("response_format_")
+
+    @staticmethod
+    def _try_code_template(
+        accumulated_tool_data: list[dict],
+        response_streamer: "_AssistantResponseStreamer | None",
+        accumulated_text: str,
+    ) -> dict | None:
+        """Attempt deterministic FE-template construction from tool outputs.
+
+        Returns a `data` event dict if any tool in accumulated_tool_data has a
+        registered code mapper AND the mapper produced a valid event.
+        Returns None to signal "fall through to fenced-JSON path".
+
+        If the LLM emitted an explicit fenced JSON block, defer to it — the
+        agent has chosen its own template (e.g. comparison intent → quickReply
+        instead of the default cheapestProduct mapper).
+        """
+        if not accumulated_tool_data:
+            return None
+        if BaseAgent._extract_fenced_json(accumulated_text) is not None:
+            return None
+        from services.tstation.template_mapper import _MAPPERS, try_build_template
+        if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
+            return None
+        prose = (
+            response_streamer.streamed_text
+            if response_streamer is not None and response_streamer.streamed_any
+            else accumulated_text
+        )
+        return try_build_template(accumulated_tool_data, prose)
 
     def stream_template(self, messages: list[dict], config: dict | None = None):
         """

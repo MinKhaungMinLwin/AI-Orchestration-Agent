@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
     AgentDomain,
-    LLM as _router_llm,
+    DECISION_LLM as _decision_llm,
     leading_agent,
     discovery_subagent,
     transaction_subagent,
@@ -39,10 +39,12 @@ class AgentDecision(BaseModel):
     reason: str = Field(description="Reason for decision, using english")
 
 
-def prompt_router() -> str:
-    return dedent(f"""
-    Current Time: {get_current_time()}
+# Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
+_decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 
+
+def prompt_router() -> str:
+    return dedent("""
     You are a domain classifier and decision engine for T-Station AI.
 
     MODE 1 - Initial Classification: Classify user message into ONE domain.
@@ -85,17 +87,10 @@ def decide_next_action(
     user_id: str | None = None,
     trace_id: str | None = None,
 ) -> AgentDecision:
-    from langchain_litellm import ChatLiteLLM
     from langchain_core.messages import SystemMessage, HumanMessage
     from config.tracing import build_trace_config
 
-    llm = ChatLiteLLM(
-        api_base=settings.AI_GATEWAY_BASE_URL,
-        api_key=settings.AI_GATEWAY_API_KEY,
-        model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
-    )
-
-    structured_model = llm.with_structured_output(AgentDecision)
+    structured_model = _decision_structured_model
 
     user_message = ""
     for msg in reversed(original_messages):
@@ -165,22 +160,6 @@ class MultiAgentDomain(BaseModel):
             "Always provide a value."
         ),
     )
-    next_action: str = Field(
-        description=(
-            "The specific action the target agent should perform immediately based on conversation state. "
-            "Be concrete — reference tool name and key param if possible. "
-            "Examples: 'match car_no 123가4566 from previous car list → extract tire_size_fr → call get_products_recommendations_tool', "
-            "'user already has goods_no from context → call get_final_price_tool directly', "
-            "'call get_my_cars_tool with mbr_no from user context', "
-            "'call get_products_recommendations_tool AGAIN with rcmd_type=\"weekend\" (new scenario), reuse tire_size from slots — do NOT filter previous wet results'. "
-            "⚠️ When the user provides a NEW scenario keyword after a previous recommendation, "
-            "next_action MUST instruct the agent to RE-CALL get_products_recommendations_tool with "
-            "the new rcmd_type, NOT to filter or pick from the previous list. Phrases like "
-            "'filter previous list', 'pick weekend-friendly items from previous wet list' are "
-            "FORBIDDEN — they cause incorrect recommendations. "
-            "Use 'proceed normally' if action is obvious from the user message alone."
-        ),
-    )
     flow: str = Field(
         description=(
             "One-line summary of the conversation journey so far. "
@@ -202,11 +181,32 @@ class MultiAgentDomain(BaseModel):
         return [agent_map[d] for d in self.domains if d in agent_map]
 
 
+class _SlimMultiAgentDomain(BaseModel):
+    """First-turn slim classification schema.
+
+    Drops user_behavior / flow narrative fields — they only carry signal
+    once prior conversation history exists. On a fresh session they would
+    be placeholders ("fresh start — no prior context"), so we skip
+    generating them to save output tokens on every first message.
+    """
+
+    reason: str = Field(description="Reason for the classification, using english")
+    domains: list[MultiAgentDomain.Domain] = Field(
+        description="List of domains detected in the request, ordered by priority"
+    )
+
+
+# Module-level singletons — avoid re-wrapping LLM per request.
+# DECISION_LLM (small/fast) is sufficient for routing classification since the
+# schemas are descriptive only — no prescriptive `next_action` field that would
+# require recalling tool signatures (which the small model used to hallucinate).
+_multi_intent_model = _decision_llm.with_structured_output(MultiAgentDomain, strict=True)
+_slim_intent_model = _decision_llm.with_structured_output(_SlimMultiAgentDomain, strict=True)
+
+
 def prompt_router_multi() -> str:
     """Classification prompt that detects multi-intent with flow sequences and conversation context."""
-    return f"""
-Current Time: {get_current_time()}
-
+    return """
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
@@ -214,12 +214,11 @@ Produce 4 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
-4. next_action — the concrete action the agent should take immediately (e.g. "match car_no 123가4566 from car list → extract tire_size_fr → call get_products_recommendations_tool")
-5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+4. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 
-IMPORTANT: user_behavior and next_action must reflect the FULL conversation context, not just the current message.
+IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
-identify WHAT they are responding to and set next_action accordingly.
+identify WHAT they are responding to in user_behavior. The agent will pick the actual tool to call based on its own flow rules — do NOT prescribe specific tool names or parameters here.
 
 ⚠️ CRITICAL — RE-RECOMMENDATION INTENT (replaces "filter previous list" default):
 When ANY previous turn in this conversation produced a tire recommendation list
@@ -251,19 +250,17 @@ PREV=CUR escape (do NOT mark as RE-RECOMMENDATION):
 In RE-RECOMMENDATION cases:
   - user_behavior MUST be like: "requesting NEW recommendation with different scenario (X)"
     or "requesting fresh search to replace previous list"
-  - next_action MUST be: "call get_products_recommendations_tool AGAIN with rcmd_type=<X>
-    (new scenario), reuse tire_size from slots — do NOT filter previous results"
   - NEVER write 'filter previous tire list', 'pick from previous list',
     'select X-friendly items from previous Y list' — these phrases push the agent
-    into wrong behavior.
+    into wrong behavior. The Discovery agent has its own Branch A/B logic that
+    reads user_behavior to decide whether to re-call the recommendation tool.
 
 Worked example 1 (with 다시 keyword):
   - Previous: get_products_recommendations_tool(rcmd_type="wet") returned 4 items
   - Current user message: "주말 나들이용으로 다시"
   - CORRECT user_behavior: "requesting new recommendation with weekend scenario after previous wet recommendation"
-  - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='weekend', reuse tire_size — NEW result replaces previous wet list"
-  - WRONG (do NOT write): "selecting weekend-suitable items from previous tire list"
-  - WRONG (do NOT write): "filter previous recommendations for weekend use"
+  - WRONG user_behavior: "selecting weekend-suitable items from previous tire list"
+  - WRONG user_behavior: "filter previous recommendations for weekend use"
 
 Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
   - Earlier turn: get_products_recommendations_tool(rcmd_type="ev") returned 4 items (235/55R19)
@@ -272,21 +269,19 @@ Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
   - PREV rcmd_type = "ev"; user mentions "패밀리/가족" + "사계절" — clearly
     different scenario family from "ev" → RE-RECOMMENDATION applies.
   - CORRECT user_behavior: "requesting NEW recommendation with family + 사계절 scenario; previous rcmd_type='ev' no longer matches"
-  - CORRECT next_action: "call get_products_recommendations_tool again with rcmd_type='family' via combined-key match (사계절+가족), reuse tire_size 235/55R19 — NEW result replaces previous EV list"
-  - WRONG: "filter previous EV list for family-friendly all-season options"
-  - WRONG: "pick 사계절 candidates from previous list"
+  - WRONG user_behavior: "filter previous EV list for family-friendly all-season options"
+  - WRONG user_behavior: "pick 사계절 candidates from previous list"
 
 Worked example 3 (PREV=CUR escape — NOT re-recommendation):
   - Previous: get_products_recommendations_tool(rcmd_type="ev") returned 4 items
   - Current user message: "이 EV 타이어 중에서 18인치로"
   - "EV" matches PREV; "이 중에서" is a demonstrative → continuation, NOT re-recommendation.
   - user_behavior: "filtering previous EV recommendation list by size 18인치"
-  - next_action: "filter the existing list — no new tool call needed"
 
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
 - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -311,12 +306,17 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 3. "장바구니에 담아줘" → TRANSACTION
 4. "강남 매장 찾아줘" / "근처 매장" → TRANSACTION
 5. "한남점 예약 가능한 날짜 알려줘" → TRANSACTION
-6. "주문 내역 확인해줘" → TRANSACTION
-7. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
+6. "주문 내역 확인해줘" / "내 주문내역 알려줘" / "주문 조회해줘" → TRANSACTION
+7. "내 쿠폰 보여줘" / "받을 수 있는 쿠폰" / "다운로드 가능 쿠폰은?" / "쿠폰함" → TRANSACTION
+8. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
 
 SUPPORT — policy, warranty, human agent:
 1. "보증 정책 알려줘" / "반품 가능해?" → SUPPORT
 2. "1:1 문의 작성해줘" / "상담원 연결" → SUPPORT
+
+⚠️ NEVER classify these as SUPPORT — always TRANSACTION (handled by coupon/order tools, NOT FAQ):
+- 내 쿠폰 / 쿠폰 조회 / 쿠폰함 / 다운로드 가능 쿠폰
+- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문
 
 LEADING — greeting, unclear intent:
 1. "안녕하세요" / "뭘 도와줄 수 있어?" → LEADING
@@ -399,14 +399,95 @@ If the previous agent showed a list and asked user to SELECT (cars, tires, store
 Examples:
 - Previous: Discovery showed car list → User: "제타" → DISCOVERY (same domain continues)
 - Previous: Discovery showed tires → User: "벤투스 S2 AS" → DISCOVERY (same domain continues)
+- Previous: Discovery showed tires → User: "1. 벤투스 S2 AS" → DISCOVERY (ordinal prefix
+  does NOT change domain; the user is still picking a tire from the recommendation list,
+  not placing an order)
+- Previous: Discovery showed tires → User: "1번", "3", "첫번째" → DISCOVERY (pure ordinal)
 - Previous: Transaction showed stores → User: "한남점" → TRANSACTION (same domain continues)
 - Previous: Transaction showed schedule → User: "내일 10시" → TRANSACTION (same domain continues)
+
+⚠️ HARD RULE — Tire pick from a Discovery recommendation/search list stays in DISCOVERY.
+Even when user_behavior reads "confirming product selection" or "user picked a tire", the
+correct domain is DISCOVERY (so `get_product_description_tool` runs and the customer sees
+the product detail card with the closing "원하시면 이어서 가격, 재고, 주문 진행까지 도와
+드릴게요" offer). DO NOT route to TRANSACTION unless the user's CURRENT message itself
+contains an explicit transactional verb — "주문", "구매", "살래", "결제", "장바구니",
+"가격", "얼마", "재고", "예약", "매장". A bare product name (with or without an ordinal
+"1." / "1번") is NEVER a transactional trigger by itself, even though it confirms a pick.
+
+⚠️ Do NOT analogize "한남점 선택할게 → TRANSACTION" (store selection in an order flow) to
+product selection. They are different: store selection happens AFTER goods_no is locked
+in, so it advances Flow 6; tire selection happens BEFORE goods_no is locked in, so it
+just resolves goods_no inside Discovery. Stay in DISCOVERY for tire picks.
 
 ⚠️ Exception: If the user's short reply is a BARE re-trigger word (다시 / 새로 /
 다른 거 alone, no other anchors), do NOT classify as continuation — route to
 LEADING per AMBIGUOUS RE-TRIGGER rule above.
 
 Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
+"""
+
+
+def prompt_router_slim() -> str:
+    """First-turn classifier prompt.
+
+    Continuation / re-recommendation / bare re-trigger rules are dropped
+    because there is no prior conversation context to leverage on a fresh
+    session. Use only when the message history contains a single user message.
+    """
+    return """
+You are a domain classifier for T-Station AI (Hankook Tire).
+Classify the user's FIRST message into EXACTLY ONE domain.
+
+DOMAINS:
+- TRANSACTION: Price / stock / buy / order / cart when goods_no (G + 12 digits)
+  is already in the message; store search by location or name
+  (강남, 근처, 올마이티, All My T); reservation slots; order tracking;
+  coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰);
+  order history inquiry (내 주문내역 / 주문 내역 / 주문 조회 / 내 주문 / 내가 주문한 거).
+- DISCOVERY: Product search by name or keyword; tire recommendation;
+  vehicle-tire compatibility; product specs / features; review videos;
+  price / stock / buy with PRODUCT NAME ONLY (no goods_no yet — Discovery
+  resolves goods_no first).
+- SUPPORT: Warranty, returns, refund policy, maintenance guidance,
+  1:1 문의, 상담원 연결, customer complaints (짜증 / 엉망 / 제대로 해 등).
+- LEADING: Pure greeting; unclear or empty intent; bare re-trigger words
+  ("다시", "또") with no other anchor.
+
+KEY RULES:
+- Message contains "G" + 12 digits → TRANSACTION
+- Product NAME only (벤투스 / 다이나프로 / Ventus / Dynapro / ...) with
+  price / stock / buy → DISCOVERY
+- Vehicle number (e.g., "12가3456") with tire request → DISCOVERY
+- 추천 / 맞는 타이어 / 어떤 타이어 → DISCOVERY
+- 매장 / 가까운 / 근처 / 올마이티 / All My T → TRANSACTION
+- 내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 쿠폰 조회 / 다운로드 가능 쿠폰 → TRANSACTION
+- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문 / 내가 주문한 거 → TRANSACTION
+- 환불 / 반품 / 보증 / 워런티 / 1:1 문의 / 상담원 → SUPPORT
+- Aggressive or complaint tone (짜증 / 엉망 / 화나 / 뭐 이런) → SUPPORT
+- Pure greeting (안녕 / hi / hello) → LEADING
+
+⚠️ NEVER classify these as SUPPORT — always TRANSACTION:
+- 내 쿠폰 / 쿠폰 조회 / 다운로드 가능 쿠폰 (handled by coupon tools)
+- 내 주문내역 / 주문 내역 / 주문 조회 (handled by order tools)
+
+EXAMPLES:
+- "안녕하세요" → LEADING
+- "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
+- "벤투스 S2 가격 얼마야?" → DISCOVERY
+- "G012345678901 가격" → TRANSACTION
+- "강남 근처 매장 찾아줘" → TRANSACTION
+- "올마이티 매장" → TRANSACTION
+- "내 쿠폰 보여줘" → TRANSACTION
+- "받을 수 있는 쿠폰 뭐가 있어?" → TRANSACTION
+- "다운로드 가능 쿠폰은?" → TRANSACTION
+- "내 주문내역 알려줘" → TRANSACTION
+- "주문 조회해줘" → TRANSACTION
+- "보증 정책 알려줘" → SUPPORT
+- "상담원 연결해주세요" → SUPPORT
+- "12가3456 타이어 추천" → DISCOVERY
+
+Output: domains (list with EXACTLY ONE domain) + reason (english).
 """
 
 
@@ -431,32 +512,58 @@ class StreamingMultiAgentCoordinator:
     ) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
         """Classify user message into one or more domains.
 
+        First turn (no prior history) uses a slim schema + slim prompt to skip
+        narrative fields. Multi-turn keeps the full schema + prompt because
+        user_behavior / flow carry real signal once history exists.
+
+        Both paths use DECISION_LLM (small/fast model) — routing is a low-reasoning
+        task and the schemas are descriptive only, so the small model has no
+        prescriptive tool-signature field to hallucinate in.
+
         Returns:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
         from langchain_core.messages import SystemMessage
         from config.tracing import build_trace_config
 
-        # Reuse singleton LLM from router.py — avoids creating a new object per request
-        structured_model = _router_llm.with_structured_output(
-            MultiAgentDomain,
-            strict=True,
-        )
+        # First turn = single user message, no prior conversation history.
+        is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
 
         try:
-            system_msg = SystemMessage(content=prompt_router_multi())
+            if is_first_turn:
+                structured_model = _slim_intent_model
+                system_msg = SystemMessage(content=prompt_router_slim())
+                run_name = "classify_multi_intent_slim"
+            else:
+                structured_model = _multi_intent_model
+                system_msg = SystemMessage(content=prompt_router_multi())
+                run_name = "classify_multi_intent"
+
             all_messages = [system_msg] + list(messages)
 
             trace_config = build_trace_config(
-                run_name="classify_multi_intent",
+                run_name=run_name,
                 session_id=session_id,
                 user_id=user_id,
                 trace_id=trace_id,
-                tags=["router", "classify_multi_intent"],
+                tags=["router", run_name],
             )
-            result: MultiAgentDomain = structured_model.invoke(all_messages, config=trace_config)
+            raw_result = structured_model.invoke(all_messages, config=trace_config)
+
+            # Normalize slim result to MultiAgentDomain for downstream compat.
+            # Empty narrative fields short-circuit _inject_conversation_context.
+            if is_first_turn:
+                result = MultiAgentDomain(
+                    reason=raw_result.reason,
+                    domains=raw_result.domains,
+                    user_behavior="",
+                    flow="",
+                )
+            else:
+                result = raw_result
+
             logger.info(
-                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, next={result.next_action!r}, flow={result.flow!r}"
+                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, flow={result.flow!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -467,7 +574,7 @@ class StreamingMultiAgentCoordinator:
 
     @staticmethod
     def _inject_conversation_context(messages: list[dict], routing: MultiAgentDomain | None) -> list[dict]:
-        """Inject conversation context (user_behavior, next_action, flow) above the Korean instruction
+        """Inject conversation context (user_behavior, flow) above the Korean instruction
         in the last user message.
 
         The current last user message already has the format:
@@ -477,7 +584,6 @@ class StreamingMultiAgentCoordinator:
         After injection:
             ## CONVERSATION CONTEXT
             - User behavior: ...
-            - Next action: ...
             - Flow so far: ...
 
             # Respond in Korean language
@@ -490,8 +596,6 @@ class StreamingMultiAgentCoordinator:
         context_parts = []
         if routing.user_behavior:
             context_parts.append(f"- User behavior: {routing.user_behavior}")
-        if routing.next_action:
-            context_parts.append(f"- Next action: {routing.next_action}")
         if routing.flow:
             context_parts.append(f"- Flow so far: {routing.flow}")
 
@@ -661,6 +765,7 @@ class StreamingMultiAgentCoordinator:
         user_id: str | None = None,
         trace_id: str | None = None,
         skip_decision: bool = False,
+        slot_context_with_intent: str | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -668,7 +773,8 @@ class StreamingMultiAgentCoordinator:
         Args:
             messages: Original user messages
             domains: Pre-classified domains (optional, will classify if not provided)
-            slot_context: Formatted slot context string to inject into agent messages
+            slot_context: Formatted slot context string (WITHOUT pending_intent block).
+                Default for Discovery / Support / Leading agents.
             session_id: Session ID for persisting tool-derived slots (goods_no, shop_id)
             tool_context: Formatted tool results from previous turn for context preservation
             user_id: User ID for Langfuse tracing
@@ -676,6 +782,14 @@ class StreamingMultiAgentCoordinator:
             skip_decision: When True AND domains has >= 2 entries, skip the
                 `decide_next_action` LLM call between the first and second agent
                 (the chain is pre-committed by the caller — e.g., P0 code gate).
+            slot_context_with_intent: Slot context WITH pending_intent block.
+                Injected ONLY for the Transaction agent — that agent acts directly
+                on the intent (Flow 1 price / Flow 2-3 stock / Flow 6 order).
+                Discovery / Support / Leading must route purely from prior
+                conversation context, never from a stale intent slot, so they keep
+                receiving `slot_context` (no intent block) instead.
+                When None (no pending_intent set), Transaction also receives plain
+                `slot_context`.
 
         Yields:
             Stream events from all agents in sequence
@@ -716,11 +830,23 @@ class StreamingMultiAgentCoordinator:
             enriched_messages = []
 
             # 1. slot_context FIRST
-            if slot_context:
+            # Per-domain slot context: only the Transaction agent sees the
+            # `[사용자의 진행 중인 요청]` block, since it is the only agent that
+            # acts directly on the intent slot. Other agents would otherwise let
+            # a stale intent silently override their conversation-history-based
+            # routing (e.g., Discovery would emit "바로 가격 조회로 이어갑니다"
+            # on a recommendation pick instead of calling
+            # `get_product_description_tool`).
+            if domain == MultiAgentDomain.Domain.TRANSACTION and slot_context_with_intent:
+                domain_slot_context = slot_context_with_intent
+            else:
+                domain_slot_context = slot_context
+
+            if domain_slot_context:
                 enriched_messages.append(
                     {
                         "role": "assistant",
-                        "content": slot_context,
+                        "content": domain_slot_context,
                     }
                 )
 
@@ -826,7 +952,11 @@ class StreamingMultiAgentCoordinator:
                     if tool_output:
                         try:
                             parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
-                            accumulated_tool_data.append({"tool": event.get("tool", ""), "data": parsed})
+                            accumulated_tool_data.append({
+                                "tool": event.get("tool", ""),
+                                "input": event.get("input", {}),
+                                "data": parsed,
+                            })
 
                             # Persist tool-derived goods_no, shop_id, and tire_size to slots
                             if session_id and isinstance(parsed, dict):
@@ -835,7 +965,11 @@ class StreamingMultiAgentCoordinator:
                                 )
 
                         except (json.JSONDecodeError, TypeError):
-                            accumulated_tool_data.append({"tool": event.get("tool", ""), "data": tool_output})
+                            accumulated_tool_data.append({
+                                "tool": event.get("tool", ""),
+                                "input": event.get("input", {}),
+                                "data": tool_output,
+                            })
 
             # Yield agent completion event
             yield {
@@ -1062,7 +1196,16 @@ _coordinator = StreamingMultiAgentCoordinator()
 
 
 def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
-    """Append template_data from Redis to assistant messages."""
+    """Append template_data from Redis to the MOST RECENT matching assistant message only.
+
+    Older assistant turns with template_data used to be enriched too, which
+    inflated the LLM input by 200–1000 tokens per past card across long
+    multi-turn conversations. The Discovery prompt explicitly instructs the
+    model to use only the LATEST recommendation list, and the BE-filtered
+    tool_context (loaded as a separate system message) already preserves
+    older-turn data. Keeping only turn_age=0 here avoids the duplication
+    while preserving the common "이중에서 / 1번째" reference path.
+    """
     if not session_id:
         return messages
 
@@ -1081,11 +1224,13 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
         if not template_map:
             return messages
 
-        # Append template_data to matching assistant messages
-        for msg in messages:
-            if msg.get("role") == "assistant" and msg["content"] in template_map:
+        # Enrich only the most recent matching assistant message.
+        # Walk in reverse so the first hit is turn_age=0; older matches are skipped.
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant" and msg.get("content") in template_map:
                 template_str = json.dumps(template_map[msg["content"]], ensure_ascii=False)
                 msg["content"] += f"\n\n[이전 선택된 상품 데이터]\n{template_str}"
+                break
 
         return messages
 
@@ -1548,6 +1693,7 @@ class TStationChatServiceV2:
 
         domains = None
         slot_context = None
+        slot_context_with_intent = None
         tool_context = None
 
         # Defaults hoisted above the try block so the P0 auto-chain gate below
@@ -1595,6 +1741,44 @@ class TStationChatServiceV2:
             # resolution below AND for prompt injection in step 6). Loading before
             # save_slots lets resolved goods_no be persisted in step 4.
             prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+
+            # 3.7.5) Recommendation-flow stale-clear.
+            # If the most recent product-listing tool in the conversation is
+            # `get_products_recommendations_tool` AND the current turn carries no
+            # fresh transactional keyword, the customer is browsing recommendations
+            # — any inherited transactional `pending_intent` from a much earlier
+            # turn is stale and must NOT be allowed to redirect a bare product-name
+            # selection (e.g. "1. 벤투스 S2 AS") into the Transaction auto-chain
+            # (P0 gate at step 4 below). Without this, picking a product after a
+            # recommendation list silently calls `get_final_price_tool` instead of
+            # `get_product_description_tool`, which surprises the user.
+            #
+            # Step 3.5 above only fires when the user explicitly re-asks for a
+            # recommendation in this turn. Step 3.7.5 covers the implicit case
+            # where the user just *continues* the recommendation flow by picking.
+            #
+            # Search-triggered flows (`search_product_tool` is the most recent
+            # listing tool, fired because the user said e.g. "벤투스 가격") are
+            # intentionally left untouched so the auto-chain still runs once
+            # goods_no resolves — that's the design behind the P0 gate.
+            if (
+                merged_slots.pending_intent is not None
+                and not turn_has_new_transactional
+                and prev_tool_data
+            ):
+                most_recent_listing_tool: str | None = None
+                for entry in reversed(prev_tool_data):
+                    tool = entry.get("tool")
+                    if tool in ("search_product_tool", "get_products_recommendations_tool"):
+                        most_recent_listing_tool = tool
+                        break
+                if most_recent_listing_tool == "get_products_recommendations_tool":
+                    logger.info(
+                        f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
+                        f"— most recent list source is get_products_recommendations_tool "
+                        f"(user is in recommendation flow, not transactional)"
+                    )
+                    merged_slots.pending_intent = None
 
             # 3.8) Resolve goods_no from the user's list-selection reply matched against
             # the most recent search_product_tool result. Without this, Discovery may
@@ -1669,8 +1853,19 @@ class TStationChatServiceV2:
             # 4) Save merged slots to Redis
             chat_history_svc.save_slots(request.session_id, merged_slots)
 
-            # 5) Build slot context string for agent injection
-            slot_context = merged_slots.to_prompt_context() if merged_slots.has_any() else None
+            # 5) Build slot context strings for agent injection.
+            # `slot_context` (no pending_intent) is the default for all agents — Discovery,
+            # Support, and Leading must route purely from prior conversation context, never
+            # from a coordinator-set intent slot, so a stale "가격" / "재고" intent from an
+            # earlier turn does not silently force a Transaction handoff on a recommendation
+            # pick. `slot_context_with_intent` is the full version, injected ONLY for the
+            # Transaction agent which acts directly on the intent (Flow 1 / 2 / 6 routing).
+            slot_context = merged_slots.to_prompt_context(include_pending_intent=False) if merged_slots.has_any() else None
+            slot_context_with_intent = merged_slots.to_prompt_context(include_pending_intent=True) if merged_slots.has_any() else None
+            # When pending_intent is unset both strings are equal — collapse so the
+            # downstream coordinator only injects one block.
+            if slot_context_with_intent == slot_context:
+                slot_context_with_intent = None
 
             # 6) Format tool context for prompt injection
             if prev_tool_data:
@@ -1683,6 +1878,7 @@ class TStationChatServiceV2:
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
             slot_context = None
+            slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
         # Try rule-based fast-path first; fall back to LLM classifier if undecided.
@@ -1793,6 +1989,7 @@ class TStationChatServiceV2:
                     user_id=request.user_id,
                     trace_id=request.tracing_id,
                     skip_decision=skip_decision,
+                    slot_context_with_intent=slot_context_with_intent,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1816,6 +2013,7 @@ class TStationChatServiceV2:
                 user_id=request.user_id,
                 trace_id=request.tracing_id,
                 skip_decision=skip_decision,
+                slot_context_with_intent=slot_context_with_intent,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -1858,6 +2056,7 @@ class TStationChatServiceV2:
         user_id: str | None = None,
         trace_id: str | None = None,
         skip_decision: bool = False,
+        slot_context_with_intent: str | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -1900,16 +2099,18 @@ class TStationChatServiceV2:
             user_id=user_id,
             trace_id=trace_id,
             skip_decision=skip_decision,
+            slot_context_with_intent=slot_context_with_intent,
         ):
             event_type = event.get("type")
 
-            # --- INTERCEPT TOKENS (Draft Response & TTFT Fix) ---
+            # --- INTERCEPT TOKENS (Draft Response only — FE ignores `token` events
+            # already and renders text from data.assistantResponse on the final
+            # template, so streaming partial tokens to the client adds no UI value
+            # and inflates SSE bandwidth. Keep accumulating into draft_response so
+            # the local QC / sanitize step still has the full text). ---
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
-                # Suppress tokens if a code-mapper tool was called (card will replace text)
-                if not _suppress_tokens:
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 continue
 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
@@ -1934,7 +2135,7 @@ class TStationChatServiceV2:
                 if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
                 input_data = event.get("input", {})
-                output_data = event.get("out`put", "")
+                output_data = event.get("output", "")
                 source_parts = []
                 if input_data:
                     source_parts.append(f"Input: {json.dumps(input_data, ensure_ascii=False)}")
