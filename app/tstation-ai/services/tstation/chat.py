@@ -281,7 +281,7 @@ Worked example 3 (PREV=CUR escape — NOT re-recommendation):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
 - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -306,12 +306,17 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 3. "장바구니에 담아줘" → TRANSACTION
 4. "강남 매장 찾아줘" / "근처 매장" → TRANSACTION
 5. "한남점 예약 가능한 날짜 알려줘" → TRANSACTION
-6. "주문 내역 확인해줘" → TRANSACTION
-7. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
+6. "주문 내역 확인해줘" / "내 주문내역 알려줘" / "주문 조회해줘" → TRANSACTION
+7. "내 쿠폰 보여줘" / "받을 수 있는 쿠폰" / "다운로드 가능 쿠폰은?" / "쿠폰함" → TRANSACTION
+8. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
 
 SUPPORT — policy, warranty, human agent:
 1. "보증 정책 알려줘" / "반품 가능해?" → SUPPORT
 2. "1:1 문의 작성해줘" / "상담원 연결" → SUPPORT
+
+⚠️ NEVER classify these as SUPPORT — always TRANSACTION (handled by coupon/order tools, NOT FAQ):
+- 내 쿠폰 / 쿠폰 조회 / 쿠폰함 / 다운로드 가능 쿠폰
+- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문
 
 LEADING — greeting, unclear intent:
 1. "안녕하세요" / "뭘 도와줄 수 있어?" → LEADING
@@ -437,7 +442,9 @@ Classify the user's FIRST message into EXACTLY ONE domain.
 DOMAINS:
 - TRANSACTION: Price / stock / buy / order / cart when goods_no (G + 12 digits)
   is already in the message; store search by location or name
-  (강남, 근처, 올마이티, All My T); reservation slots; order tracking; coupon inquiry.
+  (강남, 근처, 올마이티, All My T); reservation slots; order tracking;
+  coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰);
+  order history inquiry (내 주문내역 / 주문 내역 / 주문 조회 / 내 주문 / 내가 주문한 거).
 - DISCOVERY: Product search by name or keyword; tire recommendation;
   vehicle-tire compatibility; product specs / features; review videos;
   price / stock / buy with PRODUCT NAME ONLY (no goods_no yet — Discovery
@@ -454,9 +461,15 @@ KEY RULES:
 - Vehicle number (e.g., "12가3456") with tire request → DISCOVERY
 - 추천 / 맞는 타이어 / 어떤 타이어 → DISCOVERY
 - 매장 / 가까운 / 근처 / 올마이티 / All My T → TRANSACTION
+- 내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 쿠폰 조회 / 다운로드 가능 쿠폰 → TRANSACTION
+- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문 / 내가 주문한 거 → TRANSACTION
 - 환불 / 반품 / 보증 / 워런티 / 1:1 문의 / 상담원 → SUPPORT
 - Aggressive or complaint tone (짜증 / 엉망 / 화나 / 뭐 이런) → SUPPORT
 - Pure greeting (안녕 / hi / hello) → LEADING
+
+⚠️ NEVER classify these as SUPPORT — always TRANSACTION:
+- 내 쿠폰 / 쿠폰 조회 / 다운로드 가능 쿠폰 (handled by coupon tools)
+- 내 주문내역 / 주문 내역 / 주문 조회 (handled by order tools)
 
 EXAMPLES:
 - "안녕하세요" → LEADING
@@ -465,6 +478,11 @@ EXAMPLES:
 - "G012345678901 가격" → TRANSACTION
 - "강남 근처 매장 찾아줘" → TRANSACTION
 - "올마이티 매장" → TRANSACTION
+- "내 쿠폰 보여줘" → TRANSACTION
+- "받을 수 있는 쿠폰 뭐가 있어?" → TRANSACTION
+- "다운로드 가능 쿠폰은?" → TRANSACTION
+- "내 주문내역 알려줘" → TRANSACTION
+- "주문 조회해줘" → TRANSACTION
 - "보증 정책 알려줘" → SUPPORT
 - "상담원 연결해주세요" → SUPPORT
 - "12가3456 타이어 추천" → DISCOVERY
