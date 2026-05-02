@@ -318,7 +318,7 @@ class BaseAgent(ABC):
                                 "data": tool_result,
                                 "args": tool_input.get("args", {}),
                             })
-                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "agent_class": self.name, "status": tool_status}
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),

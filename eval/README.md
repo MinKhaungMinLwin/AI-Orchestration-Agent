@@ -1,116 +1,169 @@
-# Model Evaluation - LLM-as-Judge
+# Model Evaluation - LLM-as-Judge Faithfulness Benchmark
 
-Experiment framework to compare response quality and latency across different LLM models for `tstation-ai`.
+Benchmark framework to compare **faithfulness** and **latency** across different LLM models for `tstation-ai`.
+
+**Faithfulness** = chatbot response does not hallucinate relative to actual tool output.
+
+---
 
 ## How it works
 
-```text
-1. Run BASELINE    -> collect responses using baseline model
-2. Swap model      -> change AI_MODEL_REASONING in .env, restart container
-3. Run EXPERIMENT  -> collect responses using experiment model
-4. Judge           -> LLM-as-Judge scores experiment vs baseline
 ```
+test_cases_from_excel.json
+        ↓ user messages (1 or multi-turn)
+  tstation-ai chatbot  (live API call)
+        ↓ SSE stream → tool_evidence + template_events
+  judge LLM  (AI Gateway)
+        ↓ faithfulness score 0.0–1.0
+  results/benchmark_<model>.json
+  results/benchmark_summary.json
+```
+
+---
 
 ## Available models
 
-From `docker/config/llm/conf-gateway.yaml`.
+From `docker/config/llm/conf-gateway.yaml`:
 
 | model_name | Description |
 |---|---|
-| `gpt-5.4-reasoning` | gpt-5.4 + reasoning_effort=medium (baseline) |
+| `gpt-5.5` | gpt-5.5 |
+| `gpt-5.5-reasoning-low` | gpt-5.5 + reasoning_effort=low |
+| `gpt-5.4-reasoning` | gpt-5.4 + reasoning_effort=medium |
 | `gpt-5.4` | gpt-5.4 no reasoning |
-| `gpt-5.3` | gpt-5.3 |
-| `gpt-5.2` | gpt-5.2 |
-| `gpt-5.1` | gpt-5.1 |
-| `gpt-5.0` | gpt-5.0 |
 | `gpt-4o-mini` | gpt-4o-mini |
 
-## Step 1 - Collect baseline responses
+---
 
-Make sure root `.env` has the baseline model, for example:
+## Setup
 
-```text
-AI_MODEL_REASONING=gpt-5.4-reasoning
+**1. Set env vars in `docker/.env`:**
+
+```env
+# Required: JWT token to call chatbot API
+EVAL_JWT_TOKEN=your_jwt_token_here
+
+# Required: model being tested (used as result file label)
+AI_MODEL=gpt-5.5-reasoning-low
+
+# Judge LLM (already set in docker/.env)
+AI_GATEWAY_BASE_URL=http://ai-gateway:8000/v1
+AI_GATEWAY_API_KEY=sk-xxxx
 ```
 
-Run baseline:
+**2. Start the stack:**
 
 ```powershell
-docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace python:3.12-slim bash -c "pip install httpx -q && python -m eval.run_eval responses --api-url http://tstation-ai:8000 --jwt-token YOUR_JWT_TOKEN --run-name baseline --model gpt-5.4-reasoning --judge-api-url http://ai-gateway:8000/v1 --judge-api-key YOUR_JUDGE_API_KEY --limit 10"
+docker compose -f docker/docker-compose.yml up -d
 ```
 
-Saves to: `eval/results/baseline.json`
+---
 
-Notes:
-- `baseline` now uses `eval/test_cases_from_excel.json` by default.
-- Progress logs are printed through `eval.response_runner`.
+## Run benchmark
 
-## Step 2 - Swap model
-
-Change root `.env`:
-
-```text
-AI_MODEL_REASONING=gpt-4o-mini
-```
-
-Restart only `tstation-ai`:
+**Run (after `docker compose -f docker/docker-compose.yml up -d --build`):**
 
 ```powershell
+docker run --rm `
+  --network docker_internal-net `
+  -v "${PWD}:/workspace" -w /workspace `
+  --env-file docker/.env `
+  python:3.12-slim bash -c "pip install httpx -q && python eval/run_eval.py --limit 10"
+```
+
+- `--env-file docker/.env` — auto-reads `AI_MODEL`, `AI_GATEWAY_*`, `EVAL_JWT_TOKEN`
+- `--limit 10` — run first 10 cases; use `--limit 0` to run all 233 cases
+- `--network docker_internal-net` — same network as `tstation-ai` and `ai-gateway`
+
+**Options:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--limit N` | `5` | Max test cases per model (`0` = all 233) |
+| `--test-cases-file PATH` | `test_cases_from_excel.json` | Custom test cases file |
+| `--model-endpoint model=url` | reads `AI_MODEL` + `EVAL_API_URL` | Override model label and API URL |
+| `--judge-api-url URL` | `AI_GATEWAY_BASE_URL` | Judge LLM base URL |
+| `--judge-api-key KEY` | `AI_GATEWAY_API_KEY` | Judge LLM API key |
+
+---
+
+## Compare models
+
+```powershell
+# 1. Set model A in docker/.env: AI_MODEL=gpt-5.5-reasoning-low
 docker compose -f docker/docker-compose.yml up -d tstation-ai
+docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace --env-file docker/.env python:3.12-slim bash -c "pip install httpx -q && python eval/run_eval.py --limit 0"
+# → saves eval/results/benchmark_gpt-5.5-reasoning-low.json
+
+# 2. Swap to model B in docker/.env: AI_MODEL=gpt-4o-mini
+docker compose -f docker/docker-compose.yml up -d tstation-ai
+docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace --env-file docker/.env python:3.12-slim bash -c "pip install httpx -q && python eval/run_eval.py --limit 0"
+# → saves eval/results/benchmark_gpt-4o-mini.json
+
+# 3. Compare → eval/results/benchmark_summary.json
 ```
 
-Verify the model loaded:
+---
 
-```powershell
-docker compose -f docker/docker-compose.yml logs tstation-ai --tail 20
+## Output
+
+**Per-case record** (`results/benchmark_<model>.json`):
+```json
+{
+  "id": "tc_001",
+  "category": "product_compatibility",
+  "latency_s": 5.4,
+  "tool_evidence": [...],
+  "template_events": [...],
+  "agent_flow_events": [...],
+  "faithfulness_eval": {
+    "faithfulness": 0.95,
+    "faithfulness_bin": 1,
+    "verdict": "PASS",
+    "reason": "..."
+  }
+}
 ```
 
-Look for:
-
-```text
-[MODEL_CONFIG] main=openai/... | reasoning=openai/gpt-4o-mini | ...
+**Summary** (`results/benchmark_summary.json`):
+```json
+{
+  "models": [{
+    "model": "gpt-5.5-reasoning-low",
+    "summary": {
+      "total_count": 233,
+      "scored_count": 233,
+      "avg_latency_s": 6.2,
+      "latency_p50_s": 5.8,
+      "latency_p90_s": 9.1,
+      "latency_p95_s": 11.3,
+      "latency_p99_s": 14.0,
+      "avg_faithfulness": 0.87,
+      "pass_rate_pct": 91.4
+    }
+  }]
+}
 ```
 
-Or inspect the env directly:
-
-```powershell
-docker compose -f docker/docker-compose.yml exec tstation-ai printenv AI_MODEL_REASONING
-```
-
-## Step 3 - Collect experiment responses
-
-Run experiment:
-
-```powershell
-docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace python:3.12-slim bash -c "pip install httpx -q && python -m eval.run_eval responses --api-url http://tstation-ai:8000 --jwt-token YOUR_JWT_TOKEN --run-name experiment --model gpt-4o-mini --judge-api-url http://ai-gateway:8000/v1 --judge-api-key YOUR_JUDGE_API_KEY --limit 10"
-```
-
-Saves to: `eval/results/experiment.json`
-
-Notes:
-- `experiment` now also uses `eval/test_cases_from_excel.json` by default.
-- If needed, you can override the file explicitly with `--test-cases-file test_cases_from_excel.json`.
-
-## Step 4 - Judge baseline vs experiment
-
-Judge calls AI Gateway internally and must run on the same Docker network:
-
-```powershell
-docker run --rm --network docker_internal-net -v "${PWD}:/workspace" -w /workspace python:3.12-slim bash -c "pip install httpx -q && python -m eval.run_eval judge --judge-api-url http://ai-gateway:8000/v1 --judge-api-key YOUR_JUDGE_API_KEY --baseline baseline --experiment experiment"
-```
-
-Saves to: `eval/results/judgment_baseline_vs_experiment_*.json`
+---
 
 ## Scoring
 
-Judge LLM returns float scores `0.0-1.0`. Binarized at threshold `0.5`:
+Judge LLM returns `faithfulness` float `0.0–1.0`. Binarized at threshold `0.5`:
 
-| Raw score | Binary | Meaning |
+| Raw score | Binary | Verdict |
 |---|---|---|
-| `> 0.5` | `1 (PASS)` | Acceptable |
-| `<= 0.5` | `0 (FAIL)` | Not acceptable |
+| `> 0.5` | `1` | PASS |
+| `<= 0.5` | `0` | FAIL |
 
-- `faithfulness`: does the response avoid hallucination?
-- `correctness`: does the response convey the same info as baseline?
+**Faithfulness**: does the chatbot response avoid hallucinating relative to tool evidence?
 
-`PASS` = `faithfulness > 0.5` and `correctness > 0.5`
+- `1.0` = fully faithful to tool output
+- `0.0` = severe hallucination or factually incorrect
+
+---
+
+## Resume
+
+If interrupted, re-run the same command — eval automatically skips already-completed cases.
+To restart from scratch, delete `results/benchmark_<model>.json`.

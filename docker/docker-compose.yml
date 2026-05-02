@@ -51,6 +51,8 @@
     command: ["--config=/app/config.yaml", "--port", "8000"]
     expose:
       - 8000
+    ports:
+      - "${AI_GATEWAY_PORT:-4000}:8000"
     read_only: true
     tmpfs:
       - /tmp
