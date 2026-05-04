@@ -721,6 +721,62 @@ class StreamingMultiAgentCoordinator:
                 except Exception as e:
                     logger.warning(f"[SLOTS] Failed to save tire_size from tool input: {e}")
 
+        # Extract goods_no from tool INPUT when product description tool is called.
+        # Without this, picking a product from the recommend list (Branch S — "1번",
+        # "벤투스 S2 AS") routes through get_product_description_tool but leaves
+        # goods_no=None. The goal-router then treats `model` as missing on the next
+        # "구매할게" turn and routes to Discovery instead of Transaction, breaking
+        # the order auto-chain.
+        if tool_name == "get_product_description_tool" and tool_input:
+            input_goods_no = tool_input.get("goods_no")
+            if input_goods_no:
+                try:
+                    svc = get_chat_history_service()
+                    current_slots = svc.get_slots(session_id)
+                    new_slots = ConversationSlots(goods_no=input_goods_no)
+                    updated = current_slots.merge(new_slots)
+                    svc.save_slots(session_id, updated)
+                    logger.info(f"[SLOTS] goods_no saved from {tool_name} input: {input_goods_no}")
+                except Exception as e:
+                    logger.warning(f"[SLOTS] Failed to save goods_no from tool input: {e}")
+
+        # Auto-capture tire_size_fr from member-cars tools when EXACTLY 1 vehicle
+        # is returned. Defense-in-depth for the goal-router: if the LLM later
+        # skips the recommendation/search tool call (e.g. answering from cached
+        # `[대화 중 조회한 데이터]`), tire_size is still populated so subsequent
+        # turns ("매장 선택 후 주문", "구매할게") route to Transaction instead
+        # of looping in Discovery waiting for size confirmation.
+        # Multi-vehicle responses are skipped on purpose: the user must pick one,
+        # and that selection is captured by LLM-driven slot extraction.
+        # Existing tire_size is preserved (merge fills only when current is None).
+        if tool_name in ("get_my_cars_tool", "get_user_vehicles_tool") and tool_succeeded:
+            try:
+                car_data = parsed_data.get("data") if isinstance(parsed_data, dict) else None
+                cars_list = None
+                if isinstance(car_data, list):
+                    cars_list = car_data
+                elif isinstance(car_data, dict):
+                    for key in ("items", "cars", "vehicles", "memberCars", "member_cars"):
+                        candidate = car_data.get(key)
+                        if isinstance(candidate, list):
+                            cars_list = candidate
+                            break
+                if cars_list and len(cars_list) == 1 and isinstance(cars_list[0], dict):
+                    single = cars_list[0]
+                    tire_size_fr = single.get("tire_size_fr") or single.get("tireSizeFr")
+                    if tire_size_fr:
+                        svc = get_chat_history_service()
+                        current_slots = svc.get_slots(session_id)
+                        if current_slots.tire_size is None:
+                            new_slots = ConversationSlots(tire_size=tire_size_fr)
+                            updated = current_slots.merge(new_slots)
+                            svc.save_slots(session_id, updated)
+                            logger.info(
+                                f"[SLOTS] tire_size auto-saved from {tool_name} (1-car): {tire_size_fr}"
+                            )
+            except Exception as e:
+                logger.warning(f"[SLOTS] Failed to auto-save tire_size from {tool_name}: {e}")
+
         fields = tool_slot_extractors.get(tool_name)
         if not fields:
             return
@@ -1400,12 +1456,18 @@ _coordinator = StreamingMultiAgentCoordinator()
 
 # Cap on how many recent assistant card turns get template_data attached.
 # Past versions enriched only turn_age=0 (latest), which dropped product/store/
-# voucher card structure from earlier turns and forced the LLM to rely on
-# bubble text once a new card replaced the previous one. Multi-card flows
-# ("상품 추천 → 매장 검색 → 예약 시간") then lost cross-turn references like
-# "이 매장에 그 사이즈 재고 있어?". Capping at 5 keeps multi-turn references
-# resolvable while bounding the token cost (each card ≲ ~3KB JSON).
-_TEMPLATE_ENRICH_MAX_TURNS = 5
+# voucher card structure from earlier turns. We briefly raised the cap to 5
+# to recover multi-turn references ("이 매장에 그 사이즈 재고 있어?"), but in
+# practice a 5-turn snapshot of stale tool data nudged the LLM to "answer from
+# memory" instead of re-issuing the proper tool call — most visibly on the
+# turn right after a vehicle pick, where Discovery skipped
+# `get_products_recommendations_tool` and produced a prose response with no
+# product cards. Dropping back to 1 keeps the immediately-prior card context
+# (enough for "1번", "벤투스 S2 AS", "그 매장" demonstratives in the very next
+# turn) while preventing further turns from biasing the LLM away from fresh
+# tool calls. Older structured data is still available via the BE-filtered
+# tool_context system message.
+_TEMPLATE_ENRICH_MAX_TURNS = 1
 
 
 def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
