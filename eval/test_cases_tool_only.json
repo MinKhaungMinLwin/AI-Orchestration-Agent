@@ -1,0 +1,422 @@
+[
+  {
+    "tc_id": "TC-062",
+    "user_message": "예약한 매장에 전화해서 궁금한 거 물어보고 싶어",
+    "description": "주문 내역 내 예약 매장 정보 전달",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "TC-086",
+    "user_message": "판교 근처 티스테이션 이름으로 찾아줘",
+    "description": "명칭 검색(예: 성남 티스테이션) 시 정확한 결과",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "discovery_001",
+    "user_message": "한국타이어 225/45R17 추천해주세요",
+    "description": "Product recommendation by tire size and brand",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_002",
+    "user_message": "벤투스 타이어 찾아줘",
+    "description": "Product search by Korean brand name (Ventus) — requires Korean→English translation",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_004",
+    "user_message": "키네르기 제품 있어요?",
+    "description": "Product search: Kinergy keyword translation",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_005",
+    "user_message": "195/65R15 사이즈 타이어 보여줘",
+    "description": "Product recommendation by tire size only",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_009",
+    "user_message": "제 차에 맞는 타이어 추천해주세요",
+    "description": "Vehicle-first flow — should call get_my_cars_tool first",
+    "category": "vehicle_lookup",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_011",
+    "user_message": "지금 하는 이벤트 있어요?",
+    "description": "Events query",
+    "category": "events_deals",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_012",
+    "user_message": "기획전 목록 보여주세요",
+    "description": "Deals list query",
+    "category": "events_deals",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_013",
+    "user_message": "할인 행사 뭐 있어?",
+    "description": "Discount events — ambiguous, should check events or deals",
+    "category": "events_deals",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_014",
+    "user_message": "벤투스 S1 에보3 제품 설명 해줘",
+    "description": "Product description request",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_015",
+    "user_message": "가장 저렴한 타이어 225/45R17 보여줘",
+    "description": "Cheapest product query — should use compare_discount_tool",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_016",
+    "user_message": "타이어 교체 유튜브 영상 보여줘",
+    "description": "YouTube video search",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_017",
+    "user_message": "다이나프로 추천해줘",
+    "description": "Product search: Dynapro keyword translation",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_021",
+    "user_message": "퍼포먼스 타이어 추천해줘",
+    "description": "Tire category: performance tires",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_022",
+    "user_message": "에코 타이어 있어요?",
+    "description": "Tire category: eco/fuel-efficient tires",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_023",
+    "user_message": "오프로드 타이어 뭐가 좋아요?",
+    "description": "Tire category: off-road tires",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_027",
+    "user_message": "여름 타이어 세일 있어요?",
+    "description": "Seasonal event/sale query — should check events_tool",
+    "category": "events_deals",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_028",
+    "user_message": "벤투스 S2 AS 타이어 스펙 알려줘",
+    "description": "Specific product spec/description request",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_029",
+    "user_message": "205/60R16 타이어들 가격 비교해줘",
+    "description": "Price comparison across multiple products — compare_discount_tool",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_030",
+    "user_message": "아이온 타이어 뭐 있어요?",
+    "description": "Product search: iON EV tire line",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_033",
+    "user_message": "한국타이어 타이어 장착 후기 영상 있어요?",
+    "description": "YouTube search for tire installation review",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "transaction_001",
+    "user_message": "사용 가능한 쿠폰 있어요?",
+    "description": "Available coupons query",
+    "category": "price_coupon",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_002",
+    "user_message": "내 쿠폰 보여줘",
+    "description": "My coupons query",
+    "category": "price_coupon",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_004",
+    "user_message": "강남구 매장 목록 알려주세요",
+    "description": "Store list by region",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_005",
+    "user_message": "홍대 근처 매장 알려줘",
+    "description": "Nearby store search by place name — should use search_place_tool then get_nearby_stores_tool",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_006",
+    "user_message": "부산 해운대 매장 있어?",
+    "description": "Store search by region and area",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_007",
+    "user_message": "한남점 매장 정보 알려줘",
+    "description": "Specific store query by name",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_008",
+    "user_message": "내 주문 목록 보여줘",
+    "description": "Order history query",
+    "category": "order",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_009",
+    "user_message": "주문 상태 확인해줘",
+    "description": "Order status — should ask for order number",
+    "category": "order",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_010",
+    "user_message": "타이어 재고 있어요?",
+    "description": "Inventory query — should ask for goods_no and store if not confirmed",
+    "category": "inventory",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "transaction_011",
+    "user_message": "서울 매장 다 보여줘",
+    "description": "Store list by broad region (Seoul)",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_012",
+    "user_message": "인천공항 근처 매장 있어?",
+    "description": "Nearby store by landmark",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_013",
+    "user_message": "수원 올마이티 매장 예약 가능한 날 알려줘",
+    "description": "Store schedule availability query",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_016",
+    "user_message": "가장 최근 주문 어떻게 됐어?",
+    "description": "Latest order status query",
+    "category": "order",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_018",
+    "user_message": "대전 서구 매장 알려줘",
+    "description": "Store search by city and district",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_019",
+    "user_message": "배송 언제 와요?",
+    "description": "Delivery status inquiry — needs order number",
+    "category": "order",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "edge_001",
+    "user_message": "타이어 추천해주고 가격도 알려줘",
+    "description": "Multi-intent: recommend + price in one message",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_002",
+    "user_message": "205/55R16 한국타이어 아니면 금호 중에 뭐가 좋아?",
+    "description": "Brand comparison query",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_005",
+    "user_message": "겨울용 타이어 추천해줘",
+    "description": "Seasonal tire recommendation",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_006",
+    "user_message": "SUV 타이어 뭐가 좋아요?",
+    "description": "Vehicle type based recommendation without specific model",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_007",
+    "user_message": "수원에 올마이티 매장 있어?",
+    "description": "Store search with AllMyT filter by city",
+    "category": "edge_case",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "edge_009",
+    "user_message": "가성비 좋은 타이어 알려줘",
+    "description": "Value-for-money recommendation — vague intent",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_013",
+    "user_message": "18인치 타이어 중에 젖은 노면에 강한 거 추천해줘",
+    "description": "Performance characteristic filter: wet grip",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_034",
+    "user_message": "235/55R19 타이어 뭐가 있어요?",
+    "description": "Product search by tire size — larger SUV size",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_035",
+    "user_message": "한국타이어 벤투스 라인업 보여줘",
+    "description": "Product lineup search by sub-brand",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_036",
+    "user_message": "조용한 타이어 추천해줘",
+    "description": "Comfort/low-noise tire recommendation",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_038",
+    "user_message": "겨울 스터드리스 타이어 있어요?",
+    "description": "Winter studless tire search",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_045",
+    "user_message": "블랙프라이데이 타이어 할인 있어요?",
+    "description": "Seasonal sale event query (Black Friday)",
+    "category": "events_deals",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_047",
+    "user_message": "키네르기 GT 타이어 특징이 뭐예요?",
+    "description": "Specific product features: Kinergy GT",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_049",
+    "user_message": "225/60R17 타이어 중에 연비 좋은 거 추천해줘",
+    "description": "Fuel efficiency filter on tire search",
+    "category": "product_details",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "discovery_050",
+    "user_message": "한국타이어 레이싱 타이어 있어요?",
+    "description": "Racing/track tire query — scope boundary test",
+    "category": "product_search",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "transaction_021",
+    "user_message": "제주도 매장 있어?",
+    "description": "Store search for island location",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_022",
+    "user_message": "광주 북구 매장 알려줘",
+    "description": "Store search by city and district",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_023",
+    "user_message": "강남역 근처 티스테이션 있어요?",
+    "description": "Store near subway station",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "transaction_024",
+    "user_message": "전북 전주 매장 예약 가능한가요?",
+    "description": "Store availability check by city",
+    "category": "store",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "edge_020",
+    "user_message": "오늘 강남에서 타이어 4개 교체 가능한 매장 있어요?",
+    "description": "Same-day + location + quantity availability",
+    "category": "edge_case",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "edge_023",
+    "user_message": "연비도 좋고 소음도 적은 타이어 225/55R17 추천",
+    "description": "Multi-attribute filter: fuel efficiency + low noise",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_025",
+    "user_message": "195/65R15 타이어 중에 제일 리뷰 좋은 거 뭐야?",
+    "description": "Review-based recommendation — no review tool, test graceful handling",
+    "category": "edge_case",
+    "agent": "discovery"
+  },
+  {
+    "tc_id": "edge_027",
+    "user_message": "내일 아침 9시에 잠실점 예약 가능한가요?",
+    "description": "Specific time + store booking check",
+    "category": "edge_case",
+    "agent": "transaction"
+  }
+]

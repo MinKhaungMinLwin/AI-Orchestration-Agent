@@ -231,7 +231,7 @@ def _print_comparison(models: list[str]) -> None:
             for r in records
             if r.get("faithfulness_eval", {}).get("faithfulness") is not None
         ]
-        latencies = [r["latency_s"] for r in records if r.get("latency_s")]
+        latencies = [r["timing"]["total_s"] for r in records if isinstance((r.get("timing") or {}).get("total_s"), (int, float))]
         pass_count = sum(1 for r in records if r.get("faithfulness_eval", {}).get("verdict") == "PASS")
         avg_faith = sum(faithfulness_scores) / len(faithfulness_scores) if faithfulness_scores else 0
         avg_lat = sum(latencies) / len(latencies) if latencies else 0
@@ -316,6 +316,25 @@ def main() -> None:
              "Pass --agents all to disable filtering.",
     )
     parser.add_argument(
+        "--skip-all-fail",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip TCs that failed in ALL existing result files (default: on). Use --no-skip-all-fail to disable.",
+    )
+    parser.add_argument(
+        "--skip-all-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Skip TCs where ALL existing runs got template_eval=FALLBACK (single-turn not completable). "
+             "Run baseline first, then use this flag. Default: off.",
+    )
+    parser.add_argument(
+        "--tag",
+        default="",
+        help="Tag for this run — appended to output filename (e.g. --tag r2 → benchmark_model_r2.json). "
+             "Use for re-runs to check consistency against the baseline.",
+    )
+    parser.add_argument(
         "--no-restart",
         action="store_true",
         help="Skip docker compose restart (assume service already running with correct model)",
@@ -365,6 +384,9 @@ def main() -> None:
                 limit=args.limit,
                 test_cases_file=args.test_cases_file,
                 agents=agents,
+                skip_all_fail=args.skip_all_fail,
+                skip_all_fallback=args.skip_all_fallback,
+                tag=args.tag,
             )
             completed.append(model)
             logger.info("[BATCH] [OK] Done: %s", model)

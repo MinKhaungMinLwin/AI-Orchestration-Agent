@@ -51,3 +51,5 @@ docker/qdrant_storage/collections/
 /qdrant_storage/
 example/
 /docs/test-questions/
+
+/eval/results/

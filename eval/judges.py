@@ -22,6 +22,7 @@ AGENT_FLOW_TEMPLATE_MAP: dict[str, list[str]] = {
     "FAQ AF":                     ["quickReply", "qnaComplete"],
     "Fallback/Escalation AF":     ["quickReply", "qnaComplete"],
     "Order / Delivery AF":        ["quickReply", "qnaComplete"],
+    "Quick shopping AF":          ["cheapestProduct", "product", "location"],
 }
 
 
