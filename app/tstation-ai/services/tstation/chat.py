@@ -1018,6 +1018,12 @@ class StreamingMultiAgentCoordinator:
                     )
                     continue
 
+                # Agent already produced a complete UI payload — decide_next_action
+                # would return STOP anyway (its prompt: "ONLY CONTINUE when agent cannot complete the task").
+                if domain_data_event_emitted:
+                    logger.info("[COORDINATOR] Data event emitted — skipping decide_next_action")
+                    break
+
                 decision = decide_next_action(
                     original_messages=messages,
                     previous_agent_response=full_response,
