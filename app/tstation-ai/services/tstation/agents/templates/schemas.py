@@ -269,7 +269,11 @@ class PreOrderTemplate(TemplatePayload):
     orderInfo: OrderInfo
     isReadyToOrder: bool
     isReadyToAddToCart: bool
-    recommendActions: RecommendActions
+    # Optional: the FE renders pay/cart buttons inside the orderInfo card itself,
+    # so a separate recommendActions follow-up bubble duplicates the same intent.
+    # New emissions should omit this field; legacy emitters that still set it
+    # remain compatible.
+    recommendActions: RecommendActions | None = None
     metadata: PreOrderMeta
 
 

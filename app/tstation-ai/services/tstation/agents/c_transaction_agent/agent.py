@@ -975,10 +975,6 @@ Style rules for PROSE MODE:
     }},
     "isReadyToOrder": <true if store+date+qty all confirmed>,
     "isReadyToAddToCart": <true if qty confirmed>,
-    "recommendActions": {{
-      "question": "<next step question>",
-      "listActions": ["주문 확정", "장바구니에 담기"]
-    }},
     "metadata": {{
       "goodsId": "<goods_no>",
       "shopId": "<shop_id>",
@@ -988,6 +984,10 @@ Style rules for PROSE MODE:
   }}
 }}
 ```
+
+⚠️ Do NOT include `recommendActions` in the preOrder payload. The orderInfo
+card already renders pay/cart action buttons inside itself; a separate
+recommendActions follow-up bubble is redundant.
 
 `orderComplete` — result of quick_order_tool or save_to_cart_tool:
 ```json
