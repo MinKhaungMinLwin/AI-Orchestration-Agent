@@ -129,9 +129,47 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
-    # Rating shown on cards
-    "rating_avg", "rate", "comfort",
+    # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
+    "rating_avg", "rate", "review_count", "comfort",
 })
+
+
+# Sort key functions for user-intent-driven product ordering.
+# Applied AFTER BE response + description enrichment, so all items have
+# extra_fvr_sale_prc / rating_avg / review_count populated from `_fetch_description`.
+# Missing values sort last for ascending (inf), first for descending (negated 0).
+_SORT_KEY_FUNCS: dict[str, Any] = {
+    # 가장 저렴한 / 제일 싼 / 최저가 → 할인가 오름차순 (없으면 맨 뒤)
+    "price_asc": lambda x: (x.get("extra_fvr_sale_prc") or x.get("price") or float("inf")),
+    # 비싼 순 / 고가 → 할인가 내림차순
+    "price_desc": lambda x: -(x.get("extra_fvr_sale_prc") or x.get("price") or 0),
+    # 평점 높은 순 / 별점 좋은 → rating_avg 내림차순
+    "rating_desc": lambda x: -(x.get("rating_avg") or x.get("rate") or 0),
+    # 리뷰 많은 순 / 후기 많은 → review_count 내림차순
+    "review_desc": lambda x: -(x.get("review_count") or 0),
+}
+
+
+def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
+    """Sort product items based on user intent.
+
+    Supported sort_by values:
+      - price_asc: 가장 저렴한 순 (cheapest first)
+      - price_desc: 비싼 순 (most expensive first)
+      - rating_desc: 평점 높은 순 (highest rating first)
+      - review_desc: 리뷰 많은 순 (most reviews first)
+
+    Unknown / None sort_by passes through unchanged so the BE-determined
+    rcmd_type ordering is preserved when the user does not express a sort
+    intent.
+    """
+    if not sort_by or not items:
+        return items
+    key_func = _SORT_KEY_FUNCS.get(sort_by)
+    if key_func is None:
+        logger.warning("[_sort_items] Unknown sort_by=%s; passing through", sort_by)
+        return items
+    return sorted(items, key=key_func)
 
 
 def _slim_product_item(item: dict) -> dict:
@@ -190,6 +228,7 @@ def _fetch_description(goods_no: str) -> dict:
     (`_TRIM_KEEP_FIELDS`) keeps only flat fields, so we flatten here:
       - `image_url` ← first image's full URL (img_path_nm > thnl_path_nm fallback)
       - `rating_avg` / `rate` ← rating.rating_avg (rate is the FE alias)
+      - `review_count` ← rating.review_count (used for sort_by="review_desc")
     """
     try:
         response = get_product_description(client=get_client(), goods_no=goods_no)
@@ -201,10 +240,12 @@ def _fetch_description(goods_no: str) -> dict:
         image_url = first_image.get("img_path_nm") or first_image.get("thnl_path_nm") or ""
         rating = desc.get("rating") or {}
         rating_avg = rating.get("rating_avg") or 0
+        review_count = rating.get("review_count") or 0
         return {
             "image_url": image_url,
             "rating_avg": rating_avg,
             "rate": rating_avg,
+            "review_count": review_count,
         }
     except Exception:
         logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)
@@ -282,7 +323,13 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 @tool
 @tool_cache(ttl=300)
-def search_product_tool(keyword: str | None = None, limit: int = 5, size: str | None = None, brand_cd: str = "HK"):
+def search_product_tool(
+    keyword: str | None = None,
+    limit: int = 5,
+    size: str | None = None,
+    brand_cd: str = "HK",
+    sort_by: str | None = None,
+):
     """
     상품 검색.
 
@@ -321,6 +368,12 @@ def search_product_tool(keyword: str | None = None, limit: int = 5, size: str | 
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
+        sort_by (str | None): 정렬 의도. 사용자가 정렬을 명시하면 전달한다. Optional.
+            - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
+            - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
+            - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
+            - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
+            None 이면 BE 기본 순서 유지.
 
     Example Inputs:
         - {"keyword": "벤투스 S2", "limit": 5, "size": "225/45R17"}
@@ -328,6 +381,8 @@ def search_product_tool(keyword: str | None = None, limit: int = 5, size: str | 
         - {"keyword": "Pilot Sport", "limit": 5, "brand_cd": "MC"}
         - {"keyword": "s1 evo3", "limit": 5}
         - {"size": "235/55R19", "brand_cd": "BS"}  # 브리지스톤 사이즈만으로 검색
+        - {"size": "225/45R17", "sort_by": "price_asc"}  # 가장 저렴한 순으로 정렬
+        - {"keyword": "벤투스", "size": "225/45R17", "sort_by": "rating_desc"}  # 평점 높은 순
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
@@ -339,8 +394,8 @@ def search_product_tool(keyword: str | None = None, limit: int = 5, size: str | 
             keyword, brand_cd,
         )
     logger.info(
-        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s",
-        normalized_keyword, limit, size, brand_cd,
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s",
+        normalized_keyword, limit, size, brand_cd, sort_by,
     )
 
     try:
@@ -355,6 +410,7 @@ def search_product_tool(keyword: str | None = None, limit: int = 5, size: str | 
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             data["items"] = _enrich_items_with_descriptions(data["items"])
+            data["items"] = _sort_items(data["items"], sort_by)
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
@@ -623,7 +679,14 @@ def get_product_description_tool(goods_no: str):
 
 @tool
 @tool_cache(ttl=300)
-def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand_cd: str = "HK", car_lnc_cd: str | None = None, tire_size: str | None = None):
+def get_products_recommendations_tool(
+    rcmd_type: RcmdType,
+    limit: int = 5,
+    brand_cd: str = "HK",
+    car_lnc_cd: str | None = None,
+    tire_size: str | None = None,
+    sort_by: str | None = None,
+):
     """
     Product Recommendation
 
@@ -675,17 +738,29 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand
             - GY: Goodyear 굿이어
         car_lnc_cd (str | None, optional): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
         tire_size (str | None, optional): 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
+        sort_by (str | None, optional): 사용자 의도 기반 정렬. rcmd_type 과 독립적으로 동작하며,
+            BE 응답 + description enrichment 후 클라이언트 측에서 정렬한다.
+            - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
+            - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
+            - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
+            - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
+            None 이면 rcmd_type 의 BE 정렬 그대로 유지.
 
     Example Inputs:
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
         - {"rcmd_type": "wet", "limit": 5, "brand_cd": "HK", "tire_size": "245/45R18"}
         - {"rcmd_type": "ev", "limit": 5, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX"}
         - {"rcmd_type": "warranty", "limit": 5, "brand_cd": "HK"}
+        - {"rcmd_type": "all_weather", "tire_size": "245/45R18", "sort_by": "price_asc"}  # 가장 저렴한 사계절 타이어
+        - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s", rcmd_type, limit, brand_cd, car_lnc_cd, tire_size)
+    logger.info(
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s",
+        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by,
+    )
 
     try:
         response = get_products_recommendations(
@@ -706,6 +781,7 @@ def get_products_recommendations_tool(rcmd_type: RcmdType, limit: int = 5, brand
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             data["items"] = _enrich_items_with_descriptions(data["items"])
+            data["items"] = _sort_items(data["items"], sort_by)
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")

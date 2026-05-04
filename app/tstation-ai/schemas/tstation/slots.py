@@ -78,13 +78,23 @@ class ConversationSlots(BaseModel):
     # Discovery-only so Discovery can ask which model).
     # Mirrors Discovery Flow B's translation dictionary (Ventus/Kinergy/Optimo/
     # Dynapro/Laufenn) plus carried brands (Michelin/Pirelli/Bridgestone/Continental/
-    # Goodyear). Add new brands here if Discovery's brand_cd table grows.
+    # Goodyear). Add new brands/models here if Discovery's brand_cd table grows.
+    # Includes Korean brand names (미쉐린/피렐리/...) which dominate user input,
+    # and select bare model codes for "model-only + size" turns like "HPX
+    # 235/55R19 재고확인" — \b word boundaries prevent false positives on
+    # common substrings.
     _PRODUCT_KEYWORD_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(
-            r"벤투스|키네르기|옵티모|다이나프로|라우펜|"
-            r"Ventus|Kinergy|Optimo|Dynapro|Laufenn|"
-            r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|"
-            r"한국타이어|Hankook",
+            # Korean brands (primary user input)
+            r"벤투스|키네르기|키너지|옵티모|다이나프로|아이온|라우펜|"
+            r"미쉐린|피렐리|브리지스톤|콘티넨탈|굿이어|한국타이어|"
+            # English brands
+            r"Ventus|Kinergy|Optimo|Dynapro|iON|Laufenn|"
+            r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|Hankook|"
+            # Bare model names (brand omitted by user)
+            r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
+            r"\bS001\b|\bS007\b|\bER33\b|\bHPX\b|\bHP3\b|"
+            r"P\s?Zero|e\.?Primacy|Hyperion|S\.fit",
             re.IGNORECASE,
         ),
     ]
