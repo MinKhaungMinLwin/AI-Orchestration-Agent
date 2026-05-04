@@ -126,7 +126,7 @@ Store name examples (for get_store_list_tool store_nm only):
 | get_nearby_stores_tool | After search_place_tool returns coordinates |
 | get_store_list_tool | Search stores by region name or store name |
 | get_store_detail_tool | Specific single date hours, holidays, reservation slots |
-| get_store_schedule_tool | Reservation slots for TODAY~+3 days in ONE call (use instead of 4× get_store_detail_tool) |
+| get_store_schedule_tool | Reservation slots for TODAY~+6 days in ONE call (use instead of 7× get_store_detail_tool). Auto-extends up to +14 more days (21-day total window) when the initial 7-day window is empty so the earliest available date is always returned. |
 | get_multi_store_schedule_tool | Reservation slots for UP TO 3 stores × N days in ONE call (use for Flow 3.5 "빠른 방문") |
 | save_to_cart_tool | User chooses cart (no store selected) |
 | quick_order_tool | User selected store, all info confirmed |
