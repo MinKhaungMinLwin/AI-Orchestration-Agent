@@ -190,6 +190,7 @@ class BaseAgent(ABC):
         self._model = model
         self._tools = tools
         self._system_prompt = system_prompt
+        self._agent = self._build_agent()
 
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
@@ -202,7 +203,7 @@ class BaseAgent(ABC):
         )
 
     def invoke(self, messages: list[dict], config: dict | None = None) -> str:
-        agent = self._build_agent()
+        agent = self._agent
         result = agent.invoke({"messages": messages}, config=config)
         return result["messages"][-1].content
 
@@ -217,7 +218,7 @@ class BaseAgent(ABC):
         - tool: Tool execution results with tool name, input, and output
         - data: Final UI template payload from structured response
         """
-        agent = self._build_agent()
+        agent = self._agent
         tool_calls_map: dict[str, dict] = {}
         answering_emitted = False
         prompt_template = self.OUTPUT_TEMPLATE
@@ -527,7 +528,7 @@ class BaseAgent(ABC):
         import logging
 
         logger = logging.getLogger(__name__)
-        agent = self._build_agent()
+        agent = self._agent
 
         tool_called = False
 
