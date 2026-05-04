@@ -782,24 +782,43 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 
 
 @tool
-def get_store_schedule_tool(shop_id: str, days: int = 4, is_logistics_delivery: bool = False):
+def get_store_schedule_tool(
+    shop_id: str,
+    days: int = 7,
+    is_logistics_delivery: bool = False,
+    auto_extend_days: int = 14,
+):
     """
     Get store reservation schedule for a range of days starting from today (parallel fetch).
 
     Use this instead of calling get_store_detail_tool multiple times.
     Fetches TODAY through TODAY+(days-1) in parallel and returns all slots in one response.
 
+    Adaptive behavior (auto-extend):
+    - Phase 1: Fetch TODAY through TODAY+(days-1) in parallel.
+    - If EVERY day in Phase 1 has zero installable available_slots AND
+      ``auto_extend_days > 0``, Phase 2 fetches the next ``auto_extend_days`` days
+      so the caller never has to re-ask "다른 날짜 확인할까요?" before finding
+      the earliest available date.
+    - Total scan window is therefore up to ``days + auto_extend_days`` days
+      (default 7 + 14 = 21 days).
+
     Args:
         shop_id (str): Store ID.
-        days (int): Number of days to fetch starting from today (default 4 = TODAY, +1, +2, +3).
+        days (int): Number of days to fetch starting from today (default 7 = TODAY, +1, ..., +6).
+            Clamped to [1, 7].
         is_logistics_delivery (bool): Set True when the store has NO store inventory but logistics
             inventory IS available (Flow 3 STEP B case). Backend filters out dates earlier than
             ``FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` (store-delivery lead time). Default False.
+        auto_extend_days (int): Extra days to scan when the Phase 1 window has no installable
+            slots (default 14 → up to 21-day total window). Set to 0 to disable extension.
+            Clamped to [0, 21].
 
     Example Inputs:
         - {"shop_id": "BXXXXX"}
         - {"shop_id": "FXXXXX", "days": 4}
         - {"shop_id": "BXXXXX", "is_logistics_delivery": true}
+        - {"shop_id": "BXXXXX", "auto_extend_days": 0}  # disable auto-extend
 
     Returns:
         dict: {
@@ -809,48 +828,83 @@ def get_store_schedule_tool(shop_id: str, days: int = 4, is_logistics_delivery: 
                 "schedule": [
                     {"cal_day": "YYYYMMDD", "available_slots": ["09","10",...], "is_installable": bool, "is_tna_delivery": bool},
                     ...
-                ]
+                ],
+                "extended": bool,        # True when Phase 2 auto-extend ran
+                "days_fetched": int      # total distinct days fetched
             }
         }
     """
     logger.info(
-        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s, is_logistics_delivery=%s",
-        shop_id, days, is_logistics_delivery,
+        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s, "
+        "is_logistics_delivery=%s, auto_extend_days=%s",
+        shop_id, days, is_logistics_delivery, auto_extend_days,
     )
-    cal_days = _next_cal_days(days - 1)
+    days = max(1, min(days, 7))
+    auto_extend_days = max(0, min(auto_extend_days, 21))
 
-    schedule = []
-    with ThreadPoolExecutor(max_workers=days) as executor:
-        futures = {
-            executor.submit(
-                get_store_detail,
-                client=get_client(),
-                shop_id=shop_id,
-                cal_day=cal_day,
-                is_logistics_delivery=is_logistics_delivery,
-            ): cal_day
-            for cal_day in cal_days
-        }
-        for future in as_completed(futures):
-            cal_day = futures[future]
-            try:
-                response = future.result()
-                if response.parsed is not None:
-                    detail = _to_dict(response.parsed)
-                    schedule.append({
-                        "cal_day": cal_day,
-                        "available_slots": detail.get("available_slots") or [],
-                        "is_installable": detail.get("is_installable", False),
-                        "is_tna_delivery": detail.get("is_tna_delivery", False),
-                    })
-                else:
-                    schedule.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
-            except Exception:
-                logger.warning("[get_store_schedule_tool] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
-                schedule.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
+    def _fetch_window(cal_days_to_fetch: list[str]) -> list[dict]:
+        out: list[dict] = []
+        if not cal_days_to_fetch:
+            return out
+        with ThreadPoolExecutor(max_workers=min(len(cal_days_to_fetch), 9)) as executor:
+            futures = {
+                executor.submit(
+                    get_store_detail,
+                    client=get_client(),
+                    shop_id=shop_id,
+                    cal_day=cal_day,
+                    is_logistics_delivery=is_logistics_delivery,
+                ): cal_day
+                for cal_day in cal_days_to_fetch
+            }
+            for future in as_completed(futures):
+                cal_day = futures[future]
+                try:
+                    response = future.result()
+                    if response.parsed is not None:
+                        detail = _to_dict(response.parsed)
+                        out.append({
+                            "cal_day": cal_day,
+                            "available_slots": detail.get("available_slots") or [],
+                            "is_installable": detail.get("is_installable", False),
+                            "is_tna_delivery": detail.get("is_tna_delivery", False),
+                        })
+                    else:
+                        out.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
+                except Exception:
+                    logger.warning("[get_store_schedule_tool] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
+                    out.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
+        return out
+
+    # Phase 1 — initial window
+    phase1_cal_days = _next_cal_days(days - 1)
+    schedule = _fetch_window(phase1_cal_days)
+
+    # Phase 2 — auto-extend when Phase 1 has no installable slots anywhere
+    extended = False
+    has_any_slot = any(
+        entry.get("is_installable") and (entry.get("available_slots") or [])
+        for entry in schedule
+    )
+    if not has_any_slot and auto_extend_days > 0:
+        full_cal_days = _next_cal_days(days + auto_extend_days - 1)
+        phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
+        if phase2_cal_days:
+            logger.info(
+                "[TOOL][get_store_schedule_tool] Phase 1 empty for shop_id=%s; "
+                "auto-extending +%d days (%d new days)",
+                shop_id, auto_extend_days, len(phase2_cal_days),
+            )
+            schedule.extend(_fetch_window(phase2_cal_days))
+            extended = True
 
     schedule.sort(key=lambda x: x["cal_day"])
-    return _success_response(200, {"shop_id": shop_id, "schedule": schedule})
+    return _success_response(200, {
+        "shop_id": shop_id,
+        "schedule": schedule,
+        "extended": extended,
+        "days_fetched": len(schedule),
+    })
 
 
 @tool
