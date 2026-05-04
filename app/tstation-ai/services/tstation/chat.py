@@ -1181,7 +1181,11 @@ _FACTUAL_CLAIM_PATTERN = re.compile(
     r"|재고|할인|%\s*할인"  # 재고/할인
     r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
     r"|티스테이션\s*\S*점"  # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
-    r"|F\d{5}\b",  # shop_id (e.g. F01234)
+    r"|F\d{5}\b"  # shop_id (e.g. F01234)
+    r"|\d{4}\s*년"  # 연도 (e.g. 2025년)
+    r"|최신|신상|신제품|출시(?:일|연도|시기)?|등록\s*(?:일|상품|연도)"  # 시점/신제품 표현
+    r"|구형|구버전|이전\s*세대|차세대|신세대"  # 세대 비교
+    r"|\d+\s*세대|\d+\s*대\s*제품",  # n세대/n대 제품
     re.IGNORECASE,
 )
 
@@ -2197,11 +2201,42 @@ class TStationChatServiceV2:
             # Pass all other events (UI templates, agent flows) through
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        # 2. QC AGENT DISABLED
-        # Keep the final assistant message as-is (after local sanitization) without
-        # invoking the strict QC agent.
+        # 2. QC AGENT
+        # Gated by AI_QC_ENABLED. When enabled, fact-checks the draft against
+        # filtered tool source data using AI_MODEL_QC_AGENT (lightweight model).
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
+
+            if _s.AI_QC_ENABLED:
+                source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
+
+                if _has_factual_claims(draft_response) and source_data_chunks:
+                    try:
+                        from services.tstation.agents.g_qc_agent.agent import invoke_qc
+                        from langchain_litellm import ChatLiteLLM
+                        from config.tracing import build_trace_config
+
+                        qc_llm = ChatLiteLLM(
+                            api_base=_s.AI_GATEWAY_BASE_URL,
+                            api_key=_s.AI_GATEWAY_API_KEY,
+                            model=f"{_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_QC_AGENT}",
+                        )
+                        trace_config = build_trace_config(
+                            run_name="qc_agent",
+                            session_id=session_id,
+                            user_id=user_id,
+                            trace_id=trace_id,
+                            tags=["qc"],
+                        )
+                        qc_result = invoke_qc(qc_llm, user_query, draft_response, source_data, config=trace_config)
+                        if qc_result.strip() and qc_result.strip().upper() != "PASS":
+                            draft_response = qc_result.strip()
+                            logger.info("[QC_LAYER] QC corrected the response")
+                        else:
+                            logger.info("[QC_LAYER] QC passed")
+                    except Exception as e:
+                        logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+
             if original_message_events:
                 final_msg_event = original_message_events[-1]
                 final_msg_event["content"] = draft_response

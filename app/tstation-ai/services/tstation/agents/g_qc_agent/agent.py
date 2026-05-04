@@ -17,6 +17,7 @@ CHECK THESE ONLY:
 - tire_size consistency: the tire_size mentioned in the draft MUST match the tire_size in the Tool Input. If Tool Input shows tire_size="235/55R19" but draft says "225/40R18", that is an error — fix it to match the Input.
 - These MUST match the Source Data exactly.
 - If Source Data is empty/"No tool data retrieved", draft must NOT claim specific prices/stock/stores.
+- product launch/registration date, model year, generation, "최신/신상/구형/이전 세대" claims: do NOT assert these unless the Source Data explicitly contains a launch/registration date field (e.g. launch_dt, goods_reg_dt). Image URL paths (e.g. /upload/goods/.../2025/0228/...) are upload dates, NOT product launch dates — never infer launch year from them. If the draft makes such an unsupported claim, remove the year/recency assertion and rephrase neutrally (e.g. "두 제품 모두 한국타이어 SUV 라인업이에요. 출시 시점 정보는 제가 안내드리기 어려워서, 차량에 맞는 사이즈 기준으로 비교해 드릴게요.").
 - If Source Data is empty AND draft has no useful content, replace draft with a helpful Korean message guiding the user to ask a different question. Example: "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
 
 ⚠️ CRITICAL — WHAT COUNTS AS "USEFUL CONTENT" (do NOT replace these with fallback):
