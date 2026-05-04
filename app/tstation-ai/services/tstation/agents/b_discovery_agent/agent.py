@@ -200,6 +200,25 @@ Do NOT ask user for style/preference before calling. Just call with defaults.
    **Step C — fallback**
    여러 키워드가 있는데 합산 타입이 없으면 더 구체적인 키워드 우선 (예: "고속 + 사계절" → "high_speed"). 그래도 애매하면 "tstation".
 
+   **Step D — 정렬 의도 감지 (sort_by 추출)**
+   사용자 메시지에 정렬 의도가 명시되면 `sort_by` 파라미터로 전달한다. rcmd_type 과 독립적으로 동작하므로 함께 사용 가능
+   (예: rcmd_type=all_weather + sort_by=price_asc → 사계절 타이어 중 가장 저렴한 순으로 카드 정렬).
+
+     • "가장 저렴한", "제일 싼", "최저가", "싼 것", "싼 것부터", "저렴한 순", "저가" → `sort_by="price_asc"`
+     • "비싼 순", "비싼 것부터", "고가", "프리미엄 순" → `sort_by="price_desc"`
+     • "평점 높은", "평점 좋은", "별점 높은", "별점 좋은", "평점순", "별점 순" → `sort_by="rating_desc"`
+     • "리뷰 많은", "후기 많은", "리뷰 순", "후기 순" → `sort_by="review_desc"`
+     • 정렬 의도가 없으면 sort_by 생략 (None — BE 의 rcmd_type 정렬 유지)
+
+   ⚠️ 정렬 의도가 명확하면 항상 sort_by 를 전달한다. rcmd_type 만으로는 사용자가 원하는 순서가 보장되지 않는다.
+     - 예: "가장 저렴한 올웨더 타이어" → rcmd_type="all_weather" + sort_by="price_asc" (둘 다 전달)
+     - 예: "평점 높은 사계절 타이어" → rcmd_type 합산 매핑(또는 "tstation") + sort_by="rating_desc"
+     - 예: "리뷰 많은 빗길용 타이어" → rcmd_type="wet" + sort_by="review_desc"
+
+   ⚠️ 단, "가장 저렴한" 의도가 **단독**으로 들어오고 비교 후보 goods_no 가 이미 명확한 경우(이전 product 카드에서 선택 비교 등)는
+      `compare_discount_tool` + `cheapestProduct` 템플릿이 우선이다 (RESPONSE FORMAT 규칙 1 참조). Step D 의 sort_by 는 fresh
+      추천/검색 리스트(`get_products_recommendations_tool` / `search_product_tool`)에 적용한다.
+
    - 제휴사 가격은 JWT 토큰으로 자동 적용됩니다. entr_yn / entr_no 입력 불필요.
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
@@ -436,7 +455,10 @@ Trigger: User searches by name/keyword
    → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
    - 예: "브리지스톤 포텐자 235/55R19" → keyword="포텐자", brand_cd="BS"
    - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2" (한국타이어 디폴트), brand_cd="HK"
-5. search_product_tool 호출 (위 3 또는 4 중 적절한 분기 선택)
+5. search_product_tool 호출 (위 3 또는 4 중 적절한 분기 선택).
+   ⚠️ 사용자 메시지에 정렬 의도 키워드("가장 저렴한", "비싼 순", "평점 높은", "리뷰 많은" 등)가 있으면 RECOMMEND ENGINE Step D 의 매핑 규칙에 따라 `sort_by` 를 함께 전달한다.
+     - 예: "가장 저렴한 벤투스 S2 225/45R17" → search_product_tool(keyword="벤투스 S2", size="225/45R17", sort_by="price_asc")
+     - 예: "평점 높은 미쉐린 235/55R19" → search_product_tool(size="235/55R19", brand_cd="MC", sort_by="rating_desc")
 6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 7. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
    - For EACH price response, extract the **`extra_fvr_sale_prc`** integer
