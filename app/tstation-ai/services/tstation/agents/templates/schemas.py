@@ -366,6 +366,14 @@ class ProductTemplate(TemplatePayload):
     assistantResponse: str = Field(..., min_length=1)
     products: list[ProductItem] = Field(..., min_length=1, max_length=5)
     metadata: list[ProductMeta] = Field(..., min_length=1, max_length=5)
+    # Routing hint mirroring LocationTemplate.isBookingFlow. When True, the FE
+    # should treat a product-card click as a flow-advancement signal and call
+    # /chat (so the next checklist step — qty / shop / inventory / order —
+    # runs). When False (default), the FE keeps the legacy /append shortcut
+    # that just shows the product description bubble — appropriate for
+    # product_recommend goal where the user is browsing.
+    # Set True from store_with_stock / place_order / price_inquiry contexts.
+    isBookingFlow: bool = False
 
     @model_validator(mode="after")
     def validate_metadata_alignment(self):
