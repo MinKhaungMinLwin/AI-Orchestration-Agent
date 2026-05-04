@@ -8,6 +8,7 @@ from api import monitoring
 
 # T-station
 from api.tstation import chat_message as tstation_chat_message
+from api.tstation import faq_sync as tstation_faq_sync
 
 router = APIRouter()
 
@@ -25,6 +26,8 @@ elif settings.ENV == Environment.DEV:
     # T-Station Chat
     router.include_router(tstation_chat_message.router, tags=["Chat Message"], prefix="/tstation/messages")
 
+    # FAQ Sync
+    router.include_router(tstation_faq_sync.router, tags=["FAQ Sync"], prefix="/tstation/faq")
 
 
 # Staging
@@ -35,11 +38,17 @@ elif settings.ENV == Environment.STAGING:
     # T-Station Chat
     router.include_router(tstation_chat_message.router, tags=["Chat Message"], prefix="/tstation/messages")
 
+    # FAQ Sync
+    router.include_router(tstation_faq_sync.router, tags=["FAQ Sync"], prefix="/tstation/faq", include_in_schema=False)
+
 
 # Production
 elif settings.ENV == Environment.PROD:
     # Healthcheck & Metrics
     router.include_router(monitoring.router, tags=["Healthcheck & Metrics"], prefix="", include_in_schema=False)
+
+    # FAQ Sync
+    router.include_router(tstation_faq_sync.router, tags=["FAQ Sync"], prefix="/tstation/faq", include_in_schema=False)
 
 else:
     raise Exception("Error Environment with ENV: ", settings.ENV)
