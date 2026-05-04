@@ -37,22 +37,22 @@ if hasattr(sys.stdout, "reconfigure"):
 # ---------------------------------------------------------------------------
 # Column indices (0-based, row values_only)
 # ---------------------------------------------------------------------------
-COL_TC_ID = 1           # B
-COL_DESCRIPTION = 2     # C  테스트 시나리오
+COL_TC_ID = 1           # B  TC-ID
+COL_DESCRIPTION = 2     # C  test scenario
 COL_AGENT_FLOW = 3      # D  Agent Flow
-COL_USER_MESSAGE = 4    # E  질문 샘플
-COL_EXPECTED = 5        # F  기대 결과
+COL_USER_MESSAGE = 4    # E  question sample
+COL_EXPECTED = 5        # F  expected result
 
 DATA_START_ROW = 12  # 1-based first data row (row 11 = header "TC-ID", ...)
 
 # Part boundaries derived from TOC (TC-ID numbers, inclusive)
 PART_RANGES = [
-    (1,   45,  "Part 1", "메인 홈 및 상품 추천"),
-    (46,  96,  "Part 2", "매장 선택 및 예약 서비스"),
-    (97,  133, "Part 3", "혜택 적용 및 주문/결제"),
-    (134, 178, "Part 4", "주문 내역 및 사후 관리"),
-    (179, 228, "Part 5", "AI 가드레일 및 보안/윤리"),
-    (229, 233, "Part 6", "챗봇 대화 기반 주문서 생성"),
+    (1,   45,  "Part 1", "Home & product recommendation"),
+    (46,  96,  "Part 2", "Store selection & reservation"),
+    (97,  133, "Part 3", "Discount application & payment"),
+    (134, 178, "Part 4", "Order history & post-purchase"),
+    (179, 228, "Part 5", "AI guardrails & security/ethics"),
+    (229, 233, "Part 6", "Conversational order creation"),
 ]
 
 # Agent Flow → category slug mapping

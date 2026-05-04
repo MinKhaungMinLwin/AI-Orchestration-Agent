@@ -80,6 +80,26 @@ def main() -> None:
              "Choices: discovery_agent transaction_agent support_agent leading_agent. "
              "Pass --agents all to disable filtering.",
     )
+    parser.add_argument(
+        "--skip-all-fail",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip TCs that failed in ALL existing result files (default: on). Use --no-skip-all-fail to disable.",
+    )
+    parser.add_argument(
+        "--skip-all-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Skip TCs where ALL existing runs got template_eval=FALLBACK (single-turn not completable). "
+             "Run baseline first, then use this flag. Default: off.",
+    )
+
+    parser.add_argument(
+        "--tag",
+        default="",
+        help="Tag for this run — appended to output filename (e.g. --tag r2 → benchmark_model_r2.json). "
+             "Use for re-runs to compare consistency against the baseline.",
+    )
 
     args = parser.parse_args()
 
@@ -106,6 +126,9 @@ def main() -> None:
         limit=args.limit,
         test_cases_file=args.test_cases_file,
         agents=agents,
+        skip_all_fail=args.skip_all_fail,
+        skip_all_fallback=args.skip_all_fallback,
+        tag=args.tag,
     )
 
 
