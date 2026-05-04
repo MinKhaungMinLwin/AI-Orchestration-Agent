@@ -1018,6 +1018,55 @@ class StreamingMultiAgentCoordinator:
                     )
                     continue
 
+                # P1-B stall recovery (LAST RESORT): when domains was [TRANSACTION]
+                # alone (P0b gate did not catch the case) and Transaction emitted a
+                # "상품을 검색…" fallback line WITHOUT calling any tool, with goods_no
+                # still unresolved, the user is stranded — coordinator would otherwise
+                # fall through to decide_next_action, which often returns STOP because
+                # full_response looks complete.
+                #
+                # Recovery: extend `domains` IN-PLACE with [DISCOVERY, TRANSACTION] so
+                # the for-loop iterator picks up the appended entries (mutation works;
+                # reassignment would not). Set skip_decision=True so the LLM decision
+                # is bypassed for the recovery chain. The existing post-Discovery
+                # goods_no verification above will stop the chain naturally if
+                # Discovery's search returns 0/multiple results.
+                #
+                # Conditions (ALL must hold):
+                #   1. The first/only domain executed was TRANSACTION.
+                #   2. `last_agent_called_tools is False` — Transaction did not call
+                #      any tool (it just produced a stall text). Cases where TX
+                #      legitimately called e.g. get_orders_of_user_tool stay untouched.
+                #   3. `full_response` matches a search-fallback regex.
+                #   4. `goods_no` still None in slots after the Transaction turn.
+                if (
+                    domain == MultiAgentDomain.Domain.TRANSACTION
+                    and len(domains) == 1
+                    and not last_agent_called_tools
+                    and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요", full_response or "")
+                ):
+                    goods_no_still_none = True
+                    if session_id:
+                        try:
+                            from services.tstation.chat_history_service import get_chat_history_service
+
+                            post_slots = get_chat_history_service().get_slots(session_id)
+                            goods_no_still_none = post_slots.goods_no is None
+                        except Exception as e:
+                            logger.warning(f"[COORDINATOR] P1-B slot check failed: {e}")
+                    if goods_no_still_none:
+                        logger.warning(
+                            "[COORDINATOR] P1-B stall recovery: TX-only emitted "
+                            "search-fallback with no tool call and goods_no=None — "
+                            "extending chain to [DISCOVERY, TRANSACTION] as recovery."
+                        )
+                        domains.extend([
+                            MultiAgentDomain.Domain.DISCOVERY,
+                            MultiAgentDomain.Domain.TRANSACTION,
+                        ])
+                        skip_decision = True
+                        continue
+
                 decision = decide_next_action(
                     original_messages=messages,
                     previous_agent_response=full_response,
@@ -1983,23 +2032,27 @@ class TStationChatServiceV2:
 
         # P0b TRANSACTION → DISCOVERY+TRANSACTION redirect: when the classifier
         # picked [TRANSACTION] alone but the user actually provided product
-        # name/model + size with no resolved goods_no, force Discovery to search
+        # name/model/size with no resolved goods_no, force Discovery to search
         # first. Transaction has NO search tool (per c_transaction_agent prompt
         # GOODS_NO RESOLUTION), so without this redirect the classifier mismatch
         # leads to either (a) a quickReply confirmation prompt asking the user
-        # to click "상품 검색" — the exact ACT-FIRST anti-pattern fixed in
-        # 4dbfe3a but only for the Discovery prompt — or (b) a fallback "상품을
-        # 검색하겠습니다" line with the chain stopping because domains has only
-        # one entry.
+        # to click "상품 검색" — the ACT-FIRST anti-pattern — or (b) a fallback
+        # "상품을 검색하겠습니다" line with the chain stopping because domains
+        # has only one entry.
         #
         # Guard conditions (ALL must hold):
         #   1. Classifier chose exactly [TRANSACTION].
         #   2. `merged_slots.goods_no is None` — resolved goods_no doesn't need search.
-        #   3. `merged_slots.tire_size is not None` — size is required (regex pulls
-        #      it from the current turn or inherited from prior turns).
-        #   4. Product name/model present via ONE of:
-        #        a. `merged_slots.tire_model` — LLM-confirmed in slots (current or inherited).
-        #        b. Brand/model keyword in CURRENT turn text (다이나프로/벤투스/Dynapro/...).
+        #   3. ANY product hint via ONE of:
+        #        a. `merged_slots.tire_size` — size present (current or inherited).
+        #        b. `merged_slots.tire_model` — LLM-confirmed model (current or inherited).
+        #        c. Brand/model keyword in CURRENT turn text (미쉐린/다이나프로/Dynapro/...).
+        #
+        # Loosened from the historical "size AND (model OR keyword)" form: a
+        # single hint suffices because Discovery's search_product_tool gracefully
+        # handles partial inputs (size-only, brand-only, model-only) and the
+        # downstream guard stops the chain when search returns 0/multiple
+        # results, so over-redirecting is safe.
         #
         # Safety: same as P0 — coordinator verifies goods_no was resolved after
         # Discovery before running Transaction (search returning 0/multiple
@@ -2008,9 +2061,9 @@ class TStationChatServiceV2:
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
             and merged_slots.goods_no is None
-            and merged_slots.tire_size is not None
             and (
-                merged_slots.tire_model is not None
+                merged_slots.tire_size is not None
+                or merged_slots.tire_model is not None
                 or ConversationSlots.has_product_keyword(last_user_text)
             )
         ):
