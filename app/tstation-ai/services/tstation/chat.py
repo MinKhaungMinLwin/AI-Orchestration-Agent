@@ -1724,6 +1724,15 @@ class TStationChatServiceV2:
             user_info=request.user_info,
         )
         messages = TStationChatServiceV2._build_messages_with_user_info(request_with_enriched)
+
+        # Keep at most 20 messages (10 turns) before sending to LLM.
+        # Slots and last_user_text are extracted from request.messages (untouched above).
+        _MAX_HISTORY_MESSAGES = 20
+        if len(messages) > _MAX_HISTORY_MESSAGES:
+            dropped = len(messages) - _MAX_HISTORY_MESSAGES
+            messages = messages[-_MAX_HISTORY_MESSAGES:]
+            logger.info(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
+
         logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
