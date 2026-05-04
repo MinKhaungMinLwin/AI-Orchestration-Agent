@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = Field(default=6333)
     QDRANT_API_KEY: str = Field(default="")
     QDRANT_COLLECTION_FAQ: str = Field(
-        default="hankook_faq_docs",
+        default="",
         description="Qdrant collection name for FAQ documents",
     )
     # Embedding
