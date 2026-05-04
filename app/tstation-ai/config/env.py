@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     RABBITMQ_URL_MANAGEMENT: str
     # Worker
     NUM_WORKER: int = 2
+    UVICORN_WORKERS: int = 4
 
     ### -------------------------------
     # AWS

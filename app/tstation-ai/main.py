@@ -63,9 +63,11 @@ if __name__ == "__main__":
     import uvicorn
     env = settings.ENV
     logger.info(f"Starting app with ENVIRONMENT: {env.value}")
+    is_local = env.value == "local"
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=(env == "local")
+        workers=1 if is_local else settings.UVICORN_WORKERS,
+        reload=is_local,
     )
