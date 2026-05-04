@@ -144,6 +144,44 @@ def _slim_product_item(item: dict) -> dict:
     return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
 
 
+# brand_cd 가 이미 브랜드 필터링을 수행하는데 keyword 에도 한글 브랜드명을
+# 넣으면 GOODS_NM LIKE '%브리지스톤%' 매칭에서 0건이 발생한다 (DB GOODS_NM 에는
+# 한글 브랜드명이 저장돼 있지 않고 모델명만 들어 있음). 이런 경우를 방어하기 위해
+# 키워드가 브랜드명 단어들로만 구성됐는지 검사한다.
+_BRAND_ONLY_WORDS: frozenset[str] = frozenset({
+    # Korean brand names
+    "한국타이어", "한국", "라우펜", "미쉐린", "피렐리",
+    "브리지스톤", "브릿지스톤", "콘티넨탈", "굿이어",
+    # English / Romanized brand names
+    "hankook", "laufenn", "michelin", "pirelli",
+    "bridgestone", "continental", "conti", "goodyear",
+})
+
+
+def _strip_brand_only_keyword(keyword: str | None) -> str | None:
+    """키워드가 브랜드명 단어들로만 이루어진 경우 None 반환.
+
+    예시:
+      "브리지스톤"        → None
+      "  미쉐린 "         → None
+      "Pirelli"           → None
+      "브리지스톤 포텐자" → "브리지스톤 포텐자" (모델명 포함 시 원본 유지)
+
+    brand_cd 파라미터가 이미 브랜드 필터링을 담당하므로, 브랜드명만 들어온 경우
+    keyword 를 비워 GOODS_NM LIKE 매칭에서 모든 후보가 제외되는 0-건 버그를 방지한다.
+    모델명이 함께 있을 때는 BE 의 alias 확장과 LIKE 매칭으로 모델명을 잡아내므로
+    원본을 그대로 전달한다.
+    """
+    if not keyword:
+        return None
+    tokens = [t for t in keyword.strip().lower().split() if t]
+    if not tokens:
+        return None
+    if all(t in _BRAND_ONLY_WORDS for t in tokens):
+        return None
+    return keyword
+
+
 def _fetch_description(goods_no: str) -> dict:
     """Fetch product description and return flat fields the LLM whitelist keeps.
 
@@ -244,13 +282,15 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 @tool
 @tool_cache(ttl=300)
-def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, brand_cd: str = "HK"):
+def search_product_tool(keyword: str | None = None, limit: int = 5, size: str | None = None, brand_cd: str = "HK"):
     """
     상품 검색.
 
     When to use:
     - User searches for a specific tire by name/keyword
     - Resolving goods_no for price/stock/order handoff (Flow C/D)
+    - User mentions ONLY a brand name with size (e.g. "브리지스톤 235/55R19")
+      → keyword 를 None 으로 두고 brand_cd + size 만 전달한다.
 
     Important: keyword는 **한글로 전달**한다. BE는 한글 GOODS_NM에 LIKE 매칭하고
     alias.json으로 한글→영문을 자동 확장한다 (영문→한글 역확장은 없음).
@@ -259,14 +299,19 @@ def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, b
       Optimo→옵티모, Dynapro→다이나프로, iON→아이온)
     - 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지
     - ❌ NEVER translate Korean → English (BE 한글 매칭 실패)
+    - ❌ NEVER put a brand name into keyword (e.g. "브리지스톤", "미쉐린", "피렐리").
+      brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이
+      저장돼 있지 않아 결과가 0건이 된다. 모델명까지 들어온 경우만 keyword 사용.
 
     Brand detection: Set brand_cd from product name (MC=Michelin, PI=Pirelli, BS=Bridgestone,
     CT=Continental, GY=Goodyear, LF=Laufenn). Default: HK.
     Unsupported brands (금호, 넥센 etc.) → decline, do not search.
 
     Args:
-        keyword (str): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX')
-        limit (int): 반환할 최대 상품 수 Default: 20.
+        keyword (str | None): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX').
+            브랜드명만 있는 경우 None 으로 두고 brand_cd 로 필터링한다.
+            방어적으로, 브랜드명만 들어오면 자동으로 None 으로 정규화된다.
+        limit (int): 반환할 최대 상품 수 Default: 5.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
         brand_cd (str): 브랜드 코드. Default: HK.
             - HK: Hankook 한국타이어
@@ -282,14 +327,24 @@ def search_product_tool(keyword: str, limit: int = 5, size: str | None = None, b
         - {"keyword": "다이나프로 HPX", "limit": 5, "size": "235/55R19"}
         - {"keyword": "Pilot Sport", "limit": 5, "brand_cd": "MC"}
         - {"keyword": "s1 evo3", "limit": 5}
+        - {"size": "235/55R19", "brand_cd": "BS"}  # 브리지스톤 사이즈만으로 검색
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info("[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s", keyword, limit, size, brand_cd)
+    normalized_keyword = _strip_brand_only_keyword(keyword)
+    if normalized_keyword != keyword:
+        logger.info(
+            "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
+            keyword, brand_cd,
+        )
+    logger.info(
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s",
+        normalized_keyword, limit, size, brand_cd,
+    )
 
     try:
-        response = search_product(client=get_client(), keyword=keyword, limit=limit, size=size, brand_cd=brand_cd)
+        response = search_product(client=get_client(), keyword=normalized_keyword, limit=limit, size=size, brand_cd=brand_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,

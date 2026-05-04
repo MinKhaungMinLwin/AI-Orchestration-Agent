@@ -53,6 +53,10 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - 사용자가 영문/로마자로 입력 → 한글로 변환: "Ventus" → "벤투스", "Kinergy" → "키너지", "Optimo" → "옵티모", "Dynapro" → "다이나프로", "iON" → "아이온"
 - 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지 (한글로 옮기지 않음)
 - ❌ NEVER translate Korean → English (BE의 한글 매칭이 실패해 빈 결과를 반환함)
+- ❌ NEVER put a brand-only word into `keyword` ("브리지스톤", "미쉐린", "피렐리", "콘티넨탈", "굿이어", "라우펜", "한국타이어"). brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않아 keyword 에 넣으면 0건이 된다.
+  - 사용자 "브리지스톤 235/55R19" → `search_product_tool(size="235/55R19", brand_cd="BS")` (keyword 생략)
+  - 사용자 "미쉐린 235/55R19" → `search_product_tool(size="235/55R19", brand_cd="MC")` (keyword 생략)
+  - 사용자 "브리지스톤 포텐자 235/55R19" → `search_product_tool(keyword="포텐자", size="235/55R19", brand_cd="BS")` (브랜드명 단어는 빼고 모델명만 keyword 에 전달)
 
 
 ## TOOLS
@@ -407,16 +411,25 @@ Trigger: User searches by name/keyword
 1. Normalize product name to **Korean** (한글 입력은 그대로, 영문 입력만 한글로 변환: Ventus→벤투스, Kinergy→키너지, Optimo→옵티모, Dynapro→다이나프로, iON→아이온; 모델 코드 S1/S2/evo/HPX 등은 원형 유지)
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
-3. search_product_tool(keyword, size=if_provided, brand_cd=detected)
-4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
-5. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
+3. **Brand-only 분기**: 사용자 입력에 모델명이 없고 브랜드명만 있는 경우 (예: "브리지스톤 235/55R19", "피렐리 추천", "미쉐린 225/45R18")
+   → `search_product_tool(size=if_provided, brand_cd=detected)` 로 호출 (keyword 인자 생략 / None).
+   ⚠️ NEVER pass `keyword="브리지스톤"` / `keyword="미쉐린"` / `keyword="피렐리"` 같은 브랜드명 단어.
+      brand_cd 가 이미 브랜드 필터링을 담당하므로, 브랜드명을 keyword 에 넣으면 GOODS_NM LIKE
+      매칭에서 0건이 반환된다 (DB GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않음).
+4. **모델명 포함 분기**: 모델명이 함께 들어온 경우만 keyword 사용
+   → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
+   - 예: "브리지스톤 포텐자 235/55R19" → keyword="포텐자", brand_cd="BS"
+   - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2" (한국타이어 디폴트), brand_cd="HK"
+5. search_product_tool 호출 (위 3 또는 4 중 적절한 분기 선택)
+6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+7. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
    - For EACH price response, extract the **`extra_fvr_sale_prc`** integer
      (할인가, 사용자 실결제가) from `data` and put it into the matching item's `price` field.
    - Worked example: response `{"data": {"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "wage_prc": 0, "wage_today_prc": 0, ...}}`
      → `products[i].price = 316200`. Never 405900, never 0.
    - If get_final_price_tool fails for an item → use `null` for price (NEVER use 0).
    ⚠️ NEVER render the product template before ALL get_final_price_tool calls complete.
-6. Render `product` template with real prices. STOP and wait for user to SELECT a product.
+8. Render `product` template with real prices. STOP and wait for user to SELECT a product.
 
 
 ### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff or Price Cards)
