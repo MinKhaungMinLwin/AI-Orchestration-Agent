@@ -20,6 +20,8 @@ class StoreDetailResponse:
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
         is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
         is_tna_delivery (bool | Unset): T바로배송(한국타이어 퀵배송) 가능 매장 여부 Default: False.
+        is_imported_car (bool | Unset): 수입차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default:
+            False.
         holiday (None | str | Unset): 휴무일
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
@@ -35,6 +37,7 @@ class StoreDetailResponse:
     is_all_my_t: bool | Unset = False
     is_installable: bool | Unset = False
     is_tna_delivery: bool | Unset = False
+    is_imported_car: bool | Unset = False
     holiday: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
@@ -63,6 +66,8 @@ class StoreDetailResponse:
         is_installable = self.is_installable
 
         is_tna_delivery = self.is_tna_delivery
+
+        is_imported_car = self.is_imported_car
 
         holiday: None | str | Unset
         if isinstance(self.holiday, Unset):
@@ -123,6 +128,8 @@ class StoreDetailResponse:
             field_dict["is_installable"] = is_installable
         if is_tna_delivery is not UNSET:
             field_dict["is_tna_delivery"] = is_tna_delivery
+        if is_imported_car is not UNSET:
+            field_dict["is_imported_car"] = is_imported_car
         if holiday is not UNSET:
             field_dict["holiday"] = holiday
         if shop_biz_strt_time is not UNSET:
@@ -169,6 +176,8 @@ class StoreDetailResponse:
         is_installable = d.pop("is_installable", UNSET)
 
         is_tna_delivery = d.pop("is_tna_delivery", UNSET)
+
+        is_imported_car = d.pop("is_imported_car", UNSET)
 
         def _parse_holiday(data: object) -> None | str | Unset:
             if data is None:
@@ -241,6 +250,7 @@ class StoreDetailResponse:
             is_all_my_t=is_all_my_t,
             is_installable=is_installable,
             is_tna_delivery=is_tna_delivery,
+            is_imported_car=is_imported_car,
             holiday=holiday,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,

@@ -19,12 +19,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Log active model configuration on startup
+    import anyio.to_thread
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = 200
+
     logger.info(
         "[MODEL_CONFIG] "
-        f"main={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL} | "
-        f"reasoning={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_REASONING} | "
-        f"qc={settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL} | "
+        f"default={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL} | "
+        f"leading={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_LEADING_AGENT} | "
+        f"transaction={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_TRANSACTION_AGENT} | "
+        f"qc={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT} | "
         f"qc_enabled={settings.AI_QC_ENABLED} | "
         f"gateway={settings.AI_GATEWAY_BASE_URL}"
     )
@@ -62,9 +66,11 @@ if __name__ == "__main__":
     import uvicorn
     env = settings.ENV
     logger.info(f"Starting app with ENVIRONMENT: {env.value}")
+    is_local = env.value == "local"
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=(env == "local")
+        workers=1 if is_local else settings.UVICORN_WORKERS,
+        reload=is_local,
     )

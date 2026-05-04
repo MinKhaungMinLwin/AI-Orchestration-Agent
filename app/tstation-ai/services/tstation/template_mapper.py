@@ -8,11 +8,41 @@ fall through to the LLM UI Template Agent because they require cross-tool contex
 (car info + price + store + booking time) that the mapper cannot reconstruct from
 a single tool output.
 """
+import contextvars
 import datetime
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Per-request goal_type, set by the chat service before agent.stream() runs.
+# Read by _map_location / _map_product to set isBookingFlow when the active
+# goal expects a downstream tool call after the user's card pick.
+# ContextVar gives request-scoped propagation through the streaming generator
+# without threading goal_type through every signature in the agent → mapper
+# chain. None means "no active goal / don't override the tool-based default".
+current_goal_type: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_goal_type", default=None
+)
+
+# Goals whose checklist ends in a downstream tool call after a list-pick.
+# Card emits in these goals get isBookingFlow=True so the FE click handler
+# routes to /chat (advancing the flow) instead of /append (which only shows
+# the description bubble and stops).
+# product_recommend is intentionally excluded — it has no checklist; clicking
+# a recommended product should still surface the rich description.
+_GOAL_BOOKING_FOLLOWUP = frozenset({
+    "store_with_stock",
+    "place_order",
+    "price_inquiry",
+})
+
+
+def _is_goal_booking_followup() -> bool:
+    """Read the request-scoped goal_type and decide if isBookingFlow should be
+    forced True. Returns False when no goal is set (preserves legacy behavior).
+    """
+    return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
 
 # ── Domain tool → FE template mapping ──────────────────────────────────────────
 _TOOL_TEMPLATE_MAP: dict[str, str] = {
@@ -215,7 +245,21 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     if not items:
         return None
     items, metadata = items[:5], metadata[:5]
-    return _build_event("product", {"products": items, "metadata": metadata}, assistant_text, len(items))
+    # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
+    # product cards don't co-occur with the inventory/schedule signal tools.
+    # When the active goal is checklist-driven (stock/order/price), a click on
+    # a product card should advance the flow (qty → shop → tool call), so the
+    # FE must route to /chat instead of /append.
+    return _build_event(
+        "product",
+        {
+            "products": items,
+            "metadata": metadata,
+            "isBookingFlow": _is_goal_booking_followup(),
+        },
+        assistant_text,
+        len(items),
+    )
 
 
 # ── 2. listCar ──────────────────────────────────────────────────────────────────
@@ -247,13 +291,17 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             metadata.append({
                 "carNo": _get_str(row, "car_no"),
                 "carLncCd": _get_str(row, "car_lnc_cd"),
+                # Persist front/rear tire sizes alongside the car identifier so
+                # the coordinator's selection-time resolver can recover
+                # tire_size from the listCar template metadata when the user
+                # later picks a car. Without this, filter_for_context drops
+                # car_no as PII and the resolver has no source to match on.
+                "tireSize": _get_str(row, "tire_size_fr") or None,
+                "tireSizeRe": _get_str(row, "tire_size_re") or None,
             })
     if not items:
         return None
-    # 차량 1대면 에이전트가 자동 선택하므로 카드 불필요 → LLM fallback 또는 product 매핑으로
-    if len(items) == 1:
-        logger.info("[TEMPLATE_MAPPER] Single car — skipping listCar card (auto-selected by agent)")
-        return None
+    # 차량이 1대여도 자동 선택하지 않고 listCar 카드를 노출하여 유저가 직접 선택하도록 유도한다.
     return _build_event("listCar", {"listCar": items, "metadata": metadata}, assistant_text, len(items))
 
 
@@ -541,12 +589,18 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     items, metadata = items[:5], metadata[:5]
 
     # `isBookingFlow` controls FE click routing (True → /chat to advance the
-    # flow; False → /append, just renders the description bubble). True only
-    # when this turn explicitly carries a transactional signal — inventory,
-    # schedule, price, cart, or order tool ran together with the store list.
-    # Pure Flow 4/5 info lookups stay False so clicking a card surfaces the
-    # rich description without spuriously advancing to a date picker.
-    is_booking_flow = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+    # flow; False → /append, just renders the description bubble). True when
+    # either: (a) this turn explicitly carries a transactional signal —
+    # inventory, schedule, price, cart, or order tool ran together with the
+    # store list; or (b) the request-scoped goal_type is one of
+    # store_with_stock / place_order / price_inquiry, meaning a downstream
+    # tool call must follow the user's pick even if that tool didn't run in
+    # this turn (e.g., inventory check fires AFTER store selection).
+    # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
+    # card surfaces the rich description without spuriously advancing.
+    is_booking_flow = (
+        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup()
+    )
 
     short = _summarize(assistant_text, "location", len(items))
     return {

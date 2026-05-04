@@ -51,6 +51,8 @@
     command: ["--config=/app/config.yaml", "--port", "8000"]
     expose:
       - 8000
+    ports:
+      - "${AI_GATEWAY_PORT:-4000}:8000"
     read_only: true
     tmpfs:
       - /tmp
@@ -101,9 +103,9 @@
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -111,8 +113,8 @@
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1G
+          cpus: "8.0"
+          memory: 4G
     logging:
       driver: json-file
       options:

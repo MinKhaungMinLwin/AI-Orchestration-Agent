@@ -48,9 +48,14 @@ class Settings(BaseSettings):
     AI_DEFAULT_PROVIDER: str
     AI_GATEWAY_BASE_URL: str
     AI_GATEWAY_API_KEY: str
+    # Model tiers (reference values — declare what's available)
     AI_MODEL: str
     AI_MODEL_REASONING: str
-    AI_QC_MODEL: str
+    AI_MODEL_MINI: str
+    # Per-agent model overrides
+    AI_MODEL_LEADING_AGENT: str
+    AI_MODEL_QC_AGENT: str
+    AI_MODEL_TRANSACTION_AGENT: str
     AI_QC_ENABLED: bool = False
     # External AI Providers
     UPSTAGE_API_KEY: str
@@ -96,6 +101,7 @@ class Settings(BaseSettings):
     RABBITMQ_URL_MANAGEMENT: str
     # Worker
     NUM_WORKER: int = 2
+    UVICORN_WORKERS: int = 4
 
     ### -------------------------------
     # AWS

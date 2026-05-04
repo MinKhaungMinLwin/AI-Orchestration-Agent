@@ -1,10 +1,169 @@
-﻿import json
+import json
 import os
-import time
 
 import httpx
 
 
+# ---------------------------------------------------------------------------
+# Template correctness — rule-based, no LLM needed
+# ---------------------------------------------------------------------------
+
+# Templates that indicate the bot asked for clarification instead of completing the task
+CLARIFICATION_TEMPLATES: frozenset[str] = frozenset({"quickReply", "listCar"})
+
+# Maps test-case agent_flow value → acceptable template types (first = preferred)
+AGENT_FLOW_TEMPLATE_MAP: dict[str, list[str]] = {
+    "Product Compatibility AF":   ["product"],
+    "Product Description AF":     ["quickReply", "product"],
+    "Product Recommendation AF":  ["product", "cheapestProduct"],
+    "Inventory AF":               ["location"],
+    "Store AF":                   ["location"],
+    "Price AF":                   ["voucher", "cheapestProduct", "product"],
+    "FAQ AF":                     ["quickReply", "qnaComplete"],
+    "Fallback/Escalation AF":     ["quickReply", "qnaComplete"],
+    "Order / Delivery AF":        ["quickReply", "qnaComplete"],
+    "Quick shopping AF":          ["cheapestProduct", "product", "location"],
+}
+
+
+def check_template_correctness(tc_agent_flow: str, template_events: list[dict]) -> dict:
+    """Rule-based check: did the bot emit the expected FE template type?
+
+    Verdicts:
+      PASS      — at least one expected template was emitted
+      FALLBACK  — only clarification templates (quickReply/listCar) emitted when a richer one was expected
+      FAIL      — a wrong structured template was emitted
+      NO_OUTPUT — no template events captured at all
+      UNKNOWN   — agent_flow not in AGENT_FLOW_TEMPLATE_MAP
+    """
+    actual = [e["template"] for e in template_events if e.get("template")]
+    expected = AGENT_FLOW_TEMPLATE_MAP.get(tc_agent_flow)
+
+    if expected is None:
+        return {
+            "verdict": "UNKNOWN",
+            "expected": [],
+            "actual": actual,
+            "reason": f"No template mapping for agent_flow '{tc_agent_flow}'",
+        }
+
+    if not actual:
+        return {
+            "verdict": "NO_OUTPUT",
+            "expected": expected,
+            "actual": [],
+            "reason": "No template events captured",
+        }
+
+    matched = [t for t in actual if t in expected]
+    if matched:
+        return {
+            "verdict": "PASS",
+            "expected": expected,
+            "actual": actual,
+            "reason": f"Expected template '{matched[0]}' emitted",
+        }
+
+    if all(t in CLARIFICATION_TEMPLATES for t in actual):
+        return {
+            "verdict": "FALLBACK",
+            "expected": expected,
+            "actual": actual,
+            "reason": f"Bot returned '{actual[0]}' (clarification) instead of completing with {expected}",
+        }
+
+    return {
+        "verdict": "FAIL",
+        "expected": expected,
+        "actual": actual,
+        "reason": f"Unexpected template '{actual[0]}'; expected one of {expected}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool grounding — rule-based, deterministic, no LLM needed
+# ---------------------------------------------------------------------------
+
+# Templates that carry no factual DB claims — grounding check not applicable
+GROUNDING_EXEMPT: frozenset[str] = frozenset({"quickReply", "qnaComplete", "previewYoutube"})
+
+# Maps template type → tool name substrings (ANY match = grounded)
+# Order matters: more specific patterns first
+TEMPLATE_TOOL_PATTERNS: dict[str, list[str]] = {
+    "listCar":         ["get_my_cars_tool"],
+    "product":         ["search_product", "get_goods", "get_product"],
+    "cheapestProduct": ["search_product", "get_goods", "get_cheapest", "get_final_price"],
+    "location":        ["search_store", "get_store", "get_nearby", "get_shop"],
+    "voucher":         ["get_final_price", "get_voucher", "get_coupon"],
+    "preOrder":        ["pre_order", "create_order", "reserve"],
+    "orderComplete":   ["complete_order", "create_order", "finalize"],
+    "datepick":        ["get_date", "get_booking", "get_slot", "get_schedule"],
+}
+
+
+def check_tool_grounding(template_events: list[dict], tool_evidence: list[dict]) -> dict:
+    """Verify that every structured template is backed by an actual tool call.
+
+    For each template emitted:
+      PASS — a matching tool was found in tool_evidence
+      FAIL — structured data template emitted with no matching tool call (hallucination)
+      SKIP — template carries no factual DB claims (quickReply, qnaComplete, etc.)
+
+    Overall verdict:
+      PASS — all checkable templates are grounded
+      FAIL — at least one structured template is ungrounded
+      SKIP — no checkable templates (only exempt templates or no output)
+    """
+    called_tools = {e["tool_name"] for e in tool_evidence if e.get("tool_name")}
+
+    details: list[dict] = []
+    has_checkable = False
+    overall_fail = False
+
+    for evt in template_events:
+        template = evt.get("template", "")
+
+        if not template or template in GROUNDING_EXEMPT:
+            details.append({"template": template, "verdict": "SKIP", "reason": "No factual data claims"})
+            continue
+
+        patterns = TEMPLATE_TOOL_PATTERNS.get(template)
+        if patterns is None:
+            details.append({"template": template, "verdict": "SKIP", "reason": f"No grounding rule defined for '{template}'"})
+            continue
+
+        has_checkable = True
+        grounded_by = next((t for t in called_tools if any(p in t for p in patterns)), None)
+
+        if grounded_by:
+            details.append({"template": template, "verdict": "PASS", "grounded_by": grounded_by})
+        else:
+            details.append({
+                "template": template,
+                "verdict": "FAIL",
+                "reason": f"'{template}' emitted without required tool (expected one matching: {patterns})",
+            })
+            overall_fail = True
+
+    if not has_checkable:
+        overall_verdict = "SKIP"
+        overall_reason = "Only exempt templates emitted — no factual data to ground"
+    elif overall_fail:
+        overall_verdict = "FAIL"
+        overall_reason = "Structured template emitted without a supporting tool call"
+    else:
+        overall_verdict = "PASS"
+        overall_reason = "All structured templates are backed by tool evidence"
+
+    return {
+        "verdict": overall_verdict,
+        "reason": overall_reason,
+        "details": details,
+        "called_tools": sorted(called_tools),
+    }
+
+
+# ---------------------------------------------------------------------------
 FAITHFULNESS_SYSTEM_PROMPT = """You are an expert evaluator for T-Station AI, a Korean automotive chatbot (Hankook Tire).
 Your job is to evaluate whether a single response is faithful to the live TOOL EVIDENCE.
 
@@ -50,8 +209,7 @@ Final structured output:
 Score the response for faithfulness only."""
 
 
-def _extract_response_text(resp_json: dict) -> str:
-    """Extract response text across common OpenAI-compatible response shapes."""
+def _extract_text(resp_json: dict) -> str:
     choice = (resp_json.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content")
@@ -60,64 +218,34 @@ def _extract_response_text(resp_json: dict) -> str:
         return content.strip()
 
     if isinstance(content, list):
-        text_parts: list[str] = []
+        parts = []
         for item in content:
             if isinstance(item, str):
-                text_parts.append(item)
-                continue
-            if not isinstance(item, dict):
-                continue
-            if isinstance(item.get("text"), str):
-                text_parts.append(item["text"])
-                continue
-            if item.get("type") == "output_text" and isinstance(item.get("text"), str):
-                text_parts.append(item["text"])
-        return "".join(text_parts).strip()
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        if parts:
+            return "".join(parts).strip()
 
     for key in ("reasoning_content", "reasoning"):
         extra = message.get(key)
         if isinstance(extra, str) and extra.strip():
             return extra.strip()
         if isinstance(extra, list):
-            text_parts = []
-            for item in extra:
-                if isinstance(item, str):
-                    text_parts.append(item)
-                elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                    text_parts.append(item["text"])
-            if text_parts:
-                return "".join(text_parts).strip()
+            parts = [i if isinstance(i, str) else i.get("text", "") for i in extra if isinstance(i, (str, dict))]
+            if any(parts):
+                return "".join(parts).strip()
 
-    if isinstance(choice.get("text"), str):
-        return choice["text"].strip()
-
-    return ""
+    return choice.get("text", "").strip() if isinstance(choice.get("text"), str) else ""
 
 
-def _normalize_json_text(text: str) -> str:
+def _parse_json(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):
-        parts = text.split("```")
-        if len(parts) > 1:
-            text = parts[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-    if text.endswith("```"):
-        text = text[:-3].strip()
-    return text
-
-
-def _parse_json_text(text: str) -> dict:
-    text = _normalize_json_text(text)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            return json.loads(text[start:end + 1])
-        raise
+        text = text.split("```")[1].removeprefix("json").strip()
+    text = text.removesuffix("```").strip()
+    s, e = text.find("{"), text.rfind("}")
+    return json.loads(text[s : e + 1])
 
 
 def call_faithfulness_llm(
@@ -127,46 +255,31 @@ def call_faithfulness_llm(
     tool_evidence: str,
     response: str,
 ) -> dict:
-    """Call judge LLM for faithfulness-only scoring."""
     url = f"{judge_api_url.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {judge_api_key}",
-        "Content-Type": "application/json",
-    }
-    judge_model = os.environ.get("JUDGE_MODEL", "gpt-5.4-reasoning")
+    judge_model = os.environ.get("JUDGE_MODEL", "gpt-5.5-reasoning-xhigh")
     payload = {
         "model": judge_model,
         "messages": [
             {"role": "system", "content": FAITHFULNESS_SYSTEM_PROMPT},
             {"role": "user", "content": FAITHFULNESS_USER_TEMPLATE.format(
-                user_message=user_message,
-                tool_evidence=tool_evidence,
-                response=response,
+                user_message=user_message, tool_evidence=tool_evidence, response=response,
             )},
         ],
-        "temperature": 0.0,
-        "max_tokens": 512,
+        "max_tokens": 16384,
     }
-
-    last_error = ""
-    last_response = ""
-
-    for _ in range(3):
-        resp = httpx.post(url, json=payload, headers=headers, timeout=90)
-        resp.raise_for_status()
-        resp_json = resp.json()
-        content = _extract_response_text(resp_json)
-
-        if content:
-            try:
-                return _parse_json_text(content)
-            except json.JSONDecodeError as exc:
-                last_error = f"JSON decode failed: {exc}"
-                last_response = content[:2000]
-        else:
-            last_error = "Empty response content"
-            last_response = json.dumps(resp_json, ensure_ascii=False)[:2000]
-
-        time.sleep(2)
-
-    raise ValueError(f"Judge returned unusable response after retries. {last_error}. Raw={last_response}")
+    # reasoning models (o1/o3/o4/gpt-5.x) don't support temperature
+    _is_reasoning = any(judge_model.startswith(p) for p in ("o1", "o3", "o4", "gpt-5"))
+    if not _is_reasoning:
+        payload["temperature"] = 0.0
+    resp = httpx.post(
+        url,
+        json=payload,
+        headers={"Authorization": f"Bearer {judge_api_key}", "Content-Type": "application/json"},
+        timeout=90,
+    )
+    resp.raise_for_status()
+    resp_json = resp.json()
+    content = _extract_text(resp_json)
+    if not content:
+        raise ValueError(f"Judge returned empty response. Raw={json.dumps(resp_json, ensure_ascii=False)[:2000]}")
+    return _parse_json(content)

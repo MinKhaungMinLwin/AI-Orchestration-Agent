@@ -269,7 +269,11 @@ class PreOrderTemplate(TemplatePayload):
     orderInfo: OrderInfo
     isReadyToOrder: bool
     isReadyToAddToCart: bool
-    recommendActions: RecommendActions
+    # Optional: the FE renders pay/cart buttons inside the orderInfo card itself,
+    # so a separate recommendActions follow-up bubble duplicates the same intent.
+    # New emissions should omit this field; legacy emitters that still set it
+    # remain compatible.
+    recommendActions: RecommendActions | None = None
     metadata: PreOrderMeta
 
 
@@ -366,6 +370,14 @@ class ProductTemplate(TemplatePayload):
     assistantResponse: str = Field(..., min_length=1)
     products: list[ProductItem] = Field(..., min_length=1, max_length=5)
     metadata: list[ProductMeta] = Field(..., min_length=1, max_length=5)
+    # Routing hint mirroring LocationTemplate.isBookingFlow. When True, the FE
+    # should treat a product-card click as a flow-advancement signal and call
+    # /chat (so the next checklist step — qty / shop / inventory / order —
+    # runs). When False (default), the FE keeps the legacy /append shortcut
+    # that just shows the product description bubble — appropriate for
+    # product_recommend goal where the user is browsing.
+    # Set True from store_with_stock / place_order / price_inquiry contexts.
+    isBookingFlow: bool = False
 
     @model_validator(mode="after")
     def validate_metadata_alignment(self):
@@ -385,12 +397,22 @@ class ProductDataEvent(BaseModel):
 
 
 class CarMeta(BaseModel):
-    """Hidden FE metadata for a car selection card."""
+    """Hidden FE metadata for a car selection card.
+
+    `tireSize` / `tireSizeRe` are populated from the BE vehicle response
+    (`tire_size_fr` / `tire_size_re`) so that when the user picks a car the
+    coordinator can resolve the correct tire size into slots — without
+    needing the LLM to re-issue a recommendation tool call. Front rear
+    asymmetry is preserved (a few performance/SUV trims have different
+    sizes per axle).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     carNo: str = Field(..., min_length=1)
     carLncCd: str | None = None
+    tireSize: str | None = None
+    tireSizeRe: str | None = None
 
 
 class CarItem(BaseModel):

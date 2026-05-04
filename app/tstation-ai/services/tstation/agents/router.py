@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from langchain_litellm import ChatLiteLLM
 
+# Default LLM (AI_MODEL) — used by Discovery and Support agents.
 LLM = ChatLiteLLM(
     api_base=settings.AI_GATEWAY_BASE_URL,
     api_key=settings.AI_GATEWAY_API_KEY,
@@ -16,26 +17,42 @@ LLM = ChatLiteLLM(
     streaming=True,
 )
 
-REASONING_LLM = ChatLiteLLM(
+# Per-agent overrides
+LEADING_LLM = ChatLiteLLM(
     api_base=settings.AI_GATEWAY_BASE_URL,
     api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_REASONING}",
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_LEADING_AGENT}",
     streaming=True,
 )
 
-# Lightweight LLM for routing/decision tasks (gpt-4o-mini class via AI_QC_MODEL).
+TRANSACTION_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_TRANSACTION_AGENT}",
+    streaming=True,
+)
+
+# Lightweight LLM for routing/decision tasks (AI_MODEL_QC_AGENT, e.g. gpt-4o-mini).
 # Use for short structured outputs where reasoning depth is not needed.
 DECISION_LLM = ChatLiteLLM(
     api_base=settings.AI_GATEWAY_BASE_URL,
     api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_QC_MODEL}",
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
+)
+
+# Singleton for QC fact-checking chain — same model tier as DECISION_LLM but kept
+# separate so each can be reconfigured independently (e.g. streaming, temperature).
+QC_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
 )
 
 ### Multi-Agent Router
 # Leading Agent
 from services.tstation.agents.a_leading_agent.agent import LeadingAgent
 
-leading_agent = LeadingAgent(REASONING_LLM)
+leading_agent = LeadingAgent(LEADING_LLM)
 # Discovery Agent
 from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
 
@@ -43,7 +60,7 @@ discovery_subagent = DiscoverySubAgent(LLM)
 # Transaction Agent (merged PRICING + ORDER)
 from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
 
-transaction_subagent = TransactionSubAgent(LLM)
+transaction_subagent = TransactionSubAgent(TRANSACTION_LLM)
 
 # Support Agent
 from services.tstation.agents.e_support_agent.agent import SupportSubAgent

@@ -183,7 +183,6 @@ class BaseAgent(ABC):
 
     TOOL_TO_AF_MAP: dict[str, str] = {}
     TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
-    RESPONSE_FORMAT: type[BaseModel] | dict | None = None
     OUTPUT_TEMPLATE: Any = None
 
     def __init__(self, model, tools: list | None = None, system_prompt: str | Callable[[], str] = "", name: str = ""):
@@ -191,20 +190,20 @@ class BaseAgent(ABC):
         self._model = model
         self._tools = tools
         self._system_prompt = system_prompt
+        self._agent = self._build_agent()
 
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
         return create_agent(
             model=self._model,
             tools=self._tools,
-            response_format=self.RESPONSE_FORMAT,
             debug=True,
             system_prompt=prompt,
             name=self.name,
         )
 
     def invoke(self, messages: list[dict], config: dict | None = None) -> str:
-        agent = self._build_agent()
+        agent = self._agent
         result = agent.invoke({"messages": messages}, config=config)
         return result["messages"][-1].content
 
@@ -219,7 +218,7 @@ class BaseAgent(ABC):
         - tool: Tool execution results with tool name, input, and output
         - data: Final UI template payload from structured response
         """
-        agent = self._build_agent()
+        agent = self._agent
         tool_calls_map: dict[str, dict] = {}
         answering_emitted = False
         prompt_template = self.OUTPUT_TEMPLATE
@@ -254,29 +253,12 @@ class BaseAgent(ABC):
 
             elif mode == "updates":
                 for node, update in chunk.items():
-                    if "structured_response" in update:
-                        data_event = self._build_data_event(update["structured_response"])
-                        if data_event is not None:
-                            assistant_response = self._get_assistant_response(data_event)
-                            if assistant_response:
-                                if not answering_emitted:
-                                    yield {"type": "status", "status": "답변 중..."}
-                                    answering_emitted = True
-                                yield {"type": "token", "content": assistant_response}
-                                yield {
-                                    "type": "message",
-                                    "content": assistant_response,
-                                    "node": node,
-                                    "agent": self.name,
-                                }
-                            yield data_event
-
+                    if "messages" not in update:
+                        continue
                     message = update["messages"][-1]
                     if isinstance(message, AIMessage):
                         if hasattr(message, "tool_calls") and message.tool_calls:
                             for tc in message.tool_calls:
-                                if self._is_internal_structured_tool(tc["name"]):
-                                    continue
                                 tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
                                 display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "답변 중...")
                                 yield {
@@ -294,8 +276,6 @@ class BaseAgent(ABC):
                             "agent": self.name,
                         }
                     elif isinstance(message, ToolMessage):
-                        if self._is_internal_structured_tool(message.name):
-                            continue
                         af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
                         tool_status = "success"
                         tool_result: Any = None
@@ -318,7 +298,7 @@ class BaseAgent(ABC):
                                 "data": tool_result,
                                 "args": tool_input.get("args", {}),
                             })
-                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "status": tool_status}
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "agent_class": self.name, "status": tool_status}
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
@@ -508,10 +488,6 @@ class BaseAgent(ABC):
         return matches[-1] if matches else None
 
     @staticmethod
-    def _is_internal_structured_tool(tool_name: str) -> bool:
-        return tool_name.startswith("response_format_")
-
-    @staticmethod
     def _try_code_template(
         accumulated_tool_data: list[dict],
         response_streamer: "_AssistantResponseStreamer | None",
@@ -552,7 +528,7 @@ class BaseAgent(ABC):
         import logging
 
         logger = logging.getLogger(__name__)
-        agent = self._build_agent()
+        agent = self._agent
 
         tool_called = False
 
