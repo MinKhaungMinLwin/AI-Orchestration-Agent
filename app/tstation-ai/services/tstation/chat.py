@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -1716,8 +1717,11 @@ class TStationChatServiceV2:
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load existing slots from Redis
-            existing_slots = chat_history_svc.get_slots(request.session_id)
+            # 1) Load existing slots + tool context from Redis in parallel (independent reads)
+            existing_slots, prev_tool_data = await asyncio.gather(
+                asyncio.to_thread(chat_history_svc.get_slots, request.session_id),
+                asyncio.to_thread(chat_history_svc.get_tool_context, request.session_id),
+            )
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
             # 2) Extract regex-based slots from the LATEST user message only
@@ -1747,10 +1751,7 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
-            # 3.7) Load accumulated tool context (needed both for goods_no list-pick
-            # resolution below AND for prompt injection in step 6). Loading before
-            # save_slots lets resolved goods_no be persisted in step 4.
-            prev_tool_data = chat_history_svc.get_tool_context(request.session_id)
+            # 3.7) Tool context already loaded in step 1 (parallel with get_slots).
 
             # 3.7.5) Recommendation-flow stale-clear.
             # If the most recent product-listing tool in the conversation is
@@ -1847,7 +1848,7 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    history = chat_history_svc.get_history(request.session_id)
+                    history = await asyncio.to_thread(chat_history_svc.get_history, request.session_id)
                     resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
                         last_user_text, history
                     )
@@ -2219,14 +2220,9 @@ class TStationChatServiceV2:
                 if _has_factual_claims(draft_response) and source_data_chunks:
                     try:
                         from services.tstation.agents.g_qc_agent.agent import invoke_qc
-                        from langchain_litellm import ChatLiteLLM
+                        from services.tstation.agents.router import QC_LLM
                         from config.tracing import build_trace_config
 
-                        qc_llm = ChatLiteLLM(
-                            api_base=_s.AI_GATEWAY_BASE_URL,
-                            api_key=_s.AI_GATEWAY_API_KEY,
-                            model=f"{_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_QC_AGENT}",
-                        )
                         trace_config = build_trace_config(
                             run_name="qc_agent",
                             session_id=session_id,
@@ -2234,7 +2230,7 @@ class TStationChatServiceV2:
                             trace_id=trace_id,
                             tags=["qc"],
                         )
-                        qc_result = invoke_qc(qc_llm, user_query, draft_response, source_data, config=trace_config)
+                        qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data, config=trace_config)
                         if qc_result.strip() and qc_result.strip().upper() != "PASS":
                             draft_response = qc_result.strip()
                             logger.info("[QC_LAYER] QC corrected the response")
