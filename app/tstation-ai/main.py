@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Log active model configuration on startup
+    import anyio.to_thread
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = 200
+
     logger.info(
         "[MODEL_CONFIG] "
         f"default={settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL} | "

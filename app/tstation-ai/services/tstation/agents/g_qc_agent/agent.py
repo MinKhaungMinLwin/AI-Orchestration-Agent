@@ -60,8 +60,19 @@ def invoke_qc(llm, user_query: str, draft_response: str, source_data: str, confi
     logger.info("[QC_AGENT] Invoking QC check...")
     chain = get_qc_chain(llm)
     return chain.invoke({
-        "user_query": user_query, 
-        "draft_response": draft_response, 
+        "user_query": user_query,
+        "draft_response": draft_response,
+        "source_data": source_data
+        },
+        config=config
+    )
+
+async def ainvoke_qc(llm, user_query: str, draft_response: str, source_data: str, config: dict | None = None) -> str:
+    logger.info("[QC_AGENT] Invoking QC check (async)...")
+    chain = get_qc_chain(llm)
+    return await chain.ainvoke({
+        "user_query": user_query,
+        "draft_response": draft_response,
         "source_data": source_data
         },
         config=config
@@ -71,7 +82,7 @@ def stream_qc(llm, user_query: str, draft_response: str, source_data: str):
     logger.info("[QC_AGENT] Streaming QC check...")
     chain = get_qc_chain(llm)
     return chain.stream({
-        "user_query": user_query, 
-        "draft_response": draft_response, 
+        "user_query": user_query,
+        "draft_response": draft_response,
         "source_data": source_data
     })

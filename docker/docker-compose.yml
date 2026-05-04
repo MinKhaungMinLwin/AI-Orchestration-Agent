@@ -113,8 +113,8 @@
     deploy:
       resources:
         limits:
-          cpus: "4.0"
-          memory: 2G
+          cpus: "8.0"
+          memory: 4G
     logging:
       driver: json-file
       options:
