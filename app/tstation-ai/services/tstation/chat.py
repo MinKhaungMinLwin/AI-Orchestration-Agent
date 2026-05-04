@@ -740,43 +740,6 @@ class StreamingMultiAgentCoordinator:
                 except Exception as e:
                     logger.warning(f"[SLOTS] Failed to save goods_no from tool input: {e}")
 
-        # Auto-capture tire_size_fr from member-cars tools when EXACTLY 1 vehicle
-        # is returned. Defense-in-depth for the goal-router: if the LLM later
-        # skips the recommendation/search tool call (e.g. answering from cached
-        # `[대화 중 조회한 데이터]`), tire_size is still populated so subsequent
-        # turns ("매장 선택 후 주문", "구매할게") route to Transaction instead
-        # of looping in Discovery waiting for size confirmation.
-        # Multi-vehicle responses are skipped on purpose: the user must pick one,
-        # and that selection is captured by LLM-driven slot extraction.
-        # Existing tire_size is preserved (merge fills only when current is None).
-        if tool_name in ("get_my_cars_tool", "get_user_vehicles_tool") and tool_succeeded:
-            try:
-                car_data = parsed_data.get("data") if isinstance(parsed_data, dict) else None
-                cars_list = None
-                if isinstance(car_data, list):
-                    cars_list = car_data
-                elif isinstance(car_data, dict):
-                    for key in ("items", "cars", "vehicles", "memberCars", "member_cars"):
-                        candidate = car_data.get(key)
-                        if isinstance(candidate, list):
-                            cars_list = candidate
-                            break
-                if cars_list and len(cars_list) == 1 and isinstance(cars_list[0], dict):
-                    single = cars_list[0]
-                    tire_size_fr = single.get("tire_size_fr") or single.get("tireSizeFr")
-                    if tire_size_fr:
-                        svc = get_chat_history_service()
-                        current_slots = svc.get_slots(session_id)
-                        if current_slots.tire_size is None:
-                            new_slots = ConversationSlots(tire_size=tire_size_fr)
-                            updated = current_slots.merge(new_slots)
-                            svc.save_slots(session_id, updated)
-                            logger.info(
-                                f"[SLOTS] tire_size auto-saved from {tool_name} (1-car): {tire_size_fr}"
-                            )
-            except Exception as e:
-                logger.warning(f"[SLOTS] Failed to auto-save tire_size from {tool_name}: {e}")
-
         fields = tool_slot_extractors.get(tool_name)
         if not fields:
             return
@@ -1763,6 +1726,97 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
+    def _resolve_tire_size_from_car_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
+        """Match a user's vehicle-selection reply against the prior
+        get_my_cars_tool / get_user_vehicles_tool result and return the
+        tire_size_fr of the matched car.
+
+        Why selection-time (not auto-fill on tool result):
+          The discovery prompt always emits a `listCar` card and waits for the
+          user to pick a vehicle, even when only one car is registered. Filling
+          tire_size pre-emptively from the tool result would be wrong if the
+          user later asks about a non-registered vehicle. Resolving at the user
+          pick turn ties tire_size to the explicit selection.
+
+        Matching strategy (first hit wins):
+          1. License plate verbatim ("29조3344", "12가3456") — anywhere in text.
+          2. Ordinal at the start ("1.", "1번", "2)") → items[idx-1].
+          3. Token-overlap against car_model_nm — only resolves when exactly ONE
+             car has the top score (≥1 token match).
+
+        Expected tool_context entry shape (from filter_for_context):
+            {"tool": "get_my_cars_tool" | "get_user_vehicles_tool",
+             "data": [{"car_no": "29조3344", "car_model_nm": "제타",
+                       "tire_size_fr": "225/45R17", "car_lnc_cd": "W036270"}],
+             "input": {...}}
+        """
+        if not user_text or not prev_tool_data:
+            return None
+
+        CAR_TOOLS = {"get_my_cars_tool", "get_user_vehicles_tool"}
+        items: list[dict] = []
+        for entry in prev_tool_data:
+            if entry.get("tool") not in CAR_TOOLS:
+                continue
+            data = entry.get("data")
+            if isinstance(data, list):
+                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+                break
+            if isinstance(data, dict):
+                for key in ("items", "cars", "vehicles", "memberCars", "member_cars"):
+                    candidate = data.get(key)
+                    if isinstance(candidate, list):
+                        items = [it for it in candidate if isinstance(it, dict)]
+                        break
+                if items:
+                    break
+        if not items:
+            return None
+
+        text = user_text.strip()
+
+        # 1. License plate match: covers both old (29조3344) and new (123가4567)
+        # Korean plate formats. Match against any car_no/license_plate variant.
+        plate_match = re.search(r"\d{2,3}[가-힣]\d{4}", text)
+        if plate_match:
+            target_plate = plate_match.group(0)
+            for item in items:
+                plate = item.get("car_no") or item.get("license_plate") or item.get("licensePlate") or ""
+                if plate == target_plate:
+                    tire_size = item.get("tire_size_fr") or item.get("tireSizeFr")
+                    if tire_size:
+                        return tire_size
+
+        # 2. Ordinal pick.
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        if ordinal_match:
+            idx = int(ordinal_match.group(1)) - 1
+            if 0 <= idx < len(items):
+                tire_size = items[idx].get("tire_size_fr") or items[idx].get("tireSizeFr")
+                if tire_size:
+                    return tire_size
+
+        # 3. Token-overlap against car_model_nm. Require unique top scorer to
+        # avoid resolving ambiguous picks across same-model duplicates.
+        tokens = [t for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+        if tokens:
+            scored: list[tuple[int, dict]] = []
+            for item in items:
+                model_nm = (item.get("car_model_nm") or item.get("carModelNm") or "").lower()
+                score = sum(1 for tok in tokens if tok.lower() in model_nm)
+                if score > 0:
+                    scored.append((score, item))
+            if scored:
+                max_score = max(s for s, _ in scored)
+                top = [item for s, item in scored if s == max_score]
+                if len(top) == 1:
+                    tire_size = top[0].get("tire_size_fr") or top[0].get("tireSizeFr")
+                    if tire_size:
+                        return tire_size
+
+        return None
+
+    @staticmethod
     def _resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
         """Match a user's list-selection reply against the prior
         get_nearby_stores_tool / get_store_list_tool result and return the
@@ -2107,6 +2161,26 @@ class TStationChatServiceV2:
                     logger.info(
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
                         f"list-selection against prior search_product_tool result"
+                    )
+
+            # 3.85) Resolve tire_size from the user's vehicle-selection reply matched
+            # against the most recent get_my_cars_tool / get_user_vehicles_tool result.
+            # Without this, a 1-car listCar pick that the LLM later "answers from memory"
+            # (skipping get_products_recommendations_tool) leaves tire_size=None — and
+            # subsequent "구매할게" / "매장 선택 후 주문" turns then fail the goal-router's
+            # `size` step and route to Discovery instead of Transaction. Selection-time
+            # matching ties tire_size to the explicit user pick (license plate / ordinal /
+            # car_model_nm), so it stays correct even if the user picks a different car
+            # than the auto-default.
+            if merged_slots.tire_size is None and prev_tool_data:
+                resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_car_selection(
+                    last_user_text, prev_tool_data
+                )
+                if resolved_tire_size:
+                    merged_slots.tire_size = resolved_tire_size
+                    logger.info(
+                        f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
+                        f"vehicle-selection against prior member-cars tool result"
                     )
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
