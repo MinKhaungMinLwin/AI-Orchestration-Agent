@@ -103,9 +103,9 @@
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     security_opt:
       - no-new-privileges:true
     cap_drop:
