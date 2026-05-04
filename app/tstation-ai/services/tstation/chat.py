@@ -2264,6 +2264,16 @@ class TStationChatServiceV2:
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
             )
 
+        # Publish the active goal_type to the request-scoped ContextVar consumed
+        # by template_mapper. This lets _map_location / _map_product set
+        # isBookingFlow=True when a downstream tool call (inventory / price /
+        # order) must follow the user's card pick — without threading goal_type
+        # through every signature in the agent → mapper chain.
+        # ContextVar scoping: set once per request, FastAPI's request lifecycle
+        # confines propagation; no manual reset needed.
+        from services.tstation.template_mapper import current_goal_type
+        current_goal_type.set(merged_slots.goal_type)
+
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
