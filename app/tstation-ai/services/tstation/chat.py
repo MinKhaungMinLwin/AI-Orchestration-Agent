@@ -1981,6 +1981,49 @@ class TStationChatServiceV2:
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
             )
 
+        # P0b TRANSACTION → DISCOVERY+TRANSACTION redirect: when the classifier
+        # picked [TRANSACTION] alone but the user actually provided product
+        # name/model + size with no resolved goods_no, force Discovery to search
+        # first. Transaction has NO search tool (per c_transaction_agent prompt
+        # GOODS_NO RESOLUTION), so without this redirect the classifier mismatch
+        # leads to either (a) a quickReply confirmation prompt asking the user
+        # to click "상품 검색" — the exact ACT-FIRST anti-pattern fixed in
+        # 4dbfe3a but only for the Discovery prompt — or (b) a fallback "상품을
+        # 검색하겠습니다" line with the chain stopping because domains has only
+        # one entry.
+        #
+        # Guard conditions (ALL must hold):
+        #   1. Classifier chose exactly [TRANSACTION].
+        #   2. `merged_slots.goods_no is None` — resolved goods_no doesn't need search.
+        #   3. `merged_slots.tire_size is not None` — size is required (regex pulls
+        #      it from the current turn or inherited from prior turns).
+        #   4. Product name/model present via ONE of:
+        #        a. `merged_slots.tire_model` — LLM-confirmed in slots (current or inherited).
+        #        b. Brand/model keyword in CURRENT turn text (다이나프로/벤투스/Dynapro/...).
+        #
+        # Safety: same as P0 — coordinator verifies goods_no was resolved after
+        # Discovery before running Transaction (search returning 0/multiple
+        # results leaves goods_no=None and the chain stops).
+        elif (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            and merged_slots.goods_no is None
+            and merged_slots.tire_size is not None
+            and (
+                merged_slots.tire_model is not None
+                or ConversationSlots.has_product_keyword(last_user_text)
+            )
+        ):
+            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+            skip_decision = True
+            logger.info(
+                f"[COORDINATOR] P0b TX→DISC+TX redirect: classifier=[TRANSACTION], "
+                f"goods_no=None, tire_size={merged_slots.tire_size!r}, "
+                f"tire_model={merged_slots.tire_model!r}, "
+                f"has_product_keyword={ConversationSlots.has_product_keyword(last_user_text)}, "
+                f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+            )
+
         # STREAM MODE
         if request.stream:
             return StreamingResponse(
