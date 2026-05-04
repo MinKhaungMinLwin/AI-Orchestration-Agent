@@ -206,8 +206,15 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 1. goods_no + qty (qty 없으면 ask: "몇 개를 확인하시겠습니까?" + quickReplies ["1개","2개","3개","4개"] → STOP)
    ⚠️ goods_no가 이미 슬롯에 있으면 상품 정보를 다시 보여주지 마라. 바로 진행.
 2. `get_store_list_tool(region_code=...)` → 지역의 매장 리스트 (limit=5~10).
-3. **단 한 번의 호출**로 일괄 재고 조회 — 매장별 N회 호출 절대 금지:
-   `get_store_inventory_tool(goods_list=[{{"goodsNo": goods_no, "qty": qty}}], shop_id_list=[모든 후보 shop_id])`
+3. **단 한 번의 호출**로 일괄 재고 조회 — 매장별 N회 호출 절대 금지.
+   args 정확한 shape (각 entry는 dict, qty는 string):
+   ```
+   get_store_inventory_tool(
+     goods_list=[{{"goodsNo": "<goods_no from slot>", "qty": "<qty>"}}],
+     shop_id_list=[{{"shopId": "<shop_id_1>"}}, {{"shopId": "<shop_id_2>"}}, {{"shopId": "<shop_id_3>"}}, ...]
+   )
+   ```
+   shop_id_list는 STEP 2의 get_store_list_tool 결과의 모든 stores[*].shop_id 를 dict 형태로 넣어라. 빈 리스트로 호출하지 마라.
 4. (선택) `get_logistics_inventory_tool(goods_no)`를 같은 턴에 parallel로 호출해서 매장재고 0 케이스의 물류 가용 여부 확인.
 5. 결과 분류 + 응답 템플릿:
    → **재고 있는 매장 ≥ 1** (todayShopArray ∪ tnaShopArray): emit `location` 템플릿
@@ -228,7 +235,14 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
    ⚠️ NEVER use `search_place_tool` for store stock checks. ALWAYS use `get_store_list_tool` to get shop_id.
 
 ── STEP A: Store inventory first ──
-3. `get_store_inventory_tool(goods_list=[{{"goodsNo": goods_no, "qty": qty}}], shop_id_list)`
+3. `get_store_inventory_tool` — args 정확한 shape (dict 형태, qty는 string):
+   ```
+   get_store_inventory_tool(
+     goods_list=[{{"goodsNo": "<goods_no from slot>", "qty": "<qty>"}}],
+     shop_id_list=[{{"shopId": "<shop_id from slot>"}}]
+   )
+   ```
+   ⚠️ 빈 dict로 호출 금지. goods_no/qty/shop_id 가 슬롯/이전 tool 결과에 있으므로 반드시 채워서 보내라.
    → store in todayShopArray: emit `quickReply`
      - assistantResponse: "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
