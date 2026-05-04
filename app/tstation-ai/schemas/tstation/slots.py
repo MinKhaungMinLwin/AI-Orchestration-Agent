@@ -12,6 +12,19 @@ logger = logging.getLogger(__name__)
 # only actionable transactional intents are tracked here.
 PendingIntent = Literal["price", "stock", "order"]
 
+# High-level user goal carried across the session. Drives both goal-aware prompt
+# injection (so agents know the *destination*, not just the immediate turn) and
+# the goal-based fast-path classifier (so the coordinator can route by next
+# missing step instead of paying the LLM-classifier cost on every turn).
+# Sticky: once detected, persists across turns until the user explicitly switches
+# (handled by extract_from_user_text re-running on each turn).
+GoalType = Literal[
+    "product_recommend",
+    "store_with_stock",
+    "price_inquiry",
+    "place_order",
+]
+
 
 class ConversationSlots(BaseModel):
     """Conversation slots for tracking confirmed customer information across turns."""
@@ -24,6 +37,7 @@ class ConversationSlots(BaseModel):
     shop_name: Optional[str] = None      # e.g. "한남점"
     car_model: Optional[str] = None      # e.g. "쏘나타"
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
+    goal_type: Optional[GoalType] = None  # e.g. "store_with_stock" — high-level destination, sticky across turns.
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
@@ -72,6 +86,17 @@ class ConversationSlots(BaseModel):
         re.compile(r"추천|골라줘|알아서|뭐가\s*좋|어떤\s*게\s*좋|괜찮은\s*거"),
     ]
 
+    # Phrases that look transactional ("주문") but are actually view-only inquiries
+    # (order history, coupon, video review). Detected here so goal_type stays None
+    # for these turns — the LLM domain classifier handles them via a single tool
+    # call without needing the model→size→qty→shop checklist that goal_type
+    # assignment would otherwise enforce.
+    # `(?!\s*해|\s*하)` excludes "내 주문해줘" / "내 주문하고 싶어" which are real
+    # purchase intents that share the "내 주문" prefix with order-history phrasing.
+    _GOAL_VIEW_ONLY_PATTERNS: ClassVar[list[re.Pattern]] = [
+        re.compile(r"주문\s*내역|주문\s*조회|내가\s*주문|내\s*주문(?!\s*해|\s*하)"),
+    ]
+
     # Brand / model keyword patterns. Used by the Coordinator's auto-chain gate to
     # distinguish "벤투스 S2 얼마?" (product-specific transactional query, should
     # chain Discovery→Transaction) from "가격 얼마에요?" (no product, should stay
@@ -83,6 +108,41 @@ class ConversationSlots(BaseModel):
     # and select bare model codes for "model-only + size" turns like "HPX
     # 235/55R19 재고확인" — \b word boundaries prevent false positives on
     # common substrings.
+    # Goal label map — Korean strings injected into the prompt's `[목표: ...]`
+    # block so agents see a human-readable destination rather than the raw enum.
+    GOAL_LABELS: ClassVar[dict[str, str]] = {
+        "product_recommend": "타이어 추천",
+        "store_with_stock": "재고 있는 매장 찾기",
+        "price_inquiry": "가격 조회",
+        "place_order": "주문 진행",
+    }
+
+    # Per-goal step checklist. Each step = (step_id, korean_label, slot_field_set).
+    # A step is "done" when ANY slot in the set is non-None (frozenset to mark
+    # equivalence — e.g., either tire_model or goods_no satisfies the model step).
+    # `product_recommend` has an empty plan: Discovery is tool-driven there, no
+    # deterministic checklist to gate progress on.
+    GOAL_PLANS: ClassVar[dict[str, list[tuple[str, str, frozenset[str]]]]] = {
+        "product_recommend": [],
+        "store_with_stock": [
+            ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
+            ("size", "타이어 사이즈", frozenset({"tire_size"})),
+            ("qty", "수량", frozenset({"ord_qty"})),
+            ("shop", "매장 선택", frozenset({"shop_id"})),
+        ],
+        "price_inquiry": [
+            ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
+            ("size", "타이어 사이즈", frozenset({"tire_size"})),
+            ("qty", "수량", frozenset({"ord_qty"})),
+        ],
+        "place_order": [
+            ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
+            ("size", "타이어 사이즈", frozenset({"tire_size"})),
+            ("qty", "수량", frozenset({"ord_qty"})),
+            ("shop", "매장 선택", frozenset({"shop_id"})),
+        ],
+    }
+
     _PRODUCT_KEYWORD_PATTERNS: ClassVar[list[re.Pattern]] = [
         re.compile(
             # Korean brands (primary user input)
@@ -215,6 +275,26 @@ class ConversationSlots(BaseModel):
                 slots.pending_intent = intent_value
                 break
 
+        # Goal type — derived from the same signals as pending_intent plus an
+        # explicit recommend check. Recommend takes priority so a fresh
+        # "추천해줘" turn flips a stale transactional goal back to discovery.
+        # Goal is left None when no signal is present so merge() preserves the
+        # previously detected goal across silent turns ("4개", region names).
+        # View-only inquiries (order history, coupon, etc.) leave goal_type
+        # untouched so the LLM domain classifier handles them — checklist-based
+        # fast-path routing would otherwise mis-route them to a product flow.
+        is_view_only = any(p.search(user_text) for p in cls._GOAL_VIEW_ONLY_PATTERNS)
+        if is_view_only:
+            pass
+        elif cls.has_recommend_intent(user_text):
+            slots.goal_type = "product_recommend"
+        elif slots.pending_intent == "stock":
+            slots.goal_type = "store_with_stock"
+        elif slots.pending_intent == "price":
+            slots.goal_type = "price_inquiry"
+        elif slots.pending_intent == "order":
+            slots.goal_type = "place_order"
+
         return slots
 
     @classmethod
@@ -225,6 +305,40 @@ class ConversationSlots(BaseModel):
         when the user is clearly switching back to discovery.
         """
         return any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS)
+
+    def evaluate_goal_progress(self) -> tuple[list[str], Optional[str]]:
+        """Return (done_step_labels, next_step_label) for the current goal.
+
+        Pure function — reads only this slot instance, no I/O, no LLM. Cost is
+        O(plan_steps) ≲ 5 dict/getattr lookups per call.
+
+        Returns:
+            ([], None)             when goal_type is unset or has empty plan
+            (done, next_step)      when at least one step is unmet
+            (all_labels, None)     when every step is done (caller routes to
+                                   the goal-completion domain)
+        """
+        plan = self.GOAL_PLANS.get(self.goal_type or "", [])
+        done: list[str] = []
+        next_step: Optional[str] = None
+        for _step_id, label, required in plan:
+            if any(getattr(self, field, None) is not None for field in required):
+                done.append(label)
+            elif next_step is None:
+                next_step = label
+        return done, next_step
+
+    def next_goal_step_id(self) -> Optional[str]:
+        """Return the first unmet step_id for the current goal, or None.
+
+        Used by the coordinator's goal-based fast-path classifier to map
+        next_step → owning domain without paying the LLM-classifier cost.
+        """
+        plan = self.GOAL_PLANS.get(self.goal_type or "", [])
+        for step_id, _label, required in plan:
+            if not any(getattr(self, field, None) is not None for field in required):
+                return step_id
+        return None
 
     @classmethod
     def has_product_keyword(cls, user_text: str) -> bool:
@@ -279,6 +393,23 @@ class ConversationSlots(BaseModel):
                 entity_lines.append(f"- {label}: {val}")
 
         blocks: list[str] = []
+
+        # Goal block — emitted FIRST so the agent reads "destination" before
+        # "current facts". One compact line keeps the token cost minimal
+        # (~30-80 chars) while still surfacing done/next progress so the agent
+        # can drive the user toward the next missing step instead of rehashing
+        # the whole flow. Always emitted regardless of include_pending_intent
+        # because goal awareness is useful for every agent (Discovery,
+        # Transaction, Support, Leading).
+        if self.goal_type:
+            goal_label = self.GOAL_LABELS.get(self.goal_type, self.goal_type)
+            done, next_step = self.evaluate_goal_progress()
+            parts = [f"목표: {goal_label}"]
+            if done:
+                parts.append(f"완료: {' · '.join(done)}")
+            if next_step:
+                parts.append(f"다음: {next_step}")
+            blocks.append("[" + " | ".join(parts) + "]")
 
         if entity_lines:
             blocks.append(
