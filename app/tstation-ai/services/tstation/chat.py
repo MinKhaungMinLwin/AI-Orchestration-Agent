@@ -1067,6 +1067,54 @@ class StreamingMultiAgentCoordinator:
                         skip_decision = True
                         continue
 
+                # P1-D stall recovery (DISCOVERY counterpart of P1-B): when
+                # domains was [DISCOVERY] alone and Discovery emitted a
+                # transactional handoff line (재고/가격/매장/주문 ... 이어갈게요/
+                # 이어드릴게요/확인해 드릴게요/진행해 드릴게요) WITHOUT calling
+                # any tool, with goods_no already resolved in slots. Without
+                # recovery, the user is stranded — the stream ends with only
+                # an "I'll continue" message and the actual transactional
+                # tool never runs.
+                #
+                # Conditions (ALL must hold):
+                #   1. The first/only domain executed was DISCOVERY.
+                #   2. `last_agent_called_tools is False` — Discovery did not
+                #      call any tool (legitimate Discovery turns calling
+                #      search_product_tool / get_youtube_video_tool stay untouched).
+                #   3. `full_response` matches the transactional handoff regex.
+                #   4. `goods_no` is set in slots — TRANSACTION can run.
+                #
+                # Recovery: extend `domains` IN-PLACE with [TRANSACTION]
+                # (mutation propagates to the active for-loop iterator).
+                if (
+                    domain == MultiAgentDomain.Domain.DISCOVERY
+                    and len(domains) == 1
+                    and not last_agent_called_tools
+                    and re.search(
+                        r"(재고|가격|매장|주문|장착|예약).{0,30}"
+                        r"(이어갈게요|이어드릴게요|확인해\s*드릴게요|진행해\s*드릴게요|진행할게요)",
+                        full_response or "",
+                    )
+                ):
+                    goods_no_set = False
+                    if session_id:
+                        try:
+                            from services.tstation.chat_history_service import get_chat_history_service
+
+                            post_slots = get_chat_history_service().get_slots(session_id)
+                            goods_no_set = post_slots.goods_no is not None
+                        except Exception as e:
+                            logger.warning(f"[COORDINATOR] P1-D slot check failed: {e}")
+                    if goods_no_set:
+                        logger.warning(
+                            "[COORDINATOR] P1-D stall recovery: DISCOVERY-only emitted "
+                            "transactional-handoff text with no tool call and goods_no "
+                            "set — extending chain to [TRANSACTION] as recovery."
+                        )
+                        domains.append(MultiAgentDomain.Domain.TRANSACTION)
+                        skip_decision = True
+                        continue
+
                 decision = decide_next_action(
                     original_messages=messages,
                     previous_agent_response=full_response,
@@ -1166,6 +1214,92 @@ _TRANSACTION_FAST_RE = re.compile(
 )
 
 
+# Goal-based fast-path routing tables — kept beside _goal_based_classify so the
+# classifier code and its decision data stay together. Only goal_types defined
+# in slots.py's GOAL_PLANS appear here; mismatches simply fall through to the
+# next classifier.
+_GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
+    # store_with_stock: model/size live in Discovery (search_product_tool),
+    # qty/shop in Transaction (qty quickReply + store search).
+    ("store_with_stock", "model"): MultiAgentDomain.Domain.DISCOVERY,
+    ("store_with_stock", "size"): MultiAgentDomain.Domain.DISCOVERY,
+    ("store_with_stock", "qty"): MultiAgentDomain.Domain.TRANSACTION,
+    ("store_with_stock", "shop"): MultiAgentDomain.Domain.TRANSACTION,
+    # price_inquiry: same product-resolution pipeline; final price is Transaction.
+    ("price_inquiry", "model"): MultiAgentDomain.Domain.DISCOVERY,
+    ("price_inquiry", "size"): MultiAgentDomain.Domain.DISCOVERY,
+    ("price_inquiry", "qty"): MultiAgentDomain.Domain.TRANSACTION,
+    # place_order: identical product pipeline + shop selection in Transaction.
+    ("place_order", "model"): MultiAgentDomain.Domain.DISCOVERY,
+    ("place_order", "size"): MultiAgentDomain.Domain.DISCOVERY,
+    ("place_order", "qty"): MultiAgentDomain.Domain.TRANSACTION,
+    ("place_order", "shop"): MultiAgentDomain.Domain.TRANSACTION,
+}
+
+# Where to route when every checklist step is satisfied — final tool call lives
+# here. product_recommend is intentionally excluded: its plan is empty so it
+# never reaches "completion" via this path; LLM classifier owns that turn.
+_GOAL_COMPLETE_DOMAIN: "dict[str, MultiAgentDomain.Domain]" = {
+    "store_with_stock": MultiAgentDomain.Domain.TRANSACTION,
+    "price_inquiry": MultiAgentDomain.Domain.TRANSACTION,
+    "place_order": MultiAgentDomain.Domain.TRANSACTION,
+}
+
+# When the user's latest turn signals a deliberate pivot away from the persisted
+# goal ("다른", "이번엔", "이전 추천 말고", etc.), skip the fast-path and let the
+# LLM classifier re-evaluate. Cheaper to spend one classifier call than to
+# mis-route a goal-switch turn through a stale checklist.
+_GOAL_SWITCH_RE = re.compile(r"다른|새로|이번엔|바꿔|이전\s*추천\s*말고", re.IGNORECASE)
+
+# Master toggle. Set False to disable goal-based fast-path without removing the
+# code (useful if downstream telemetry shows mis-routes; the LLM classifier
+# remains the safety net regardless).
+_GOAL_FAST_PATH_ENABLED = True
+
+
+def _goal_based_classify(
+    last_user_text: str,
+    merged_slots,
+) -> "list[MultiAgentDomain.Domain] | None":
+    """Goal-driven fast-path classifier.
+
+    When `merged_slots.goal_type` is set and the user message does not signal
+    a goal switch, route by the next missing checklist step (or the goal's
+    completion-domain when every step is satisfied).
+
+    Returns a single-domain list on hit, or None to fall through to
+    `_rule_based_classify` / the LLM classifier.
+
+    Pure function: no I/O, no LLM, ~tens of microseconds per call. Cost is
+    bounded by GOAL_PLANS size (≲5 steps).
+    """
+    if not _GOAL_FAST_PATH_ENABLED:
+        return None
+
+    goal_type = getattr(merged_slots, "goal_type", None)
+    if not goal_type:
+        return None
+
+    if last_user_text and _GOAL_SWITCH_RE.search(last_user_text):
+        logger.info("[GOAL_ROUTER] goal-switch keyword in text — falling through")
+        return None
+
+    next_step_id = merged_slots.next_goal_step_id()
+
+    if next_step_id is None:
+        domain = _GOAL_COMPLETE_DOMAIN.get(goal_type)
+        if domain is not None:
+            logger.info(f"[GOAL_ROUTER] goal={goal_type} all steps done → {domain.value}")
+            return [domain]
+        return None
+
+    domain = _GOAL_NEXT_STEP_DOMAIN.get((goal_type, next_step_id))
+    if domain is not None:
+        logger.info(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
+        return [domain]
+    return None
+
+
 def _rule_based_classify(
     last_user_text: str,
     merged_slots,
@@ -1248,16 +1382,28 @@ def _has_factual_claims(text: str) -> bool:
 _coordinator = StreamingMultiAgentCoordinator()
 
 
-def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
-    """Append template_data from Redis to the MOST RECENT matching assistant message only.
+# Cap on how many recent assistant card turns get template_data attached.
+# Past versions enriched only turn_age=0 (latest), which dropped product/store/
+# voucher card structure from earlier turns and forced the LLM to rely on
+# bubble text once a new card replaced the previous one. Multi-card flows
+# ("상품 추천 → 매장 검색 → 예약 시간") then lost cross-turn references like
+# "이 매장에 그 사이즈 재고 있어?". Capping at 5 keeps multi-turn references
+# resolvable while bounding the token cost (each card ≲ ~3KB JSON).
+_TEMPLATE_ENRICH_MAX_TURNS = 5
 
-    Older assistant turns with template_data used to be enriched too, which
-    inflated the LLM input by 200–1000 tokens per past card across long
-    multi-turn conversations. The Discovery prompt explicitly instructs the
-    model to use only the LATEST recommendation list, and the BE-filtered
-    tool_context (loaded as a separate system message) already preserves
-    older-turn data. Keeping only turn_age=0 here avoids the duplication
-    while preserving the common "이중에서 / 1번째" reference path.
+
+def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
+    """Attach template_data from Redis to recent assistant card turns.
+
+    Walks messages in reverse and enriches up to _TEMPLATE_ENRICH_MAX_TURNS
+    most-recent assistant turns whose content matches a Redis-stored
+    template_data entry. Each enriched turn gets a `[이전 선택된 상품 데이터]`
+    JSON appended to its content so the LLM can resolve references like
+    "두번째 매장", "그 사이즈" across multi-turn card flows.
+
+    Token-context concerns are bounded by the cap; the BE-filtered
+    tool_context (loaded as a separate system message) preserves additional
+    older-turn structured data.
     """
     if not session_id:
         return messages
@@ -1267,7 +1413,9 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
 
         redis_messages = get_chat_history_service().get_history(session_id)
 
-        # content -> template_data map
+        # content -> template_data map. If two assistant turns share identical
+        # content, the chronologically-latest template_data wins — acceptable
+        # because identical content typically implies identical structured data.
         template_map = {
             msg["content"]: msg["template_data"]
             for msg in redis_messages
@@ -1277,13 +1425,14 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
         if not template_map:
             return messages
 
-        # Enrich only the most recent matching assistant message.
-        # Walk in reverse so the first hit is turn_age=0; older matches are skipped.
+        enriched = 0
         for msg in reversed(messages):
+            if enriched >= _TEMPLATE_ENRICH_MAX_TURNS:
+                break
             if msg.get("role") == "assistant" and msg.get("content") in template_map:
                 template_str = json.dumps(template_map[msg["content"]], ensure_ascii=False)
                 msg["content"] += f"\n\n[이전 선택된 상품 데이터]\n{template_str}"
-                break
+                enriched += 1
 
         return messages
 
@@ -1934,9 +2083,14 @@ class TStationChatServiceV2:
             slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
-        # Try rule-based fast-path first; fall back to LLM classifier if undecided.
+        # Fast-path order: goal-based (deterministic checklist) → rule-based
+        # (regex) → LLM classifier (multi-intent, conversational context).
+        # Each layer returns None to defer to the next.
         routing_result = None
-        fast_domains = _rule_based_classify(last_user_text, merged_slots)
+        fast_domains = (
+            _goal_based_classify(last_user_text, merged_slots)
+            or _rule_based_classify(last_user_text, merged_slots)
+        )
         if fast_domains is not None:
             domains = fast_domains
             # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
@@ -1972,6 +2126,39 @@ class TStationChatServiceV2:
                 f"[COORDINATOR] Post-classification redirect: goods_no={merged_slots.goods_no!r} "
                 f"resolved from list-selection + pending_intent={merged_slots.pending_intent!r} "
                 f"→ [DISCOVERY] → [TRANSACTION]"
+            )
+            domains = [MultiAgentDomain.Domain.TRANSACTION]
+
+        # P0c redirect: classifier picked [DISCOVERY] but goods_no is ALREADY
+        # known (carried from a prior turn) AND the user expressed a FRESH
+        # transactional intent this turn (재고/가격/주문/매장). Without this,
+        # Discovery has no useful action — it would emit a fallback line like
+        # "재고 확인을 이어갈게요" without calling any tool, then the stream ends.
+        #
+        # Difference from the redirect above:
+        #   - The above requires `goods_no_resolved_this_turn=True` (just-resolved
+        #     via list-selection THIS turn).
+        #   - This one fires when goods_no was resolved in a PRIOR turn and
+        #     carried via slots into the current turn.
+        #
+        # Guard: `regex_slots.pending_intent is not None` — the intent must be
+        # FRESHLY expressed in the current user message (regex extraction over
+        # last_user_text). Using `merged_slots.pending_intent` would over-route
+        # cases where a stale intent lingers from many turns ago without the
+        # user re-asking. Fresh-intent guard prevents misrouting follow-up
+        # browse turns ("이 타이어 맞아?" / "다른 사이즈 있어?") that carry
+        # goods_no but no transactional anchor.
+        elif (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.DISCOVERY
+            and merged_slots.goods_no is not None
+            and regex_slots.pending_intent is not None
+        ):
+            logger.info(
+                f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
+                f"goods_no={merged_slots.goods_no!r} (carried), "
+                f"fresh_intent={regex_slots.pending_intent!r}, "
+                f"session_id={request.session_id} → domains=[TRANSACTION]"
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
