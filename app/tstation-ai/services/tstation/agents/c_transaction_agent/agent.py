@@ -964,7 +964,7 @@ Style rules for PROSE MODE:
   "type": "data",
   "template": "preOrder",
   "data": {{
-    "assistantResponse": "<ask user to confirm the order details>",
+    "assistantResponse": "<ONE short sentence asking for confirmation, e.g. '주문 내용을 확인해 주세요.' — NEVER list carInfo / product / quantity / storeName / bookingDateTime / paymentAmount values in this string; those are rendered by the orderInfo card and re-stating them creates a duplicate giant text bubble above the card>",
     "orderInfo": {{
       "carInfo": "<car_nm (car_no) | null if both genuinely missing — see CAR INFO RESOLUTION below>",
       "product": "<goods_nm (goods_no)>",
@@ -1044,8 +1044,14 @@ For template turns (voucher / location / datepick / preOrder / orderComplete):
 - Do NOT write a placeholder like "결과를 확인해 주세요" without any context.
 
 For `preOrder`:
-- Confirm what you know (vehicle, product, store, date if selected, price if available).
-- Explicitly ask the user to confirm before the order is placed.
+- `assistantResponse` MUST be ONE short Korean sentence (≤ 30 chars) asking for confirmation.
+  Recommended: exactly "주문 내용을 확인해 주세요." or "주문 정보를 확인해 주세요."
+- NEVER list carInfo / product / quantity / storeName / bookingDateTime / paymentAmount
+  in `assistantResponse`. The FE renders an `orderInfo` card immediately below the
+  text bubble that already shows every one of those fields — repeating them in
+  `assistantResponse` produces a giant duplicate text bubble above the card.
+- Detailed order data goes ONLY in `orderInfo`. Confirmation question goes ONLY in
+  `assistantResponse`. They never overlap.
 
 For `orderComplete`:
 - On success: confirm what was done and give the order number if available.
