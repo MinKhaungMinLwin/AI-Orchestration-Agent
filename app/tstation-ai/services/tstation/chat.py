@@ -295,7 +295,7 @@ DOMAIN ROUTING EXAMPLES
 ====================================================
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
-1. "i want to buy tires for 29조3344" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
+1. "i want to buy tires for 12가3456" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
 2. "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
 3. "벤투스 S2 가격" / "Dynapro HPX 얼마야?" → DISCOVERY (resolve goods_no first → STOP)
 4. "벤투스 S2 재고 확인해줘" → DISCOVERY (resolve goods_no → STOP)
@@ -1726,64 +1726,71 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def _resolve_tire_size_from_car_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
-        """Match a user's vehicle-selection reply against the prior
-        get_my_cars_tool / get_user_vehicles_tool result and return the
-        tire_size_fr of the matched car.
+    def _resolve_tire_size_from_history_template(user_text: str, history: list[dict]) -> str | None:
+        """Match a user's vehicle-selection reply against the metadata of the
+        most recent assistant message that rendered a `listCar` template, and
+        return the picked car's tireSize.
 
-        Why selection-time (not auto-fill on tool result):
-          The discovery prompt always emits a `listCar` card and waits for the
-          user to pick a vehicle, even when only one car is registered. Filling
-          tire_size pre-emptively from the tool result would be wrong if the
-          user later asks about a non-registered vehicle. Resolving at the user
-          pick turn ties tire_size to the explicit selection.
+        Mirrors `_resolve_shop_id_from_history_template` for cars. Uses the
+        listCar template metadata as the source of truth because:
+          - filter_for_context drops car_no as PII, so prev_tool_data has no
+            usable per-car identifiers.
+          - The listCar metadata is what was actually shown to the user and is
+            persisted to Redis history (template_data field).
+          - tireSize / tireSizeRe were added to CarMeta specifically so that
+            tire_size can be recovered at selection time without an extra LLM
+            tool call.
+
+        Expected history msg shape (from chat_history_service.get_history):
+            {"role": "assistant", "content": "...",
+             "template_data": {"type": "data", "template": "listCar",
+                               "data": {"listCar": [{"licensePlate": "12가3456",
+                                                     "info": "K7 2.5 GDI", ...}],
+                                        "metadata": [{"carNo": "12가3456",
+                                                      "carLncCd": "01",
+                                                      "tireSize": "225/45R17",
+                                                      "tireSizeRe": "225/45R17"}]}}}
 
         Matching strategy (first hit wins):
-          1. License plate verbatim ("29조3344", "12가3456") — anywhere in text.
-          2. Ordinal at the start ("1.", "1번", "2)") → items[idx-1].
-          3. Token-overlap against car_model_nm — only resolves when exactly ONE
-             car has the top score (≥1 token match).
-
-        Expected tool_context entry shape (from filter_for_context):
-            {"tool": "get_my_cars_tool" | "get_user_vehicles_tool",
-             "data": [{"car_no": "29조3344", "car_model_nm": "제타",
-                       "tire_size_fr": "225/45R17", "car_lnc_cd": "W036270"}],
-             "input": {...}}
+          1. License plate verbatim ("12가3456", "123가4567") against carNo.
+          2. Ordinal at the start ("1.", "1번", "2)") → metadata[idx-1].
+          3. Token-overlap against listCar[i].info — unique top scorer required.
         """
-        if not user_text or not prev_tool_data:
+        if not user_text or not history:
             return None
 
-        CAR_TOOLS = {"get_my_cars_tool", "get_user_vehicles_tool"}
-        items: list[dict] = []
-        for entry in prev_tool_data:
-            if entry.get("tool") not in CAR_TOOLS:
+        latest_listcar: dict | None = None
+        for msg in reversed(history):
+            if msg.get("role") != "assistant":
                 continue
-            data = entry.get("data")
-            if isinstance(data, list):
-                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
-                break
+            template_data = msg.get("template_data")
+            if not isinstance(template_data, dict):
+                continue
+            if template_data.get("template") != "listCar":
+                continue
+            data = template_data.get("data")
             if isinstance(data, dict):
-                for key in ("items", "cars", "vehicles", "memberCars", "member_cars"):
-                    candidate = data.get(key)
-                    if isinstance(candidate, list):
-                        items = [it for it in candidate if isinstance(it, dict)]
-                        break
-                if items:
-                    break
-        if not items:
+                latest_listcar = data
+                break
+        if latest_listcar is None:
+            return None
+
+        cars = latest_listcar.get("listCar") or []
+        metadata = latest_listcar.get("metadata") or []
+        if not isinstance(cars, list) or not isinstance(metadata, list) or not metadata:
             return None
 
         text = user_text.strip()
 
-        # 1. License plate match: covers both old (29조3344) and new (123가4567)
-        # Korean plate formats. Match against any car_no/license_plate variant.
+        # 1. License plate match against metadata[i].carNo.
         plate_match = re.search(r"\d{2,3}[가-힣]\d{4}", text)
         if plate_match:
             target_plate = plate_match.group(0)
-            for item in items:
-                plate = item.get("car_no") or item.get("license_plate") or item.get("licensePlate") or ""
-                if plate == target_plate:
-                    tire_size = item.get("tire_size_fr") or item.get("tireSizeFr")
+            for meta in metadata:
+                if not isinstance(meta, dict):
+                    continue
+                if meta.get("carNo") == target_plate:
+                    tire_size = meta.get("tireSize")
                     if tire_size:
                         return tire_size
 
@@ -1791,26 +1798,29 @@ class TStationChatServiceV2:
         ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
         if ordinal_match:
             idx = int(ordinal_match.group(1)) - 1
-            if 0 <= idx < len(items):
-                tire_size = items[idx].get("tire_size_fr") or items[idx].get("tireSizeFr")
-                if tire_size:
-                    return tire_size
+            if 0 <= idx < len(metadata):
+                meta = metadata[idx]
+                if isinstance(meta, dict):
+                    tire_size = meta.get("tireSize")
+                    if tire_size:
+                        return tire_size
 
-        # 3. Token-overlap against car_model_nm. Require unique top scorer to
-        # avoid resolving ambiguous picks across same-model duplicates.
+        # 3. Token-overlap against listCar[i].info. Require unique top scorer.
         tokens = [t for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
         if tokens:
             scored: list[tuple[int, dict]] = []
-            for item in items:
-                model_nm = (item.get("car_model_nm") or item.get("carModelNm") or "").lower()
-                score = sum(1 for tok in tokens if tok.lower() in model_nm)
+            for car, meta in zip(cars, metadata):
+                if not isinstance(car, dict) or not isinstance(meta, dict):
+                    continue
+                info = (car.get("info") or car.get("description") or "").lower()
+                score = sum(1 for tok in tokens if tok.lower() in info)
                 if score > 0:
-                    scored.append((score, item))
+                    scored.append((score, meta))
             if scored:
                 max_score = max(s for s, _ in scored)
-                top = [item for s, item in scored if s == max_score]
+                top = [meta for s, meta in scored if s == max_score]
                 if len(top) == 1:
-                    tire_size = top[0].get("tire_size_fr") or top[0].get("tireSizeFr")
+                    tire_size = top[0].get("tireSize")
                     if tire_size:
                         return tire_size
 
@@ -2164,24 +2174,30 @@ class TStationChatServiceV2:
                     )
 
             # 3.85) Resolve tire_size from the user's vehicle-selection reply matched
-            # against the most recent get_my_cars_tool / get_user_vehicles_tool result.
-            # Without this, a 1-car listCar pick that the LLM later "answers from memory"
-            # (skipping get_products_recommendations_tool) leaves tire_size=None — and
-            # subsequent "구매할게" / "매장 선택 후 주문" turns then fail the goal-router's
-            # `size` step and route to Discovery instead of Transaction. Selection-time
-            # matching ties tire_size to the explicit user pick (license plate / ordinal /
-            # car_model_nm), so it stays correct even if the user picks a different car
-            # than the auto-default.
-            if merged_slots.tire_size is None and prev_tool_data:
-                resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_car_selection(
-                    last_user_text, prev_tool_data
-                )
-                if resolved_tire_size:
-                    merged_slots.tire_size = resolved_tire_size
-                    logger.info(
-                        f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
-                        f"vehicle-selection against prior member-cars tool result"
+            # against the metadata of the most recent `listCar` template.
+            # filter_for_context drops car_no as PII, so prev_tool_data has no
+            # car identifiers to match against — instead we read the listCar
+            # template metadata (which now carries tireSize / tireSizeRe per
+            # entry, populated by _map_list_car). Without this, a listCar pick
+            # that the LLM later "answers from memory" (skipping
+            # get_products_recommendations_tool) leaves tire_size=None — and
+            # subsequent "구매할게" / "매장 선택 후 주문" turns then fail the
+            # goal-router's `size` step and route to Discovery instead of
+            # Transaction.
+            if merged_slots.tire_size is None:
+                try:
+                    history = chat_history_svc.get_history(request.session_id)
+                    resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
+                        last_user_text, history
                     )
+                    if resolved_tire_size:
+                        merged_slots.tire_size = resolved_tire_size
+                        logger.info(
+                            f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
+                            f"vehicle-selection against last `listCar` template metadata"
+                        )
+                except Exception as e:
+                    logger.warning(f"[SLOTS] history tire_size resolver failed: {e}")
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
             # the most recent get_nearby_stores_tool / get_store_list_tool result.

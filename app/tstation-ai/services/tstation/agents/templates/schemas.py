@@ -393,12 +393,22 @@ class ProductDataEvent(BaseModel):
 
 
 class CarMeta(BaseModel):
-    """Hidden FE metadata for a car selection card."""
+    """Hidden FE metadata for a car selection card.
+
+    `tireSize` / `tireSizeRe` are populated from the BE vehicle response
+    (`tire_size_fr` / `tire_size_re`) so that when the user picks a car the
+    coordinator can resolve the correct tire size into slots — without
+    needing the LLM to re-issue a recommendation tool call. Front rear
+    asymmetry is preserved (a few performance/SUV trims have different
+    sizes per axle).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     carNo: str = Field(..., min_length=1)
     carLncCd: str | None = None
+    tireSize: str | None = None
+    tireSizeRe: str | None = None
 
 
 class CarItem(BaseModel):

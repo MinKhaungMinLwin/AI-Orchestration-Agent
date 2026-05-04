@@ -685,7 +685,7 @@ Hard rules:
       }}
     ],
     "metadata": [
-      {{"carNo": "12가3456", "carLncCd": "01"}}
+      {{"carNo": "12가3456", "carLncCd": "01", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"}}
     ]
   }}
 }}
@@ -760,6 +760,8 @@ Backend → FE mapping for `listCar` (from `get_my_cars_tool` / `get_user_vehicl
 | `car_image_url`                     | `imageUrl` (use `""` if missing)                     |
 | `car_no`                            | `metadata[i].carNo`                                  |
 | `car_lnc_cd`                        | `metadata[i].carLncCd` (omit/null if missing)        |
+| `tire_size_fr`                      | `metadata[i].tireSize` (omit/null if missing)        |
+| `tire_size_re`                      | `metadata[i].tireSizeRe` (omit/null if missing)      |
 
 Backend → FE mapping for `cheapestProduct` (from `compare_discount_tool`):
 
