@@ -1,0 +1,594 @@
+from abc import ABC
+from collections.abc import Callable
+from typing import Any, TypeVar
+import json
+import logging
+import re
+
+from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
+from langchain.agents import create_agent
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+
+
+# Validation 실패 시 사용자에게 빈 화면(silent dead-end) 대신 보여줄 안내.
+# OUTPUT_TEMPLATE을 emit하려다 schema 검증이 깨진 경우, FE는 stream 종료
+# 토큰(\n\n)만 받아 "응답 없음"으로 보였다. quickReply로 fallback하면
+# 최소한 사용자가 다음 행동을 선택할 수 있다.
+_VALIDATION_FALLBACK_MESSAGE = (
+    "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
+    "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
+)
+_VALIDATION_FALLBACK_QUICK_REPLIES = ["다시 시도", "상담사 연결", "처음으로"]
+
+
+class _AssistantResponseStreamer:
+    """OUTPUT_TEMPLATE 응답에서 `assistantResponse` 값만 토큰 단위로 흘려보내는
+    state machine. 이게 없으면 LeadingAgent처럼 fenced JSON을 출력하는 agent는
+    JSON이 닫힐 때까지 모든 토큰을 버퍼링하므로, 사용자는 답이 다 만들어질 때까지
+    스피너만 본다 (체감 latency의 핵심 원인).
+    """
+
+    _KEY = '"assistantResponse"'
+    _ESCAPE_MAP = {'"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+
+    def __init__(self):
+        self._buf = ""
+        self._state = "SEARCHING"
+        self._streamed_text = ""
+
+    @property
+    def streamed_any(self) -> bool:
+        return bool(self._streamed_text)
+
+    @property
+    def streamed_text(self) -> str:
+        return self._streamed_text
+
+    @property
+    def finished(self) -> bool:
+        return self._state == "DONE"
+
+    def feed(self, chunk: str) -> str:
+        out: list[str] = []
+        self._buf += chunk
+        while True:
+            if self._state == "SEARCHING":
+                idx = self._buf.find(self._KEY)
+                if idx < 0:
+                    # key가 청크 경계에 걸칠 수 있으니 끝부분만 남긴다.
+                    keep = len(self._KEY) - 1
+                    if len(self._buf) > keep:
+                        self._buf = self._buf[-keep:]
+                    break
+                self._buf = self._buf[idx + len(self._KEY):]
+                self._state = "AWAIT_COLON"
+            elif self._state == "AWAIT_COLON":
+                idx = self._buf.find(":")
+                if idx < 0:
+                    break
+                self._buf = self._buf[idx + 1:]
+                self._state = "AWAIT_QUOTE"
+            elif self._state == "AWAIT_QUOTE":
+                idx = self._buf.find('"')
+                if idx < 0:
+                    break
+                self._buf = self._buf[idx + 1:]
+                self._state = "INSIDE"
+            elif self._state == "INSIDE":
+                emitted, consumed, finished = self._decode_inside(self._buf)
+                if emitted:
+                    out.append(emitted)
+                self._buf = self._buf[consumed:]
+                if finished:
+                    self._state = "DONE"
+                break
+            else:
+                self._buf = ""
+                break
+        result = "".join(out)
+        if result:
+            self._streamed_text += result
+        return result
+
+    @classmethod
+    def _decode_inside(cls, s: str) -> tuple[str, int, bool]:
+        out: list[str] = []
+        i = 0
+        n = len(s)
+        while i < n:
+            ch = s[i]
+            if ch == '"':
+                return ("".join(out), i + 1, True)
+            if ch == "\\":
+                if i + 1 >= n:
+                    break
+                esc = s[i + 1]
+                if esc == "u":
+                    if i + 6 > n:
+                        break
+                    try:
+                        out.append(chr(int(s[i + 2:i + 6], 16)))
+                    except ValueError:
+                        out.append(s[i:i + 6])
+                    i += 6
+                    continue
+                out.append(cls._ESCAPE_MAP.get(esc, esc))
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return ("".join(out), i, False)
+
+
+TOOL_DISPLAY_NAMES: dict[str, str] = {
+    # Discovery
+    "check_compatibility_tool": "차량-타이어 호환 확인 중...",
+    "search_product_tool": "상품 검색 중...",
+    "get_user_vehicles_tool": "차량 정보 조회 중...",
+    "get_my_cars_tool": "내 차량 조회 중...",
+    "search_car_model_tool": "차량 모델 검색 중...",
+    "search_car_model_groups_tool": "차종 모델 검색 중...",
+    "get_car_trims_tool": "차량 트림 조회 중...",
+    "get_product_description_tool": "상품 상세 정보 조회 중...",
+    "get_products_recommendations_tool": "상품 추천 조회 중...",
+    "get_events_tool": "이벤트 목록 조회 중...",
+    "get_deals_tool": "기획전 목록 조회 중...",
+    "compare_discount_tool": "할인 가격 비교 중...",
+    "search_youtube_video_tool": "유튜브 영상 검색 중...",
+    # Transaction
+    "get_final_price_tool": "가격 정보 조회 중...",
+    "get_available_coupons_tool": "사용 가능 쿠폰 조회 중...",
+    "get_my_coupons_tool": "내 쿠폰 조회 중...",
+    "get_logistics_inventory_tool": "재고 확인 중...",
+    "get_store_inventory_tool": "매장 재고 확인 중...",
+    "search_place_tool": "위치 검색 중...",
+    "get_nearby_stores_tool": "주변 매장 검색 중...",
+    "get_store_list_tool": "매장 목록 조회 중...",
+    "get_store_detail_tool": "매장 상세 정보 조회 중...",
+    "save_to_cart_tool": "장바구니에 담는 중...",
+    "quick_order_tool": "주문서 작성 중...",
+    "get_order_status_tool": "주문 현황 조회 중...",
+    "get_orders_of_user_tool": "주문 내역 조회 중...",
+    # Support
+    "get_faq_tool": "자주 묻는 질문 검색 중...",
+    "search_faq_rag_tool": "질문 검색 중...",
+    "escalate_tool": "상담사 연결 중...",
+    "transfer_to_qna_tool": "1:1 문의 페이지 준비 중...",
+    # UI Template
+    "quick_reply_tool": "응답 생성 중...",
+    "list_car_tool": "차량 목록 준비 중...",
+    "list_product_tool": "상품 목록 준비 중...",
+    "list_voucher_tool": "쿠폰 목록 준비 중...",
+    "list_location_tool": "매장 목록 준비 중...",
+    "list_event_tool": "이벤트 목록 준비 중...",
+    "list_preview_youtube_tool": "영상 목록 준비 중...",
+    "available_dates_tool": "예약 날짜 준비 중...",
+    "preorder_tool": "주문서 준비 중...",
+    "qna_complete_tool": "문의 페이지 준비 중...",
+    "order_complete_tool": "주문 완료 처리 중...",
+    "cheapest_product_tool": "가격 비교 결과 준비 중...",
+}
+
+
+class BaseAgent(ABC):
+    """Base agent class with streaming support for agent name and AF (Agent Function) mapping."""
+
+    TOOL_TO_AF_MAP: dict[str, str] = {}
+    TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
+    RESPONSE_FORMAT: type[BaseModel] | dict | None = None
+    OUTPUT_TEMPLATE: Any = None
+
+    def __init__(self, model, tools: list | None = None, system_prompt: str | Callable[[], str] = "", name: str = ""):
+        self.name = name
+        self._model = model
+        self._tools = tools
+        self._system_prompt = system_prompt
+
+    def _build_agent(self):
+        prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
+        return create_agent(
+            model=self._model,
+            tools=self._tools,
+            response_format=self.RESPONSE_FORMAT,
+            debug=True,
+            system_prompt=prompt,
+            name=self.name,
+        )
+
+    def invoke(self, messages: list[dict], config: dict | None = None) -> str:
+        agent = self._build_agent()
+        result = agent.invoke({"messages": messages}, config=config)
+        return result["messages"][-1].content
+
+    def stream(self, messages: list[dict], config: dict | None = None):
+        """
+        Supported Stream modes:
+        - status: Lifecycle markers — thinking (start), answering (before first token)
+        - agent_flow: Agent name or AF when active (for UI display)
+        - tokens: AI response tokens
+        - message: Agent messages with agent name
+        - tool_start: Emitted before a tool runs, with display_name for UI typing indicator
+        - tool: Tool execution results with tool name, input, and output
+        - data: Final UI template payload from structured response
+        """
+        agent = self._build_agent()
+        tool_calls_map: dict[str, dict] = {}
+        answering_emitted = False
+        prompt_template = self.OUTPUT_TEMPLATE
+        suppress_tokens = prompt_template is not None
+        accumulated_text = ""
+        accumulated_tool_data: list[dict] = []
+        response_streamer = _AssistantResponseStreamer() if suppress_tokens else None
+
+        yield {"type": "status", "status": "생각 중..."}
+
+        for mode, chunk in agent.stream(
+            {"messages": messages},
+            stream_mode=["messages", "updates"],
+            config=config,
+        ):
+            if mode == "messages":
+                token, _ = chunk
+                if isinstance(token, AIMessageChunk) and token.text:
+                    if suppress_tokens:
+                        accumulated_text += token.text
+                        streamed = response_streamer.feed(token.text)
+                        if streamed:
+                            if not answering_emitted:
+                                yield {"type": "status", "status": "답변 중..."}
+                                answering_emitted = True
+                            yield {"type": "token", "content": streamed}
+                        continue
+                    if not answering_emitted:
+                        yield {"type": "status", "status": "답변 중..."}
+                        answering_emitted = True
+                    yield {"type": "token", "content": token.text}
+
+            elif mode == "updates":
+                for node, update in chunk.items():
+                    if "structured_response" in update:
+                        data_event = self._build_data_event(update["structured_response"])
+                        if data_event is not None:
+                            assistant_response = self._get_assistant_response(data_event)
+                            if assistant_response:
+                                if not answering_emitted:
+                                    yield {"type": "status", "status": "답변 중..."}
+                                    answering_emitted = True
+                                yield {"type": "token", "content": assistant_response}
+                                yield {
+                                    "type": "message",
+                                    "content": assistant_response,
+                                    "node": node,
+                                    "agent": self.name,
+                                }
+                            yield data_event
+
+                    message = update["messages"][-1]
+                    if isinstance(message, AIMessage):
+                        if hasattr(message, "tool_calls") and message.tool_calls:
+                            for tc in message.tool_calls:
+                                if self._is_internal_structured_tool(tc["name"]):
+                                    continue
+                                tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
+                                display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "답변 중...")
+                                yield {
+                                    "type": "status",
+                                    "status": "tool_start",
+                                    "tool": tc["name"],
+                                    "display_name": display_name,
+                                }
+                        if suppress_tokens:
+                            continue
+                        yield {
+                            "type": "message",
+                            "content": message.content,
+                            "node": node,
+                            "agent": self.name,
+                        }
+                    elif isinstance(message, ToolMessage):
+                        if self._is_internal_structured_tool(message.name):
+                            continue
+                        af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
+                        tool_status = "success"
+                        tool_result: Any = None
+                        try:
+                            tool_result = (
+                                json.loads(message.content) if isinstance(message.content, str) else message.content
+                            )
+                            if isinstance(tool_result, dict):
+                                tool_status = tool_result.get("status", "success")
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        tool_input = tool_calls_map.get(message.tool_call_id, {})
+                        if tool_result is not None:
+                            # Capture input args alongside the result so the
+                            # template mapper can correlate same-turn tool calls
+                            # by shop_id / cal_day (e.g., merge get_store_detail
+                            # data into a get_store_list location card).
+                            accumulated_tool_data.append({
+                                "tool": message.name,
+                                "data": tool_result,
+                                "args": tool_input.get("args", {}),
+                            })
+                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "agent_class": self.name, "status": tool_status}
+                        yield {
+                            "type": "tool",
+                            "input": tool_input.get("args", {}),
+                            "output": message.content,
+                            "node": node,
+                            "tool": message.name,
+                        }
+
+        # Phase 2B: prefer code-based template mapping over LLM fenced JSON.
+        # When a deterministically-mappable tool was used, build the data event
+        # in code from accumulated_tool_data — saves the LLM from emitting the
+        # full FE JSON payload (the dominant 2nd-call output token cost).
+        code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
+        if code_event is not None:
+            assistant_response = self._get_assistant_response(code_event)
+            already_streamed = response_streamer is not None and response_streamer.streamed_any
+            if assistant_response:
+                if not answering_emitted:
+                    yield {"type": "status", "status": "답변 중..."}
+                    answering_emitted = True
+                if not already_streamed:
+                    yield {"type": "token", "content": assistant_response}
+                yield {
+                    "type": "message",
+                    "content": assistant_response,
+                    "agent": self.name,
+                }
+            yield code_event
+            yield {"type": "token", "content": "\n\n"}
+            return
+
+        if prompt_template is not None and accumulated_text:
+            data_event = self._build_data_event_from_text(accumulated_text, prompt_template)
+            already_streamed = response_streamer is not None and response_streamer.streamed_any
+            if data_event is not None:
+                assistant_response = self._get_assistant_response(data_event)
+                if assistant_response:
+                    if not answering_emitted:
+                        yield {"type": "status", "status": "답변 중..."}
+                        answering_emitted = True
+                    # 점진적 streaming으로 이미 prose를 보낸 경우 token 재전송은
+                    # 화면에 응답이 두 번 쌓이게 만든다.
+                    if not already_streamed:
+                        yield {"type": "token", "content": assistant_response}
+                    yield {
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": self.name,
+                    }
+                yield data_event
+            else:
+                # _build_data_event_from_text가 이미 error 로그를 남겼다.
+                # 여기서는 빈 \n\n만 보내는 대신 사용자에게 fallback quickReply를
+                # 노출해 silent dead-end UX를 방지한다.
+                if not answering_emitted:
+                    yield {"type": "status", "status": "답변 중..."}
+                    answering_emitted = True
+                if already_streamed:
+                    # prose는 이미 흘러갔으므로 fallback 메시지 중복 송출은 피하고
+                    # 마무리용 quickReply chips만 추가한다.
+                    yield {
+                        "type": "data",
+                        "template": "quickReply",
+                        "data": {
+                            "assistantResponse": response_streamer.streamed_text,
+                            "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
+                        },
+                    }
+                else:
+                    # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
+                    # template_mapper couldn't build a card — e.g., zero-result
+                    # search where the model honored the "prose mode" rule but
+                    # the mapper found no items to render. Treat the raw text
+                    # as the assistant's prose answer rather than showing the
+                    # generic validation-failure apology.
+                    prose_only = accumulated_text.strip()
+                    if prose_only and self._extract_fenced_json(accumulated_text) is None:
+                        yield {"type": "token", "content": prose_only}
+                        yield {
+                            "type": "message",
+                            "content": prose_only,
+                            "agent": self.name,
+                        }
+                        yield {
+                            "type": "data",
+                            "template": "quickReply",
+                            "data": {
+                                "assistantResponse": prose_only,
+                                "quickReplies": [],
+                            },
+                        }
+                    else:
+                        yield from self._yield_validation_fallback()
+
+        yield {"type": "token", "content": "\n\n"}
+
+    def _yield_validation_fallback(self):
+        """OUTPUT_TEMPLATE 검증 실패 시 사용자 가시 fallback 이벤트 시퀀스.
+
+        성공 경로(token → message → data)와 같은 형태로 emit하여
+        FE/coordinator가 일관되게 처리할 수 있게 한다.
+        """
+        message = _VALIDATION_FALLBACK_MESSAGE
+        yield {"type": "token", "content": message}
+        yield {
+            "type": "message",
+            "content": message,
+            "agent": self.name,
+        }
+        yield {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": message,
+                "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
+            },
+        }
+
+    def _build_data_event(self, structured_response: BaseModel | dict | None) -> dict | None:
+        """Convert structured response into the FE `data` event shape."""
+        if structured_response is None:
+            return None
+
+        payload = (
+            structured_response.model_dump() if isinstance(structured_response, BaseModel) else structured_response
+        )
+        if not isinstance(payload, dict):
+            logger.warning("[%s] Structured response is not a dict — skipping data event", self.name)
+            return None
+
+        if payload.get("type") != "data":
+            logger.warning("[%s] Structured response missing type='data' — skipping", self.name)
+            return None
+
+        if not isinstance(payload.get("template"), str):
+            logger.warning("[%s] Structured response missing template — skipping", self.name)
+            return None
+
+        if not isinstance(payload.get("data"), dict):
+            logger.warning("[%s] Structured response missing data object — skipping", self.name)
+            return None
+
+        return payload
+
+    @staticmethod
+    def _get_assistant_response(data_event: dict) -> str:
+        data = data_event.get("data", {})
+        if not isinstance(data, dict):
+            return ""
+        assistant_response = data.get("assistantResponse")
+        return assistant_response if isinstance(assistant_response, str) else ""
+
+    def _build_data_event_from_text(self, text: str, template_cls: Any) -> dict | None:
+        """Extract a fenced JSON object from `text`, validate it against `template_cls`,
+        and return a `data` event ready to yield. Returns None on any failure.
+
+        On failure, logs at error level so missed structured-output turns are observable
+        (the coordinator will fall back to the legacy UI Template Agent path).
+        """
+        raw = self._extract_fenced_json(text)
+        if raw is None:
+            logger.error(
+                "[%s] No fenced JSON block found in agent response — falling back to legacy UI path",
+                self.name,
+            )
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error("[%s] Invalid JSON in agent response: %s", self.name, exc)
+            return None
+        try:
+            validated = TypeAdapter(template_cls).validate_python(parsed)
+        except ValidationError as exc:
+            logger.error(
+                "[%s] Output JSON failed schema validation (template=%s): %s",
+                self.name,
+                parsed.get("template") if isinstance(parsed, dict) else None,
+                exc.errors(include_url=False),
+            )
+            return None
+        return self._build_data_event(validated)
+
+    @staticmethod
+    def _extract_fenced_json(text: str) -> str | None:
+        matches = _FENCED_JSON_RE.findall(text)
+        return matches[-1] if matches else None
+
+    @staticmethod
+    def _is_internal_structured_tool(tool_name: str) -> bool:
+        return tool_name.startswith("response_format_")
+
+    @staticmethod
+    def _try_code_template(
+        accumulated_tool_data: list[dict],
+        response_streamer: "_AssistantResponseStreamer | None",
+        accumulated_text: str,
+    ) -> dict | None:
+        """Attempt deterministic FE-template construction from tool outputs.
+
+        Returns a `data` event dict if any tool in accumulated_tool_data has a
+        registered code mapper AND the mapper produced a valid event.
+        Returns None to signal "fall through to fenced-JSON path".
+
+        If the LLM emitted an explicit fenced JSON block, defer to it — the
+        agent has chosen its own template (e.g. comparison intent → quickReply
+        instead of the default cheapestProduct mapper).
+        """
+        if not accumulated_tool_data:
+            return None
+        if BaseAgent._extract_fenced_json(accumulated_text) is not None:
+            return None
+        from services.tstation.template_mapper import _MAPPERS, try_build_template
+        if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
+            return None
+        prose = (
+            response_streamer.streamed_text
+            if response_streamer is not None and response_streamer.streamed_any
+            else accumulated_text
+        )
+        return try_build_template(accumulated_tool_data, prose)
+
+    def stream_template(self, messages: list[dict], config: dict | None = None):
+        """
+        Stream that transforms tool calls into data template events.
+        Yields ONLY data events (no token or agent_flow events).
+
+        Use this when you want to format tool outputs as UI templates directly.
+        """
+        import json
+        import logging
+
+        logger = logging.getLogger(__name__)
+        agent = self._build_agent()
+
+        tool_called = False
+
+        for mode, chunk in agent.stream(
+            {"messages": messages},
+            stream_mode=["messages", "updates"],
+            config=config,
+        ):
+            if mode == "updates":
+                for node, update in chunk.items():
+                    message = update["messages"][-1]
+                    if isinstance(message, ToolMessage):
+                        tool_called = True
+                        template_name = self.TOOL_TO_TEMPLATE_MAP.get(message.name)
+                        if not template_name:
+                            logger.warning(f"[UI_TEMPLATE] Tool {message.name} has no template mapping")
+                            continue
+                        # Parse tool output (message.content is JSON string)
+                        try:
+                            tool_output = json.loads(message.content)
+                            tool_data = tool_output.get("data", {})
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(f"[UI_TEMPLATE] Failed to parse tool output for {message.name}")
+                            tool_data = {}
+
+                        # Skip if tool_data is null or empty
+                        if not tool_data:
+                            logger.warning(f"[UI_TEMPLATE] Empty tool_data for {message.name}, skipping")
+                            continue
+
+                        # Yield data event with tool's actual output data
+                        yield {
+                            "type": "data",
+                            "template": template_name,
+                            "data": tool_data,
+                        }
+
+        if not tool_called:
+            logger.warning("[UI_TEMPLATE] Agent generated no tool calls — templates not rendered")
