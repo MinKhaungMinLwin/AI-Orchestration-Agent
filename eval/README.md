@@ -1,310 +1,141 @@
-# Eval — LLM-as-Judge Faithfulness Benchmark
+# Eval — Faithfulness Benchmark
 
-Benchmark framework to evaluate **faithfulness**, **latency**, and **consistency** across LLM models for `tstation-ai`.
+LLM-as-Judge evaluation for chatbot faithfulness. Results are saved directly to Langfuse.
 
-**Faithfulness** = chatbot response does not hallucinate relative to actual tool output (grounded in live API evidence, not training data).
-
----
-
-## How it works
-
-```text
-test_cases_from_excel.json
-        ↓ single-turn user messages
-  tstation-ai chatbot  (live SSE API call)
-        ↓ tool_evidence + template_events + timing
-  Judge LLM  (AI Gateway)
-        ↓ faithfulness score 0.0–1.0
-  results/benchmark_<model>.json   ← one file per model
-        ↓
-  python eval/summarize_results.py
-        ↓
-  results/benchmark_summary.json   ← aggregate across all models
-```
-
-Only **discovery_agent** and **transaction_agent** responses count toward scores.
-Multi-turn test cases are automatically skipped (single-turn only).
+**Faithfulness** = does the bot's response match the actual tool call data (no hallucinations)?
 
 ---
 
 ## Setup
 
-**1. Set env vars in `docker/.env`:**
+Set these variables in `docker/.env`:
 
 ```env
-EVAL_JWT_TOKEN=your_jwt_token_here     # JWT to call chatbot API
-AI_GATEWAY_API_KEY=sk-xxxx             # Judge LLM API key
+EVAL_JWT_TOKEN=your_jwt_token          # JWT to call chatbot API
+AI_GATEWAY_API_KEY=sk-xxxx             # API key for judge LLM
 HTTPS_PORT=8001                        # nginx HTTPS port (default 8001)
-```
-
-**2. Start the stack:**
-
-```powershell
-just start
+LANGFUSE_PUBLIC_KEY=pk-lf-xxx          # Langfuse project public key
+LANGFUSE_SECRET_KEY=sk-lf-xxx          # Langfuse project secret key
+LANGFUSE_HOST=http://localhost:3002    # Langfuse host (default localhost:3002)
 ```
 
 ---
 
-## Run — single model
+## Step 1 — Upload dataset to Langfuse (run once)
 
-```powershell
-python eval/run_eval.py --model-endpoint gpt-4.1=https://localhost:8001/api --limit 20
+```bash
+python eval/upload_dataset.py
 ```
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--model-endpoint model=url` | reads `AI_MODEL` + `EVAL_API_URL` from env | Model label and API URL |
-| `--limit N` | `5` | Max test cases (`0` = all) |
-| `--agents AGENT [...]` | `discovery_agent transaction_agent` | Only run cases for these agents. Pass `all` to disable filter. |
-| `--skip-all-fail` / `--no-skip-all-fail` | on | Skip TCs that fail faithfulness in every existing result file (systemic failures) |
-| `--skip-all-fallback` / `--no-skip-all-fallback` | off | Skip TCs where every existing run got `template_eval=FALLBACK` (single-turn not completable). Run baseline first, then enable. |
-| `--tag TAG` | _(none)_ | Tag for re-runs — saves to `benchmark_<model>_<tag>.json` |
-| `--judge-api-url URL` | `http://localhost:4000/v1` | Judge LLM base URL |
-| `--judge-api-key KEY` | `AI_GATEWAY_API_KEY` env | Judge LLM API key |
-| `--test-cases-file PATH` | `eval/test_cases_from_excel.json` | Custom test cases file |
+| `--dataset` | `tstation-eval` | Dataset name on Langfuse |
+| `--file` | `eval/test_cases_tool_only.json` | Test cases JSON file |
+| `--limit N` | `0` (all) | Upload only first N cases |
+| `--dry-run` | — | Preview without making API calls |
+
+```bash
+# Preview
+python eval/upload_dataset.py --dry-run
+
+# Upload 10 cases to a new dataset for quick testing
+python eval/upload_dataset.py --dataset tstation-eval-v2 --limit 10
+
+# Upload all
+python eval/upload_dataset.py --dataset tstation-eval
+```
+
+> Safe to re-run — existing items are skipped (idempotent).
 
 ---
 
-## Recommended workflow — baseline then focused re-run
+## Step 2 — Run eval
 
-Because ~85% of single-turn TCs result in `template_eval=FALLBACK` (bot asks for clarification
-instead of completing), most TCs do not differentiate models. This two-step workflow filters them out:
-
-```powershell
-# Step 1 — Baseline: run ALL TCs on one representative model (no filters)
-python eval/run_eval.py \
-  --model-endpoint gpt-5.5-reasoning-low=https://localhost:8001/api \
-  --limit 0 \
-  --no-skip-all-fail
-
-# Step 2 — Focused: run other models, skipping TCs that were always FALLBACK in Step 1
-python eval/run_eval_all.py \
-  --models gpt-4.1 gpt-4.1-mini gpt-5.1 \
-  --limit 0 \
-  --skip-all-fallback
+```bash
+python eval/langfuse_eval.py --model <model> --run-name <run>
 ```
-
-After Step 1, `--skip-all-fallback` automatically reads the baseline result file and removes TCs
-where the bot could never complete in a single turn. The remaining TCs are the ones where models
-can meaningfully diverge.
-
-**Resume:** if interrupted, re-run the same command — already-completed TCs are skipped.
-To restart from scratch, delete `results/benchmark_<model>.json`.
-
----
-
-## Run — multiple models (batch)
-
-Automatically restarts `tstation-ai` with the correct model between runs.
-
-```powershell
-python eval/run_eval_all.py --models gpt-4.1 gpt-4.1-mini gpt-5.1 --limit 20
-```
-
-All flags from `run_eval.py` apply, plus:
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--all` | — | Run all models defined in `ALL_MODELS` list |
-| `--no-restart` | — | Skip docker compose restart (service already running) |
-| `--service-name NAME` | `tstation-ai` | Docker compose service to restart |
-| `--health-timeout N` | `60` | Seconds to wait for service health after restart |
+| `--model` | _(required)_ | Model label (e.g. `gpt-5.5-reasoning-low`) |
+| `--run-name` | _(required)_ | Langfuse run name (e.g. `gpt-5.5-r1`) |
+| `--step` | `all` | `experiment` / `judge` / `all` — run one step or both |
+| `--dataset` | `tstation-eval` | Dataset uploaded in Step 1 |
+| `--limit N` | `0` (all) | Max items in experiment step (0 = all) |
+| `--concurrency N` | `1` | Parallel workers |
+| `--api-url` | `https://localhost:8001/api` | Chatbot URL (via nginx) |
+| `--judge-api-url` | `http://localhost:4000/v1` | Judge LLM URL (ai-gateway) |
+| `--judge-api-key` | `AI_GATEWAY_API_KEY` from env | Judge LLM API key |
 
-**Resume:** if interrupted, re-run the same command — already-completed TCs are skipped automatically.
-To restart from scratch, delete `results/benchmark_<model>.json`.
+```bash
+# Run both steps (default)
+python eval/langfuse_eval.py \
+  --model gpt-5.5-reasoning-low \
+  --run-name gpt-5.5-low-r1
+
+# Experiment only (call chatbot, upload traces)
+python eval/langfuse_eval.py \
+  --model gpt-5.5-reasoning-low \
+  --run-name gpt-5.5-low-r1 \
+  --step experiment
+
+# Judge only (re-score an existing run with a different judge model)
+python eval/langfuse_eval.py \
+  --model gpt-5.5-reasoning-low \
+  --run-name gpt-5.5-low-r1 \
+  --step judge
+
+# Quick test: 5 items, 4 parallel workers
+python eval/langfuse_eval.py \
+  --model gpt-5.5-reasoning-low \
+  --run-name gpt-5.5-low-test \
+  --limit 5 --concurrency 4
+```
 
 ---
 
-## Generate summary
+## Viewing Results
 
-Run after one or more benchmark files exist:
+Go to Langfuse UI → **Datasets** → select dataset → select run.
 
-```powershell
-python eval/summarize_results.py --output eval/results/benchmark_summary.json
+```text
+Langfuse
+└── Datasets
+    └── tstation-eval
+        ├── gpt-5.5-low-r1    ← click to view each item
+        ├── claude-sonnet-r1
+        └── o3-high-r1
 ```
 
-Prints a ranked table to stdout and writes the JSON summary file.
+Each item has:
+
+- **Score `faithfulness`**: float 0.0–1.0 (`> 0.5` = PASS)
+- **Trace**: full span (classify → agent → tools → response)
 
 ---
 
-## Compare models (cross-model analysis)
+## How It Works
 
-```powershell
-python eval/summarize_results.py --compare
-python eval/summarize_results.py --compare --models gpt-4.1 gpt-4.1-mini gpt-5.1
+```text
+upload_dataset.py         experiment.py (--step experiment)   judge.py (--step judge)
+─────────────────         ──────────────────────────────────   ──────────────────────
+Read test_cases.json
+Create Langfuse dataset   Fetch dataset items
+Upload items              For each item (parallel OK):          Fetch dataset run items
+                          ├─ POST /tstation/messages/chat       For each run item:
+                          │    → collect tool_evidence,         ├─ GET trace from Langfuse
+                          │      template_events                │    → read input, output
+                          ├─ upsert trace (input + output)      ├─ call judge LLM
+                          └─ create dataset run item            └─ create_score(faithfulness)
 ```
-
-Groups TCs into three sections:
-
-| Section | Meaning |
-| --- | --- |
-| **ALL PASS** | Every model answered correctly — reliable cases |
-| **ALL FAIL** | Every model failed — systemic prompt/tool gap, not model-specific |
-| **DIVERGENT** | Models disagree — key target for model selection analysis |
-
----
-
-## Consistency check (re-run comparison)
-
-Run the same test cases a second time with `--tag r2`, then compare verdict stability:
-
-```powershell
-# Step 1 — baseline already done:
-#   results/benchmark_gpt-4.1.json
-
-# Step 2 — re-run with tag:
-python eval/run_eval_all.py --models gpt-4.1 gpt-5.1 --limit 20 --tag r2
-#   → results/benchmark_gpt-4.1_r2.json
-
-# Step 3 — compare:
-python eval/summarize_results.py --consistency --tag r2
-python eval/summarize_results.py --consistency --tag r2 --models gpt-4.1
-```
-
-| Verdict | Meaning |
-| --- | --- |
-| **Stable PASS** | Both runs PASS — model is reliable on this TC |
-| **Stable FAIL** | Both runs FAIL — systemic issue, not random |
-| **Flipped** | PASS ↔ FAIL between runs — hallucination or judge inconsistency, needs review |
-
----
-
-## Output format
-
-### Per-model result file — `results/benchmark_<model>.json`
-
-Array of records, one per test case:
-
-```json
-{
-  "tc_id": "TC-001",
-  "category": "product_compatibility",
-  "description": "차량번호로 규격 자동조회",
-  "model": "gpt-4.1",
-  "run_tag": "",
-  "actual_agent": "discovery_agent",
-  "user_message": "내 차 번호가 99구9999인데 맞는 타이어 뭐야?",
-  "tool_evidence": [
-    {
-      "tool_name": "get_my_cars_tool",
-      "tool_input": { "license_plate": "99구9999" },
-      "tool_output": "...",
-      "source_domain": "vehicle"
-    }
-  ],
-  "template_events": [
-    { "type": "data", "template": "listCar", "data": { ... } }
-  ],
-  "timing": {
-    "total_s": 8.47,
-    "routing_s": 2.30,
-    "thinking_s": 2.60,
-    "tool_calls": [{ "tool": "get_my_cars_tool", "duration_s": 0.27 }],
-    "tool_total_s": 0.27,
-    "response_s": 2.31
-  },
-  "faithfulness_eval": {
-    "faithfulness": 1.0,
-    "verdict": "PASS",
-    "reason": "The response only lists the registered car details..."
-  },
-  "template_eval": {
-    "verdict": "FALLBACK",
-    "expected": ["product"],
-    "actual": ["listCar"],
-    "reason": "Bot returned 'listCar' (clarification) instead of completing with ['product']"
-  },
-  "grounding_eval": {
-    "verdict": "PASS",
-    "reason": "All structured templates are backed by tool evidence",
-    "called_tools": ["get_my_cars_tool"]
-  }
-}
-```
-
-### Timing segments
-
-All segments measured directly from SSE event arrival times:
-
-| Field | What it measures |
-| --- | --- |
-| `total_s` | Request start → `[DONE]` marker |
-| `routing_s` | Request start → sub-agent start (coordinator dispatch overhead) |
-| `thinking_s` | Sub-agent start → first `tool_start` event (LLM decision time) |
-| `tool_total_s` | Earliest tool start → latest tool result (wall time across all tools) |
-| `response_s` | Last tool result → first `data` template event (post-tool LLM reasoning) |
-
-### Template eval verdicts
-
-| Verdict | Meaning |
-| --- | --- |
-| `PASS` | Bot emitted the expected template type |
-| `FALLBACK` | Bot asked for clarification (`listCar`/`quickReply`) instead of completing — correct multi-turn behavior, but eval is single-turn |
-| `FAIL` | Bot emitted a wrong structured template |
-
-> FALLBACK (~85%) is expected and normal — production is multi-turn but eval sends only the first message.
-
-### Grounding eval verdicts
-
-| Verdict | Meaning |
-| --- | --- |
-| `PASS` | Every structured template is backed by a matching tool call |
-| `FAIL` | Structured template emitted with no supporting tool call (hallucination) |
-| `SKIP` | Only exempt templates returned (`quickReply`, `qnaComplete`) — no factual data to ground |
-
----
-
-## Summary file — `results/benchmark_summary.json`
-
-```json
-{
-  "results_dir": "...",
-  "total_models": 4,
-  "models": [
-    {
-      "model": "gpt-4.1-mini",
-      "summary": {
-        "total_count": 20,
-        "included_count": 20,
-        "excluded_count": 0,
-        "scored_count": 20,
-        "pass_count": 18,
-        "fail_count": 2,
-        "avg_faithfulness": 0.894,
-        "avg_faithfulness_bin": 0.9,
-        "pass_rate_pct": 90.0,
-        "avg_latency_s": 11.74,
-        "latency_p50_s": 12.33,
-        "latency_p90_s": 17.73,
-        "avg_routing_s": 3.71,
-        "avg_thinking_s": 3.75,
-        "avg_tool_total_s": 0.34,
-        "avg_response_s": 3.06,
-        "pass_tc_ids": ["TC-001", "TC-003", "..."],
-        "fail_tc_ids": ["TC-002", "TC-014"],
-        "excluded_tc_ids": []
-      }
-    }
-  ]
-}
-```
-
-**Two faithfulness metrics:**
-- `avg_faithfulness` — mean of raw float scores (0–1); reflects *degree* of faithfulness per response
-- `avg_faithfulness_bin` — mean of binary scores (PASS=1, FAIL=0); equals `pass_rate_pct / 100`
-
-`excluded_count` = records where the actual responding agent was not `discovery_agent` or `transaction_agent` (e.g. `leading_agent`); these are excluded from all metrics.
 
 ---
 
 ## Scoring
 
-Judge LLM (`JUDGE_MODEL`, default `gpt-5.5-reasoning-xhigh`) returns a faithfulness float `0.0–1.0`:
+Judge LLM (`JUDGE_MODEL`, default `gpt-5.5-reasoning-xhigh`) returns:
 
-| Raw score | Verdict |
+| Score | Verdict |
 | --- | --- |
-| `> 0.5` | PASS |
-| `<= 0.5` | FAIL |
-
-- `1.0` = fully faithful to tool evidence
-- `0.0` = severe hallucination or wrong facts asserted without tool backing
+| `> 0.5` | **PASS** — faithful |
+| `<= 0.5` | **FAIL** — hallucination or wrong data |
