@@ -37,17 +37,24 @@ def tool_cache(ttl: int = 300) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
             from services.tstation.chat_history_service import get_redis_client
-            redis_client = get_redis_client()
-            cache_key = _make_cache_key(func.__name__, args, kwargs)
+            try:
+                redis_client = get_redis_client()
+                cache_key = _make_cache_key(func.__name__, args, kwargs)
 
-            cached = redis_client.get(cache_key)
-            if cached is not None:
-                logger.debug(f"[TOOL_CACHE] HIT {func.__name__} key={cache_key[-8:]}")
-                return json.loads(cached)
+                cached = redis_client.get(cache_key)
+                if cached is not None:
+                    logger.debug(f"[TOOL_CACHE] HIT {func.__name__} key={cache_key[-8:]}")
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"[TOOL_CACHE] Redis read failed for {func.__name__}, falling back to direct call: {e}")
+                return func(*args, **kwargs)
 
             result = func(*args, **kwargs)
-            redis_client.setex(cache_key, ttl, json.dumps(result, default=str))
-            logger.debug(f"[TOOL_CACHE] SET {func.__name__} key={cache_key[-8:]} ttl={ttl}s")
+            try:
+                redis_client.setex(cache_key, ttl, json.dumps(result, default=str))
+                logger.debug(f"[TOOL_CACHE] SET {func.__name__} key={cache_key[-8:]} ttl={ttl}s")
+            except Exception as e:
+                logger.warning(f"[TOOL_CACHE] Redis write failed for {func.__name__}: {e}")
             return result
 
         return wrapper
