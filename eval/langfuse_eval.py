@@ -9,7 +9,7 @@ Usage:
     python eval/langfuse_eval.py --run-name gpt-5.5-r1
 
     # Override judge model từ CLI
-    python eval/langfuse_eval.py --run-name gpt-5.5-r1 --model gpt-5.5-reasoning-xhigh
+    python eval/langfuse_eval.py --run-name gpt-5.5-r1 --judge-model gpt-5.5-reasoning-xhigh
 
     # Chỉ chạy experiment (gọi chatbot, lưu trace)
     python eval/langfuse_eval.py --run-name gpt-5.5-r1 --step experiment
@@ -82,6 +82,7 @@ def main() -> None:
     qc_model = os.environ.get("AI_QC_MODEL") or os.environ.get("AI_MODEL_QC_AGENT", "(unknown)")
     logger.info("=" * 60)
     logger.info("EVAL CONFIG   run=%s | step=%s", args.run_name, args.step)
+    logger.info("  experiment  api=%s", args.api_url)
     logger.info("  experiment  chatbot=%s  qc=%s", chatbot_model, qc_model)
     logger.info("  judge       model=%s  runs=%d", os.environ.get("JUDGE_MODEL", "(not set)"), args.judge_runs)
     logger.info("  dataset=%-20s concurrency=%d  limit=%s", args.dataset, args.concurrency, args.limit or "all")

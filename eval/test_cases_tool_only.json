@@ -523,5 +523,67 @@
     "description": "Edge: non-existent card/membership — should not hallucinate benefits",
     "category": "price_coupon",
     "agent": "support"
+  },
+  {
+    "tc_id": "tc_076",
+    "user_message": "내 차 번호 99구9999인데 타이어 추천해줘",
+    "messages": [
+      "내 차 번호 99구9999인데 타이어 추천해줘",
+      "추천해준 iON evo AS SUV 4개로 할게",
+      "매장은 강남점으로 하고 내일 오후 2시 예약해줘",
+      "매장으로 직접 운전해서 갈게"
+    ],
+    "description": "[Multi-turn] Standard quick shopping: car plate → product selection → store+time → visit method → preOrder",
+    "category": "quick_shopping",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "tc_077",
+    "user_message": "내 차 타이어 4개 전에 주문했던 타이어와 동일한걸로 갈고 싶은데 예약해줘",
+    "messages": [
+      "내 차 타이어 4개 전에 주문했던 타이어와 동일한걸로 갈고 싶은데 예약해줘",
+      "가장 가까운 매장으로 이번 주 토요일 10시 예약해줘",
+      "바빠서 그런데 스마트픽업서비스 신청할게"
+    ],
+    "description": "[Multi-turn] Shortcut: reuse previous order history, skip product selection → nearest store → pickup service → preOrder",
+    "category": "quick_shopping",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "tc_078",
+    "user_message": "Ventus air S 4개 서초점에서 오늘 장착 돼?",
+    "messages": [
+      "Ventus air S 4개 서초점에서 오늘 장착 돼?",
+      "그럼 재고 있는 근처 매장으로 아무 데나 예약해줘",
+      "모레 오전 11시로 하고 직접 방문할게"
+    ],
+    "description": "[Multi-turn] Inventory exception: out-of-stock at selected store → fallback to nearby available store → preOrder",
+    "category": "quick_shopping",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "tc_079",
+    "user_message": "가진 쿠폰 중에 할인 제일 많이 되는 거 써서 예약해줘",
+    "messages": [
+      "가진 쿠폰 중에 할인 제일 많이 되는 거 써서 예약해줘",
+      "상품은 Kinergy EX 2개, 매장은 판교점으로 할게",
+      "다음 주 월요일 오후 3시에 직접 갈게"
+    ],
+    "description": "[Multi-turn] Max discount: auto-apply best coupon → product+store → time+visit method → preOrder with discount applied",
+    "category": "quick_shopping",
+    "agent": "transaction"
+  },
+  {
+    "tc_id": "tc_080",
+    "user_message": "타이어 4개 강남점 예약해줘",
+    "messages": [
+      "타이어 4개 강남점 예약해줘",
+      "아니 2개만 갈게. 사이즈는 245/45R19야",
+      "직접 방문 대신 픽업 서비스로 바꿀 수 있어?",
+      "일정은 내일 오전 9시로 확정해줘"
+    ],
+    "description": "[Multi-turn] Info correction: quantity 4→2, add tire size, switch visit method self→pickup, confirm time → preOrder",
+    "category": "quick_shopping",
+    "agent": "transaction"
   }
 ]

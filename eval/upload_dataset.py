@@ -47,14 +47,16 @@ def upload_dataset(dataset_name: str, test_cases_file: Path, dry_run: bool = Fal
     valid = [(tc_id, msg, tc) for tc_id, msg, tc in valid if tc_id and msg]
 
     if dry_run:
-        for tc_id, msg, _ in valid:
-            logger.info("[DRY RUN] %s — %s", tc_id, msg[:70])
+        for tc_id, msg, tc in valid:
+            n_turns = len(tc.get("messages") or [])
+            turns_str = f" [{n_turns} turns]" if n_turns > 1 else ""
+            logger.info("[DRY RUN] %s%s — %s", tc_id, turns_str, msg[:70])
         logger.info("Would create %d item(s) in dataset '%s'", len(valid), dataset_name)
         return
 
     lf.create_dataset(
         name=dataset_name,
-        description="T-Station AI eval — single-turn test cases for discovery and transaction agents",
+        description="T-Station AI eval — test cases for discovery and transaction agents (single-turn and multi-turn)",
     )
     existing_ids = {str(item.id) for item in lf.get_dataset(dataset_name).items}
     logger.info("Dataset '%s': %d existing items", dataset_name, len(existing_ids))
@@ -64,10 +66,15 @@ def upload_dataset(dataset_name: str, test_cases_file: Path, dry_run: bool = Fal
         if tc_id in existing_ids:
             skipped += 1
             continue
+        input_data: dict = {"user_message": user_message}
+        messages = tc.get("messages")
+        if messages and len(messages) > 1:
+            input_data["messages"] = messages
+
         lf.create_dataset_item(
             dataset_name=dataset_name,
             id=tc_id,
-            input={"user_message": user_message},
+            input=input_data,
             metadata={
                 "tc_id": tc_id,
                 "description": tc.get("description", ""),

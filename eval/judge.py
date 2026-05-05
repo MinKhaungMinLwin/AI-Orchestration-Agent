@@ -40,20 +40,26 @@ def _judge_one(*, run_item, idx: int, total: int, judge_runs: int, judge_api_url
     output_ = trace.output or {}
     agent = (trace.tags or ["unknown"])[0]
     user_message = input_.get("user_message", "")
+    messages: list[str] = input_.get("messages", [])
     tool_evidence = output_.get("tool_evidence", [])
     template_events = output_.get("template_events", [])
 
     if not user_message:
         raise ValueError(f"trace {trace_id} has no user_message")
 
+    existing_score_names = {s.name for s in (trace.scores or [])}
+    if "faith" in existing_score_names:
+        logger.info("[JUDGE] [%d/%d] %s [%s] — already scored, skipping", idx, total, trace_id, agent)
+        return {}
+
     logger.info("[JUDGE] [%d/%d] %s [%s] — scoring (%d runs)...", idx, total, trace_id, agent, judge_runs)
     shared = dict(judge_api_url=judge_api_url, judge_api_key=judge_api_key)
 
     _metric_fns = {
-        "faithfulness":         (score_faithfulness,         dict(user_message=user_message, tool_evidence=tool_evidence, template_events=template_events)),
-        "answer_relevance":     (score_answer_relevance,     dict(user_message=user_message, template_events=template_events)),
-        "template_correctness": (score_template_correctness, dict(user_message=user_message, template_events=template_events)),
-        "tool_appropriateness": (score_tool_appropriateness, dict(user_message=user_message, tool_evidence=tool_evidence)),
+        "faithfulness":         (score_faithfulness,         dict(user_message=user_message, messages=messages, tool_evidence=tool_evidence, template_events=template_events)),
+        "answer_relevance":     (score_answer_relevance,     dict(user_message=user_message, messages=messages, template_events=template_events)),
+        "template_correctness": (score_template_correctness, dict(user_message=user_message, messages=messages, template_events=template_events)),
+        "tool_appropriateness": (score_tool_appropriateness, dict(user_message=user_message, messages=messages, tool_evidence=tool_evidence)),
     }
     with ThreadPoolExecutor(max_workers=len(_metric_fns)) as ex:
         metric_futures = {
@@ -87,7 +93,7 @@ def run_judge(*, run_name: str, dataset_name: str, judge_runs: int = 3, judge_ap
     )
 
     totals: dict[str, list[float]] = {m: [0.0, 0] for m, _, _ in _METRICS}
-    errors = 0
+    errors = skipped = 0
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
@@ -101,13 +107,19 @@ def run_judge(*, run_name: str, dataset_name: str, judge_runs: int = 3, judge_ap
                 logger.error("[JUDGE] item failed: %s", future.exception())
                 errors += 1
                 continue
-            for metric, score in future.result().items():
+            result = future.result()
+            if not result:
+                skipped += 1
+                continue
+            for metric, score in result.items():
                 totals[metric][0] += score
                 totals[metric][1] += 1
 
     lf.flush()
 
-    logger.info("[JUDGE] DONE   errors=%d | Langfuse → Datasets → %s → %s", errors, dataset_name, run_name)
+    scored = total_items - skipped - errors
+    logger.info("[JUDGE] DONE   scored=%d skipped=%d errors=%d | Langfuse → Datasets → %s → %s",
+                scored, skipped, errors, dataset_name, run_name)
     for metric, (total_score, count) in totals.items():
         avg = total_score / count if count else 0.0
         logger.info("  %-22s avg=%.3f  n=%d", metric, avg, count)

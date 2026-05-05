@@ -10,6 +10,7 @@ Evaluate whether the bot's response is faithful to the live TOOL EVIDENCE.
 
 You are given the user question, TOOL EVIDENCE from live tool events, and the final structured output.
 Treat TOOL EVIDENCE as the source of truth. Lower faithfulness for any claim not supported by it.
+For multi-turn conversations, TOOL EVIDENCE aggregates calls from all turns — evaluate the final output against the full evidence set.
 
 Templates and key fields:
 - quickReply: data.assistantResponse, data.quickReplies[]
@@ -69,6 +70,7 @@ Consider:
 2. Were unnecessary or wrong tools called?
 3. Were required tools skipped (e.g., product search missing for a product query)?
 If no tools were needed (e.g., greeting/complaint), score 1.0.
+For multi-turn conversations, tool calls span all turns — evaluate overall tool usage for the complete conversation goal.
 
 - 1.0 = exactly the right tools with sensible parameters
 - 0.5 = mostly correct but missing a tool or one unnecessary call
@@ -132,7 +134,7 @@ def _call_judge(*, judge_api_url: str, judge_api_key: str, system_prompt: str, u
         f"{judge_api_url.rstrip('/')}/chat/completions",
         json=payload,
         headers={"Authorization": f"Bearer {judge_api_key}", "Content-Type": "application/json"},
-        timeout=90,
+        timeout=180,
     )
     resp.raise_for_status()
     content = _extract_text(resp.json())
@@ -141,33 +143,53 @@ def _call_judge(*, judge_api_url: str, judge_api_key: str, system_prompt: str, u
     return _parse_json(content)
 
 
-def call_faithfulness_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, tool_evidence: str, response: str) -> dict:
+def call_faithfulness_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, messages: list[str] | None = None, tool_evidence: str, response: str) -> dict:
+    if messages and len(messages) > 1:
+        conv = "\n".join(f"[Turn {i + 1}] {m}" for i, m in enumerate(messages))
+        question_context = f"Full conversation ({len(messages)} turns):\n{conv}"
+    else:
+        question_context = f"User question: {user_message}"
     return _call_judge(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         system_prompt=FAITHFULNESS_SYSTEM_PROMPT,
-        user_content=f"User question: {user_message}\n\nTOOL EVIDENCE (source of truth):\n{tool_evidence}\n\nFinal structured output:\n{response}\n\nScore for faithfulness only.",
+        user_content=f"{question_context}\n\nTOOL EVIDENCE (source of truth):\n{tool_evidence}\n\nFinal structured output:\n{response}\n\nScore for faithfulness only.",
     )
 
 
-def call_answer_relevance_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, response: str) -> dict:
+def call_answer_relevance_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, messages: list[str] | None = None, response: str) -> dict:
+    if messages and len(messages) > 1:
+        conv = "\n".join(f"[Turn {i + 1}] {m}" for i, m in enumerate(messages))
+        user_content = f"Full conversation ({len(messages)} turns):\n{conv}\n\nFinal structured output (last turn):\n{response}\n\nScore whether the final output resolves the complete conversation goal."
+    else:
+        user_content = f"User question: {user_message}\n\nFinal structured output:\n{response}\n\nScore for answer relevance only."
     return _call_judge(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         system_prompt=ANSWER_RELEVANCE_SYSTEM_PROMPT,
-        user_content=f"User question: {user_message}\n\nFinal structured output:\n{response}\n\nScore for answer relevance only.",
+        user_content=user_content,
     )
 
 
-def call_template_correctness_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, response: str) -> dict:
+def call_template_correctness_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, messages: list[str] | None = None, response: str) -> dict:
+    if messages and len(messages) > 1:
+        conv = "\n".join(f"[Turn {i + 1}] {m}" for i, m in enumerate(messages))
+        user_content = f"Full conversation ({len(messages)} turns):\n{conv}\n\nFinal structured output (last turn):\n{response}\n\nScore whether the template type is appropriate for the final step of this conversation."
+    else:
+        user_content = f"User question: {user_message}\n\nFinal structured output:\n{response}\n\nScore whether the template type is appropriate for the user's intent."
     return _call_judge(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         system_prompt=TEMPLATE_CORRECTNESS_SYSTEM_PROMPT,
-        user_content=f"User question: {user_message}\n\nFinal structured output:\n{response}\n\nScore whether the template type is appropriate for the user's intent.",
+        user_content=user_content,
     )
 
 
-def call_tool_appropriateness_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, tool_evidence: str) -> dict:
+def call_tool_appropriateness_llm(*, judge_api_url: str, judge_api_key: str, user_message: str, messages: list[str] | None = None, tool_evidence: str) -> dict:
+    if messages and len(messages) > 1:
+        conv = "\n".join(f"[Turn {i + 1}] {m}" for i, m in enumerate(messages))
+        question_context = f"Full conversation ({len(messages)} turns):\n{conv}"
+    else:
+        question_context = f"User question: {user_message}"
     return _call_judge(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         system_prompt=TOOL_APPROPRIATENESS_SYSTEM_PROMPT,
-        user_content=f"User question: {user_message}\n\nTool calls made:\n{tool_evidence}\n\nScore whether the tool calls are appropriate for the user's request.",
+        user_content=f"{question_context}\n\nTool calls made:\n{tool_evidence}\n\nScore whether the tool calls are appropriate for the user's request.",
     )

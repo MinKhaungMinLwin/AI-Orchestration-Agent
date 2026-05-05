@@ -64,34 +64,38 @@ def call_chat(
     }
 
 
-def score_faithfulness(*, user_message: str, tool_evidence: list[dict], template_events: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
+def score_faithfulness(*, user_message: str, messages: list[str] | None = None, tool_evidence: list[dict], template_events: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
     return call_faithfulness_llm(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         user_message=user_message,
+        messages=messages or [],
         tool_evidence=json.dumps(tool_evidence, ensure_ascii=False),
         response=json.dumps(template_events, ensure_ascii=False),
     )
 
 
-def score_answer_relevance(*, user_message: str, template_events: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
+def score_answer_relevance(*, user_message: str, messages: list[str] | None = None, template_events: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
     return call_answer_relevance_llm(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         user_message=user_message,
+        messages=messages or [],
         response=json.dumps(template_events, ensure_ascii=False),
     )
 
 
-def score_template_correctness(*, user_message: str, template_events: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
+def score_template_correctness(*, user_message: str, messages: list[str] | None = None, template_events: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
     return call_template_correctness_llm(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         user_message=user_message,
+        messages=messages or [],
         response=json.dumps(template_events, ensure_ascii=False),
     )
 
 
-def score_tool_appropriateness(*, user_message: str, tool_evidence: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
+def score_tool_appropriateness(*, user_message: str, messages: list[str] | None = None, tool_evidence: list[dict], judge_api_url: str, judge_api_key: str) -> dict:
     return call_tool_appropriateness_llm(
         judge_api_url=judge_api_url, judge_api_key=judge_api_key,
         user_message=user_message,
+        messages=messages or [],
         tool_evidence=json.dumps(tool_evidence, ensure_ascii=False),
     )

@@ -38,21 +38,41 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
     meta = item.metadata or {}
     tc_id = meta.get("tc_id", str(item.id))
     agent = meta.get("agent", "unknown")
-    user_message = (item.input or {}).get("user_message", "")
 
-    if not user_message:
-        raise ValueError(f"{tc_id} has no user_message")
+    input_ = item.input or {}
+    user_message = input_.get("user_message", "")
+    messages: list[str] = input_.get("messages") or ([user_message] if user_message else [])
+
+    if not messages:
+        raise ValueError(f"{tc_id} has no messages")
 
     tracing_id = uuid.uuid4().hex
-    logger.info("[EXP] [%d/%d] %s [%s] — calling chatbot...", idx, total, tc_id, agent)
+    session_id = f"eval_{eval_run_id}_{tc_id}"
+    n_turns = len(messages)
 
-    result = call_chat(
-        api_url,
-        jwt_token=jwt_token,
-        user_message=user_message,
-        session_id=f"eval_{eval_run_id}_{tc_id}",
-        tracing_id=tracing_id,
-    )
+    logger.info("[EXP] [%d/%d] %s [%s] — calling chatbot (%d turn%s)...", idx, total, tc_id, agent, n_turns, "s" if n_turns > 1 else "")
+
+    all_tool_evidence: list[dict] = []
+    last_template_events: list[dict] = []
+    turn_latencies: list[float] = []
+
+    for turn_idx, msg in enumerate(messages, 1):
+        result = call_chat(
+            api_url,
+            jwt_token=jwt_token,
+            user_message=msg,
+            session_id=session_id,
+            tracing_id=tracing_id,
+        )
+        all_tool_evidence.extend(result["tool_evidence"])
+        last_template_events = result["template_events"]
+        turn_latencies.append(result["total_s"])
+        if n_turns > 1:
+            logger.info("[EXP] [%d/%d] %s  turn %d/%d — %.1fs", idx, total, tc_id, turn_idx, n_turns, result["total_s"])
+
+    trace_input: dict = {"user_message": user_message}
+    if n_turns > 1:
+        trace_input["messages"] = messages
 
     lf.api.ingestion.batch(batch=[
         IngestionEvent_TraceCreate(
@@ -60,8 +80,8 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
             timestamp=datetime.now(timezone.utc).isoformat(),
             body=TraceBody(
                 id=tracing_id,
-                input={"user_message": user_message},
-                output={"tool_evidence": result["tool_evidence"], "template_events": result["template_events"]},
+                input=trace_input,
+                output={"tool_evidence": all_tool_evidence, "template_events": last_template_events},
                 tags=[agent],
             ),
         )
@@ -73,11 +93,19 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
         trace_id=tracing_id,
     ))
 
-    lf.create_score(trace_id=tracing_id, name="latency", value=result["total_s"], data_type="NUMERIC")
-    lf.create_score(trace_id=tracing_id, name=f"latency.{agent}", value=result["total_s"], data_type="NUMERIC")
+    last_turn_s = turn_latencies[-1]
 
-    logger.info("[EXP] [%d/%d] %s [%s] — done (%.1fs)", idx, total, tc_id, agent, result["total_s"])
-    return result["total_s"], agent
+    lf.create_score(trace_id=tracing_id, name="latency", value=round(last_turn_s, 3), data_type="NUMERIC")
+    lf.create_score(trace_id=tracing_id, name=f"latency.{agent}", value=round(last_turn_s, 3), data_type="NUMERIC")
+    if n_turns > 1:
+        for i, t in enumerate(turn_latencies, 1):
+            lf.create_score(trace_id=tracing_id, name=f"latency.turn_{i}", value=round(t, 3), data_type="NUMERIC")
+
+    if n_turns > 1:
+        logger.info("[EXP] [%d/%d] %s [%s] — done (last=%.1fs  total=%.1fs)", idx, total, tc_id, agent, last_turn_s, sum(turn_latencies))
+    else:
+        logger.info("[EXP] [%d/%d] %s [%s] — done (%.1fs)", idx, total, tc_id, agent, last_turn_s)
+    return last_turn_s, agent
 
 
 def run_experiment(*, api_url: str, run_name: str, dataset_name: str, limit: int = 0, concurrency: int = 1, lf) -> None:
