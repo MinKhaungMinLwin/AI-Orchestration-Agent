@@ -1388,6 +1388,29 @@ def _has_factual_claims(text: str) -> bool:
     return bool(_FACTUAL_CLAIM_PATTERN.search(text))
 
 
+# Tools whose output is a deterministic DB passthrough — agent cannot hallucinate facts.
+_QC_SKIP_TOOLS = frozenset({
+    "get_my_cars_tool",
+    "transfer_to_qna_tool",
+})
+
+# Templates that carry no LLM-interpreted facts (car list, QnA escalation).
+_QC_SKIP_TEMPLATES = frozenset({
+    "listCar",
+    "qnaComplete",
+    "datepick",
+})
+
+
+def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
+    """Return True when QC is provably unnecessary for this turn."""
+    if last_template in _QC_SKIP_TEMPLATES:
+        return True
+    if called_tool_names and called_tool_names.issubset(_QC_SKIP_TOOLS):
+        return True
+    return False
+
+
 # Singleton coordinator instance
 _coordinator = StreamingMultiAgentCoordinator()
 
@@ -2567,6 +2590,8 @@ class TStationChatServiceV2:
         source_data_chunks = []
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
+        called_tool_names: set[str] = set()
+        last_template: str | None = None
         coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
 
@@ -2633,6 +2658,7 @@ class TStationChatServiceV2:
             if event_type == "tool":
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 tool_name = event.get("tool", "Unknown")
+                called_tool_names.add(tool_name)
                 if tool_name in _lat_tool_start:
                     logger.info(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
                 # Suppress tokens when a "list display" tool is called (card will replace text).
@@ -2673,6 +2699,7 @@ class TStationChatServiceV2:
 
             # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
             if event_type == "data":
+                last_template = event.get("template") or last_template
                 event_data = event.get("data", {})
                 if isinstance(event_data, dict) and event_data.get("assistantResponse"):
                     assistant_response = event_data["assistantResponse"]
@@ -2748,7 +2775,11 @@ class TStationChatServiceV2:
             if _s.AI_QC_ENABLED:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
-                if _has_factual_claims(draft_response) and source_data_chunks:
+                if (
+                    _has_factual_claims(draft_response)
+                    and source_data_chunks
+                    and not _should_skip_qc(called_tool_names, last_template)
+                ):
                     try:
                         from services.tstation.agents.g_qc_agent.agent import invoke_qc
                         from services.tstation.agents.router import QC_LLM

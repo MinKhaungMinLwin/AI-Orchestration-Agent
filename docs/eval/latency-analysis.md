@@ -9,36 +9,36 @@ Filters applied to both datasets: scored agents only (`discovery_agent` + `trans
 
 ---
 
-## 1. Một request đi qua những gì?
+## 1. What does a request go through?
 
 ```
- Request vào
+ Request in
       │
       ▼
  ┌─────────────┐
  │   ROUTING   │  ← coordinator: auth, session load, dispatch agent
- └─────────────┘    KHÔNG phải LLM — infrastructure thuần
+ └─────────────┘    NOT an LLM — pure infrastructure
       │
       ▼
  ┌─────────────┐
- │   THINKING  │  ← LLM đọc system prompt + tool schemas, quyết định gọi tool nào
+ │   THINKING  │  ← LLM reads system prompt + tool schemas, decides which tool to call
  └─────────────┘    1 LLM call
       │
       ▼
  ┌─────────────┐
- │  TOOL CALL  │  ← gọi API backend (Oracle), lấy data
- └─────────────┘    nếu nhiều tool tuần tự: LLM xử lý xong mới gọi tool tiếp theo
+ │  TOOL CALL  │  ← calls backend API (Oracle), fetches data
+ └─────────────┘    sequential tools: LLM must finish processing before calling the next tool
       │
       ▼
  ┌─────────────┐
- │   RESPONSE  │  ← LLM đọc kết quả tool, sinh ra template FE
- └─────────────┘    1 LLM call nữa
+ │   RESPONSE  │  ← LLM reads tool results, generates FE template
+ └─────────────┘    another LLM call
       │
       ▼
- Response ra
+ Response out
 ```
 
-**Unaccounted (~20%):** Khi gọi nhiều tool tuần tự, thời gian LLM quyết định tool tiếp theo nằm trong khoảng trống giữa `tool_total` và không được capture riêng.
+**Unaccounted (~20%):** When multiple tools are called sequentially, the time the LLM spends deciding the next tool call falls in the gap between `tool_total` spans and is not captured separately.
 
 ---
 
@@ -62,25 +62,25 @@ Filters applied to both datasets: scored agents only (`discovery_agent` + `trans
 
 ---
 
-## 3. Phân tích so sánh
+## 3. Comparative analysis
 
-### Response phase không đổi (3.28s vs 3.35s)
+### Response phase unchanged (3.28s vs 3.35s)
 
-Đây là điểm quan trọng nhất: **model tốt hơn không làm response phase nhanh hơn**. v2 dùng các model top nhưng response vẫn ~3.3–3.4s — bằng với baseline. Nguyên nhân không phải model mà là **context size**: LLM phải đọc toàn bộ raw JSON từ Oracle (nhiều fields dư) trước khi render template.
+This is the most important finding: **a better model does not make the response phase faster**. v2 uses top models but response still sits at ~3.3–3.4s — the same as baseline. The cause is not the model but **context size**: the LLM must read the full raw JSON from Oracle (many redundant fields) before rendering the template.
 
-→ Tối ưu response không phải bằng cách đổi model, mà bằng cách **trim tool output** trước khi đưa vào LLM.
+→ Optimizing response requires **trimming tool output** before feeding it to the LLM, not swapping models.
 
-### Thinking nhanh hơn 0.4s ở v2
+### Thinking is 0.4s faster in v2
 
-Top models (v2) quyết định tool call nhanh hơn 0.4s avg. Nhưng p99 của v2 (6.88s) lại cao hơn baseline (5.75s) — một số TCs phức tạp làm model "suy nghĩ" lâu hơn.
+Top models (v2) decide on tool calls 0.4s faster on average. However, v2's p99 (6.88s) is higher than baseline (5.75s) — some complex TCs make the model "think" longer.
 
-### Routing nhanh hơn 0.6s ở v2 — không liên quan model
+### Routing is 0.6s faster in v2 — unrelated to model
 
-Routing không có LLM nào, nhưng v2 vẫn nhanh hơn 0.6s. Khả năng cao do thời điểm chạy khác nhau (server load), không phải do model. Không nên kết luận routing đã được cải thiện.
+Routing involves no LLM, yet v2 is still 0.6s faster. Most likely due to different run times (server load), not the model. This should not be interpreted as a routing improvement.
 
-### Tool_total cao hơn ở v2 (+0.4s avg)
+### Tool_total higher in v2 (+0.4s avg)
 
-v2 chạy nhiều TC phức tạp hơn (67 TCs vs 35 TCs), có nhiều cases gọi nhiều tool hơn, nên wall time dài hơn. p95/p99 tương đương nhau.
+v2 ran more complex TCs (67 TCs vs 35 TCs), with more cases making multiple tool calls, resulting in longer wall time. p95/p99 are comparable.
 
 ---
 
@@ -95,22 +95,22 @@ v2 chạy nhiều TC phức tạp hơn (67 TCs vs 35 TCs), có nhiều cases g�
 | `get_order_status_tool` | 7 | 0.29s | 0.33s | 42 | 0.27s | 0.35s |
 | `get_available_coupons_tool` | 1 | 0.32s | — | 9 | 0.49s | 2.30s |
 
-`get_my_cars_tool` nhanh hơn hẳn ở v2 (0.26s vs 0.44s) — có thể do thời điểm chạy hoặc TCs khác nhau, cần kiểm tra thêm.
+`get_my_cars_tool` is significantly faster in v2 (0.26s vs 0.44s) — likely due to different run times or different TCs; needs further investigation.
 
-`get_available_coupons_tool` ở v2 có p99=2.30s (n=9, còn ít sample) — variance lớn, đáng theo dõi.
+`get_available_coupons_tool` in v2 has p99=2.30s (n=9, small sample) — high variance, worth monitoring.
 
 ---
 
-## 5. Ưu tiên optimize
+## 5. Optimization priorities
 
-| # | Vấn đề | Ảnh hưởng | Baseline | v2 | Hướng xử lý |
-|---|--------|-----------|----------|-----|-------------|
-| **1** | Response không giảm dù đổi model tốt hơn | **Mọi request có tool** | 3.28s | 3.35s | Trim tool output trước khi đưa vào LLM — chỉ giữ fields cần thiết |
-| **2** | Thinking chiếm 26% tổng thời gian | **Mọi request** | 3.53s | 3.13s | Rút ngắn system prompt; giảm số tool schema; tách agent nhỏ hơn |
-| **3** | Routing ~2.3–2.8s, tail p99 > 5s | **Mọi request** | 2.84s | 2.27s | Profile coordinator để tìm bottleneck: session init, Qdrant warmup, agent loading |
-| **4** | Tool_total tail (p95 ~3.7–4.4s) | Tool-heavy requests | p95=3.66s | p95=4.43s | Batch hoặc song song hóa multi-tool calls |
-| **5** | `get_available_coupons_tool` p99=2.30s | Coupon-related TCs | — | 2.30s | Cache hoặc tối ưu query; cần thêm sample để xác nhận |
+| # | Issue | Impact | Baseline | v2 | Approach |
+|---|-------|--------|----------|-----|----------|
+| **1** | Response phase unchanged despite better model | **Every request with tools** | 3.28s | 3.35s | Trim tool output before feeding to LLM — keep only required fields |
+| **2** | Thinking accounts for 26% of total time | **Every request** | 3.53s | 3.13s | Shorten system prompt; reduce tool schema count; split agents smaller |
+| **3** | Routing ~2.3–2.8s, tail p99 > 5s | **Every request** | 2.84s | 2.27s | Profile coordinator for bottlenecks: session init, Qdrant warmup, agent loading |
+| **4** | Tool_total tail (p95 ~3.7–4.4s) | Tool-heavy requests | p95=3.66s | p95=4.43s | Batch or parallelize multi-tool calls |
+| **5** | `get_available_coupons_tool` p99=2.30s | Coupon-related TCs | — | 2.30s | Cache or optimize query; needs more samples to confirm |
 
-**Thứ tự làm:** #1 và #2 trước — cả hai ảnh hưởng đến mọi request, cải thiện được ngay bằng code (không cần infra). #3 cần profile thực tế trên server. #4 và #5 chỉ cải thiện tail.
+**Priority order:** #1 and #2 first — both affect every request and can be improved with code changes alone (no infra required). #3 requires profiling on real server. #4 and #5 only improve tail latency.
 
-**Kỳ vọng nếu làm #1 + #2:** Cắt được 2–4s khỏi avg total, đưa p50 từ ~11–13s xuống ~8–10s.
+**Expected gain from #1 + #2:** Cut 2–4s from avg total, bringing p50 from ~11–13s down to ~8–10s.
