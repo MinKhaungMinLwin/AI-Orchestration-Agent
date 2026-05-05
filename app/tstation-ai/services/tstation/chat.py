@@ -295,7 +295,7 @@ DOMAIN ROUTING EXAMPLES
 ====================================================
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
-1. "i want to buy tires for 29조3344" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
+1. "i want to buy tires for 12가3456" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
 2. "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
 3. "벤투스 S2 가격" / "Dynapro HPX 얼마야?" → DISCOVERY (resolve goods_no first → STOP)
 4. "벤투스 S2 재고 확인해줘" → DISCOVERY (resolve goods_no → STOP)
@@ -720,6 +720,25 @@ class StreamingMultiAgentCoordinator:
                     logger.info(f"[SLOTS] tire_size saved from {tool_name} input: {input_tire_size}")
                 except Exception as e:
                     logger.warning(f"[SLOTS] Failed to save tire_size from tool input: {e}")
+
+        # Extract goods_no from tool INPUT when product description tool is called.
+        # Without this, picking a product from the recommend list (Branch S — "1번",
+        # "벤투스 S2 AS") routes through get_product_description_tool but leaves
+        # goods_no=None. The goal-router then treats `model` as missing on the next
+        # "구매할게" turn and routes to Discovery instead of Transaction, breaking
+        # the order auto-chain.
+        if tool_name == "get_product_description_tool" and tool_input:
+            input_goods_no = tool_input.get("goods_no")
+            if input_goods_no:
+                try:
+                    svc = get_chat_history_service()
+                    current_slots = svc.get_slots(session_id)
+                    new_slots = ConversationSlots(goods_no=input_goods_no)
+                    updated = current_slots.merge(new_slots)
+                    svc.save_slots(session_id, updated)
+                    logger.info(f"[SLOTS] goods_no saved from {tool_name} input: {input_goods_no}")
+                except Exception as e:
+                    logger.warning(f"[SLOTS] Failed to save goods_no from tool input: {e}")
 
         fields = tool_slot_extractors.get(tool_name)
         if not fields:
@@ -1400,12 +1419,18 @@ _coordinator = StreamingMultiAgentCoordinator()
 
 # Cap on how many recent assistant card turns get template_data attached.
 # Past versions enriched only turn_age=0 (latest), which dropped product/store/
-# voucher card structure from earlier turns and forced the LLM to rely on
-# bubble text once a new card replaced the previous one. Multi-card flows
-# ("상품 추천 → 매장 검색 → 예약 시간") then lost cross-turn references like
-# "이 매장에 그 사이즈 재고 있어?". Capping at 5 keeps multi-turn references
-# resolvable while bounding the token cost (each card ≲ ~3KB JSON).
-_TEMPLATE_ENRICH_MAX_TURNS = 5
+# voucher card structure from earlier turns. We briefly raised the cap to 5
+# to recover multi-turn references ("이 매장에 그 사이즈 재고 있어?"), but in
+# practice a 5-turn snapshot of stale tool data nudged the LLM to "answer from
+# memory" instead of re-issuing the proper tool call — most visibly on the
+# turn right after a vehicle pick, where Discovery skipped
+# `get_products_recommendations_tool` and produced a prose response with no
+# product cards. Dropping back to 1 keeps the immediately-prior card context
+# (enough for "1번", "벤투스 S2 AS", "그 매장" demonstratives in the very next
+# turn) while preventing further turns from biasing the LLM away from fresh
+# tool calls. Older structured data is still available via the BE-filtered
+# tool_context system message.
+_TEMPLATE_ENRICH_MAX_TURNS = 1
 
 
 def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
@@ -1697,6 +1722,107 @@ class TStationChatServiceV2:
                     goods_no = best_item.get("goods_no")
                     if goods_no:
                         return goods_no
+
+        return None
+
+    @staticmethod
+    def _resolve_tire_size_from_history_template(user_text: str, history: list[dict]) -> str | None:
+        """Match a user's vehicle-selection reply against the metadata of the
+        most recent assistant message that rendered a `listCar` template, and
+        return the picked car's tireSize.
+
+        Mirrors `_resolve_shop_id_from_history_template` for cars. Uses the
+        listCar template metadata as the source of truth because:
+          - filter_for_context drops car_no as PII, so prev_tool_data has no
+            usable per-car identifiers.
+          - The listCar metadata is what was actually shown to the user and is
+            persisted to Redis history (template_data field).
+          - tireSize / tireSizeRe were added to CarMeta specifically so that
+            tire_size can be recovered at selection time without an extra LLM
+            tool call.
+
+        Expected history msg shape (from chat_history_service.get_history):
+            {"role": "assistant", "content": "...",
+             "template_data": {"type": "data", "template": "listCar",
+                               "data": {"listCar": [{"licensePlate": "12가3456",
+                                                     "info": "K7 2.5 GDI", ...}],
+                                        "metadata": [{"carNo": "12가3456",
+                                                      "carLncCd": "01",
+                                                      "tireSize": "225/45R17",
+                                                      "tireSizeRe": "225/45R17"}]}}}
+
+        Matching strategy (first hit wins):
+          1. License plate verbatim ("12가3456", "123가4567") against carNo.
+          2. Ordinal at the start ("1.", "1번", "2)") → metadata[idx-1].
+          3. Token-overlap against listCar[i].info — unique top scorer required.
+        """
+        if not user_text or not history:
+            return None
+
+        latest_listcar: dict | None = None
+        for msg in reversed(history):
+            if msg.get("role") != "assistant":
+                continue
+            template_data = msg.get("template_data")
+            if not isinstance(template_data, dict):
+                continue
+            if template_data.get("template") != "listCar":
+                continue
+            data = template_data.get("data")
+            if isinstance(data, dict):
+                latest_listcar = data
+                break
+        if latest_listcar is None:
+            return None
+
+        cars = latest_listcar.get("listCar") or []
+        metadata = latest_listcar.get("metadata") or []
+        if not isinstance(cars, list) or not isinstance(metadata, list) or not metadata:
+            return None
+
+        text = user_text.strip()
+
+        # 1. License plate match against metadata[i].carNo.
+        plate_match = re.search(r"\d{2,3}[가-힣]\d{4}", text)
+        if plate_match:
+            target_plate = plate_match.group(0)
+            for meta in metadata:
+                if not isinstance(meta, dict):
+                    continue
+                if meta.get("carNo") == target_plate:
+                    tire_size = meta.get("tireSize")
+                    if tire_size:
+                        return tire_size
+
+        # 2. Ordinal pick.
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        if ordinal_match:
+            idx = int(ordinal_match.group(1)) - 1
+            if 0 <= idx < len(metadata):
+                meta = metadata[idx]
+                if isinstance(meta, dict):
+                    tire_size = meta.get("tireSize")
+                    if tire_size:
+                        return tire_size
+
+        # 3. Token-overlap against listCar[i].info. Require unique top scorer.
+        tokens = [t for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+        if tokens:
+            scored: list[tuple[int, dict]] = []
+            for car, meta in zip(cars, metadata):
+                if not isinstance(car, dict) or not isinstance(meta, dict):
+                    continue
+                info = (car.get("info") or car.get("description") or "").lower()
+                score = sum(1 for tok in tokens if tok.lower() in info)
+                if score > 0:
+                    scored.append((score, meta))
+            if scored:
+                max_score = max(s for s, _ in scored)
+                top = [meta for s, meta in scored if s == max_score]
+                if len(top) == 1:
+                    tire_size = top[0].get("tireSize")
+                    if tire_size:
+                        return tire_size
 
         return None
 
@@ -2046,6 +2172,32 @@ class TStationChatServiceV2:
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
                         f"list-selection against prior search_product_tool result"
                     )
+
+            # 3.85) Resolve tire_size from the user's vehicle-selection reply matched
+            # against the metadata of the most recent `listCar` template.
+            # filter_for_context drops car_no as PII, so prev_tool_data has no
+            # car identifiers to match against — instead we read the listCar
+            # template metadata (which now carries tireSize / tireSizeRe per
+            # entry, populated by _map_list_car). Without this, a listCar pick
+            # that the LLM later "answers from memory" (skipping
+            # get_products_recommendations_tool) leaves tire_size=None — and
+            # subsequent "구매할게" / "매장 선택 후 주문" turns then fail the
+            # goal-router's `size` step and route to Discovery instead of
+            # Transaction.
+            if merged_slots.tire_size is None:
+                try:
+                    history = chat_history_svc.get_history(request.session_id)
+                    resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
+                        last_user_text, history
+                    )
+                    if resolved_tire_size:
+                        merged_slots.tire_size = resolved_tire_size
+                        logger.info(
+                            f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
+                            f"vehicle-selection against last `listCar` template metadata"
+                        )
+                except Exception as e:
+                    logger.warning(f"[SLOTS] history tire_size resolver failed: {e}")
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
             # the most recent get_nearby_stores_tool / get_store_list_tool result.

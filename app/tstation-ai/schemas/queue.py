@@ -2,6 +2,7 @@ import time
 from enum import Enum
 from typing import Any, Dict, Optional
 from uuid import uuid4
+from venv import logger
 
 from celery_app import redis
 from pydantic import BaseModel, Field, model_validator
@@ -110,6 +111,7 @@ class QueueRes(BaseModel):
             - Create task_id
             - save start timestamp
         """
+        logger.info(f"[REDIS_LOG] Creating new queue task for queue '%s' and task '%s'", queue_name, task_name)
         task_id = f"{task_name}_{uuid4()}".replace("-", "_")
         metadata = Metadata(
             queue_name=queue_name,

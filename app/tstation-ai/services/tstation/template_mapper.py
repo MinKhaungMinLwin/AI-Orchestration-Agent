@@ -291,6 +291,13 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             metadata.append({
                 "carNo": _get_str(row, "car_no"),
                 "carLncCd": _get_str(row, "car_lnc_cd"),
+                # Persist front/rear tire sizes alongside the car identifier so
+                # the coordinator's selection-time resolver can recover
+                # tire_size from the listCar template metadata when the user
+                # later picks a car. Without this, filter_for_context drops
+                # car_no as PII and the resolver has no source to match on.
+                "tireSize": _get_str(row, "tire_size_fr") or None,
+                "tireSizeRe": _get_str(row, "tire_size_re") or None,
             })
     if not items:
         return None
