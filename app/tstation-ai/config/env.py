@@ -61,9 +61,11 @@ class Settings(BaseSettings):
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str
 
-    # Redis Conversation Management
+    # Redis Conversation Management (DB 0: conversation history)
     REDIS_CONVERSATION_MANAGEMENT_PASSWORD: str
     REDIS_CONVERSATION_MANAGEMENT_URL: str
+    # Redis Queue (DB 1: task queue tracking + Celery backend)
+    REDIS_QUEUE_URL: str
 
     ### -------------------------------
     # Chat Content Encryption (AES-256-GCM)
@@ -131,7 +133,7 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = Field(default=6333)
     QDRANT_API_KEY: str = Field(default="")
     QDRANT_COLLECTION_FAQ: str = Field(
-        default="hankook_faq_docs",
+        default="",
         description="Qdrant collection name for FAQ documents",
     )
     # Embedding
