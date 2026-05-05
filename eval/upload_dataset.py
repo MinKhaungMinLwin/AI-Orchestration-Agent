@@ -29,7 +29,7 @@ DEFAULT_DATASET_NAME = "tstation-eval"
 DEFAULT_FILE = EVAL_DIR / "test_cases_tool_only.json"
 
 
-def upload_dataset(dataset_name: str, test_cases_file: Path, dry_run: bool = False, limit: int = 0) -> None:
+def upload_dataset(dataset_name: str, test_cases_file: Path, dry_run: bool = False, limit: int = 0, force: bool = False) -> None:
     from langfuse import Langfuse
 
     lf = Langfuse(
@@ -63,7 +63,7 @@ def upload_dataset(dataset_name: str, test_cases_file: Path, dry_run: bool = Fal
 
     created = skipped = 0
     for tc_id, user_message, tc in valid:
-        if tc_id in existing_ids:
+        if tc_id in existing_ids and not force:
             skipped += 1
             continue
         input_data: dict = {"user_message": user_message}
@@ -103,6 +103,7 @@ def main() -> None:
     parser.add_argument("--file", default=str(DEFAULT_FILE), help=f"Test cases JSON file (default: {DEFAULT_FILE.name})")
     parser.add_argument("--dry-run", action="store_true", help="Preview without making API calls")
     parser.add_argument("--limit", type=int, default=0, help="Max items to upload (0 = all)")
+    parser.add_argument("--force", action="store_true", help="Upsert existing items (update metadata)")
     args = parser.parse_args()
 
     upload_dataset(
@@ -110,6 +111,7 @@ def main() -> None:
         test_cases_file=Path(args.file),
         dry_run=args.dry_run,
         limit=args.limit,
+        force=args.force,
     )
 
 

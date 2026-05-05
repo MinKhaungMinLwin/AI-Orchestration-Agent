@@ -32,7 +32,7 @@ _eval_dir = Path(__file__).parent
 if str(_eval_dir) not in sys.path:
     sys.path.insert(0, str(_eval_dir))
 
-from common import load_dotenv
+from common import EVAL_DIR, load_dotenv
 from logging_utils import configure_logging
 from experiment import run_experiment
 from judge import run_judge
@@ -40,6 +40,7 @@ from judge import run_judge
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATASET_NAME = "tstation-eval"
+DEFAULT_FILE = EVAL_DIR / "test_cases_tool_only.json"
 
 
 def _make_langfuse():
@@ -68,6 +69,7 @@ def main() -> None:
         help="Which step to run: experiment (call chatbot), judge (score), all (default)",
     )
     parser.add_argument("--dataset", default=DEFAULT_DATASET_NAME, help=f"Langfuse dataset name (default: {DEFAULT_DATASET_NAME})")
+    parser.add_argument("--file", default=str(DEFAULT_FILE), help=f"Test cases JSON for ground-truth agent metadata (default: {DEFAULT_FILE.name})")
     parser.add_argument("--api-url", default=os.environ.get("EVAL_API_URL", _default_api_url))
     parser.add_argument("--judge-api-url", default=os.environ.get("JUDGE_API_URL", "http://localhost:4000/v1"))
     parser.add_argument("--judge-api-key", default=os.environ.get("AI_GATEWAY_API_KEY", os.environ.get("OPENAI_API_KEY", "")))
@@ -95,6 +97,7 @@ def main() -> None:
             api_url=args.api_url,
             run_name=args.run_name,
             dataset_name=args.dataset,
+            tc_file=Path(args.file),
             limit=args.limit,
             concurrency=args.concurrency,
             lf=lf,

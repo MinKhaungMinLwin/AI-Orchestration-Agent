@@ -1,8 +1,10 @@
+import json
 import logging
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 
 from langfuse.api import IngestionEvent_TraceCreate, TraceBody
 from langfuse.api.resources.dataset_run_items.types.create_dataset_run_item_request import CreateDatasetRunItemRequest
@@ -34,10 +36,11 @@ def _latency_stats(latencies: list[float]) -> str:
     return f"avg={avg:.1f}s  p50={p(50):.1f}s  p90={p(90):.1f}s  p95={p(95):.1f}s  p99={p(99):.1f}s"
 
 
-def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str, eval_run_id: str, run_name: str, lf) -> tuple[float, str]:
+def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str, eval_run_id: str, run_name: str, tc_meta: dict, lf) -> tuple[float, str]:
     meta = item.metadata or {}
     tc_id = meta.get("tc_id", str(item.id))
-    agent = meta.get("agent", "unknown")
+    # JSON file is ground truth for agent; Langfuse metadata can be stale
+    agent = tc_meta.get(tc_id, {}).get("agent") or meta.get("agent", "unknown")
 
     input_ = item.input or {}
     user_message = input_.get("user_message", "")
@@ -47,7 +50,7 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
         raise ValueError(f"{tc_id} has no messages")
 
     tracing_id = uuid.uuid4().hex
-    session_id = f"eval_{eval_run_id}_{tc_id}"
+    session_id = uuid.uuid4().hex
     n_turns = len(messages)
 
     logger.info("[EXP] [%d/%d] %s [%s] — calling chatbot (%d turn%s)...", idx, total, tc_id, agent, n_turns, "s" if n_turns > 1 else "")
@@ -57,12 +60,15 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
     turn_latencies: list[float] = []
 
     for turn_idx, msg in enumerate(messages, 1):
+        # Multi-turn: each turn gets a unique tracing_id so the server processes it as a
+        # fresh request. The aggregated eval trace (tracing_id) is created separately below.
+        turn_tracing_id = uuid.uuid4().hex if n_turns > 1 else tracing_id
         result = call_chat(
             api_url,
             jwt_token=jwt_token,
             user_message=msg,
             session_id=session_id,
-            tracing_id=tracing_id,
+            tracing_id=turn_tracing_id,
         )
         all_tool_evidence.extend(result["tool_evidence"])
         last_template_events = result["template_events"]
@@ -108,7 +114,10 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
     return last_turn_s, agent
 
 
-def run_experiment(*, api_url: str, run_name: str, dataset_name: str, limit: int = 0, concurrency: int = 1, lf) -> None:
+def run_experiment(*, api_url: str, run_name: str, dataset_name: str, tc_file: Path, limit: int = 0, concurrency: int = 1, lf) -> None:
+    tc_meta = {tc["tc_id"]: tc for tc in json.loads(tc_file.read_text(encoding="utf-8")) if tc.get("tc_id")}
+    logger.info("[EXP] Loaded %d test cases from %s (ground truth for agent)", len(tc_meta), tc_file.name)
+
     dataset = lf.get_dataset(dataset_name)
     items = dataset.items[:limit] if limit > 0 else dataset.items
 
@@ -137,7 +146,7 @@ def run_experiment(*, api_url: str, run_name: str, dataset_name: str, limit: int
         futures = {
             executor.submit(_experiment_one, item=item, idx=idx, total=total_items,
                             api_url=api_url, jwt_token=jwt_token,
-                            eval_run_id=eval_run_id, run_name=run_name, lf=lf): item
+                            eval_run_id=eval_run_id, run_name=run_name, tc_meta=tc_meta, lf=lf): item
             for idx, item in enumerate(items, 1)
         }
         for future in as_completed(futures):
