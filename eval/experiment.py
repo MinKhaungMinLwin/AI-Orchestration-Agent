@@ -102,7 +102,6 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
     last_turn_s = turn_latencies[-1]
 
     lf.create_score(trace_id=tracing_id, name="latency", value=round(last_turn_s, 3), data_type="NUMERIC")
-    lf.create_score(trace_id=tracing_id, name=f"latency.{agent}", value=round(last_turn_s, 3), data_type="NUMERIC")
     if n_turns > 1:
         for i, t in enumerate(turn_latencies, 1):
             lf.create_score(trace_id=tracing_id, name=f"latency.turn_{i}", value=round(t, 3), data_type="NUMERIC")
@@ -114,12 +113,21 @@ def _experiment_one(*, item, idx: int, total: int, api_url: str, jwt_token: str,
     return last_turn_s, agent
 
 
-def run_experiment(*, api_url: str, run_name: str, dataset_name: str, tc_file: Path, limit: int = 0, concurrency: int = 1, lf) -> None:
+def run_experiment(*, api_url: str, run_name: str, dataset_name: str, tc_file: Path, limit: int = 0, concurrency: int = 1, turns: str = "all", lf) -> None:
     tc_meta = {tc["tc_id"]: tc for tc in json.loads(tc_file.read_text(encoding="utf-8")) if tc.get("tc_id")}
     logger.info("[EXP] Loaded %d test cases from %s (ground truth for agent)", len(tc_meta), tc_file.name)
 
     dataset = lf.get_dataset(dataset_name)
-    items = dataset.items[:limit] if limit > 0 else dataset.items
+    items = list(reversed(dataset.items))
+    items = items[:limit] if limit > 0 else items
+
+    if turns != "all":
+        before = len(items)
+        items = [
+            item for item in items
+            if (len((item.input or {}).get("messages", [])) > 1) == (turns == "multi")
+        ]
+        logger.info("[EXP] Filtered to %s-turn: %d → %d items", turns, before, len(items))
 
     existing_ids = _existing_run_item_ids(lf, dataset_name, run_name)
     if existing_ids:
