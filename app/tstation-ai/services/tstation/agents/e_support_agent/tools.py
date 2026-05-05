@@ -9,6 +9,7 @@ from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_f
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
 from langchain.tools import tool
+from common.tool_cache import tool_cache
 from services.tstation.rag import (
     get_qdrant_service,
     get_embedding_service,
@@ -46,6 +47,7 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 @tool
+@tool_cache(ttl=3600)
 def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: int = 50):
     """
     [PRIMARY] Get FAQ list from database.
@@ -76,7 +78,7 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         for item in items:
             item["source"] = "FAQ DB"
         logger.info("[TOOL][get_faq_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, parsed)
     except Exception as e:
         logger.exception("[TOOL][get_faq_tool] Failed")
         return _error_response(None, str(e), "Failed to get FAQ")
