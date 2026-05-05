@@ -96,6 +96,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         session_id=session_id,
         access_token=user["token"],
         user_info=request.user_info,
+        **({"tracing_id": request.tracing_id} if request.tracing_id else {}),
     )
 
     # Call chat service

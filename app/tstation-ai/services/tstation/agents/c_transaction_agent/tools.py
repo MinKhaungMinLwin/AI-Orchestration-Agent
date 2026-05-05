@@ -189,16 +189,17 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
 
 @tool
 @tool_cache(ttl=600)
-def get_available_coupons_tool(lang_cd: str = "ko"):
+def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
     """
     다운로드 가능 쿠폰 조회.
 
     Use when user asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons".
 
     Args:
+        mbr_no (str | None): 회원번호 (used for per-user cache key scoping).
         lang_cd (str): Language code (default: 'ko').
     """
-    logger.info("[TOOL][get_available_coupons_tool] Called with: lang_cd=%s", lang_cd)
+    logger.info("[TOOL][get_available_coupons_tool] Called with: mbr_no=%s, lang_cd=%s", mbr_no, lang_cd)
 
     try:
         response = get_available_coupons(client=get_client(), lang_cd=lang_cd)

@@ -444,51 +444,26 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: Price / stock / buy / order / cart when goods_no (G + 12 digits)
-  is already in the message; store search by location or name
-  (강남, 근처, 올마이티, All My T); reservation slots; order tracking;
-  coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰);
-  order history inquiry (내 주문내역 / 주문 내역 / 주문 조회 / 내 주문 / 내가 주문한 거).
-- DISCOVERY: Product search by name or keyword; tire recommendation;
-  vehicle-tire compatibility; product specs / features; review videos;
-  price / stock / buy with PRODUCT NAME ONLY (no goods_no yet — Discovery
-  resolves goods_no first).
-- SUPPORT: Warranty, returns, refund policy, maintenance guidance,
-  1:1 문의, 상담원 연결, customer complaints (짜증 / 엉망 / 제대로 해 등).
-- LEADING: Pure greeting; unclear or empty intent; bare re-trigger words
-  ("다시", "또") with no other anchor.
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT].
+- DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
+- SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
+- LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
-KEY RULES:
-- Message contains "G" + 12 digits → TRANSACTION
-- Product NAME only (벤투스 / 다이나프로 / Ventus / Dynapro / ...) with
-  price / stock / buy → DISCOVERY
-- Vehicle number (e.g., "12가3456") with tire request → DISCOVERY
-- 추천 / 맞는 타이어 / 어떤 타이어 → DISCOVERY
-- 매장 / 가까운 / 근처 / 올마이티 / All My T → TRANSACTION
-- 내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 쿠폰 조회 / 다운로드 가능 쿠폰 → TRANSACTION
-- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문 / 내가 주문한 거 → TRANSACTION
-- 환불 / 반품 / 보증 / 워런티 / 1:1 문의 / 상담원 → SUPPORT
-- Aggressive or complaint tone (짜증 / 엉망 / 화나 / 뭐 이런) → SUPPORT
-- Pure greeting (안녕 / hi / hello) → LEADING
+RULES:
+- G+12 digits in message → TRANSACTION
+- Product name only (벤투스/Ventus/다이나프로/Dynapro/...) + price/stock/buy, no goods_no → DISCOVERY
+- Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
+- 추천/맞는 타이어/어떤 타이어 → DISCOVERY
+- 매장/근처/올마이티/All My T → TRANSACTION
+- 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
+- Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
+- Greeting only (안녕/hi/hello) → LEADING
 
-⚠️ NEVER classify these as SUPPORT — always TRANSACTION:
-- 내 쿠폰 / 쿠폰 조회 / 다운로드 가능 쿠폰 (handled by coupon tools)
-- 내 주문내역 / 주문 내역 / 주문 조회 (handled by order tools)
-
-EXAMPLES:
-- "안녕하세요" → LEADING
-- "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
-- "벤투스 S2 가격 얼마야?" → DISCOVERY
-- "G012345678901 가격" → TRANSACTION
-- "강남 근처 매장 찾아줘" → TRANSACTION
-- "올마이티 매장" → TRANSACTION
-- "내 쿠폰 보여줘" → TRANSACTION
-- "받을 수 있는 쿠폰 뭐가 있어?" → TRANSACTION
-- "다운로드 가능 쿠폰은?" → TRANSACTION
-- "내 주문내역 알려줘" → TRANSACTION
-- "주문 조회해줘" → TRANSACTION
-- "보증 정책 알려줘" → SUPPORT
-- "상담원 연결해주세요" → SUPPORT
+EXAMPLES (tricky cases):
+- "벤투스 S2 가격 얼마야?" → DISCOVERY (product name, no goods_no)
+- "G012345678901 가격" → TRANSACTION (goods_no present)
+- "내 쿠폰 보여줘" → TRANSACTION (NOT SUPPORT)
+- "내 주문내역 알려줘" → TRANSACTION (NOT SUPPORT)
 - "12가3456 타이어 추천" → DISCOVERY
 
 Output: domains (list with EXACTLY ONE domain) + reason (english).
@@ -1411,6 +1386,29 @@ _FACTUAL_CLAIM_PATTERN = re.compile(
 def _has_factual_claims(text: str) -> bool:
     """Check if draft contains factual commerce claims that need QC verification."""
     return bool(_FACTUAL_CLAIM_PATTERN.search(text))
+
+
+# Tools whose output is a deterministic DB passthrough — agent cannot hallucinate facts.
+_QC_SKIP_TOOLS = frozenset({
+    "get_my_cars_tool",
+    "transfer_to_qna_tool",
+})
+
+# Templates that carry no LLM-interpreted facts (car list, QnA escalation).
+_QC_SKIP_TEMPLATES = frozenset({
+    "listCar",
+    "qnaComplete",
+    "datepick",
+})
+
+
+def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
+    """Return True when QC is provably unnecessary for this turn."""
+    if last_template in _QC_SKIP_TEMPLATES:
+        return True
+    if called_tool_names and called_tool_names.issubset(_QC_SKIP_TOOLS):
+        return True
+    return False
 
 
 # Singleton coordinator instance
@@ -2592,6 +2590,8 @@ class TStationChatServiceV2:
         source_data_chunks = []
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
+        called_tool_names: set[str] = set()
+        last_template: str | None = None
         coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
 
@@ -2658,6 +2658,7 @@ class TStationChatServiceV2:
             if event_type == "tool":
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 tool_name = event.get("tool", "Unknown")
+                called_tool_names.add(tool_name)
                 if tool_name in _lat_tool_start:
                     logger.info(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
                 # Suppress tokens when a "list display" tool is called (card will replace text).
@@ -2698,6 +2699,7 @@ class TStationChatServiceV2:
 
             # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
             if event_type == "data":
+                last_template = event.get("template") or last_template
                 event_data = event.get("data", {})
                 if isinstance(event_data, dict) and event_data.get("assistantResponse"):
                     assistant_response = event_data["assistantResponse"]
@@ -2773,7 +2775,11 @@ class TStationChatServiceV2:
             if _s.AI_QC_ENABLED:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
-                if _has_factual_claims(draft_response) and source_data_chunks:
+                if (
+                    _has_factual_claims(draft_response)
+                    and source_data_chunks
+                    and not _should_skip_qc(called_tool_names, last_template)
+                ):
                     try:
                         from services.tstation.agents.g_qc_agent.agent import invoke_qc
                         from services.tstation.agents.router import QC_LLM

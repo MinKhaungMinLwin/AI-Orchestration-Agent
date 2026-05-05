@@ -11,6 +11,7 @@ class ChatMessageRequest(BaseModel):
     session_id: str = Field(..., description="Session ID (required)")
     stream: bool = Field(default=False, description="Stream mode")
     user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
+    tracing_id: Optional[str] = Field(default=None, description="Tracing ID for Langfuse (eval use)")
 
     model_config = {
         "json_schema_extra": {

@@ -280,6 +280,7 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
 
 
 @tool
+@tool_cache(ttl=3600)
 def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
     """
     차량-상품 타이어 호환 검증.
@@ -316,7 +317,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 
 @tool
-@tool_cache(ttl=300)
+@tool_cache(ttl=600)
 def search_product_tool(
     keyword: str | None = None,
     limit: int = 5,
@@ -409,6 +410,7 @@ def search_product_tool(
 
 
 @tool
+@tool_cache(ttl=3600)
 def get_user_vehicles_tool(car_no: str, owner_nm: str):
     """
     차량번호+소유주명으로 차량 조회.
@@ -445,6 +447,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
 
 
 @tool
+@tool_cache(ttl=600)
 def get_my_cars_tool(mbr_no: str):
     """
     사용자 등록 차량 조회 (회원번호 기준).
@@ -864,6 +867,7 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
 
 
 @tool
+@tool_cache(ttl=300)
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """Get product final price and discount info.
 
