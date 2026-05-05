@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -29,10 +30,8 @@ DEFAULT_DATASET_NAME = "tstation-eval"
 DEFAULT_FILE = EVAL_DIR / "test_cases_tool_only.json"
 SUMMARY_METRICS = ["faith", "relevance", "template", "tools"]
 META_FIELDS = [
-    "tc_id", "agent", "category", "description",
-    "is_multi_turn", "n_turns", "user_message",
-    "trace_id", "created_at",
-    "n_tools", "tool_names", "templates_used",
+    "tc_id", "agent", "is_multi_turn", "n_turns",
+    "user_message", "tool_names", "templates_used",
 ]
 
 
@@ -62,46 +61,73 @@ def _obs_duration_s(obs) -> float | None:
     return round((obs.end_time - obs.start_time).total_seconds(), 3)
 
 
+# Span names whose GENERATION children should be excluded from "agent" LLM analysis
+_EXCLUDE_SPAN_NAMES = {"classify_multi_intent", "classify_multi_intent_slim", "qc_agent"}
+
+
 def _extract_span_timings(trace_id: str, lf) -> dict:
-    """Fetch Langfuse observations for a trace and aggregate tool/LLM span durations."""
+    """Fetch Langfuse observations and decompose latency into tools / llm_think / llm_gen.
+
+    Uses temporal ordering instead of parent-child hierarchy because LangGraph nests
+    spans multiple levels deep (discovery_agent → agent_node → ChatLiteLLM), so
+    direct-children lookup would miss grandchildren.
+    """
     page = lf.api.observations.get_many(trace_id=trace_id, limit=100)
     obs_list = page.data or []
+    if not obs_list:
+        return {}
+
+    # Collect IDs of classify / qc spans and their direct children so we can
+    # exclude their GENERATION spans from the agent-level think/gen analysis.
+    children: dict[str | None, list] = defaultdict(list)
+    for obs in obs_list:
+        children[obs.parent_observation_id].append(obs)
+
+    excluded_ids: set[str] = set()
+    for obs in obs_list:
+        if (obs.name or "") in _EXCLUDE_SPAN_NAMES:
+            excluded_ids.add(obs.id)
+            for child in children.get(obs.id, []):
+                excluded_ids.add(child.id)
+
+    # Partition observations
+    gen_obs = [o for o in obs_list if (o.type or "").upper() == "GENERATION" and o.start_time and o.end_time]
+    tool_obs = [
+        o for o in obs_list
+        if o.id not in excluded_ids
+        and (o.name == "tools" or (o.name or "").endswith("_tool"))
+        and o.start_time and o.end_time
+    ]
+    agent_gen_obs = [o for o in gen_obs if o.id not in excluded_ids]
 
     result: dict = {}
-    llm_total_s = 0.0
-    tools_parent_s: float | None = None
-    tool_individual: dict[str, float] = {}
 
-    for obs in obs_list:
-        dur = _obs_duration_s(obs)
-        if dur is None:
-            continue
-        name: str = obs.name or ""
-        obs_type: str = (obs.type or "").upper()
-
-        # LLM generation spans (thinking + text output combined)
-        if obs_type == "GENERATION":
-            llm_total_s += dur
-
-        # "tools" parent span — total tool execution time
-        elif name == "tools":
-            tools_parent_s = dur
-
-        # Individual tool spans (e.g., get_products_recommendations_tool)
-        elif name.endswith("_tool"):
-            tool_individual[name] = tool_individual.get(name, 0.0) + dur
+    llm_total_s = sum(d for o in gen_obs if (d := _obs_duration_s(o)))
+    tools_total_s = sum(d for o in tool_obs if (d := _obs_duration_s(o)))
 
     if llm_total_s:
         result["span.llm_s"] = round(llm_total_s, 3)
+    if tools_total_s:
+        result["span.tools_s"] = round(tools_total_s, 3)
 
-    # Prefer the "tools" parent span; fall back to sum of individual tool spans
-    tools_s = tools_parent_s if tools_parent_s is not None else (sum(tool_individual.values()) or None)
-    if tools_s:
-        result["span.tools_s"] = round(tools_s, 3)
+    if tool_obs and agent_gen_obs:
+        first_tool_start = min(o.start_time for o in tool_obs)
+        last_tool_end = max((o.end_time for o in tool_obs if o.end_time), default=None)
 
-    # Per-tool durations (prefix "span.tool.")
-    for tool_name, dur in tool_individual.items():
-        result[f"span.tool.{tool_name}"] = round(dur, 3)
+        pre_gens = [o for o in agent_gen_obs if o.end_time <= first_tool_start]
+        post_gens = [o for o in agent_gen_obs if last_tool_end and o.start_time >= last_tool_end]
+
+        think_s = sum(d for o in pre_gens if (d := _obs_duration_s(o)))
+        gen_s = sum(d for o in post_gens if (d := _obs_duration_s(o)))
+        if think_s:
+            result["span.llm_think_s"] = round(think_s, 3)
+        if gen_s:
+            result["span.llm_gen_s"] = round(gen_s, 3)
+    elif agent_gen_obs:
+        # No tools called — all agent LLM time is direct response generation
+        gen_s = sum(d for o in agent_gen_obs if (d := _obs_duration_s(o)))
+        if gen_s:
+            result["span.llm_gen_s"] = round(gen_s, 3)
 
     return result
 
@@ -171,14 +197,16 @@ def _latency_stats(vals: list[float]) -> str:
 
 
 _LATENCY_STEPS = [
-    ("latency",              "total   "),
-    ("latency.classify_s",   "classify"),
-    ("latency.slots_s",      "slots   "),
-    ("latency.agents_s",     "agents  "),
-    ("span.tools_s",         "tools   "),
-    ("span.llm_s",           "llm     "),
-    ("latency.qc_s",         "qc      "),
-    ("latency.stream_total_s","stream  "),
+    ("latency",               "total    "),
+    ("latency.classify_s",    "classify "),
+    ("latency.slots_s",       "slots    "),
+    ("latency.agents_s",      "agents   "),
+    ("span.tools_s",          "  tools  "),
+    ("span.llm_think_s",      "  llm_think"),
+    ("span.llm_gen_s",        "  llm_gen"),
+    ("span.llm_s",            "  llm_all"),
+    ("latency.qc_s",          "qc       "),
+    ("latency.stream_total_s","stream   "),
 ]
 
 
@@ -281,8 +309,10 @@ def fetch_results(*, dataset_name: str, run_name: str, output: Path, concurrency
 
     rows.sort(key=lambda r: r["tc_id"])
 
-    score_cols: list[str] = sorted({k for r in rows for k in r if k not in META_FIELDS})
-    fieldnames = META_FIELDS + score_cols
+    all_extra = {k for r in rows for k in r if k not in META_FIELDS}
+    latency_cols = sorted(k for k in all_extra if k not in set(SUMMARY_METRICS))
+    eval_cols = [k for k in SUMMARY_METRICS if k in all_extra]
+    fieldnames = META_FIELDS + latency_cols + eval_cols
 
     with open(output, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore", restval="")
