@@ -24,7 +24,7 @@ def call_chat(
     timeout: int = 300,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/tstation/messages/chat"
-    payload: dict = {"content": user_message, "session_id": session_id, "stream": True}
+    payload: dict = {"content": user_message, "session_id": session_id, "stream": True, "user_info": {"location": {"xpos": 127.0276, "ypos": 37.4979}}}
     if tracing_id:
         payload["tracing_id"] = tracing_id
 

@@ -75,7 +75,6 @@ def _judge_one(*, run_item, idx: int, total: int, judge_runs: int, judge_api_url
             continue
         avg, comment = _aggregate(runs, metric)
         lf.create_score(trace_id=trace_id, name=score_name, value=round(avg, 4), data_type="NUMERIC", comment=comment)
-        lf.create_score(trace_id=trace_id, name=f"{score_name}.{agent}", value=round(avg, 4), data_type="NUMERIC")
         results[metric] = avg
         logger.info("[JUDGE] [%d/%d] %s  %s=%.3f", idx, total, trace_id, log_label, avg)
 

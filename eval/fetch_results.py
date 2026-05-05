@@ -55,6 +55,57 @@ def _normalize_scores(scores_raw: list) -> dict:
     return result
 
 
+def _obs_duration_s(obs) -> float | None:
+    """Return span duration in seconds, or None if timestamps are missing."""
+    if not obs.start_time or not obs.end_time:
+        return None
+    return round((obs.end_time - obs.start_time).total_seconds(), 3)
+
+
+def _extract_span_timings(trace_id: str, lf) -> dict:
+    """Fetch Langfuse observations for a trace and aggregate tool/LLM span durations."""
+    page = lf.api.observations.get_many(trace_id=trace_id, limit=100)
+    obs_list = page.data or []
+
+    result: dict = {}
+    llm_total_s = 0.0
+    tools_parent_s: float | None = None
+    tool_individual: dict[str, float] = {}
+
+    for obs in obs_list:
+        dur = _obs_duration_s(obs)
+        if dur is None:
+            continue
+        name: str = obs.name or ""
+        obs_type: str = (obs.type or "").upper()
+
+        # LLM generation spans (thinking + text output combined)
+        if obs_type == "GENERATION":
+            llm_total_s += dur
+
+        # "tools" parent span — total tool execution time
+        elif name == "tools":
+            tools_parent_s = dur
+
+        # Individual tool spans (e.g., get_products_recommendations_tool)
+        elif name.endswith("_tool"):
+            tool_individual[name] = tool_individual.get(name, 0.0) + dur
+
+    if llm_total_s:
+        result["span.llm_s"] = round(llm_total_s, 3)
+
+    # Prefer the "tools" parent span; fall back to sum of individual tool spans
+    tools_s = tools_parent_s if tools_parent_s is not None else (sum(tool_individual.values()) or None)
+    if tools_s:
+        result["span.tools_s"] = round(tools_s, 3)
+
+    # Per-tool durations (prefix "span.tool.")
+    for tool_name, dur in tool_individual.items():
+        result[f"span.tool.{tool_name}"] = round(dur, 3)
+
+    return result
+
+
 def _fetch_row_full(*, run_item, lf_item_meta: dict, tc_meta: dict, lf) -> dict | None:
     trace_id = run_item.trace_id
     if not trace_id:
@@ -77,6 +128,8 @@ def _fetch_row_full(*, run_item, lf_item_meta: dict, tc_meta: dict, lf) -> dict 
     tool_names = ",".join(dict.fromkeys(t.get("tool_name", "") for t in tool_evidence if t.get("tool_name")))
     templates_used = ",".join(dict.fromkeys(e.get("template", "") for e in template_events if e.get("template")))
 
+    span_timings = _extract_span_timings(trace_id, lf)
+
     row: dict = {
         "tc_id": tc_id,
         "agent": tc.get("agent") or _infer_agent(scores) or (trace.tags or ["unknown"])[0],
@@ -92,6 +145,7 @@ def _fetch_row_full(*, run_item, lf_item_meta: dict, tc_meta: dict, lf) -> dict 
         "templates_used": templates_used,
     }
     row.update(scores)
+    row.update(span_timings)
     return row
 
 
@@ -104,6 +158,28 @@ def _infer_agent(scores: dict) -> str | None:
 
 def _avg(vals: list[float]) -> float:
     return sum(vals) / len(vals) if vals else 0.0
+
+
+def _latency_stats(vals: list[float]) -> str:
+    if not vals:
+        return "no data"
+    s = sorted(vals)
+    n = len(s)
+    def p(pct: int) -> float:
+        return s[min(int(n * pct / 100), n - 1)]
+    return f"avg={_avg(s):.2f}s  p50={p(50):.2f}s  p90={p(90):.2f}s  p95={p(95):.2f}s  p99={p(99):.2f}s  n={n}"
+
+
+_LATENCY_STEPS = [
+    ("latency",              "total   "),
+    ("latency.classify_s",   "classify"),
+    ("latency.slots_s",      "slots   "),
+    ("latency.agents_s",     "agents  "),
+    ("span.tools_s",         "tools   "),
+    ("span.llm_s",           "llm     "),
+    ("latency.qc_s",         "qc      "),
+    ("latency.stream_total_s","stream  "),
+]
 
 
 def _print_summary(rows: list[dict], run_name: str) -> None:
@@ -147,6 +223,13 @@ def _print_summary(rows: list[dict], run_name: str) -> None:
                 _avg([r["relevance"] for r in subset if r.get("relevance") is not None]),
                 _avg([r["latency"] for r in subset if r.get("latency") is not None]),
             )
+
+    logger.info("")
+    logger.info("Latency by step:")
+    for field, label in _LATENCY_STEPS:
+        vals = [r[field] for r in rows if r.get(field) is not None]
+        if vals:
+            logger.info("  %s  %s", label, _latency_stats(vals))
 
     scored = [r for r in rows if r.get("faith") is not None]
     if scored:

@@ -5,19 +5,19 @@ Step 1 — experiment: call chatbot, upload trace input/output, link to dataset 
 Step 2 — judge:      read traces from Langfuse, score faithfulness, upload scores.
 
 Usage:
-    # Chạy cả 2 bước (JUDGE_MODEL lấy từ .env)
+    # Run both steps (JUDGE_MODEL taken from .env)
     python eval/langfuse_eval.py --run-name gpt-5.5-r1
 
-    # Override judge model từ CLI
+    # Override judge model from CLI
     python eval/langfuse_eval.py --run-name gpt-5.5-r1 --judge-model gpt-5.5-reasoning-xhigh
 
-    # Chỉ chạy experiment (gọi chatbot, lưu trace)
+    # Run experiment step only (call chatbot, save trace)
     python eval/langfuse_eval.py --run-name gpt-5.5-r1 --step experiment
 
-    # Chỉ chạy judge (chấm điểm)
+    # Run judge step only (score responses)
     python eval/langfuse_eval.py --run-name gpt-5.5-r1 --step judge
 
-    # Giới hạn số item, tăng concurrency
+    # Limit items and increase concurrency
     python eval/langfuse_eval.py --run-name gpt-5.5-r1 --concurrency 5 --limit 10
 """
 
@@ -76,6 +76,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="Max items to run in experiment step (0 = all)")
     parser.add_argument("--concurrency", type=int, default=1, help="Parallel workers (default: 1)")
     parser.add_argument("--judge-runs", type=int, default=3, help="Judge runs per item, final score = mean (default: 3)")
+    parser.add_argument("--turns", choices=["single", "multi", "all"], default="all", help="Filter by turn type: single, multi, all (default: all)")
     args = parser.parse_args()
     if args.judge_model:
         os.environ["JUDGE_MODEL"] = args.judge_model
@@ -83,7 +84,7 @@ def main() -> None:
     chatbot_model = os.environ.get("AI_MODEL_REASONING") or os.environ.get("AI_MODEL", "(unknown)")
     qc_model = os.environ.get("AI_QC_MODEL") or os.environ.get("AI_MODEL_QC_AGENT", "(unknown)")
     logger.info("=" * 60)
-    logger.info("EVAL CONFIG   run=%s | step=%s", args.run_name, args.step)
+    logger.info("EVAL CONFIG   run=%s | step=%s | turns=%s", args.run_name, args.step, args.turns)
     logger.info("  experiment  api=%s", args.api_url)
     logger.info("  experiment  chatbot=%s  qc=%s", chatbot_model, qc_model)
     logger.info("  judge       model=%s  runs=%d", os.environ.get("JUDGE_MODEL", "(not set)"), args.judge_runs)
@@ -100,6 +101,7 @@ def main() -> None:
             tc_file=Path(args.file),
             limit=args.limit,
             concurrency=args.concurrency,
+            turns=args.turns,
             lf=lf,
         )
 
