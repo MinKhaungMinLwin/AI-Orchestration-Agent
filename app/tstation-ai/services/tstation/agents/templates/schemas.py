@@ -362,9 +362,17 @@ class ProductTag(BaseModel):
 
 
 class ProductItem(BaseModel):
-    """Visible product card content for the FE."""
+    """Visible product card content for the FE.
 
-    model_config = ConfigDict(extra="forbid")
+    extra="ignore" — LLM 이 종종 BE row 의 필드명(comfort, review_count 등)을
+    그대로 emit 하는 hallucination 이 발생한다. forbid 로 두면 validation 이
+    실패해 카드 자체가 안 나오므로(quickReply fallback 발생), ignore 로 풀어
+    검증을 통과시키고 model_dump 시점에 자동 strip 한다.
+    `inject_product_tags_and_sanitize` 가 한 번 더 schema-키 화이트리스트로
+    sanitize 하므로 wire 에는 정의된 필드만 노출된다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     imageUrl: str
     title: str = Field(..., min_length=1)
