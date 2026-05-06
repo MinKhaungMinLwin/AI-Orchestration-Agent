@@ -16,6 +16,10 @@ from services.tstation.agents.b_discovery_agent.tools import get_product_descrip
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
+from services.tstation.agents.e_support_agent.tools import (
+    get_faq_tool,
+    search_faq_rag_tool,
+)
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -45,6 +49,34 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - Tire size priority: user's new input > confirmed slot > user context fallback
 - If user mentions a DIFFERENT car model → ignore confirmed tire_size, re-lookup for new vehicle.
 - If "진행 중인 요청" slot is present and the user has just selected / resolved a product in this turn, route to the matching Transaction flow (가격 조회 → price, 재고 확인 → stock, 주문 진행 → order confirmation) instead of defaulting to `get_product_description_tool`. The slot is auto-cleared by the system once that Transaction tool runs — do not attempt to clear it yourself.
+
+
+## INTENT GUARD (compatibility / info_question only)
+
+When the injected `## CONVERSATION CONTEXT` block contains `Intent: compatibility` or `Intent: info_question`:
+
+**FAQ-first answering policy (do NOT fabricate from your own knowledge):**
+
+1. FIRST call `get_faq_tool` with an inferred `lrcl_cd`:
+   - 회원/계정/장착예약 → `"C01"` (mdcl `"C0103"` 계정, `"C0106"` 장착)
+   - 타이어/상품/공기압/마모/교체/EV/사계절/런플랫 → `"C02"` (mdcl `"C0201"`)
+   - 매장/보관/위탁 → `"C03"` (mdcl `"C0302"`)
+   - Unsure → omit `lrcl_cd`.
+   Call `limit=100` first; retry `limit=200` if the first response has no relevant item.
+2. If `get_faq_tool` fails (`status="error"`) or returns no relevant item at `limit=200` → fall back to `search_faq_rag_tool(query=<user's question>)`. Apply the standard score thresholds: ≥0.7 answer directly, 0.45–0.7 use as supporting info, all <0.45 → out-of-scope (then own knowledge as last resort).
+3. Synthesize the answer from FAQ `answer` text into the `quickReply` template — quote the FAQ facts, do NOT make up numbers / brand claims / policy statements that aren't in FAQ.
+4. ONLY when both `get_faq_tool` and `search_faq_rag_tool` produce nothing usable, fall back to your own knowledge as a last resort, and clearly say it's general guidance (e.g., "공식 답변이 아니라 일반적인 안내입니다.").
+
+**Tool restrictions for these two intents:**
+- DO NOT call any of: `get_my_cars_tool`, `get_user_vehicles_tool`, `check_compatibility_tool`, `get_products_recommendations_tool`, `search_product_tool`, `search_car_model_tool`, `search_car_model_groups_tool`, `get_car_trims_tool`, `get_product_description_tool`.
+- DO NOT enter Flow A/B/C/D/E/F/G below.
+- The vehicle being mentioned (e.g., "내 제타", "내 K7") does NOT trigger vehicle lookup — these are knowledge questions answered via FAQ.
+
+**Response shape:**
+- For `compatibility`: open with a one-line verdict (네 / 아니요 / 조건부 가능) → 2-3 short bullets citing FAQ facts (사이즈·하중지수·속도등급 적합성 + 용도·승차감·비용 차이) → close with one short follow-up offering the next step ("제타에 맞는 전기차용 타이어 찾아드릴까요? 😊").
+- For `info_question`: 1-2 short paragraphs grounded in FAQ content (교체 주기, 공기압, 마모 한계, EV 타이어 특성 등) → close with one short follow-up.
+
+For ALL other intents (`recommend` / `product_search` / `vehicle_lookup` / `compare` / `event_inquiry` / `video_inquiry` / `selection` / `confirmation` / `other`), or when `Intent` is missing entirely, follow the existing Flow A-G logic below unchanged.
 
 
 ## INPUT NORMALIZATION
@@ -940,6 +972,9 @@ class DiscoverySubAgent(BaseAgent):
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
         "get_final_price_tool": "Price",
+        # FAQ (used for compatibility / info_question intents)
+        "get_faq_tool": "FAQ",
+        "search_faq_rag_tool": "FAQ",
     }
 
     def __init__(self, model):
@@ -960,6 +995,8 @@ class DiscoverySubAgent(BaseAgent):
                 get_deals_tool,
                 compare_discount_tool,
                 get_final_price_tool,
+                get_faq_tool,
+                search_faq_rag_tool,
             ],
             system_prompt=get_discovery_system_prompt,
             name="Discovery Agent",
