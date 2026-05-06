@@ -39,7 +39,11 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
     },
     "search_product_tool": {
         "list_key": "items",
-        "keep": {"goods_no", "goods_nm", "tire_size_1"},
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
+        },
     },
     "get_faq_tool": {
         "list_key": "faqs",
@@ -97,7 +101,11 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     },
     "search_product_tool": {
         "list_key": "items",
-        "keep": {"goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc"},
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
+        },
     },
     "get_nearby_stores_tool": {
         "list_key": "stores",
