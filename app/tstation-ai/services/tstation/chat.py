@@ -116,7 +116,6 @@ def decide_next_action(
     )
 
     trace_config = build_trace_config(
-        run_name="decide_next_action",
         session_id=session_id,
         user_id=user_id,
         trace_id=trace_id,
@@ -523,7 +522,6 @@ class StreamingMultiAgentCoordinator:
             all_messages = [system_msg] + list(messages)
 
             trace_config = build_trace_config(
-                run_name=run_name,
                 session_id=session_id,
                 user_id=user_id,
                 trace_id=trace_id,
@@ -944,7 +942,6 @@ class StreamingMultiAgentCoordinator:
                 # under this manual agent span. Falls back to the chat root
                 # when tracing is disabled (span.id is None).
                 agent_trace_config = build_trace_config(
-                    run_name=f"{domain_key}_agent",
                     session_id=session_id,
                     user_id=user_id,
                     trace_id=trace_id,
@@ -1340,6 +1337,27 @@ def _goal_based_classify(
     if domain is not None:
         logger.info(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
         return [domain]
+    return None
+
+
+def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
+    """Always-on SUPPORT fast-path for unambiguous escalation/policy keywords.
+
+    DECISION_LLM (small QC-tier model) has been observed to mis-route
+    '상담사 연결' / '상담원 연결' to LEADING — leaving LeadingAgent (which has
+    no transfer_to_qna_tool) to refuse the request and surface a "상담사 연결"
+    quickReply chip that, when tapped, loops back into the same refusal.
+
+    Bypass classification when an explicit support trigger is present so the
+    request always reaches SupportAgent's transfer_to_qna_tool. Independent of
+    `_RULE_BASED_ROUTING_ENABLED` so escalation cannot be silently disabled
+    alongside the broader rule-based path.
+    """
+    if not text:
+        return None
+    if _SUPPORT_FAST_RE.search(text):
+        logger.info(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
+        return [MultiAgentDomain.Domain.SUPPORT]
     return None
 
 
@@ -2059,6 +2077,7 @@ class TStationChatServiceV2:
                 input=_truncate_root(last_user_msg),
             )
             _parent_span.update_trace(
+                name="chat",
                 session_id=request.session_id,
                 user_id=request.user_id,
             )
@@ -2851,7 +2870,6 @@ class TStationChatServiceV2:
                             },
                         ) as _qc_span:
                             trace_config = build_trace_config(
-                                run_name="qc_agent",
                                 session_id=session_id,
                                 user_id=user_id,
                                 trace_id=trace_id,

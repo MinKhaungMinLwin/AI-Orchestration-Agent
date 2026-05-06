@@ -1,8 +1,6 @@
 import logging
 from common.tool_cache import tool_cache
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
@@ -15,7 +13,9 @@ logger = logging.getLogger(__name__)
 # STORE AF
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync_detailed as get_store_detail
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_schedule_api_store_schedule_get import sync_detailed as get_store_schedule
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_place_api_store_place_search_get import sync_detailed as search_place
+from common.tstation_be_api_client.hkt_api_client.models import ScheduleMode
 
 # PRICE AF
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
@@ -66,61 +66,6 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 
-def _next_cal_days(n: int = 3) -> list[str]:
-    """Return today + next n days as YYYYMMDD strings, using project timezone (TZ_OFFSET env)."""
-    tz_offset = int(os.getenv("TZ_OFFSET", "0"))
-    tz = timezone(timedelta(hours=tz_offset))
-    today = datetime.now(tz).date()
-    return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(0, n + 1)]
-
-
-def _fetch_store_detail_once(shop_id: str, cal_day: str, is_logistics_delivery: bool = False) -> dict:
-    """Fetch store_detail for a single (shop_id, cal_day) pair. Returns {} on failure.
-
-    When ``is_logistics_delivery=True``, the backend applies
-    ``AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` so only slots after the
-    store-delivery lead time are returned (store-inventory empty + logistics-inventory available).
-    """
-    try:
-        response = get_store_detail(
-            client=get_client(),
-            shop_id=shop_id,
-            cal_day=cal_day,
-            is_logistics_delivery=is_logistics_delivery,
-        )
-        if response.parsed is not None:
-            return _to_dict(response.parsed)
-    except Exception:
-        logger.warning("[_fetch_store_detail_once] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
-    return {}
-
-
-def _count_available_slots(detail: dict) -> int:
-    """Count non-empty available slots in a store_detail response."""
-    if not isinstance(detail, dict):
-        return 0
-    slots = detail.get("available_slots") or detail.get("time_slots") or []
-    return len(slots) if isinstance(slots, list) else 0
-
-
-def _parallel_fetch_store_days(shop_ids: list[str], cal_days: list[str], max_workers: int = 9) -> dict:
-    """Parallel-fetch all (shop_id, cal_day) combinations. Returns {shop_id: {cal_day: detail}}.
-
-    Used by Flow 3.5 (fastest-store search) where per-store logistics state is intentionally
-    ignored — a store without local stock is simply deprioritized by having a later earliest slot,
-    not by applying the lead-time filter.
-    """
-    results: dict[str, dict[str, dict]] = {sid: {} for sid in shop_ids}
-    pairs = [(sid, day) for sid in shop_ids for day in cal_days]
-    if not pairs:
-        return results
-
-    with ThreadPoolExecutor(max_workers=min(len(pairs), max_workers)) as executor:
-        futures = {executor.submit(_fetch_store_detail_once, sid, day): (sid, day) for sid, day in pairs}
-        for future in as_completed(futures):
-            sid, day = futures[future]
-            results[sid][day] = future.result()
-    return results
 
 
 def _fetch_order_detail(ord_no: str) -> dict:
@@ -598,187 +543,176 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 
 
 @tool
-def get_store_schedule_tool(
-    shop_id: str,
-    days: int = 7,
-    is_logistics_delivery: bool = False,
-    auto_extend_days: int = 14,
-):
+def get_store_schedule_tool(shop_id: str, mode: str):
     """
-    Get store reservation schedule for a range of days (parallel fetch).
+    Get reservation slots for a single store using mode-based cal_day range (single BE call).
 
-    Use instead of calling get_store_detail_tool multiple times.
-    Fetches TODAY through TODAY+(days-1) in parallel.
+    The backend applies a different cal_day range per mode based on inventory state.
+    Choose mode AFTER inspecting get_store_inventory_tool + get_logistics_inventory_tool
+    results for this shop and goods_no:
 
-    Adaptive auto-extend: if all Phase 1 days have zero installable slots AND auto_extend_days>0,
-    automatically fetches the next auto_extend_days days (total window: up to days+auto_extend_days).
+    | mode                          | When to use                                      |
+    |-------------------------------|--------------------------------------------------|
+    | today_only                    | shop ∈ todayShopArray (오늘서비스만)             |
+    | tna_only                      | shop ∈ tnaShopArray, NOT in todayShopArray       |
+    | logistics_only                | 매장재고 X + 물류재고 O                          |
+    | in_store_only                 | 매장재고 O + 물류재고 X (오늘 ∪ T바로배송)       |
+    | in_store_logistics_combined   | 매장재고 O + 물류재고 O (오늘 ∪ T바로 ∪ 일반배송)|
+    | general                       | 단순 매장 방문 (no tire context)                 |
 
     Args:
         shop_id (str): Store ID.
-        days (int): Days to fetch from today (default 7, clamped to [1,7]).
-        is_logistics_delivery (bool): Same as get_store_detail_tool. Default False.
-        auto_extend_days (int): Extra days to scan when Phase 1 is empty (default 14, clamped to [0,21]).
+        mode (str): One of the ScheduleMode values listed above.
 
     Examples:
-        - {"shop_id": "BXXXXX"}
-        - {"shop_id": "FXXXXX", "days": 4}
-        - {"shop_id": "BXXXXX", "is_logistics_delivery": true}
+        - {"shop_id": "BXXXXX", "mode": "in_store_logistics_combined"}
+        - {"shop_id": "FXXXXX", "mode": "logistics_only"}
+        - {"shop_id": "BXXXXX", "mode": "general"}
     """
     logger.info(
-        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s, "
-        "is_logistics_delivery=%s, auto_extend_days=%s",
-        shop_id, days, is_logistics_delivery, auto_extend_days,
+        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, mode=%s",
+        shop_id, mode,
     )
-    days = max(1, min(days, 7))
-    auto_extend_days = max(0, min(auto_extend_days, 21))
 
-    def _fetch_window(cal_days_to_fetch: list[str]) -> list[dict]:
-        out: list[dict] = []
-        if not cal_days_to_fetch:
-            return out
-        with ThreadPoolExecutor(max_workers=min(len(cal_days_to_fetch), 9)) as executor:
-            futures = {
-                executor.submit(
-                    get_store_detail,
-                    client=get_client(),
-                    shop_id=shop_id,
-                    cal_day=cal_day,
-                    is_logistics_delivery=is_logistics_delivery,
-                ): cal_day
-                for cal_day in cal_days_to_fetch
-            }
-            for future in as_completed(futures):
-                cal_day = futures[future]
-                try:
-                    response = future.result()
-                    if response.parsed is not None:
-                        detail = _to_dict(response.parsed)
-                        out.append({
-                            "cal_day": cal_day,
-                            "available_slots": detail.get("available_slots") or [],
-                            "is_installable": detail.get("is_installable", False),
-                            "is_tna_delivery": detail.get("is_tna_delivery", False),
-                        })
-                    else:
-                        out.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
-                except Exception:
-                    logger.warning("[get_store_schedule_tool] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
-                    out.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
-        return out
+    try:
+        mode_enum = ScheduleMode(mode)
+    except ValueError:
+        valid = [m.value for m in ScheduleMode]
+        return _error_response(None, "invalid_mode", f"mode must be one of {valid}; got {mode!r}")
 
-    # Phase 1 — initial window
-    phase1_cal_days = _next_cal_days(days - 1)
-    schedule = _fetch_window(phase1_cal_days)
-
-    # Phase 2 — auto-extend when Phase 1 has no installable slots anywhere
-    extended = False
-    has_any_slot = any(
-        entry.get("is_installable") and (entry.get("available_slots") or [])
-        for entry in schedule
-    )
-    if not has_any_slot and auto_extend_days > 0:
-        full_cal_days = _next_cal_days(days + auto_extend_days - 1)
-        phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
-        if phase2_cal_days:
-            logger.info(
-                "[TOOL][get_store_schedule_tool] Phase 1 empty for shop_id=%s; "
-                "auto-extending +%d days (%d new days)",
-                shop_id, auto_extend_days, len(phase2_cal_days),
+    try:
+        response = get_store_schedule(client=get_client(), shop_id=shop_id, mode=mode_enum)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get store schedule"
             )
-            schedule.extend(_fetch_window(phase2_cal_days))
-            extended = True
+        logger.info("[TOOL][get_store_schedule_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_store_schedule_tool] Failed")
+        return _error_response(None, str(e), "Failed to get store schedule")
 
-    schedule.sort(key=lambda x: x["cal_day"])
-    return _success_response(200, {
-        "shop_id": shop_id,
-        "schedule": schedule,
-        "extended": extended,
-        "days_fetched": len(schedule),
-    })
+
+def _fetch_schedule_for_shops(shop_ids: list[str], mode: ScheduleMode) -> dict[str, dict]:
+    """Parallel-fetch /api/store/schedule for multiple shops with the same mode.
+
+    Returns {shop_id: parsed_dict}. Empty dict for failed shops.
+    """
+    results: dict[str, dict] = {sid: {} for sid in shop_ids}
+    if not shop_ids:
+        return results
+
+    with ThreadPoolExecutor(max_workers=min(len(shop_ids), 9)) as executor:
+        futures = {
+            executor.submit(get_store_schedule, client=get_client(), shop_id=sid, mode=mode): sid
+            for sid in shop_ids
+        }
+        for future in as_completed(futures):
+            sid = futures[future]
+            try:
+                response = future.result()
+                if response.parsed is not None:
+                    results[sid] = _to_dict(response.parsed)
+            except Exception:
+                logger.warning("[_fetch_schedule_for_shops] Failed for shop_id=%s mode=%s", sid, mode.value)
+    return results
 
 
 @tool
 def get_multi_store_schedule_tool(
     shop_id_list: list[str],
-    initial_days: int = 2,
-    extend_days: int = 1,
+    today_shop_ids: list[str] | None = None,
+    tna_shop_ids: list[str] | None = None,
+    has_logistics: bool = False,
 ):
     """
-    Get reservation schedule for multiple stores (up to 3) with adaptive day extension.
+    Flow 3.5 — find earliest reservation slots across up to 3 stores using **tier cascade**.
 
-    Use for "가장 빨리 방문 가능한 매장" queries — fetches all (shop_id × cal_day) pairs in ONE parallel call.
-    Use INSTEAD OF calling get_store_detail_tool N×M times.
+    The tool selects ONE tier across the whole batch based on inventory state:
 
-    Adaptive: Phase 1 fetches initial_days. If ALL stores have zero slots AND extend_days>0,
-    Phase 2 extends window by extend_days.
+    | Tier | Trigger condition                                       | mode used      |
+    |------|---------------------------------------------------------|----------------|
+    | 1    | At least one candidate ∈ todayShopArray                 | today_only     |
+    | 2    | Tier 1 empty AND ≥1 candidate ∈ tnaShopArray            | tna_only       |
+    | 3    | Tiers 1–2 empty AND has_logistics=True                  | logistics_only |
+    | none | All tiers empty                                         | (no BE call)   |
+
+    Tier 1 queries the today_only intersection; tier 2 the tna intersection; tier 3
+    the remaining candidates not already in today/tna arrays. The first non-empty
+    tier is returned — earlier tiers always win (today > tna > 일반배송).
+
+    Caller MUST first run get_store_inventory_tool + get_logistics_inventory_tool
+    so todayShopArray/tnaShopArray/logistics_qty are known.
 
     Args:
-        shop_id_list (list[str]): Up to 3 shop IDs (extras truncated).
-        initial_days (int): Days to fetch initially (default 2 = TODAY, +1).
-        extend_days (int): Extra days if initial window is empty (default 1).
+        shop_id_list (list[str]): Up to 3 candidate shop IDs (extras truncated).
+        today_shop_ids (list[str] | None): shop_ids in todayShopArray from get_store_inventory_tool.
+        tna_shop_ids (list[str] | None): shop_ids in tnaShopArray from get_store_inventory_tool.
+        has_logistics (bool): True if logistics_qty > 0 (from get_logistics_inventory_tool).
 
-    Example: {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
+    Example:
+        {
+          "shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"],
+          "today_shop_ids": ["BXXXXX"],
+          "tna_shop_ids": ["FXXXXX"],
+          "has_logistics": true
+        }
     """
     logger.info(
-        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, initial_days=%s, extend_days=%s",
-        shop_id_list, initial_days, extend_days,
+        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, "
+        "today_shop_ids=%s, tna_shop_ids=%s, has_logistics=%s",
+        shop_id_list, today_shop_ids, tna_shop_ids, has_logistics,
     )
 
-    shop_ids = [sid for sid in (shop_id_list or []) if sid][:3]
-    if not shop_ids:
+    candidates = [sid for sid in (shop_id_list or []) if sid][:3]
+    if not candidates:
         return _error_response(None, "invalid_input", "shop_id_list is empty")
 
-    initial_days = max(1, min(initial_days, 7))
-    extend_days = max(0, min(extend_days, 5))
+    today_set = set(today_shop_ids or [])
+    tna_set = set(tna_shop_ids or [])
 
-    # Phase 1 — initial window (e.g., 2 days = TODAY, +1)
-    phase1_cal_days = _next_cal_days(initial_days - 1)
-    phase1_results = _parallel_fetch_store_days(shop_ids, phase1_cal_days)
-
-    # Per-store empty check: stores that have zero slots across all initial days
-    stores_without_slots = [
-        sid for sid in shop_ids
-        if not any(
-            _count_available_slots(phase1_results.get(sid, {}).get(day, {})) > 0
-            for day in phase1_cal_days
-        )
-    ]
-
-    merged: dict[str, dict[str, dict]] = phase1_results
-    extended = False
-    all_cal_days = list(phase1_cal_days)
-
-    # Phase 2 — extend ONLY the stores whose initial window is empty.
-    # Fetching per-store preserves correctness (a store that needs day +2 still
-    # gets its +2 data) while avoiding wasted BE calls for stores already filled.
-    if stores_without_slots and extend_days > 0:
-        full_cal_days = _next_cal_days(initial_days + extend_days - 1)
-        phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
-        if phase2_cal_days:
-            phase2_results = _parallel_fetch_store_days(stores_without_slots, phase2_cal_days)
-            for sid in stores_without_slots:
-                merged[sid] = {**phase1_results.get(sid, {}), **phase2_results.get(sid, {})}
-            all_cal_days.extend(phase2_cal_days)
-            extended = True
-
-    # Shape output: one entry per shop with sorted schedule
-    stores_out = []
-    for sid in shop_ids:
-        schedule = []
-        for day in sorted(merged.get(sid, {}).keys()):
-            detail = merged[sid].get(day) or {}
-            schedule.append({
-                "cal_day": day,
-                "available_slots": detail.get("available_slots") or [],
-                "is_installable": detail.get("is_installable", False),
-                "is_tna_delivery": detail.get("is_tna_delivery", False),
+    # Tier 1 — today_only on candidates ∩ todayShopArray
+    tier1_shops = [sid for sid in candidates if sid in today_set]
+    if tier1_shops:
+        results = _fetch_schedule_for_shops(tier1_shops, ScheduleMode.TODAY_ONLY)
+        if any(r.get("slots") for r in results.values()):
+            return _success_response(200, {
+                "tier": "today_only",
+                "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier1_shops],
+                "candidate_shop_ids": candidates,
             })
-        stores_out.append({"shop_id": sid, "schedule": schedule})
+
+    # Tier 2 — tna_only on candidates ∩ tnaShopArray
+    tier2_shops = [sid for sid in candidates if sid in tna_set]
+    if tier2_shops:
+        results = _fetch_schedule_for_shops(tier2_shops, ScheduleMode.TNA_ONLY)
+        if any(r.get("slots") for r in results.values()):
+            return _success_response(200, {
+                "tier": "tna_only",
+                "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier2_shops],
+                "candidate_shop_ids": candidates,
+            })
+
+    # Tier 3 — logistics_only on remaining candidates (not in today/tna sets)
+    if has_logistics:
+        tier3_shops = [sid for sid in candidates if sid not in today_set and sid not in tna_set]
+        # Fall back to all candidates if filtering removed every shop
+        if not tier3_shops:
+            tier3_shops = list(candidates)
+        results = _fetch_schedule_for_shops(tier3_shops, ScheduleMode.LOGISTICS_ONLY)
+        if any(r.get("slots") for r in results.values()):
+            return _success_response(200, {
+                "tier": "logistics_only",
+                "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier3_shops],
+                "candidate_shop_ids": candidates,
+            })
 
     return _success_response(200, {
-        "stores": stores_out,
-        "extended": extended,
-        "days_fetched": len(set(all_cal_days)),
+        "tier": "none",
+        "stores": [],
+        "candidate_shop_ids": candidates,
     })
 
 

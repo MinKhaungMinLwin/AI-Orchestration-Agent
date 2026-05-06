@@ -50,6 +50,7 @@ from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
 from .review_item import ReviewItem
 from .review_rating import ReviewRating
+from .schedule_mode import ScheduleMode
 from .session_info import SessionInfo
 from .session_list_response import SessionListResponse
 from .set_order_form_ai_request import SetOrderFormAIRequest
@@ -61,6 +62,8 @@ from .store_inventory_request import StoreInventoryRequest
 from .store_inventory_response import StoreInventoryResponse
 from .store_list_item import StoreListItem
 from .store_list_response import StoreListResponse
+from .store_schedule_response import StoreScheduleResponse
+from .store_schedule_slot import StoreScheduleSlot
 from .tire_spec import TireSpec
 from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
@@ -116,6 +119,7 @@ __all__ = (
     "RecommendationResponse",
     "ReviewItem",
     "ReviewRating",
+    "ScheduleMode",
     "SessionInfo",
     "SessionListResponse",
     "SetOrderFormAIRequest",
@@ -127,6 +131,8 @@ __all__ = (
     "StoreInventoryResponse",
     "StoreListItem",
     "StoreListResponse",
+    "StoreScheduleResponse",
+    "StoreScheduleSlot",
     "TireSpec",
     "ValidationError",
     "ValidationErrorContext",

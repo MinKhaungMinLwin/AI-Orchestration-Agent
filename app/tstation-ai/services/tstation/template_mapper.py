@@ -617,13 +617,40 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
 # ── 9. datepick ─────────────────────────────────────────────────────────────────
 
+def _parse_tm_to_hour(tm: str) -> int | None:
+    """Parse a BE `tm` slot value to an integer hour (0-23).
+
+    BE OpenAPI spec says `tm` is `HHMM` (e.g. "0900", "1030"), but observed
+    runtime payloads also send hour-only ("13"). Accept both, return the hour
+    portion. Returns None for unparseable / out-of-range values.
+    """
+    s = (tm or "").strip()
+    if not s.isdigit():
+        return None
+    if len(s) <= 2:
+        h = int(s)
+    elif len(s) == 4:
+        h = int(s[:2])
+    else:
+        return None
+    return h if 0 <= h <= 23 else None
+
+
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Map `get_store_schedule_tool` output to a `datepick` event.
 
-    Only handles the schedule tool (single shop, multi-day, response carries cal_day).
-    `get_store_detail_tool` is intentionally skipped — its response does not include
-    cal_day, and reconstructing it from input args is not currently supported by
-    BaseAgent's tool-result accumulator.
+    BE response shape (per StoreScheduleResponse in tstation-be-openapi.json):
+        {
+          "shop_id": "...", "shop_nm": "...", "mode": "...",
+          "is_installable": bool, "is_tna_delivery": bool,
+          "slots": [{"cal_day": "YYYYMMDD", "tm": "HHMM"}, ...]
+        }
+
+    Slots are flat (one entry per available time), not grouped by day. Group by
+    `cal_day` and dedupe to integer hours for the FE `availableTimes` contract.
+    `get_store_detail_tool` is intentionally skipped — its response does not
+    include cal_day, and reconstructing it from input args is not currently
+    supported by BaseAgent's tool-result accumulator.
     """
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
     if not entries:
@@ -632,38 +659,46 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if not isinstance(raw, dict):
         return None
 
-    schedule = raw.get("schedule")
     shop_id = _get_str(raw, "shop_id")
-    if not shop_id or not isinstance(schedule, list) or not schedule:
+    slots = raw.get("slots")
+    if not shop_id or not isinstance(slots, list):
+        return None
+
+    # Response-level installable flag: when False, treat as no available times
+    # (BE may still echo cal_day rows in some modes; FE expects empty list).
+    is_installable = bool(raw.get("is_installable", True))
+
+    # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
+    # but we sort cal_day strings before emitting to avoid relying on that.
+    by_day: dict[str, set[int]] = {}
+    for s in slots:
+        if not isinstance(s, dict):
+            continue
+        cal_day = _get_str(s, "cal_day")
+        hour = _parse_tm_to_hour(_get_str(s, "tm"))
+        if not cal_day or hour is None:
+            continue
+        bucket = by_day.setdefault(cal_day, set())
+        if is_installable:
+            bucket.add(hour)
+
+    if not by_day:
         return None
 
     dates: list[dict] = []
     selected_idx: int | None = None
-    for i, entry in enumerate(schedule):
-        if not isinstance(entry, dict):
-            continue
-        cal_day = _get_str(entry, "cal_day")
-        if not cal_day:
-            continue
-        slots = entry.get("available_slots") or []
-        # If this date is not installable at this store, treat slots as empty
-        # (the FE schema validator also drops noon=12 separately).
-        if not entry.get("is_installable", False):
-            available_times: list[int] = []
-        else:
-            available_times = [int(s) for s in slots if isinstance(s, str) and s.isdigit()]
-        available = bool(available_times)
+    for i, cal_day in enumerate(sorted(by_day.keys())):
+        times = sorted(by_day[cal_day])
+        available = bool(times)
         dates.append({
             "date": _yyyymmdd_to_korean_date(cal_day),
             "available": available,
-            "availableTimes": available_times,
+            "availableTimes": times,
             "index": i,
         })
         if selected_idx is None and available:
             selected_idx = i
 
-    if not dates:
-        return None
     # All days empty → let the LLM emit the "no slots" friendly quickReply
     # ("현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?").
     if selected_idx is None:

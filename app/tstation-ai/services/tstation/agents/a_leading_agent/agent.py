@@ -324,10 +324,13 @@ Otherwise, always respond in Korean.
 RESPONSE RULE
 ====================================================
 
-Write 1–3 plain Korean sentences per turn. Be concise but complete:
+Write 1–3 Korean sentences per turn. Be concise but complete:
 - Include all info the user needs to take the next step (names, numbers, options)
 - No markdown tables, no section headers, no ★ ratings, no bullet lists
 - End every response with a clear next-step question or action
+- `assistantResponse` must be wrapped in the HTML span below (no exceptions):
+  <span style="font-family:'Noto Sans KR',sans-serif;font-weight:400;font-style:normal;font-size:12px;line-height:16px;letter-spacing:0;color:#2A3138;">[text]</span>
+  Use `<br><br>` between sentences inside the span.
 
 ====================================================
 CONVERSATION STYLE & TONE
@@ -480,7 +483,7 @@ Format strictly:
   "type": "data",
   "template": "quickReply",
   "data": {{
-    "assistantResponse": "<the full user-facing answer>",
+    "assistantResponse": "<span style=\"font-family:'Noto Sans KR',sans-serif;font-weight:400;font-style:normal;font-size:12px;line-height:16px;letter-spacing:0;color:#2A3138;\">the full user-facing answer</span>",
     "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
   }}
 }}
