@@ -103,12 +103,18 @@ def _count_available_slots(detail: dict) -> int:
     return len(slots) if isinstance(slots, list) else 0
 
 
-def _parallel_fetch_store_days(shop_ids: list[str], cal_days: list[str], max_workers: int = 9) -> dict:
+def _parallel_fetch_store_days(
+    shop_ids: list[str],
+    cal_days: list[str],
+    is_logistics_delivery: bool = False,
+    max_workers: int = 9,
+) -> dict:
     """Parallel-fetch all (shop_id, cal_day) combinations. Returns {shop_id: {cal_day: detail}}.
 
-    Used by Flow 3.5 (fastest-store search) where per-store logistics state is intentionally
-    ignored — a store without local stock is simply deprioritized by having a later earliest slot,
-    not by applying the lead-time filter.
+    When ``is_logistics_delivery=True``, every BE call applies the store-delivery
+    lead-time filter (`AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`). The
+    flag is uniform across stores in a batch because logistics inventory is
+    goods-level, not per-store, so the caller decides once for the whole call.
     """
     results: dict[str, dict[str, dict]] = {sid: {} for sid in shop_ids}
     pairs = [(sid, day) for sid in shop_ids for day in cal_days]
@@ -116,7 +122,10 @@ def _parallel_fetch_store_days(shop_ids: list[str], cal_days: list[str], max_wor
         return results
 
     with ThreadPoolExecutor(max_workers=min(len(pairs), max_workers)) as executor:
-        futures = {executor.submit(_fetch_store_detail_once, sid, day): (sid, day) for sid, day in pairs}
+        futures = {
+            executor.submit(_fetch_store_detail_once, sid, day, is_logistics_delivery): (sid, day)
+            for sid, day in pairs
+        }
         for future in as_completed(futures):
             sid, day = futures[future]
             results[sid][day] = future.result()
@@ -702,6 +711,7 @@ def get_multi_store_schedule_tool(
     shop_id_list: list[str],
     initial_days: int = 2,
     extend_days: int = 1,
+    is_logistics_delivery: bool = False,
 ):
     """
     Get reservation schedule for multiple stores (up to 3) with adaptive day extension.
@@ -716,12 +726,19 @@ def get_multi_store_schedule_tool(
         shop_id_list (list[str]): Up to 3 shop IDs (extras truncated).
         initial_days (int): Days to fetch initially (default 2 = TODAY, +1).
         extend_days (int): Extra days if initial window is empty (default 1).
+        is_logistics_delivery (bool): True when logistics_qty > 0 for the goods being
+            checked (regardless of per-store stock). Backend then applies
+            `AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)` to all stores in
+            this batch. Default False (e.g., logistics_qty == 0). Set this AFTER
+            running get_logistics_inventory_tool — do NOT call this tool in parallel
+            with the logistics check.
 
-    Example: {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
+    Example: {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"], "is_logistics_delivery": true}
     """
     logger.info(
-        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, initial_days=%s, extend_days=%s",
-        shop_id_list, initial_days, extend_days,
+        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, initial_days=%s, "
+        "extend_days=%s, is_logistics_delivery=%s",
+        shop_id_list, initial_days, extend_days, is_logistics_delivery,
     )
 
     shop_ids = [sid for sid in (shop_id_list or []) if sid][:3]
@@ -733,7 +750,9 @@ def get_multi_store_schedule_tool(
 
     # Phase 1 — initial window (e.g., 2 days = TODAY, +1)
     phase1_cal_days = _next_cal_days(initial_days - 1)
-    phase1_results = _parallel_fetch_store_days(shop_ids, phase1_cal_days)
+    phase1_results = _parallel_fetch_store_days(
+        shop_ids, phase1_cal_days, is_logistics_delivery=is_logistics_delivery
+    )
 
     # Per-store empty check: stores that have zero slots across all initial days
     stores_without_slots = [
@@ -755,7 +774,9 @@ def get_multi_store_schedule_tool(
         full_cal_days = _next_cal_days(initial_days + extend_days - 1)
         phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
         if phase2_cal_days:
-            phase2_results = _parallel_fetch_store_days(stores_without_slots, phase2_cal_days)
+            phase2_results = _parallel_fetch_store_days(
+                stores_without_slots, phase2_cal_days, is_logistics_delivery=is_logistics_delivery
+            )
             for sid in stores_without_slots:
                 merged[sid] = {**phase1_results.get(sid, {}), **phase2_results.get(sid, {})}
             all_cal_days.extend(phase2_cal_days)
