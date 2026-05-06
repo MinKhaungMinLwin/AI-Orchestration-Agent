@@ -116,12 +116,12 @@ def decide_next_action(
     )
 
     trace_config = build_trace_config(
-        run_name="decide_next_action",
         session_id=session_id,
         user_id=user_id,
         trace_id=trace_id,
         parent_span_id=parent_span_id,
         tags=["router", "decide_next_action"],
+        prompt_name="router",
     )
 
     try:
@@ -522,12 +522,12 @@ class StreamingMultiAgentCoordinator:
             all_messages = [system_msg] + list(messages)
 
             trace_config = build_trace_config(
-                run_name=run_name,
                 session_id=session_id,
                 user_id=user_id,
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
                 tags=["router", run_name],
+                prompt_name="router",
             )
             raw_result = structured_model.invoke(all_messages, config=trace_config)
 
@@ -795,7 +795,7 @@ class StreamingMultiAgentCoordinator:
         Yields:
             Stream events from all agents in sequence
         """
-        from config.tracing import build_trace_config
+        from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
 
         # Classify if domains not provided
         # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
@@ -922,57 +922,87 @@ class StreamingMultiAgentCoordinator:
             # Stream from agent and yield events immediately
             full_response = ""
             last_agent_called_tools = False
-            agent_trace_config = build_trace_config(
-                run_name=f"{domain_key}_agent",
-                session_id=session_id,
-                user_id=user_id,
+            agent_tools_called: list[str] = []
+
+            # Last user message becomes the agent span's input — keeps the
+            # trace readable instead of dumping the entire enriched_messages
+            # array (which includes slot/tool context blocks).
+            _agent_input_msg = next(
+                (m.get("content", "") for m in reversed(enriched_messages) if m.get("role") == "user"),
+                "",
+            )
+
+            with _trace_span(
+                f"agent:{domain_key}",
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
-                tags=[domain_key, "agent"],
-            )
-            for event in agent.stream(enriched_messages, config=agent_trace_config):
-                # Tag with source domain for UI
-                event["source_domain"] = domain_key
-                yield event
+                input=_agent_input_msg,
+            ) as _agent_span:
+                # Nest LangChain auto-captured spans (LLM generations, tools)
+                # under this manual agent span. Falls back to the chat root
+                # when tracing is disabled (span.id is None).
+                agent_trace_config = build_trace_config(
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    parent_span_id=_agent_span.id or parent_span_id,
+                    tags=[domain_key, "agent"],
+                    prompt_name=f"{domain_key}_agent",
+                )
+                for event in agent.stream(enriched_messages, config=agent_trace_config):
+                    # Tag with source domain for UI
+                    event["source_domain"] = domain_key
+                    yield event
 
-                # Track direct data events emitted by the domain agent (JSON output).
-                # When present, skip the UI Template stage below.
-                if event.get("type") == "data":
-                    domain_data_event_emitted = True
+                    # Track direct data events emitted by the domain agent (JSON output).
+                    # When present, skip the UI Template stage below.
+                    if event.get("type") == "data":
+                        domain_data_event_emitted = True
 
-                # Capture message content for context passing
-                if event.get("type") == "message":
-                    content = event.get("content", "")
-                    if content:
-                        accumulated_context[domain_key] = content
-                        full_response = content
-                        logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
+                    # Capture message content for context passing
+                    if event.get("type") == "message":
+                        content = event.get("content", "")
+                        if content:
+                            accumulated_context[domain_key] = content
+                            full_response = content
+                            logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
-                # Capture tool outputs for UI Template Agent
-                if event.get("type") == "tool":
-                    last_agent_called_tools = True
-                    tool_output = event.get("output", "")
-                    if tool_output:
-                        try:
-                            parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "input": event.get("input", {}),
-                                "data": parsed,
-                            })
+                    # Capture tool outputs for UI Template Agent
+                    if event.get("type") == "tool":
+                        last_agent_called_tools = True
+                        tool_name = event.get("tool", "")
+                        if tool_name:
+                            agent_tools_called.append(tool_name)
+                        tool_output = event.get("output", "")
+                        if tool_output:
+                            try:
+                                parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                                accumulated_tool_data.append({
+                                    "tool": tool_name,
+                                    "input": event.get("input", {}),
+                                    "data": parsed,
+                                })
 
-                            # Persist tool-derived goods_no, shop_id, and tire_size to slots
-                            if session_id and isinstance(parsed, dict):
-                                self._save_tool_derived_slots(
-                                    session_id, event.get("tool", ""), parsed, event.get("input", {})
-                                )
+                                # Persist tool-derived goods_no, shop_id, and tire_size to slots
+                                if session_id and isinstance(parsed, dict):
+                                    self._save_tool_derived_slots(
+                                        session_id, tool_name, parsed, event.get("input", {})
+                                    )
 
-                        except (json.JSONDecodeError, TypeError):
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "input": event.get("input", {}),
-                                "data": tool_output,
-                            })
+                            except (json.JSONDecodeError, TypeError):
+                                accumulated_tool_data.append({
+                                    "tool": tool_name,
+                                    "input": event.get("input", {}),
+                                    "data": tool_output,
+                                })
+
+                _agent_span.update(
+                    output=_truncate({
+                        "response": full_response,
+                        "tools_called": agent_tools_called,
+                        "data_event_emitted": domain_data_event_emitted,
+                    }),
+                )
 
             # Yield agent completion event
             yield {
@@ -2039,14 +2069,15 @@ class TStationChatServiceV2:
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
         _parent_span_id = None
-        from config.tracing import _tracing_enabled, tracer
+        from config.tracing import _tracing_enabled, tracer, truncate_for_trace as _truncate_root
         if _tracing_enabled:
             _parent_span = tracer.start_span(
                 name="chat",
                 trace_context={"trace_id": request.tracing_id},
-                input=last_user_msg,
+                input=_truncate_root(last_user_msg),
             )
             _parent_span.update_trace(
+                name="chat",
                 session_id=request.session_id,
                 user_id=request.user_id,
             )
@@ -2304,24 +2335,45 @@ class TStationChatServiceV2:
         # Fast-path order: goal-based (deterministic checklist) → rule-based
         # (regex) → LLM classifier (multi-intent, conversational context).
         # Each layer returns None to defer to the next.
+        # Wrapped in a manual `classify` span so Langfuse shows a single clean
+        # node: input=last user text, output=domains. Any nested LLM call from
+        # classify_multi_intent attaches under this span via parent_span_id.
+        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
         routing_result = None
-        fast_domains = (
-            _support_fast_path(last_user_text)
-            or _goal_based_classify(last_user_text, merged_slots)
-            or _rule_based_classify(last_user_text, merged_slots)
-        )
-        if fast_domains is not None:
-            domains = fast_domains
-            # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
-        else:
-            domains, routing_result = _coordinator.classify_multi_intent(
-                messages,
-                session_id=request.session_id,
-                user_id=request.user_id,
-                trace_id=request.tracing_id,
-                parent_span_id=_parent_span_id,
+        with _trace_span(
+            "classify",
+            trace_id=request.tracing_id,
+            parent_span_id=_parent_span_id,
+            input=last_user_text,
+        ) as _classify_span:
+            fast_domains = (
+                _goal_based_classify(last_user_text, merged_slots)
+                or _rule_based_classify(last_user_text, merged_slots)
             )
-            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+            if fast_domains is not None:
+                domains = fast_domains
+                _classify_path = "fast"
+                # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+            else:
+                domains, routing_result = _coordinator.classify_multi_intent(
+                    messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_classify_span.id or _parent_span_id,
+                )
+                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                _classify_path = "llm"
+            _classify_span.update(
+                output=_truncate({
+                    "domains": [d.value for d in domains],
+                    "path": _classify_path,
+                    "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
+                    "flow": getattr(routing_result, "flow", None) if routing_result else None,
+                }),
+            )
+            if _parent_span is not None and domains:
+                _parent_span.update_trace(name=domains[0].value.lower())
         _t_classify = time.perf_counter()
 
         # Post-classification redirect: when the user's current-turn reply was a
@@ -2505,8 +2557,9 @@ class TStationChatServiceV2:
         if request.tracing_id:
             from config.tracing import _tracing_enabled, tracer
             if _tracing_enabled:
+                # slots has no manual span — keep as score. classify/agents/qc
+                # are now covered by business spans in Langfuse.
                 tracer.create_score(trace_id=request.tracing_id, name="latency.slots_ms", value=round((_t_slots - _t0) * 1000))
-                tracer.create_score(trace_id=request.tracing_id, name="latency.classify_ms", value=round((_t_classify - _t_slots) * 1000))
 
         # STREAM MODE
         if request.stream:
@@ -2597,6 +2650,7 @@ class TStationChatServiceV2:
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
+        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
         logger.info(
             "[REQUEST_CONFIG] "
             f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
@@ -2803,24 +2857,46 @@ class TStationChatServiceV2:
                     and not _should_skip_qc(called_tool_names, last_template)
                 ):
                     try:
-                        from services.tstation.agents.g_qc_agent.agent import invoke_qc
+                        from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
                         from services.tstation.agents.router import QC_LLM
                         from config.tracing import build_trace_config
 
-                        trace_config = build_trace_config(
-                            run_name="qc_agent",
-                            session_id=session_id,
-                            user_id=user_id,
+                        with _trace_span(
+                            "qc",
                             trace_id=trace_id,
                             parent_span_id=parent_span_id,
-                            tags=["qc"],
-                        )
-                        qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data, config=trace_config)
-                        if qc_result.strip() and qc_result.strip().upper() != "PASS":
-                            draft_response = qc_result.strip()
-                            logger.info("[QC_LAYER] QC corrected the response")
-                        else:
-                            logger.info("[QC_LAYER] QC passed")
+                            input={
+                                "user_query": user_query,
+                                "draft": draft_response,
+                                "source_data": source_data,
+                            },
+                        ) as _qc_span:
+                            trace_config = build_trace_config(
+                                session_id=session_id,
+                                user_id=user_id,
+                                trace_id=trace_id,
+                                parent_span_id=_qc_span.id or parent_span_id,
+                                tags=["qc"],
+                                prompt_name="qc_agent",
+                            )
+                            async def _run_qc():
+                                return await ainvoke_qc(
+                                    QC_LLM, user_query, draft_response, source_data, config=trace_config
+                                )
+                            import anyio.from_thread as _anyio_ft
+                            qc_result = _anyio_ft.run(_run_qc)
+                            _qc_passed = not qc_result.strip() or qc_result.strip().upper() == "PASS"
+                            if not _qc_passed:
+                                draft_response = qc_result.strip()
+                                logger.info("[QC_LAYER] QC corrected the response")
+                            else:
+                                logger.info("[QC_LAYER] QC passed")
+                            _qc_span.update(
+                                output=_truncate({
+                                    "verdict": "PASS" if _qc_passed else "CORRECTED",
+                                    "result": qc_result,
+                                }),
+                            )
                     except Exception as e:
                         logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
 
@@ -2851,15 +2927,12 @@ class TStationChatServiceV2:
             f"qc={(_t_qc - _t_agents)*1000:.0f}ms "
             f"total={(_t_qc - _t_stream_start)*1000:.0f}ms"
         )
-        if trace_id:
-            from config.tracing import _tracing_enabled, tracer
-            if _tracing_enabled:
-                tracer.create_score(trace_id=trace_id, name="latency.agents_ms", value=round((_t_agents - _t_stream_start) * 1000))
-                tracer.create_score(trace_id=trace_id, name="latency.qc_ms", value=round((_t_qc - _t_agents) * 1000))
-                tracer.create_score(trace_id=trace_id, name="latency.stream_total_ms", value=round((_t_qc - _t_stream_start) * 1000))
+        # agents / qc / stream_total latency is now tracked via manual Langfuse
+        # spans ("agent:*", "qc") — no need to submit redundant scores.
 
         if parent_span is not None:
-            parent_span.update_trace(name="chat", output=draft_response)
+            from config.tracing import truncate_for_trace as _truncate_root_out
+            parent_span.update_trace(name="chat", output=_truncate_root_out(draft_response))
             parent_span.end()
 
         # 5. FINALIZE THE STREAM
