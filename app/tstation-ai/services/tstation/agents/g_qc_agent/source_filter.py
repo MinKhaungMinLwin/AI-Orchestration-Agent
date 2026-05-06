@@ -33,6 +33,8 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
             "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
             "wrt_grte_term", "rating_avg",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
         },
     },
     "search_product_tool": {
@@ -89,6 +91,8 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "t_wgt_idx", "t_tray_ware", "t_rlx_isn_yn",
             "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
             "wrt_grte_term", "rating_avg",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
         },
     },
     "search_product_tool": {

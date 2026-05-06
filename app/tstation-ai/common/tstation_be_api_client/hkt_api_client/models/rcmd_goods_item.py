@@ -21,7 +21,7 @@ class RcmdGoodsItem:
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
         tot_scr (int | None | Unset): 추천 점수 (TOT_SCR (FST_DISP_YN = ‘Y’ 이면 TOT_SCR * 10), 티스테이션 추천 전용)
         t_comfort (float | None | Unset): 승차감 (T_COMFORT)
-        t_silence (float | None | Unset): 정숙성 (T_SILENCE)
+        t_silence (float | None | Unset): 정숙성 점수 (T_SILENCE). 내부 추천 점수 — EU 소음 라벨(label_pnwave)과 별개
         t_life_span (float | None | Unset): 수명 (T_LIFE_SPAN)
         t_fuel_eff_convert (float | None | Unset): 연비 (T_FUEL_EFF_CONVERT)
         wet (float | None | Unset): 빗길 성능 (WET)
@@ -30,8 +30,8 @@ class RcmdGoodsItem:
         t_highspd (float | None | Unset): 고속 주행 성능 (T_HIGHSPD)
         t_highspd_cd (None | str | Unset): 고속 주행 등급 코드 (T_HIGHSPD_CD)
         t_high_hand_avg (float | None | Unset): 핸들링 평균 (T_HIGH_HAND_AVG)
-        t_com_sil_avg (float | None | Unset): 정숙성 평균 (T_COM_SIL_AVG)
-        t_com_cvs (float | None | Unset): 승차감/정숙성 종합 (T_COM_CVS)
+        t_com_sil_avg (float | None | Unset): 정숙성 평균 점수 (T_COM_SIL_AVG). 내부 추천 점수 — EU 소음 라벨과 별개
+        t_com_cvs (float | None | Unset): 승차감/정숙성 종합 점수 (T_COM_CVS). 내부 추천 점수 — EU 소음 라벨과 별개
         t_milg_cvs (float | None | Unset): 마일리지 종합 (T_MILG_CVS)
         t_wgt_idx (float | None | Unset): 하중 지수 (T_WGT_IDX)
         t_wgt_idx_kg (float | None | Unset): 하중 지수 KG (T_WGT_IDX_KG)
@@ -41,6 +41,11 @@ class RcmdGoodsItem:
         season_nm (None | str | Unset): 계절 분류명 (SEASON_NM)
         car_knd_nm (None | str | Unset): 차종 분류명 (CAR_KND_NM)
         prc_grd_nm (None | str | Unset): 가격 등급명 (PRC_GRD_NM)
+        label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외. 정숙성 내부
+            점수(t_silence/t_com_sil_avg)와 별개의 라벨 정보
+        label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''. 라벨 표기 — 추천 정렬 기준
+            아님
+        label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB, VARCHAR2). 라벨 표기용 — 정숙성 내부 점수와 별개
         wrt_grte_term (int | None | Unset): 워런티 보증 기간 개월 (WRT_GRTE_TERM)
         rating_avg (float | None | Unset): 평균 평점 (RATING_AVG)
         image_url (None | str | Unset):
@@ -76,6 +81,9 @@ class RcmdGoodsItem:
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
+    label_pnwave: None | str | Unset = UNSET
+    label_pnwave_nm: None | str | Unset = UNSET
+    label_pndb: None | str | Unset = UNSET
     wrt_grte_term: int | None | Unset = UNSET
     rating_avg: float | None | Unset = UNSET
     image_url: None | str | Unset = UNSET
@@ -238,6 +246,24 @@ class RcmdGoodsItem:
         else:
             prc_grd_nm = self.prc_grd_nm
 
+        label_pnwave: None | str | Unset
+        if isinstance(self.label_pnwave, Unset):
+            label_pnwave = UNSET
+        else:
+            label_pnwave = self.label_pnwave
+
+        label_pnwave_nm: None | str | Unset
+        if isinstance(self.label_pnwave_nm, Unset):
+            label_pnwave_nm = UNSET
+        else:
+            label_pnwave_nm = self.label_pnwave_nm
+
+        label_pndb: None | str | Unset
+        if isinstance(self.label_pndb, Unset):
+            label_pndb = UNSET
+        else:
+            label_pndb = self.label_pndb
+
         wrt_grte_term: int | None | Unset
         if isinstance(self.wrt_grte_term, Unset):
             wrt_grte_term = UNSET
@@ -337,6 +363,12 @@ class RcmdGoodsItem:
             field_dict["car_knd_nm"] = car_knd_nm
         if prc_grd_nm is not UNSET:
             field_dict["prc_grd_nm"] = prc_grd_nm
+        if label_pnwave is not UNSET:
+            field_dict["label_pnwave"] = label_pnwave
+        if label_pnwave_nm is not UNSET:
+            field_dict["label_pnwave_nm"] = label_pnwave_nm
+        if label_pndb is not UNSET:
+            field_dict["label_pndb"] = label_pndb
         if wrt_grte_term is not UNSET:
             field_dict["wrt_grte_term"] = wrt_grte_term
         if rating_avg is not UNSET:
@@ -584,6 +616,33 @@ class RcmdGoodsItem:
 
         prc_grd_nm = _parse_prc_grd_nm(d.pop("prc_grd_nm", UNSET))
 
+        def _parse_label_pnwave(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pnwave = _parse_label_pnwave(d.pop("label_pnwave", UNSET))
+
+        def _parse_label_pnwave_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pnwave_nm = _parse_label_pnwave_nm(d.pop("label_pnwave_nm", UNSET))
+
+        def _parse_label_pndb(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pndb = _parse_label_pndb(d.pop("label_pndb", UNSET))
+
         def _parse_wrt_grte_term(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -674,6 +733,9 @@ class RcmdGoodsItem:
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             prc_grd_nm=prc_grd_nm,
+            label_pnwave=label_pnwave,
+            label_pnwave_nm=label_pnwave_nm,
+            label_pndb=label_pndb,
             wrt_grte_term=wrt_grte_term,
             rating_avg=rating_avg,
             image_url=image_url,
