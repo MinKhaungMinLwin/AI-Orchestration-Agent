@@ -146,49 +146,45 @@ class RouterEntities(BaseModel):
     Each field is independent — populate only the ones present in the message.
     Surfaced to domain agents via `_inject_conversation_context` as advisory
     context (not authoritative — agents still own flow logic).
+
+    All fields are declared without Pydantic defaults so they end up in the
+    JSON schema's `required` array — OpenAI's `strict` structured output
+    mode rejects schemas where any property is missing from `required`. The
+    LLM must explicitly emit `null` (or `false` for the bool) when a field
+    does not apply, which is documented in each field's description.
     """
 
     vehicle_mention: str | None = Field(
-        default=None,
-        description="Car model name mentioned (e.g., '제타', 'GV70', 'K7'). Null if absent.",
+        description="Car model name mentioned (e.g., '제타', 'GV70', 'K7'). Use null if absent.",
     )
     vehicle_possessive: bool = Field(
-        default=False,
-        description="True only when the user references the car as their own ('내', '내 차', '등록차', 'my car'). False if just a model name with no ownership marker.",
+        description="True only when the user references the car as their own ('내', '내 차', '등록차', 'my car'). False if just a model name with no ownership marker, or no vehicle mentioned.",
     )
     vehicle_number: str | None = Field(
-        default=None,
-        description="Korean license plate when present (e.g., '12가3456'). Null if absent.",
+        description="Korean license plate when present (e.g., '12가3456'). Use null if absent.",
     )
-    owner_nm: str | None = Field(default=None, description="Vehicle owner name when paired with car_no. Null if absent.")
+    owner_nm: str | None = Field(description="Vehicle owner name when paired with car_no. Use null if absent.")
     tire_size: str | None = Field(
-        default=None,
-        description="Normalized tire size (e.g., '225/45R17'). Null if absent.",
+        description="Normalized tire size (e.g., '225/45R17'). Use null if absent.",
     )
     tire_attribute: str | None = Field(
-        default=None,
-        description="Tire-type attribute mentioned (e.g., '전기차용', '사계절', '런플랫', '광폭', '스노우'). Null if absent.",
+        description="Tire-type attribute mentioned (e.g., '전기차용', '사계절', '런플랫', '광폭', '스노우'). Use null if absent.",
     )
     product_name: str | None = Field(
-        default=None,
-        description="Product/model name (e.g., '벤투스 S2', 'Dynapro HPX', '키너지 GT'). Null if absent.",
+        description="Product/model name (e.g., '벤투스 S2', 'Dynapro HPX', '키너지 GT'). Use null if absent.",
     )
-    goods_no: str | None = Field(default=None, description="goods_no when present in message (G+12 digits). Null otherwise.")
+    goods_no: str | None = Field(description="goods_no when present in message (G+12 digits). Use null otherwise.")
     scenario: str | None = Field(
-        default=None,
-        description="Scenario keyword (e.g., '빗길', '눈길', '사계절', '주말', '가족', '전기차', '고속'). Null if absent.",
+        description="Scenario keyword (e.g., '빗길', '눈길', '사계절', '주말', '가족', '전기차', '고속'). Use null if absent.",
     )
     brand: str | None = Field(
-        default=None,
-        description="Brand mentioned (e.g., '한국타이어', '미쉐린', '브리지스톤'). Null if absent.",
+        description="Brand mentioned (e.g., '한국타이어', '미쉐린', '브리지스톤'). Use null if absent.",
     )
-    quantity: int | None = Field(default=None, description="Quantity mentioned (e.g., '4개' → 4). Null if absent.")
+    quantity: int | None = Field(description="Quantity mentioned (e.g., '4개' → 4). Use null if absent.")
     store_keyword: str | None = Field(
-        default=None,
-        description="Store-related keyword/location (e.g., '강남', '한남점', '올마이티', 'All My T'). Null if absent.",
+        description="Store-related keyword/location (e.g., '강남', '한남점', '올마이티', 'All My T'). Use null if absent.",
     )
     question_form: str | None = Field(
-        default=None,
         description=(
             "Form of the user's request — pick ONE of: "
             "'yes_no' (yes/no question like '껴도 돼?', '맞아?', '써도 돼?'), "
@@ -196,7 +192,7 @@ class RouterEntities(BaseModel):
             "'action_request' (wants the agent to do something / produce a list, e.g. '추천해줘'), "
             "'selection' (picking from a previously shown list — bare item name, ordinal, plate number), "
             "'confirmation' (yes/ok/맞아 confirming a previous prompt). "
-            "Null if none applies."
+            "Use null if none applies."
         ),
     )
 
@@ -257,8 +253,7 @@ class MultiAgentDomain(BaseModel):
         ),
     )
     entities: RouterEntities = Field(
-        default_factory=RouterEntities,
-        description="Structured entities extracted from the current message. Populate fields that apply, leave others null.",
+        description="Structured entities extracted from the current message. Populate fields that apply; pass null/false for the rest. ALL keys must be present (OpenAI strict structured output requirement).",
     )
     user_behavior: str = Field(
         description=(
@@ -320,8 +315,7 @@ class _SlimMultiAgentDomain(BaseModel):
         ),
     )
     entities: RouterEntities = Field(
-        default_factory=RouterEntities,
-        description="Structured entities extracted from the first message.",
+        description="Structured entities extracted from the first message. ALL keys must be present (use null/false for fields that don't apply).",
     )
 
 
