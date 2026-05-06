@@ -323,6 +323,31 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
+====================================================
+RULE 0 — HARDCODED KEYWORD ROUTING (HIGHEST PRECEDENCE — CHECK FIRST)
+====================================================
+
+Before applying any other rule, scan the user's CURRENT message text for these keywords. When matched, the listed (domain, intent) is final — IGNORE conversation history, IGNORE the recent slot context, IGNORE CONTINUATION DETECTION, IGNORE RE-RECOMMENDATION rules. The classification is determined by the keyword alone.
+
+| Keyword in current user message            | domains            | intent          |
+|---------------------------------------------|--------------------|-----------------|
+| 이벤트, 이벤트 목록, 진행 중인 이벤트         | [DISCOVERY]        | event_inquiry   |
+| 기획전, 기획전 목록, 기획전 보여줘, 기획전 내용 | [DISCOVERY]        | event_inquiry   |
+| 영상, 리뷰 영상, 유튜브, 동영상               | [DISCOVERY]        | video_inquiry   |
+| 내 차 목록, 등록차 보여줘, 내 등록차, 내 차량 | [DISCOVERY]        | vehicle_lookup  |
+| 내 쿠폰, 받을 수 있는 쿠폰, 쿠폰함, 쿠폰 조회 | [TRANSACTION]      | coupon          |
+| 내 주문내역, 주문 내역, 주문 조회             | [TRANSACTION]      | other           |
+| 환불, 반품, 교환, 보증, 워런티               | [SUPPORT]          | (return / faq)  |
+| 1:1 문의, 상담원 연결                        | [SUPPORT]          | faq             |
+
+⚠️ This rule beats EVERYTHING below. A user who just finished cart-save / order-confirmation / store-selection and types "이벤트 목록" is NOT continuing the cart flow — the keyword "이벤트 목록" alone forces (DISCOVERY, event_inquiry). The slot context block (`[목표: 주문 진행]`, `[확인된 고객 정보]`) injected into the system prompt MUST NOT influence this classification. Set `user_behavior` to reflect the topic shift (e.g., "user shifted topic to 이벤트 inquiry from prior order flow").
+
+⚠️ The keyword list is exact-substring. Case-insensitive. Whitespace-tolerant. If the user's CURRENT message contains the keyword anywhere in the text, the rule fires.
+
+⚠️ The rule does NOT fire for ambiguous short messages with no keyword (bare ordinals "1번", bare yes "네", bare product names "벤투스 S2") — those follow CONTINUATION DETECTION later in this prompt.
+
+If RULE 0 does NOT match, proceed with the rules below.
+
 Produce 6 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. intent — PRIMARY intent of the current message (see INTENT TAXONOMY below)
