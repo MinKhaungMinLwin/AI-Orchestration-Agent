@@ -738,6 +738,7 @@ Hard rules:
         "imageUrl": "https://...",
         "title": "Ventus S2 AS 225/45R18",
         "tires": "고급형",
+        "comfort": "높음",
         "price": 150000,
         "rate": 4.8,
         "totalQuantity": 12
@@ -826,6 +827,7 @@ Backend → FE mapping for `product` (from `search_product_tool` / `get_products
 | `image_url`                      | `imageUrl` (use `""` if missing)                        |
 | `goods_nm` (+ ` ` + `tire_size_1`) | `title` — combine product name with `tire_size_1` to differentiate same-name SKUs (e.g. `"벤투스 S2 AS 225/45R18"`). If `tire_size_1` is missing/empty, use `goods_nm` alone. |
 | derive from tire scores          | `tires` (`"고급형"`/`"내구형"`/`"연비형"`); use `""` if no tire score fields are present in the item — DO NOT guess. |
+| derive from `t_comfort` score    | `comfort` (`"높음"` if ≥7, `"보통"` if 4–7, `"낮음"` if <4); use `""` if `t_comfort` is missing — DO NOT guess. |
 | `extra_fvr_sale_prc` from `get_final_price_tool` | `price` (int or null — 사용자가 실제 결제하는 할인가. use `null` if `extra_fvr_sale_prc` missing/0; NEVER use 0 as fallback) |
 | `rate` or `review_rate` or `rating_avg` | `rate` (float, 0.0 if missing)                  |
 | `stock_qty`                      | `totalQuantity` (int, 0 if missing)                     |
