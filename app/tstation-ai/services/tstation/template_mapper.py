@@ -180,6 +180,18 @@ def _normalize_time(s: str) -> str:
 
 # ── 1. product ──────────────────────────────────────────────────────────────────
 
+# Tag chip 매핑 (BE → FE)
+# - primary chip (chatbox-product-tag-primary): prc_grd_nm 화이트리스트만 통과.
+#   BE 가 이미 한글로 저장 (PR_GOODS_BASE.PRC_GRD_NM) → 그대로 노출.
+# - secondary chip (chatbox-product-tag-secondary): goods_pfm_nm 영문 코드를
+#   한글 라벨로 매핑. 매핑되지 않은 코드 (RUNFLAT 등) 는 chip skip.
+_PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
+_GOODS_PFM_LABELS: dict[str, str] = {
+    "COMFORT": "정숙/승차감",
+    "SPORT": "고속/제동성",
+}
+
+
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # TEMP DEBUG: dump entry shape so we can see what keys actually arrive at runtime.
     logger.info(
@@ -227,15 +239,19 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             # Price priority: matched get_final_price_tool result > inline row field.
             price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
-            # Tag chips: prc_grd_nm → primary 강조, goods_pfm_nm → secondary 일반.
-            # 빈 값은 칩에서 제외 (FE 가 빈 chip 그리지 않게).
+            # Tag chips:
+            # - primary: prc_grd_nm 화이트리스트 (한글 그대로). 그 외 값은 skip.
+            # - secondary: goods_pfm_nm 영문 코드 → 한글 라벨 매핑. 매핑 외 코드는 skip.
+            # 각 chip 의 primary 플래그는 FE 클래스 결정 (위치 무관) — primary 누락 시
+            # secondary 가 primary 로 보일 일 없음.
             tags: list[dict] = []
             prc_grd = _get_str(row, "prc_grd_nm")
-            if prc_grd:
+            if prc_grd in _PRC_GRD_ALLOWED:
                 tags.append({"text": prc_grd, "primary": True})
-            goods_pfm = _get_str(row, "goods_pfm_nm")
-            if goods_pfm:
-                tags.append({"text": goods_pfm, "primary": False})
+            goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
+            goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
+            if goods_pfm_label:
+                tags.append({"text": goods_pfm_label, "primary": False})
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
