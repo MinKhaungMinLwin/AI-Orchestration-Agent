@@ -239,7 +239,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             metadata.append({"goodsId": goods_no})
     if not items:
         return None
-    items, metadata = items[:5], metadata[:5]
+    items, metadata = items[:10], metadata[:10]
     # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
     # product cards don't co-occur with the inventory/schedule signal tools.
     # When the active goal is checklist-driven (stock/order/price), a click on
