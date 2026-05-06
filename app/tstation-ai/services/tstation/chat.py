@@ -1310,6 +1310,27 @@ def _goal_based_classify(
     return None
 
 
+def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
+    """Always-on SUPPORT fast-path for unambiguous escalation/policy keywords.
+
+    DECISION_LLM (small QC-tier model) has been observed to mis-route
+    '상담사 연결' / '상담원 연결' to LEADING — leaving LeadingAgent (which has
+    no transfer_to_qna_tool) to refuse the request and surface a "상담사 연결"
+    quickReply chip that, when tapped, loops back into the same refusal.
+
+    Bypass classification when an explicit support trigger is present so the
+    request always reaches SupportAgent's transfer_to_qna_tool. Independent of
+    `_RULE_BASED_ROUTING_ENABLED` so escalation cannot be silently disabled
+    alongside the broader rule-based path.
+    """
+    if not text:
+        return None
+    if _SUPPORT_FAST_RE.search(text):
+        logger.info(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
+        return [MultiAgentDomain.Domain.SUPPORT]
+    return None
+
+
 def _rule_based_classify(
     last_user_text: str,
     merged_slots,
@@ -2285,7 +2306,8 @@ class TStationChatServiceV2:
         # Each layer returns None to defer to the next.
         routing_result = None
         fast_domains = (
-            _goal_based_classify(last_user_text, merged_slots)
+            _support_fast_path(last_user_text)
+            or _goal_based_classify(last_user_text, merged_slots)
             or _rule_based_classify(last_user_text, merged_slots)
         )
         if fast_domains is not None:
