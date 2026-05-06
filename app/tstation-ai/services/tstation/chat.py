@@ -2105,7 +2105,8 @@ class TStationChatServiceV2:
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
         _parent_span_id = None
-        from config.tracing import _tracing_enabled, tracer, truncate_for_trace as _truncate_root
+        from config.tracing import _tracing_enabled, tracer, truncate_for_trace as _truncate_root, set_trace_name as _set_trace_name
+        _set_trace_name(last_user_msg[:60] if last_user_msg else None)
         if _tracing_enabled:
             _parent_span = tracer.start_span(
                 name="chat",
@@ -2113,7 +2114,7 @@ class TStationChatServiceV2:
                 input=_truncate_root(last_user_msg),
             )
             _parent_span.update_trace(
-                name="chat",
+                name=(last_user_msg[:60] if last_user_msg else "chat"),
                 session_id=request.session_id,
                 user_id=request.user_id,
             )
@@ -2410,8 +2411,6 @@ class TStationChatServiceV2:
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
                 }),
             )
-            if _parent_span is not None and domains:
-                _parent_span.update_trace(name=domains[0].value.lower())
         _t_classify = time.perf_counter()
 
         # Post-classification redirect: when the user's current-turn reply was a
@@ -2970,7 +2969,13 @@ class TStationChatServiceV2:
 
         if parent_span is not None:
             from config.tracing import truncate_for_trace as _truncate_root_out
-            parent_span.update_trace(name="chat", output=_truncate_root_out(draft_response))
+            _last_user = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
+            )
+            parent_span.update_trace(
+                name=(_last_user[:60] if _last_user else "chat"),
+                output=_truncate_root_out(draft_response),
+            )
             parent_span.end()
 
         # 5. FINALIZE THE STREAM

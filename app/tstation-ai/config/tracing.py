@@ -1,5 +1,6 @@
 import contextlib
 import logging
+from contextvars import ContextVar
 from typing import Any, Iterator
 
 from config.env import Environment, settings
@@ -55,14 +56,52 @@ def truncate_for_trace(value: Any, max_chars: int = MAX_TRACE_OUTPUT_CHARS) -> A
     return value
 
 
+# Per-request trace name stored in a ContextVar so callbacks can read it
+# without threading the value through every function signature.
+_trace_name_var: ContextVar[str | None] = ContextVar("_trace_name", default=None)
+
+
+def set_trace_name(name: str | None) -> None:
+    """Set the desired Langfuse trace name for the current request context."""
+    _trace_name_var.set(name)
+
+
 class FilteredCallbackHandler(CallbackHandler):
-    """LangChain callback handler that replaces system prompts with ``[prompt:<name>]``
-    before sending to Langfuse, so 800-line prompts don't appear in every generation span.
+    """LangChain callback handler that:
+    - Replaces system prompts with ``[prompt:<name>]`` to keep generation spans small.
+    - Sets the Langfuse trace name to the user's message (read from ContextVar)
+      on the root chain span, overriding the default LangChain class name.
     """
 
     def __init__(self, prompt_name: str | None = None, **kwargs: Any) -> None:
+        kwargs.setdefault("update_trace", False)
         super().__init__(**kwargs)
         self._prompt_name = prompt_name or "agent"
+
+    def on_chain_start(
+        self,
+        serialized: dict[str, Any],
+        inputs: dict[str, Any],
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        result = super().on_chain_start(
+            serialized, inputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
+        )
+        # For the root chain of each callback handler (parent_run_id is None from
+        # LangChain's perspective), override the trace name with the user message.
+        if parent_run_id is None:
+            trace_name = _trace_name_var.get()
+            if trace_name:
+                obs = getattr(self, "runs", {}).get(run_id)
+                if obs is not None:
+                    try:
+                        obs.update_trace(name=trace_name)
+                    except Exception:
+                        pass
+        return result
 
     def on_chat_model_start(
         self,
