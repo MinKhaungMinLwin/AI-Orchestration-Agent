@@ -25,6 +25,7 @@ class StoreListItem:
         addr_dtl (None | str | Unset): 일반주소
         road_addr_base (None | str | Unset): 도로명주소
         road_addr_dtl (None | str | Unset): 도로명주소 상세
+        tel_no (None | str | Unset): 매장 전화번호 (SHOP_TEL_NO)
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
         shop_biz_strt_wday (None | str | Unset): 영업 시작 요일 (예: 월요일)
@@ -43,6 +44,7 @@ class StoreListItem:
     addr_dtl: None | str | Unset = UNSET
     road_addr_base: None | str | Unset = UNSET
     road_addr_dtl: None | str | Unset = UNSET
+    tel_no: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
     shop_biz_strt_wday: None | str | Unset = UNSET
@@ -90,6 +92,12 @@ class StoreListItem:
             road_addr_dtl = UNSET
         else:
             road_addr_dtl = self.road_addr_dtl
+
+        tel_no: None | str | Unset
+        if isinstance(self.tel_no, Unset):
+            tel_no = UNSET
+        else:
+            tel_no = self.tel_no
 
         shop_biz_strt_time: None | str | Unset
         if isinstance(self.shop_biz_strt_time, Unset):
@@ -156,6 +164,8 @@ class StoreListItem:
             field_dict["road_addr_base"] = road_addr_base
         if road_addr_dtl is not UNSET:
             field_dict["road_addr_dtl"] = road_addr_dtl
+        if tel_no is not UNSET:
+            field_dict["tel_no"] = tel_no
         if shop_biz_strt_time is not UNSET:
             field_dict["shop_biz_strt_time"] = shop_biz_strt_time
         if shop_biz_end_time is not UNSET:
@@ -228,6 +238,15 @@ class StoreListItem:
             return cast(None | str | Unset, data)
 
         road_addr_dtl = _parse_road_addr_dtl(d.pop("road_addr_dtl", UNSET))
+
+        def _parse_tel_no(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tel_no = _parse_tel_no(d.pop("tel_no", UNSET))
 
         def _parse_shop_biz_strt_time(data: object) -> None | str | Unset:
             if data is None:
@@ -302,6 +321,7 @@ class StoreListItem:
             addr_dtl=addr_dtl,
             road_addr_base=road_addr_base,
             road_addr_dtl=road_addr_dtl,
+            tel_no=tel_no,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,
             shop_biz_strt_wday=shop_biz_strt_wday,

@@ -16,11 +16,11 @@ MAX_LIST_ITEMS = 10
 _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
     "get_nearby_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base"},
+        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "addr_dtl", "tel_no"},
     },
     "get_store_list_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "addr_base"},
+        "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no"},
     },
     "get_products_recommendations_tool": {
         "list_key": "items",
@@ -117,11 +117,11 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     },
     "get_nearby_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "tel_no"},
+        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "addr_dtl", "tel_no"},
     },
     "get_store_list_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "addr_base", "tel_no"},
+        "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no"},
     },
     "get_store_inventory_tool": {
         "list_key": "items",
