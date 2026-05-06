@@ -2372,6 +2372,8 @@ class TStationChatServiceV2:
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
                 }),
             )
+            if _parent_span is not None and domains:
+                _parent_span.update_trace(name=domains[0].value.lower())
         _t_classify = time.perf_counter()
 
         # Post-classification redirect: when the user's current-turn reply was a
