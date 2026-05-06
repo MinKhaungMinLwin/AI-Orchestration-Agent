@@ -230,12 +230,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
-                # FE renders these as tag chips (primary/secondary) only when truthy.
-                # Tool output has no `tires` field, and `comfort` arrives as a numeric
-                # score (e.g. 5.0); stringifying it produced a label that looked like a
-                # rating. Skip both — keep the cards clean (FE still shows the rate stars).
                 "tires": "",
-                "comfort": "",
                 "price": price,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
