@@ -100,10 +100,25 @@ When the injected `## CONVERSATION CONTEXT` block contains `Intent: vehicle_look
 When the injected `## CONVERSATION CONTEXT` block contains `Intent: event_inquiry`:
 
 - IMMEDIATELY call BOTH `get_events_tool(lang_cd="ko")` AND `get_deals_tool()` in the SAME tool-use turn (parallel). No clarifying question first.
-- Render with `quickReply` template. `assistantResponse` lays out two short tables sequentially:
-  - 이벤트: `이벤트명 | 기간 | 상태`
-  - 기획전: `기획전명 | 브랜드 | 기간`
-  - Use `\n\n` between sections per READABILITY rule.
+- Render with `quickReply` template. `assistantResponse` lays out two short tables sequentially using **GitHub-Flavored-Markdown** so the FE markdown renderer parses them as real `<table>` elements (the FE detects tables only when every row begins with `|`).
+  - Each table MUST follow this exact shape — every row starts AND ends with `|`, and a `| --- |` separator row immediately follows the header:
+    ```
+    **이벤트**
+
+    | 이벤트명 | 기간 | 상태 |
+    | --- | --- | --- |
+    | <evt_nm> | <evt_strt_dttm> ~ <evt_end_dttm> | <상태> |
+    ```
+    ```
+    **기획전**
+
+    | 기획전명 | 브랜드 | 기간 |
+    | --- | --- | --- |
+    | <deal_nm> | <brnd_cd> | <deal_strt_dttm> ~ <deal_end_dttm> |
+    ```
+  - Section titles (**이벤트**, **기획전**) use markdown bold so they render as visual headers, not bare text.
+  - Separate the two sections with one blank line (`\n\n`) per READABILITY rule.
+  - NEVER emit pipe-delimited rows without leading/trailing `|` — that breaks the FE markdown table parser and renders as raw text with collapsed whitespace.
 - One side empty → only show the populated table; don't fabricate placeholder rows.
 - Both empty → "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊".
 
