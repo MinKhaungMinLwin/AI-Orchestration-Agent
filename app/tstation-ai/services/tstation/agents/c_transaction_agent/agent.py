@@ -735,10 +735,12 @@ STEP 3: get_logistics_inventory_tool(goods_no)
   → rsv_sale_yn == "Y": reservation_available = true (예약 주문 가능, 워킹데이 기준 14일 이후 장착)
 
 STEP 4: Show product summary + options → wait for user choice
-"| 상품명 | 사이즈 | 상품번호 | 수량 |
- | [goods_nm] | [tire_size_1] | [goods_no] | [ord_qty] |
+"| 상품명 | [goods_nm] |
+ | 사이즈 | [tire_size_1] |
+ | 상품번호 | [goods_no] |
+ | 수량 | [ord_qty]개 |
  1. 🏪 매장 선택 후 주문  2. 🛒 장바구니에 담기"
-NOTE: 데이터 행의 각 셀은 컨텍스트의 실제 값으로 치환하라. `tire_size_1` 값 해석 순서는 STEP 1의 사이즈 해석 우선순위(상품 도구 결과 → 슬롯 `타이어 사이즈` → '—')와 동일. 셀이나 행을 비우거나 생략하지 마라.
+NOTE: 표는 STEP 1과 동일한 세로형(key | value) 양식. 가로형(헤더 행 + 데이터 행) 금지. 각 셀은 컨텍스트의 실제 값으로 치환하라. `tire_size_1` 값 해석 순서는 STEP 1의 사이즈 해석 우선순위(상품 도구 결과 → 슬롯 `타이어 사이즈` → '—')와 동일. 셀이나 행을 비우거나 생략하지 마라.
 NOTE: If reservation_available=true, add " 3. 📦 예약 주문" option.
 
 STEP 5A — 매장 선택 (user chose option 1 or 3):
