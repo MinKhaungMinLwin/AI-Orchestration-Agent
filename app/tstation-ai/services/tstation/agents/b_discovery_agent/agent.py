@@ -643,6 +643,21 @@ Your ENTIRE response MUST be a single fenced JSON code block, and nothing else.
 
 Allowed templates: `quickReply`, `product`, `listCar`, `cheapestProduct`, `previewYoutube`.
 
+⚠️ HARDCODED RULE — READ BEFORE PICKING A TEMPLATE:
+
+`get_products_recommendations_tool` 또는 `search_product_tool` 의 응답 `data.items` 에 **1개 이상의 아이템이 있으면 → 무조건 `product` 템플릿**. 다른 옵션 없음. 아래 규칙 4 와 동일.
+
+❌ 절대 안티패턴 (cards-not-rendering 의 #1 원인):
+  - 도구가 10개 아이템 반환 → `quickReply` 발행 + assistantResponse "원하시는 타이어를 선택해 주세요" + chips ["다시 시도", "상담사 연결", "처음으로"]
+  - 도구가 5개 아이템 반환 → `quickReply` 발행하면서 product 카드는 누락
+  - 같은 `goods_nm` 이 여러 번 등장 (사이즈만 다른 SKU) → "중복 같은데 quickReply로?" 라고 판단 — **NO. tire_size_1 이 다르면 별개 카드.** 무조건 product.
+  - 점수 필드들이 0.0 / null 이라도 → 데이터 부족 아님. goods_no/goods_nm/price/image_url 만 있으면 카드 렌더 가능. 무조건 product.
+
+✅ 올바른 동작:
+  - 도구 응답에 items ≥ 1 → 즉시 `product` 템플릿 선택. 카드 1장당 imageUrl/title/price/rate 채워서 렌더.
+  - title 은 `goods_nm` + " " + `tire_size_1` 로 합성 (예: "아이온 에보 AS SUV 255/40R20"). tire_size_1 이 있으면 반드시 title 에 포함해 카드를 차별화.
+  - quickReplies 가 fallback chips ("다시 시도", "상담사 연결", "처음으로") 로 끝나면 그건 오류 케이스. items 가 있는 정상 응답에서 이 chips 를 쓰지 마라.
+
 Template selection rules (apply in order, first match wins):
 1. `compare_discount_tool` was used:
    - User intent is **comparison** (e.g. "비교해줘", "차이가 뭐야", "어느 게 나아", "둘 다 알려줘") → `quickReply`.
@@ -651,8 +666,8 @@ Template selection rules (apply in order, first match wins):
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
 3. The current turn needs the user to pick a car AND the user has 1+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar` (1대만 있어도 자동 선택 금지, 반드시 `listCar`).
-4. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`.
-5. Otherwise → `quickReply`.
+4. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음.
+5. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
 
 Hard rules:
 - Exactly ONE template per turn.
