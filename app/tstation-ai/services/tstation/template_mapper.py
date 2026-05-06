@@ -611,7 +611,13 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             road_base = _get_str(row, "road_addr_base")
             road_dtl = _get_str(row, "road_addr_dtl")
             road_full = " ".join(p for p in [road_base, road_dtl] if p).strip()
-            detail_addr = road_full or _get_str(row, "addr_base", "addr_dtl")
+            # Fallback when no road address — combine base + dtl so the user
+            # sees the full address ("경상남도 거창군 거창읍 강남로 72") instead
+            # of just the prefecture/gu portion ("경상남도 거창군").
+            jibun_base = _get_str(row, "addr_base")
+            jibun_dtl = _get_str(row, "addr_dtl")
+            jibun_full = " ".join(p for p in [jibun_base, jibun_dtl] if p).strip()
+            detail_addr = road_full or jibun_full
 
             # Detail endpoint overrides the list endpoint where overlapping (it
             # is the more authoritative source for is_all_my_t / is_installable
@@ -632,7 +638,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             biz_sat_str = f"토요일 {sat_strt_time}~{sat_end_time}" if sat_strt_time and sat_end_time else ""
             biz_hours = " / ".join(p for p in [biz_weekday_str, biz_sat_str] if p)
 
-            tel_no = _get_str(detail, "tel_no")
+            # tel_no: prefer detail (most authoritative when get_store_detail_tool
+            # ran in the same turn), fall back to the list row so basic store
+            # search results always show the phone number.
+            tel_no = _get_str(detail, "tel_no") or _get_str(row, "tel_no")
             holiday = _get_str(detail, "holiday")
 
             services: list[str] = []
