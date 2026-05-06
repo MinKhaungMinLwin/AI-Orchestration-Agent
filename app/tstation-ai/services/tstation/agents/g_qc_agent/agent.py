@@ -20,6 +20,7 @@ If the Draft Response contains a [Template: <name>] section with JSON:
 - If the JSON has wrong field values, output: corrected text, then [Template: <name>], then corrected JSON
 - If only the text is wrong, output just the corrected text (no template section)
 - Never add, remove, or rename JSON fields — only fix wrong values
+- If the Draft has no [Template] section, never add one — output corrected text only
 """
 
 def get_qc_chain(llm):
