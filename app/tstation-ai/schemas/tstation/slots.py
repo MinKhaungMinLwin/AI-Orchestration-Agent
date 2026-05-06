@@ -22,6 +22,7 @@ GoalType = Literal[
     "product_recommend",
     "product_search",
     "store_with_stock",
+    "store_finder",
     "price_inquiry",
     "place_order",
 ]
@@ -37,6 +38,12 @@ class ConversationSlots(BaseModel):
     shop_id: Optional[str] = None        # store code
     shop_name: Optional[str] = None      # e.g. "한남점"
     car_model: Optional[str] = None      # e.g. "쏘나타"
+    region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
+    # Free-form user store-selection criteria captured on the originating turn
+    # (e.g. "친절한 직원, 얼라인먼트, 워셔액 무료"). Sticky across slot-fill
+    # turns so the agent can re-apply the criteria once the missing slot
+    # (region/address) is satisfied. Cleared automatically when goal_type flips.
+    user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
     goal_type: Optional[GoalType] = None  # e.g. "store_with_stock" — high-level destination, sticky across turns.
 
@@ -47,6 +54,11 @@ class ConversationSlots(BaseModel):
         "goods_no": ["tire_model", "tire_size"],
         "shop_name": ["shop_id"],
         "car_model": ["tire_size", "goods_no"],
+        # When the goal flips (e.g. store_finder → product_recommend), drop the
+        # store-specific carryovers. region/preferences only make sense within
+        # a store-finding goal; preserving them across goal flips would inject
+        # stale criteria into unrelated turns.
+        "goal_type": ["region", "user_preferences_text"],
     }
 
     # Regex patterns for extracting slots from user messages
@@ -87,6 +99,75 @@ class ConversationSlots(BaseModel):
         re.compile(r"추천|골라줘|알아서|뭐가\s*좋|어떤\s*게\s*좋|괜찮은\s*거"),
     ]
 
+    # Store-finder patterns — turns where the user explicitly looks for a store
+    # without a price/stock/order intent. Drives `store_finder` goal so the
+    # coordinator routes through the goal-router (preserving preferences across
+    # the region clarification turn) instead of running ad-hoc per-turn.
+    # NOTE: Only fires when no transactional pending_intent is set (price/stock/
+    # order takes priority via the elif chain in `extract_from_user_text`).
+    _STORE_FINDER_PATTERNS: ClassVar[list[re.Pattern]] = [
+        re.compile(
+            r"매장|샵|지점|티스테이션|더타이어샵|올마이T|올마이티|"
+            r"가까운\s*곳|근처(?:에)?\s*(?:매장|샵|지점)|"
+            r"내\s*주변(?:에)?(?:\s*매장|\s*샵|\s*지점)?|"
+            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디"
+        ),
+    ]
+
+    # Soft preference hints — when present together with a store-finder turn,
+    # capture the full user_text into `user_preferences_text` so the agent can
+    # filter/rank stores against these criteria after the region slot is filled.
+    # Kept narrow on purpose: a bland "근처 매장 알려줘" should NOT capture
+    # preferences (no real criteria), so the next-turn region answer routes
+    # through the default flow instead of dragging an empty preference block.
+    _PREFERENCE_HINT_PATTERNS: ClassVar[list[re.Pattern]] = [
+        re.compile(
+            r"친절|여성|얼라인먼트|밸런스|워셔액|무료|깨끗|믿을|친근|편하|"
+            r"잘\s*봐|꼼꼼|전문|특화|수입차|외제차|프리미엄|"
+            r"평점|리뷰|평이?\s*좋|"
+            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반"
+        ),
+    ]
+
+    # Region/area whitelist — Korean metro districts and frequently-mentioned
+    # neighborhoods. Bounded by non-Hangul/Latin lookarounds so common
+    # substrings ("동작 안 해") don't false-positive. Generic "[가-힣]+(구|동|시|...)"
+    # fallbacks are intentionally NOT included here to avoid noisy matches;
+    # the LLM prompt still handles unrecognized region names through the
+    # existing get_store_list_tool(region_code=...) path.
+    _REGION_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"(?<![가-힣A-Za-z0-9])"
+        r"(?P<region>"
+        # Seoul gu
+        r"강남|강북|강동|강서|관악|광진|구로|금천|노원|도봉|동대문|동작|마포"
+        r"|서대문|서초|성동|성북|송파|양천|영등포|용산|은평|종로|중랑"
+        # Seoul districts/landmarks
+        r"|잠실|판교|역삼|논현|압구정|신사|청담|반포|방배|이태원|홍대|연남"
+        r"|성수|왕십리|건대|선릉|삼성"
+        # Gyeonggi
+        r"|분당|수정|중원|수원|영통|성남|용인|기흥|수지|처인"
+        r"|안양|만안|동안|고양|덕양|일산|파주|광명|부천|안산|단원|상록|시흥"
+        r"|의왕|하남|김포|평택|안성|이천|여주|화성|동탄|오산|군포|의정부"
+        r"|남양주|구리"
+        # Incheon
+        r"|인천|남동|연수|미추홀|부평|계양"
+        # Busan / Daegu / Gwangju / Daejeon / Ulsan / Jeju
+        r"|부산|해운대|수영|동래|연제|기장"
+        r"|대구|수성|달서|달성"
+        r"|광주|대전|유성|울산|울주|제주|서귀포"
+        # Other major cities
+        r"|춘천|강릉|원주|속초"
+        r"|창원|마산|진주|통영|포항|경주|구미"
+        r"|전주|군산|익산|목포|순천|광양|여수"
+        r"|청주|충주|천안|아산"
+        r")"
+        # Trailing lookahead intentionally OMITTED so common Korean particles
+        # (에/은/는/이/가/쪽/구/시/...) don't block legitimate matches.
+        # Risk: "강남구청" matches "강남" — acceptable since the region_code is
+        # consistent with the user's intent. Mid-word matches are still
+        # blocked by the leading lookbehind ("이강남씨" → no match).
+    )
+
     # Phrases that look transactional ("주문") but are actually view-only inquiries
     # (order history, coupon, video review). Detected here so goal_type stays None
     # for these turns — the LLM domain classifier handles them via a single tool
@@ -115,6 +196,7 @@ class ConversationSlots(BaseModel):
         "product_recommend": "타이어 추천",
         "product_search": "상품 검색",
         "store_with_stock": "재고 있는 매장 찾기",
+        "store_finder": "매장 찾기",
         "price_inquiry": "가격 조회",
         "place_order": "주문 진행",
     }
@@ -141,6 +223,15 @@ class ConversationSlots(BaseModel):
             ("size", "타이어 사이즈", frozenset({"tire_size"})),
             ("qty", "수량", frozenset({"ord_qty"})),
             ("shop", "매장 선택", frozenset({"shop_id"})),
+        ],
+        # store_finder: pure store search (no stock/price/order intent).
+        # Single-step plan that completes once region resolves. The agent
+        # filters/ranks the resulting store list against `user_preferences_text`
+        # if present (free-form criteria like "친절한 직원", "워셔액 무료").
+        # `shop_id` is intentionally NOT a goal step here — picking a specific
+        # store is the user's job after the agent presents the matched list.
+        "store_finder": [
+            ("region", "지역", frozenset({"region"})),
         ],
         "price_inquiry": [
             ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
@@ -306,6 +397,12 @@ class ConversationSlots(BaseModel):
             slots.goal_type = "price_inquiry"
         elif slots.pending_intent == "order":
             slots.goal_type = "place_order"
+        elif cls.has_store_finder_intent(user_text):
+            # Pure store search: no stock/price/order intent, but the user is
+            # explicitly asking for a store. Routes through goal-router so the
+            # follow-up region answer reuses the originating turn's context
+            # (preferences) instead of running a generic store list.
+            slots.goal_type = "store_finder"
         elif cls.has_product_keyword(user_text):
             # Bare product-keyword turn — no transactional intent, no recommend
             # verb, but a known brand/model is mentioned. Drive Discovery to
@@ -313,7 +410,55 @@ class ConversationSlots(BaseModel):
             # "검색해 드릴까요?" confirmation quickReply.
             slots.goal_type = "product_search"
 
+        # Region extraction — gated to avoid false positives on common-noun
+        # tokens that overlap with Seoul-gu names ("동작 안 해", "중구", "북구"...).
+        # Short bare-word turns are treated as slot fills and always tried;
+        # longer turns require explicit store-finding context (a store keyword
+        # or an active stock intent). For longer turns where context is
+        # missing, we skip extraction even if the regex would match — stale
+        # region slots persisting from non-store turns are noisier than the
+        # occasional missed match.
+        text_stripped = user_text.strip()
+        should_extract_region = (
+            len(text_stripped) <= 8
+            or cls.has_store_finder_intent(user_text)
+            or slots.pending_intent == "stock"
+        )
+        if should_extract_region:
+            region_match = cls._REGION_PATTERN.search(user_text)
+            if region_match:
+                slots.region = region_match.group("region")
+
+        # Free-form preference capture — only when the turn IS store-related
+        # AND carries criteria hints. Skips bland turns like "근처 매장 알려줘"
+        # so an empty preference block doesn't get persisted, and skips
+        # non-store turns ("강남 가는 길") so unrelated text doesn't leak in.
+        is_store_related = (
+            cls.has_store_finder_intent(user_text)
+            or slots.pending_intent == "stock"
+        )
+        if is_store_related and cls._has_preference_hints(user_text):
+            slots.user_preferences_text = user_text.strip()
+
         return slots
+
+    @classmethod
+    def has_store_finder_intent(cls, user_text: str) -> bool:
+        """Return True when the user turn explicitly asks for a store/shop.
+
+        Excludes turns that already carry a transactional intent (stock/price/
+        order) — those are handled by their respective goal types. The caller
+        (`extract_from_user_text`) enforces the priority via the elif chain.
+        """
+        return any(pattern.search(user_text) for pattern in cls._STORE_FINDER_PATTERNS)
+
+    @classmethod
+    def _has_preference_hints(cls, user_text: str) -> bool:
+        """Return True when the turn carries soft store-selection criteria
+        (친절/얼라인먼트/워셔액/...). Used to gate `user_preferences_text` capture
+        so generic store-finder turns don't persist a meaningless preference
+        block."""
+        return any(pattern.search(user_text) for pattern in cls._PREFERENCE_HINT_PATTERNS)
 
     @classmethod
     def has_recommend_intent(cls, user_text: str) -> bool:
@@ -395,6 +540,7 @@ class ConversationSlots(BaseModel):
             "shop_id": "매장코드",
             "shop_name": "매장명",
             "car_model": "차량 모델",
+            "region": "지역",
         }
 
         # Map pending_intent enum value → Korean label displayed in the prompt.
@@ -436,6 +582,24 @@ class ConversationSlots(BaseModel):
                     *entity_lines,
                     "[위 정보가 없는 항목은 tool을 호출하여 확인하세요. 유저에게 묻지 마세요.]",
                 ])
+            )
+
+        # Free-form store-selection preferences captured on the originating
+        # turn. Persists across the region clarification so the agent can
+        # filter/rank store search results against the user's actual criteria
+        # (친절한 직원, 얼라인먼트, 워셔액 무료 etc.) once region resolves.
+        # Confirmable items in BE data → use them to filter/order; non-data
+        # items (분위기/직원 친절도) → mention and offer to confirm via the
+        # store directly rather than fabricating an answer.
+        if self.user_preferences_text:
+            blocks.append(
+                "[사용자의 매장 선호 조건]\n"
+                f"{self.user_preferences_text}\n"
+                "→ 매장 결과 제시 시 위 조건을 반드시 참고하여 추천하거나, "
+                "매칭 여부를 응답에 명시하세요. BE 데이터로 확인 가능한 항목은 "
+                "결과 필터링/순위에 반영하고, 확인이 어려운 항목은 "
+                "'매장 직원에게 문의 가능합니다' 식으로 안내하세요. "
+                "이 조건들을 무시하고 일반 매장 리스트만 반환하지 마세요."
             )
 
         if include_pending_intent and self.pending_intent is not None:
