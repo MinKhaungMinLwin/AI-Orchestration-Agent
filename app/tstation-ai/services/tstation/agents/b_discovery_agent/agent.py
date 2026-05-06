@@ -100,29 +100,27 @@ When the injected `## CONVERSATION CONTEXT` block contains `Intent: vehicle_look
 When the injected `## CONVERSATION CONTEXT` block contains `Intent: event_inquiry`:
 
 - IMMEDIATELY call BOTH `get_events_tool(lang_cd="ko")` AND `get_deals_tool()` in the SAME tool-use turn (parallel). No clarifying question first.
-- Render with `quickReply` template. `assistantResponse` lays out two short tables sequentially using **GitHub-Flavored-Markdown** so the FE markdown renderer parses them as real `<table>` elements (the FE detects tables only when every row begins with `|`).
-  - Each table MUST follow this exact shape — every row starts AND ends with `|`, and a `| --- |` separator row immediately follows the header:
-    ```
-    **이벤트**
+- Render with `quickReply` template. `assistantResponse` lays out two short **single-line bullet lists** (NOT markdown tables) sequentially:
+  ```
+  **이벤트**
 
-    | 이벤트명 | 기간 | 상태 |
-    | --- | --- | --- |
-    | <evt_nm> | <evt_strt_date> ~ <evt_end_date> | <상태> |
-    ```
-    ```
-    **기획전**
+  - <evt_nm> · <evt_strt_date> ~ <evt_end_date> · <상태>
+  - ...
 
-    | 기획전명 | 기간 |
-    | --- | --- |
-    | <deal_nm> | <deal_strt_date> ~ <deal_end_date> |
-    ```
-  - Section titles (**이벤트**, **기획전**) use markdown bold so they render as visual headers, not bare text.
-  - Separate the two sections with one blank line (`\n\n`) per READABILITY rule.
-  - NEVER emit pipe-delimited rows without leading/trailing `|` — that breaks the FE markdown table parser and renders as raw text with collapsed whitespace.
-  - ⚠️ EVERY data row MUST follow the same `|`-bounded shape as the header. The LAST row is especially prone to drift (e.g., dropped trailing `|`, extra newline before it, missing leading `|`). If you emit N rows and the last one has even one of these defects, the FE renders it as a stray text line below the table — visible bug. Double-check the final row before emitting.
+  **기획전**
+
+  - <deal_nm> · <deal_strt_date> ~ <deal_end_date>
+  - ...
+  ```
+  - Format rules:
+    - Section titles (**이벤트**, **기획전**) use markdown bold so they render as visual headers.
+    - Each item starts with `- ` (markdown bullet). The whole item MUST stay on ONE line — the FE markdown renderer treats every line break as a separate list item, so multi-line entries break visually.
+    - Use ` · ` (가운데 점, U+00B7, with single spaces around it) as the metadata separator within each item. Do NOT use `|`, `,`, or tab characters.
+    - Separate the two sections with one blank line (`\n\n`) per READABILITY rule.
+  - NEVER emit a markdown table (no `|` separators, no `| --- |` rows). Bullet list only — tables broke trailing-row formatting and 기획전 had no clean column layout.
 - ⚠️ **Date formatting (STRICT):** the tools return ISO datetime strings like `"2025-04-30 15:02:00"`. You MUST strip the time portion and emit only the date `2025-04-30`. Apply to BOTH event period (`evt_strt_dtime` / `evt_end_dtime`) and deal period (`disp_strt_dtime` / `disp_end_dtime`). Never include `HH:MM:SS` in the rendered period.
-- ⚠️ **기획전 columns are EXACTLY two: `기획전명 | 기간`.** Do NOT add `브랜드` (the tool's `deal_brand_logo` is an internal logo code like `hk` / `multi` / `ts` / empty — not user-meaningful). Removing it also keeps the table narrow enough to render cleanly on mobile.
-- One side empty → only show the populated table; don't fabricate placeholder rows.
+- ⚠️ **기획전 metadata is EXACTLY: `기획전명 · 기간`.** Do NOT include `브랜드` / `deal_brand_logo` (it's an internal logo code like `hk` / `multi` / `ts` / empty — not user-meaningful).
+- One side empty → only show the populated list; don't fabricate placeholder rows.
 - Both empty → "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊".
 
 ⚠️ ABSOLUTE RULES for this intent:
