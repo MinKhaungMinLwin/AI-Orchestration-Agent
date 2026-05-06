@@ -162,22 +162,13 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
 @tool_cache(ttl=300)
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """
-    Get product price and discount.
-
-    Retrieve base selling price, maximum discounted price (promotion + coupon),
-    labor cost, and today's labor cost using the product number.
+    Get product price and discount (base price, promotion, coupon, labor cost).
 
     Args:
         goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
         member_type (str | None): Member type (e.g., 'general', 'PARTNER').
 
-    Example Inputs:
-        - {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
-        - {"goods_no": "GXXXXXXXXXXXX", "member_type": "PARTNER"}
-        - {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
     """
     logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
 
@@ -198,27 +189,17 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
 
 @tool
 @tool_cache(ttl=600)
-def get_available_coupons_tool(lang_cd: str = "ko"):
+def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
     """
     다운로드 가능 쿠폰 조회.
 
-    현재 사용자가 다운로드 가능한 쿠폰 목록을 조회합니다.
-
-    Use this tool when:
-    - User asks about coupons available for download
-    - User asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons"
+    Use when user asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons".
 
     Args:
-        lang_cd (str): Language code (default: 'ko' for Korean).
-
-    Example Inputs:
-        - {"lang_cd": "ko"}
-        - {"lang_cd": "ko"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        mbr_no (str | None): 회원번호 (used for per-user cache key scoping).
+        lang_cd (str): Language code (default: 'ko').
     """
-    logger.info("[TOOL][get_available_coupons_tool] Called with: lang_cd=%s", lang_cd)
+    logger.info("[TOOL][get_available_coupons_tool] Called with: mbr_no=%s, lang_cd=%s", mbr_no, lang_cd)
 
     try:
         response = get_available_coupons(client=get_client(), lang_cd=lang_cd)
@@ -240,21 +221,10 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
     """
     내 쿠폰 목록 조회.
 
-    사용자가 보유한 사용 가능한 쿠폰 목록을 조회합니다.
-
-    Use this tool when:
-    - User asks about their owned coupons
-    - User asks "내 쿠폰", "쿠폰 목록", "my coupons"
+    Use when user asks "내 쿠폰", "쿠폰 목록", "my coupons".
 
     Args:
-        lang_cd (str): Language code (default: 'ko' for Korean).
-
-    Example Inputs:
-        - {"lang_cd": "ko"}
-        - {"lang_cd": "ko"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        lang_cd (str): Language code (default: 'ko').
     """
     logger.info("[TOOL][get_my_coupons_tool] Called with: lang_cd=%s", lang_cd)
 
@@ -276,38 +246,22 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
 @tool
 def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
     """
-    쿠폰 발급 (다운로드).
-
-    두 가지 모드를 지원합니다 — 정확히 한쪽만 입력해야 합니다 (XOR):
+    쿠폰 발급 (다운로드) — 정확히 한쪽만 입력 (XOR):
     - goods_no 모드: 상품에 해당하는 최저가 혜택 쿠폰(상품쿠폰 + 결제쿠폰) 묶음 발급
     - cpn_no 모드: 지정된 쿠폰번호 단일 발급
 
-    회원번호(mbrNo)와 제휴사번호(entrNo)는 BE 가 JWT 토큰에서 자동으로 채웁니다 —
-    이 도구에서는 절대 사용자 식별 정보를 인자로 받지 않습니다.
-
-    Use this tool when:
-    - User asks to receive/download a coupon ("쿠폰 받아줘", "다운로드", "쿠폰 받기", "발급해줘")
-    - User wants the lowest-price benefit coupon for a specific product (use goods_no)
-    - User explicitly references a coupon number from a prior voucher card (use cpn_no)
-    - DO NOT pass both arguments — choose exactly one based on user intent
+    Use when: 사용자가 쿠폰 수령/다운로드 요청 ("쿠폰 받아줘", "발급해줘").
+    DO NOT pass both arguments — choose exactly one.
 
     Args:
-        goods_no (str | None): 상품 번호. cpn_no 와 동시에 입력 불가.
-        cpn_no (str | None): 쿠폰 번호. goods_no 와 동시에 입력 불가.
+        goods_no (str | None): 상품 번호. cpn_no와 동시 입력 불가.
+        cpn_no (str | None): 쿠폰 번호. goods_no와 동시 입력 불가.
 
-    Example Inputs:
-        - {"goods_no": "G000000314254"}        # 상품 기준 최저가 혜택 쿠폰 묶음 발급
-        - {"cpn_no": "C00000123"}              # 특정 쿠폰 단일 발급
+    Examples:
+        - {"goods_no": "G000000314254"}   # 상품 기준 최저가 쿠폰 묶음
+        - {"cpn_no": "C00000123"}         # 특정 쿠폰 단일 발급
 
-    Returns:
-        dict: {"status": "success", "http_status": 200, "data": {
-            "code": "100|400|700|800|900",
-            "message": <str|null>,
-            "max_cpn":   {"cpn_no", "code", "message", "cpn_issu_no"} | null,  # goods 모드: 상품쿠폰
-            "extra_cpn": {"cpn_no", "code", "message", "cpn_issu_no"} | null,  # goods 모드: 결제쿠폰
-            "single_cpn":{"cpn_no", "code", "message", "cpn_issu_no"} | null   # cpn 모드: 단일 쿠폰
-        }}
-        per-coupon code: 100=발급 성공, 900=발급 실패(이미 보유 또는 대상 아님)
+    Response code: 100=발급 성공, 900=실패(이미 보유 또는 대상 아님).
     """
     logger.info(
         "[TOOL][issue_coupon_tool] Called with: goods_no=%s, cpn_no=%s",
@@ -352,28 +306,18 @@ def get_logistics_inventory_tool(goods_no: str):
     """
     물류 창고 재고 조회.
 
-    When to use:
-    - MANDATORY as STEP 3 in order flow — call before presenting store options
-    - When user asks if product is in stock (warehouse level)
+    MANDATORY as STEP 3 in order flow — call before presenting store options.
 
-    Result:
-    - logistics_qty > 0 → inventory_mode = LOGISTICS_AVAILABLE (all stores eligible)
-    - logistics_qty = 0 → inventory_mode = LOGISTICS_UNAVAILABLE (must check store inventory)
-    - rsv_sale_yn: "Y" → reservation order available (장착 워킹데이 기준 14일 이후)
+    Result interpretation:
+    - logistics_qty > 0 → LOGISTICS_AVAILABLE (all stores eligible)
+    - logistics_qty = 0 → LOGISTICS_UNAVAILABLE (must check store inventory)
+    - rsv_sale_yn="Y" → reservation order available; use rsv_install_date for user-facing date.
+    ⚠️ Never expose logistics_qty or rsv_sale_yn raw value to user.
 
     Args:
         goods_no (str): Product number.
 
-    Example Inputs:
-        - {"goods_no": "GXXXXXXXXXXXX"}
-        - {"goods_no": "GXXXXXXXXXXXX"}
-        - {"goods_no": "GXXXXXXXXXXXX"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": {"logistics_qty": int, "rsv_sale_yn": str|null, "rsv_install_date": str|null}}
-        - logistics_qty: Logistics warehouse stock quantity (0 = out of stock). ⚠️ Do NOT expose quantity to user.
-        - rsv_sale_yn: Reservation sale flag ("Y" = reservation order available). ⚠️ Do NOT expose raw value to user.
-        - rsv_install_date: Earliest installation date for reservation orders (YYYY-MM-DD format, only present when rsv_sale_yn="Y"). Use this date in user-facing messages.
+    Example: {"goods_no": "GXXXXXXXXXXXX"}
     """
     body = LogisticsRequest(goods_no=goods_no)
     logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
@@ -398,21 +342,13 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     """
     Check store inventory availability.
 
-    Input product list and store list to check:
-    - todayShopArray: Stores that can install today
-    - tnaShopArray: Stores eligible for T-NA delivery
+    Returns todayShopArray (stores that can install today) and tnaShopArray (T-NA delivery eligible).
 
     Args:
-        goods_list (List[Dict[str, Any]]): Product list for stock check.
-            Each item: {"goodsNo": "G123", "qty": "4"} where qty is STRING type.
-        shop_id_list (List[Dict[str, Any]]): Store list for stock check.
-            Each item: {"shopId": "F0001"}
+        goods_list (List[Dict]): [{"goodsNo": "G123", "qty": "4"}] — qty is STRING type.
+        shop_id_list (List[Dict]): [{"shopId": "F0001"}]
 
-    Example Inputs:
-        - {"goods_list": [{"goodsNo": "GXXXXXXXXXXXX", "qty": "4"}], "shop_id_list": [{"shopId": "BXXXXX"}]}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"goods_list": [{"goodsNo": "GXXXXXXXXXXXX", "qty": "4"}], "shop_id_list": [{"shopId": "BXXXXX"}]}
     """
     g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
     s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
@@ -442,27 +378,14 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
 @tool_cache(ttl=3600)
 def search_place_tool(query: str, size: int = 10):
     """
-    위치 명칭 검색 (Kakao 키워드 검색)
-
-    장소명, 건물명, 주소 등을 검색하여 좌표(x, y)를 반환합니다.
-    반환된 좌표는 get_nearby_stores_tool의 user_xpos, user_ypos 파라미터로 사용할 수 있습니다.
-
-    ⚠️ PRIVACY: 반환된 x, y 좌표는 **내부 파라미터 전용**입니다.
-    절대 사용자 응답 텍스트(assistantResponse 등)에 노출하지 마세요.
-    좌표는 개인정보로 취급되며, 사용자에게는 매장명·주소로만 안내합니다.
-    사용자가 직접 좌표/위도/경도를 묻더라도 좌표 값을 답변하지 않습니다.
+    위치 명칭 검색 (Kakao 키워드 검색) — 반환된 x,y 좌표를 get_nearby_stores_tool에 사용.
+    ⚠️ 좌표(x,y)는 내부 파라미터 전용 — 사용자에게 절대 노출하지 마세요.
 
     Args:
-        query (str): 검색어 (예: '센텀시티', '강남역', '강남대로 100')
-        size (int): 반환할 최대 결과 수 (기본 10)
+        query (str): 검색어 (e.g., '센텀시티', '강남역').
+        size (int): 최대 결과 수 (default 10).
 
-    Example Inputs:
-        - {"query": "센텀시티"}
-        - {"query": "강남역"}
-        - {"query": "강남대로 100"}
-
-    Returns:
-        dict: {"status": "success", "data": {"total": N, "items": [{"title": "...", "road_addr": "...", "x": "...", "y": "..."}]}}
+    Example: {"query": "강남역"}
     """
     logger.info("[TOOL][search_place_tool] Called with: query=%s, size=%s", query, size)
 
@@ -492,46 +415,21 @@ def get_nearby_stores_tool(
     chl_sct_cd: str | None = None,
 ):
     """
-    Get nearby stores.
+    Get nearby stores within radius based on coordinates.
 
-    Retrieve stores within specified radius (default 10km) based on customer coordinates,
-    including distance (km) from customer location.
-
-    Response stores include is_installable / is_imported_car fields:
-    - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
-    - is_installable=false: 매장은 온라인 쇼핑 장착 불가
-    - is_imported_car=true: 수입차 특화점 (SHOP_SPCL_SVC_SCT_CD '216' 보유)
-    - is_imported_car=false: 일반 매장
-
-    ⚠️ 수입차 특화점 필터 규칙 (imported_car_only):
-    사용자가 "수입차 특화점", "수입차 전문매장", "수입차 전문점", "수입차 매장",
-    "외제차 특화점", "외제차 전문매장" 등을 언급하면 imported_car_only=True 로 설정하세요.
+    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점).
+    ⚠️ 수입차 특화점: 사용자가 "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 언급 시 imported_car_only=True.
 
     Args:
-        user_xpos (float): Customer current X coordinate (longitude).
-        user_ypos (float): Customer current Y coordinate (latitude).
-        radius_km (float): Search radius in km (default 10km).
-        svc_codes (List[str] | None): Service category codes.
-            Returns stores that have ANY of the specified services.
-            Example: ["101", "102"]
-        all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
-            Default: False.
-        imported_car_only (bool): If True, only return imported-car specialty stores
-            (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216'). Default: False.
-        chl_sct_cd (str | None): Channel section code for shop type filtering.
-            F = T'Station (티스테이션)
-            S = The Tire Shop (더타이어샵)
-            Default: None (all shop types).
+        user_xpos (float): X 좌표 (경도).
+        user_ypos (float): Y 좌표 (위도).
+        radius_km (float): 검색 반경 km (default 10).
+        svc_codes (List[str] | None): 서비스 코드 필터 (e.g., ["101", "102"]).
+        all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
+        imported_car_only (bool): True → 수입차 특화점만. Default False.
+        chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
 
-    Example Inputs:
-        - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "svc_codes": ["101", "102"]}
-        - {"user_xpos": 126.9780, "user_ypos": 37.5665, "radius_km": 20, "chl_sct_cd": "F"}
-        - {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "imported_car_only": true}
-        - {"user_xpos": 103.8198, "user_ypos": 1.3521, "radius_km": 20, "chl_sct_cd": "S"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
-        Response data includes is_installable and is_imported_car fields per store.
+    Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F"}
     """
     logger.info(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
@@ -599,93 +497,31 @@ def get_store_list_tool(
     """
     Get store list by region and/or store name.
 
-    Retrieve store list based on region name and/or store name keyword search.
-    Returns all stores if no filters are provided.
+    Parameter rules:
+    - region_code: geographic location only (e.g., '서울', '강남', '부산').
+    - store_nm: business name only (e.g., '티스테', '극동상사').
+    - Pass BOTH when user mentions location AND store name simultaneously.
 
-    IMPORTANT — Parameter separation rules:
-    - region_code: ONLY geographic location words (city, district, neighborhood).
-        Examples: '서울', '강남', '부산', '수원', '송파'
-    - store_nm: ONLY business/store name keywords.
-        Examples: '티스테', '타이'
+    Filter flags:
+    - all_my_t_only=True: "all my T"/"올마이티"/"올마이T" 표현 시. 결과에 is_all_my_t 포함, True면 "[all my T]" 표시.
+    - imported_car_only=True: "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 표현 시. True면 "[수입차 특화점]" 표시.
+    - chl_sct_cd: "티스테이션/t'station/티스테" → "F", "더타이어샵/the tire shop/타이어샵" → "S", None=전체.
 
-    When the user mentions BOTH a location and a store name, pass BOTH parameters simultaneously.
-    Do NOT put the store name into region_code, or the region into store_nm.
-
-    ⚠️ "all my T" 매장 필터 규칙:
-    사용자가 아래 표현 중 하나라도 사용하면 all_my_t_only=True 로 설정하세요:
-    - "all my T", "all my t", "All My T"
-    - "올마이티", "올마이t", "올마이T"
-    - "allMyT", "allmyt"
-
-    해당 매장 결과에는 is_all_my_t 필드가 포함됩니다.
-    is_all_my_t=true 인 매장은 응답 시 매장명 옆에 "[all my T]" 태그를 표시하세요.
-
-    ⚠️ 수입차 특화점 필터 규칙 (imported_car_only):
-    사용자가 아래 표현 중 하나라도 사용하면 imported_car_only=True 로 설정하세요:
-    - "수입차 특화점", "수입차 전문매장", "수입차 전문점"
-    - "수입차 매장", "수입차 정비소", "외제차 특화점", "외제차 전문매장"
-    백엔드는 ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장만 반환합니다.
-    응답의 is_imported_car=true 인 매장은 매장명 옆에 "[수입차 특화점]" 태그를 표시하세요.
-
-    ⚠️ 매장 타입 필터 규칙 (chl_sct_cd):
-    사용자가 특정 매장 타입을 언급하면 chl_sct_cd 를 설정하세요:
-    - "티스테이션", "t'station", "T'Station", "티스테" → chl_sct_cd="F"
-    - "더타이어샵", "the tire shop", "The Tire Shop", "타이어샵" → chl_sct_cd="S"
-    일반 매장 검색(특정 타입 미언급)은 chl_sct_cd=None (기본값, 전체 매장).
-
-    Response stores include is_installable / is_imported_car fields:
-    - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
-    - is_installable=false: 매장은 온라인 쇼핑 장착 불가
-    - is_imported_car=true: 수입차 특화점 (SHOP_SPCL_SVC_SCT_CD '216' 보유)
-    - is_imported_car=false: 일반 매장
+    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점).
 
     Args:
-        region_code (str | None): Geographic region keyword — Korean city, district, or neighborhood.
-            Used for ADDR_BASE / ADDR_DTL LIKE search.
-            Examples: '서울', '강남', '부산'
-        store_nm (str | None): Store or business name keyword.
-            Examples: '티스테', '타이'
-        limit (int): Maximum number of stores to return (default 5).
-        all_my_t_only (bool): If True, only return "all my T" stores (SMART_CARE_SHOP_YN = 'Y').
-            Default: False.
-        imported_car_only (bool): If True, only return imported-car specialty stores
-            (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216'). Default: False.
-        chl_sct_cd (str | None): Channel section code for shop type filtering.
-            F = T'Station (티스테이션)
-            S = The Tire Shop (더타이어샵)
-            Default: None (all shop types).
+        region_code (str | None): 지역명 키워드 (e.g., '서울', '강남', '부산').
+        store_nm (str | None): 매장명 키워드 (e.g., '티스테', '극동상사').
+        limit (int): 최대 반환 매장 수 (default 5).
+        all_my_t_only (bool): True → all my T 매장만. Default False.
+        imported_car_only (bool): True → 수입차 특화점만. Default False.
+        chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
 
-    Example Inputs:
-        # User says "강남에 티스테 찾아줘" → pass BOTH
+    Examples:
         - {"region_code": "강남", "store_nm": "티스테", "limit": 5}
-
-        # User says "부산 한국타이어" → pass BOTH
-        - {"region_code": "부산", "store_nm": "한국타이어", "limit": 5}
-
-        # User says "서울 매장 보여줘" → region only
-        - {"region_code": "서울", "store_nm": None, "limit": 5}
-
-        # User says "극동상사 찾아줘" → store name only
+        - {"region_code": "서울", "limit": 5}
         - {"region_code": None, "store_nm": "극동상사", "limit": 5}
-
-        # User says "all my T 매장" → all_my_t_only=True
-        - {"region_code": None, "store_nm": None, "limit": 5, "all_my_t_only": True}
-
-        # User says "수입차 전문매장 찾아줘" → imported_car_only=True
-        - {"region_code": None, "store_nm": None, "limit": 5, "imported_car_only": True}
-
-        # User says "강남 수입차 특화점" → region + imported_car_only
-        - {"region_code": "강남", "store_nm": None, "limit": 5, "imported_car_only": True}
-
-        # User says "내주변 티스테이션 매장 찾아줘" → chl_sct_cd="F"
-        - {"region_code": None, "store_nm": None, "limit": 5, "chl_sct_cd": "F"}
-
-        # User says "강남 더타이어샵 매장" → region + chl_sct_cd
-        - {"region_code": "강남", "store_nm": None, "limit": 5, "chl_sct_cd": "S"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
-        Response data includes is_installable and is_imported_car fields per store.
+        - {"region_code": "강남", "limit": 5, "imported_car_only": True}
     """
     # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
     if store_nm:
@@ -724,37 +560,17 @@ def get_store_list_tool(
 @tool
 def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: bool = False):
     """
-    Get store details and reservation availability.
+    Get store details and available reservation time slots for a specific date.
 
-    Retrieve store information and available reservation time slots (hourly)
-    based on store ID and date.
-
-    Response includes is_installable, is_tna_delivery, is_imported_car fields:
-    - is_installable=true: 매장은 온라인 쇼핑 장착 가능 (SMART_CARE_SHOP_YN IN ('Y','E'))
-    - is_installable=false: 매장은 온라인 쇼핑 장착 불가
-    - is_tna_delivery=true: T바로배송(한국타이어 퀵배송) 가능 매장
-    - is_tna_delivery=false: T바로배송 불가 매장
-    - is_imported_car=true: 수입차 특화점 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD '216' 보유)
-    - is_imported_car=false: 일반 매장
+    Store fields: is_installable (온라인 장착 가능), is_tna_delivery (T바로배송), is_imported_car (수입차 특화점).
 
     Args:
         shop_id (str): Store ID.
         cal_day (str): Query date in YYYYMMDD format.
-        is_logistics_delivery (bool): Set True when the store has NO store inventory but logistics
-            inventory IS available (Flow 3 STEP B case). Backend then filters time slots with
-            ``AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` so only dates after the
-            store-delivery lead time are returned. Default False (매장재고 있음 케이스).
+        is_logistics_delivery (bool): True when store has NO store inventory but logistics IS available
+            (Flow 3 STEP B) — backend filters slots by store-delivery lead time. Default False.
 
-    Example Inputs:
-        - {"shop_id": "BXXXXX", "cal_day": "20260401"}
-        - {"shop_id": "BXXXXX", "cal_day": "20250225", "is_logistics_delivery": true}
-        - {"shop_id": "FXXXXX", "cal_day": "20260320"}
-        - {"shop_id": "FXXXXX", "cal_day": "20260401"}
-        - {"shop_id": "CXXXXX", "cal_day": "20250225"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
-        Response data includes is_installable field.
+    Example: {"shop_id": "BXXXXX", "cal_day": "20260401"}
     """
     logger.info(
         "[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s, is_logistics_delivery=%s",
@@ -789,50 +605,24 @@ def get_store_schedule_tool(
     auto_extend_days: int = 14,
 ):
     """
-    Get store reservation schedule for a range of days starting from today (parallel fetch).
+    Get store reservation schedule for a range of days (parallel fetch).
 
-    Use this instead of calling get_store_detail_tool multiple times.
-    Fetches TODAY through TODAY+(days-1) in parallel and returns all slots in one response.
+    Use instead of calling get_store_detail_tool multiple times.
+    Fetches TODAY through TODAY+(days-1) in parallel.
 
-    Adaptive behavior (auto-extend):
-    - Phase 1: Fetch TODAY through TODAY+(days-1) in parallel.
-    - If EVERY day in Phase 1 has zero installable available_slots AND
-      ``auto_extend_days > 0``, Phase 2 fetches the next ``auto_extend_days`` days
-      so the caller never has to re-ask "다른 날짜 확인할까요?" before finding
-      the earliest available date.
-    - Total scan window is therefore up to ``days + auto_extend_days`` days
-      (default 7 + 14 = 21 days).
+    Adaptive auto-extend: if all Phase 1 days have zero installable slots AND auto_extend_days>0,
+    automatically fetches the next auto_extend_days days (total window: up to days+auto_extend_days).
 
     Args:
         shop_id (str): Store ID.
-        days (int): Number of days to fetch starting from today (default 7 = TODAY, +1, ..., +6).
-            Clamped to [1, 7].
-        is_logistics_delivery (bool): Set True when the store has NO store inventory but logistics
-            inventory IS available (Flow 3 STEP B case). Backend filters out dates earlier than
-            ``FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` (store-delivery lead time). Default False.
-        auto_extend_days (int): Extra days to scan when the Phase 1 window has no installable
-            slots (default 14 → up to 21-day total window). Set to 0 to disable extension.
-            Clamped to [0, 21].
+        days (int): Days to fetch from today (default 7, clamped to [1,7]).
+        is_logistics_delivery (bool): Same as get_store_detail_tool. Default False.
+        auto_extend_days (int): Extra days to scan when Phase 1 is empty (default 14, clamped to [0,21]).
 
-    Example Inputs:
+    Examples:
         - {"shop_id": "BXXXXX"}
         - {"shop_id": "FXXXXX", "days": 4}
         - {"shop_id": "BXXXXX", "is_logistics_delivery": true}
-        - {"shop_id": "BXXXXX", "auto_extend_days": 0}  # disable auto-extend
-
-    Returns:
-        dict: {
-            "status": "success",
-            "data": {
-                "shop_id": str,
-                "schedule": [
-                    {"cal_day": "YYYYMMDD", "available_slots": ["09","10",...], "is_installable": bool, "is_tna_delivery": bool},
-                    ...
-                ],
-                "extended": bool,        # True when Phase 2 auto-extend ran
-                "days_fetched": int      # total distinct days fetched
-            }
-        }
     """
     logger.info(
         "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s, "
@@ -916,45 +706,18 @@ def get_multi_store_schedule_tool(
     """
     Get reservation schedule for multiple stores (up to 3) with adaptive day extension.
 
-    Use this for "가장 빨리 방문 가능한 매장" type queries when comparing earliest available
-    slots across multiple stores. Fetches all (shop_id × cal_day) pairs in parallel in ONE tool call.
+    Use for "가장 빨리 방문 가능한 매장" queries — fetches all (shop_id × cal_day) pairs in ONE parallel call.
+    Use INSTEAD OF calling get_store_detail_tool N×M times.
 
-    Adaptive behavior:
-    - Phase 1: Fetch shop_id_list × initial_days in parallel (default 2 = TODAY, +1).
-    - If EVERY store has zero available_slots across ALL initial days AND extend_days > 0:
-      Phase 2 — extend the window by extend_days and parallel-fetch the new days only.
-    - Returns merged schedule with `extended=true` so the caller can mention the extension.
-
-    Use this INSTEAD OF calling get_store_detail_tool N× M times (N stores × M days).
+    Adaptive: Phase 1 fetches initial_days. If ALL stores have zero slots AND extend_days>0,
+    Phase 2 extends window by extend_days.
 
     Args:
-        shop_id_list (list[str]): Up to 3 shop IDs. Extra IDs are truncated.
-        initial_days (int): Initial days to fetch starting from today (default 2).
-        extend_days (int): Extra days to fetch if initial window has no slots (default 1).
+        shop_id_list (list[str]): Up to 3 shop IDs (extras truncated).
+        initial_days (int): Days to fetch initially (default 2 = TODAY, +1).
+        extend_days (int): Extra days if initial window is empty (default 1).
 
-    Example Inputs:
-        - {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
-        - {"shop_id_list": ["BXXXXX", "FXXXXX"], "initial_days": 2, "extend_days": 2}
-
-    Returns:
-        dict: {
-            "status": "success",
-            "http_status": 200,
-            "data": {
-                "stores": [
-                    {
-                        "shop_id": str,
-                        "schedule": [
-                            {"cal_day": "YYYYMMDD", "available_slots": [...], "is_installable": bool, "is_tna_delivery": bool},
-                            ...
-                        ]
-                    },
-                    ...
-                ],
-                "extended": bool,         # True = Phase 2 fallback was triggered
-                "days_fetched": int       # total distinct days fetched
-            }
-        }
+    Example: {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
     """
     logger.info(
         "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, initial_days=%s, extend_days=%s",
@@ -1026,27 +789,16 @@ def get_multi_store_schedule_tool(
 @tool
 def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None):
     """
-    장바구니에 상품을 저장합니다.
+    장바구니에 상품 저장 (매장 선택 없이).
 
-    매장을 선택하지 않고 상품과 수량만으로 장바구니에 담는 API입니다.
-    setOrderFormAI API를 drtPurYn="N" (장바구니 모드)으로 호출합니다.
-
-    Use this tool when:
-    - User has confirmed goods_no and quantity but does NOT want to select a store
-    - User explicitly says "장바구니에 담아줘", "장바구니 저장", "나중에 주문할게"
-    - User skips store selection step
+    Use when: 사용자가 매장 선택 없이 장바구니에 담기를 원할 때 ("장바구니에 담아줘", "나중에 주문할게").
 
     Args:
-        goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
-        ord_qty (int): Quantity to add to cart, min is 1.
-        car_lnc_cd (str | None): Vehicle launch code (optional, for vehicle info).
+        goods_no (str): Product number.
+        ord_qty (int): Quantity (min 1).
+        car_lnc_cd (str | None): Vehicle launch code (optional).
 
-    Example Inputs:
-        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4}
-        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 2, "car_lnc_cd": "LNCXXXXXX"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
     logger.info("[TOOL][save_to_cart_tool] Called with: goods_info=%s, car_lnc_cd=%s", goods_info_arr_str, car_lnc_cd)
@@ -1077,30 +829,23 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
     """
     퀵쇼핑 주문 실행 (매장 선택 포함).
 
-    When to use:
-    - User confirmed goods_no + ord_qty + selected shop_id
-    - Pre-conditions MUST all pass before calling:
+    Pre-conditions MUST all pass before calling:
       1. get_logistics_inventory_tool called (inventory_mode set)
       2. get_store_detail_tool called → is_installable=true confirmed
       3. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool verified shop in todayShopArray/tnaShopArray
-      4. Pre-order preview shown, user confirmed in a separate turn
+      4. Pre-order preview shown, user confirmed
 
     When NOT to use:
-    - shop_id is not yet confirmed from tool result (never fabricate shop_id)
+    - shop_id not yet confirmed from tool result (never fabricate shop_id)
     - is_installable not yet verified
 
     Args:
-        goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
-        ord_qty (int): Quantity to order, min is 1.
-        shop_id (str): Store ID from store tool results (e.g., "CXXXXX", "BXXXXX").
-        car_lnc_cd (str | None): Vehicle launch code (optional, for vehicle info).
+        goods_no (str): Product number.
+        ord_qty (int): Quantity (min 1).
+        shop_id (str): Store ID from store tool results (e.g., "CXXXXX").
+        car_lnc_cd (str | None): Vehicle launch code (optional).
 
-    Example Inputs:
-        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX"}
-        - {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 2, "shop_id": "BXXXXX", "car_lnc_cd": "LNCXXXXXX"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX"}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
     logger.info("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s", goods_info_arr_str, shop_id, car_lnc_cd)
@@ -1130,34 +875,12 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
 @tool
 def get_order_status_tool(query_no: str):
     """
-    Retrieve order processing status and delivery tracking information.
-
-    This tool queries the Order & Delivery API using a query number.
-    If query_no starts with 'O', it queries by order number.
-    If query_no starts with 'D', it queries by delivery number.
-
-    The system retrieves order progress data from OP_ORD_DTL_INFO and delivery
-    tracking information from OP_ORD_DLV_DTL_INFO.
-
-    It returns the current order status (such as order received, processing,
-    shipped, or completed) together with delivery progress and shipping
-    tracking details if available.
-
-    Use this tool when the user wants to:
-    - check order status
-    - track delivery progress
-    - view shipping or tracking information for an order
+    Retrieve order status and delivery tracking.
 
     Args:
-        query_no (str): Query number. Order number starts with 'O' (e.g., 'O...'),
-            delivery number starts with 'D' (e.g., 'D...').
+        query_no (str): Order number (starts with 'O') or delivery number (starts with 'D').
 
-    Example Inputs:
-        - {"query_no": "O100017122"}
-        - {"query_no": "D201805160015211"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"query_no": "O100017122"}
     """
     logger.info("[TOOL][get_order_status_tool] Called with: query_no=%s", query_no)
 
@@ -1179,28 +902,11 @@ def get_order_status_tool(query_no: str):
 @tool
 def get_orders_of_user_tool():
     """
-    Retrieve the list of orders for the authenticated user.
+    Retrieve authenticated user's order list (ord_no, goods_nm, ord_qty, sys_reg_dtime).
 
-    This tool queries the Order & Delivery API to get all orders associated
-    with the current user. It returns order summaries including:
-    - Order number (ord_no)
-    - Product name (goods_nm)
-    - Order quantity (ord_qty)
-    - Registration date (sys_reg_dtime)
-
-    Use this tool when the user wants to:
-    - check their orders
-    - see their order history
-    - list all their orders
-    - find a specific order number
-
-    This tool should be called FIRST when user asks about their orders.
-    After receiving the order list:
-    - If only 1 order: you can automatically call get_order_status_tool with that order number
-    - If multiple orders: show the list to user and ask which one they want details for
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": {"orders": [...]}} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Call FIRST when user asks about their orders.
+    - 1 order → auto-call get_order_status_tool with that order number
+    - Multiple orders → show list, ask which one they want details for
     """
     logger.info("[TOOL][get_orders_of_user_tool] Called")
 

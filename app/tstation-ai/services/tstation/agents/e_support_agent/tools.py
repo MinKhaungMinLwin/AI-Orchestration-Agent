@@ -9,6 +9,7 @@ from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_f
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
 from langchain.tools import tool
+from common.tool_cache import tool_cache
 from services.tstation.rag import (
     get_qdrant_service,
     get_embedding_service,
@@ -46,45 +47,19 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 @tool
+@tool_cache(ttl=3600)
 def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: int = 50):
     """
-    [PRIMARY] Get FAQ list from database API.
-
-    Retrieve frequently asked questions from CS_CUST_INQ_MGMT_INFO.
-    Only FAQ data (INQ_TYPE_CD='FAQ') is retrieved. 1:1 inquiry history
-    is excluded for privacy protection.
-
-    Can filter by large category (lrcl_cd) and medium category (mdcl_cd).
+    [PRIMARY] Get FAQ list from database.
 
     Args:
-        lrcl_cd (str | None): Large category code filter (LRCL_CD).
-            Supported values:
-                - "C01": 회원/주문/장착 관련 (membership, order, installation)
-                - "C02": 상품/타이어 관련 (product, tire info)
-                - "C03": 매장/서비스 관련 (store, service)
-                - None: search all categories
-        mdcl_cd (str | None): Medium category code filter (MDCL_CD).
-            Known values (use when determinable):
-                - C01 → "C0103" (회원가입/계정), "C0106" (장착일정/예약)
-                - C02 → "C0201" (타이어 상품정보/수명)
-                - C03 → "C0302" (매장서비스/보관)
-                - None: search all medium categories within lrcl_cd
-        limit (int): Number of FAQs to return (default 50, max 200).
+        lrcl_cd (str | None): Large category — "C01" (회원/주문/장착) | "C02" (상품/타이어) | "C03" (매장/서비스) | None (all).
+        mdcl_cd (str | None): Medium category — C01→"C0103"(회원가입/계정),"C0106"(장착/예약) | C02→"C0201"(타이어 상품정보) | C03→"C0302"(매장서비스) | None (all).
+        limit (int): FAQs to return (default 50, max 200).
 
-    Call strategy:
-        Step 1: Call with limit=50 (and lrcl_cd inferred from user question if possible)
-        Step 2: If no relevant result, call with limit=100
-        Step 3: If still no result, call with limit=200 (MAX)
-        Step 4: If still no result after limit=200, fall back to search_faq_rag_tool
+    Call strategy: limit=50 → retry 100 → retry 200 → fall back to search_faq_rag_tool on failure.
 
-    Example Inputs:
-        - {"lrcl_cd": "C01", "mdcl_cd": "C0103", "limit": 50}
-        - {"lrcl_cd": "C02", "mdcl_cd": "C0201", "limit": 50}
-        - {"lrcl_cd": "C03", "mdcl_cd": "C0303", "limit": 50}
-        - {"lrcl_cd": None, "mdcl_cd": None, "limit": 50}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"lrcl_cd": "C01", "mdcl_cd": "C0103", "limit": 50}
     """
     logger.info("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
 
@@ -103,7 +78,7 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         for item in items:
             item["source"] = "FAQ DB"
         logger.info("[TOOL][get_faq_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, parsed)
     except Exception as e:
         logger.exception("[TOOL][get_faq_tool] Failed")
         return _error_response(None, str(e), "Failed to get FAQ")
@@ -117,20 +92,15 @@ def search_faq_rag_tool(
     """
     [FALLBACK] Search FAQs using RAG (semantic vector search).
 
-    Use this ONLY when get_faq_tool fails (API error, timeout) or returns
-    no relevant results after limit=200.
-    Do NOT call this as the first step — always try get_faq_tool first.
+    Use ONLY when get_faq_tool fails or returns no relevant results after limit=200.
+    Do NOT call as the first step.
 
     Args:
-        query (str): The user's search query.
-        top_k (int): Maximum number of FAQ entries to return (default 5).
-        score_threshold (float): Minimum relevance score to include a result (default 0.6).
+        query (str): 사용자 검색어.
+        top_k (int): 최대 반환 FAQ 수 (default 5).
+        score_threshold (float): 최소 관련성 점수 (default 0.6).
 
-    Returns:
-        dict: {"status": "success", "http_status": 200, "data": [...]} or error dict.
-
-    Example:
-        result = search_faq_rag_tool(query="환불 가능한가요?", top_k=5, score_threshold=0.6)
+    Example: {"query": "환불 가능한가요?", "top_k": 5}
     """
     logger.info(
         "[TOOL][search_faq_rag_tool] query=%s, top_k=%s, score_threshold=%s",
@@ -230,29 +200,15 @@ def escalate_tool(
     """
     Escalate to customer service agent.
 
-    Handle consultation requests based on conversation volume and inquiry type.
-    There are 3 branches:
-
-    - **with_summary**: If message count ≥ threshold (ESCALATION_MSG_THRESHOLD, default 3)
-      and summary exists, pass summary as URL-encoded query parameter
-    - **direct**: If conversation is short or no summary, redirect to consultation page directly
-    - **policy**: If inq_type_cd is registered in policy table, branch to specified channel (call/email, etc.)
+    Branches: with_summary (msg_count ≥ threshold + summary) | direct (short conversation) | policy (inq_type_cd in policy table).
 
     Args:
-        mbr_no (str | None): Member number.
-        inq_type_cd (str): Inquiry type code (e.g., ORDER, DELIVERY, CLAIM, etc.).
-        msg_count (int): Number of messages in conversation.
-        summary (str | None): Conversation summary (URL encoded).
+        mbr_no (str | None): 회원번호.
+        inq_type_cd (str): Inquiry type (ORDER, DELIVERY, CLAIM, MEMBERSHIP, OTHER, etc.).
+        msg_count (int): 대화 메시지 수.
+        summary (str | None): 대화 요약.
 
-    Example Inputs:
-        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "ORDER", "msg_count": 3, "summary": "Customer wants to cancel order"}
-        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "DELIVERY", "msg_count": 2, "summary": "Package delayed"}
-        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "CLAIM", "msg_count": 5, "summary": "Product damaged on delivery"}
-        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "MEMBERSHIP", "msg_count": 1, "summary": "Membership upgrade request"}
-        - {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "OTHER", "msg_count": 4, "summary": "General inquiry about products"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"mbr_no": "MXXXXXXXXX", "inq_type_cd": "ORDER", "msg_count": 3, "summary": "주문 취소 요청"}
     """
     body = EscalationRequest(
         inq_type_cd=inq_type_cd,
@@ -287,31 +243,11 @@ def transfer_to_qna_tool(
     """
     Create encrypted QnA write URL to transfer user to 1:1 inquiry write page.
 
-    Data is AES-128 ECB encrypted with Base64 URL-safe encoding.
-    Use this when user wants to write a 1:1 inquiry with AI-summarized content.
-
     Args:
-        cnsl_clss_seq (str | None): Consultation type code.
-            - 10002: 상품문의 (Product inquiry)
-            - 10006: 주문/결제/배송 (Order/Payment/Delivery)
-            - 10010: 반품/교환/환불 (Return/Exchange/Refund)
-            - 10013: 제공서비스/이벤트/혜택 (Service/Event/Benefits)
-            - 10017: 회원 (Member)
-            - 10019: 기타 (Other)
-            - 10025: 가맹점제휴문의 (Franchise inquiry)
-            - 10034: 이력서접수 (Resume submission)
-            If not provided, omit and AI will auto-select.
-        inq_tit_nm (str | None): Inquiry title (max 100 chars).
-        ai_summary (str | None): Inquiry content — key facts only (max 400 chars).
-        is_mobile (bool): Use mobile URL if True.
-
-    Returns:
-        dict with keys:
-            - status: "success" or "error"
-            - response: Markdown string to display to the user verbatim (includes clickable link)
-            - url: The generated inquiry page URL (used by UI template agent)
-            - isMobile, cnsl_clss_seq, inq_tit_nm, ai_summary: metadata for UI template rendering
-        ⚠️ Always output the `response` field verbatim as your reply to the user.
+        cnsl_clss_seq (str | None): 10002=상품 / 10006=주문·결제·배송 / 10010=반품·교환·환불 / 10013=서비스·이벤트 / 10017=회원 / 10019=기타 / 10025=가맹점제휴 / 10034=이력서.
+        inq_tit_nm (str | None): 문의 제목 (max 100자).
+        ai_summary (str | None): 문의 내용 요약 (max 400자, 1인칭 한국어).
+        is_mobile (bool): True → mobile URL 사용.
     """
     logger.info(
         "[TOOL][transfer_to_qna_tool] Called with: cnsl_clss_seq=%s, inq_tit_nm=%s, ai_summary=%s, is_mobile=%s",

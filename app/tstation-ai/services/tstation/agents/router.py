@@ -40,6 +40,14 @@ DECISION_LLM = ChatLiteLLM(
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
 )
 
+# Singleton for QC fact-checking chain — same model tier as DECISION_LLM but kept
+# separate so each can be reconfigured independently (e.g. streaming, temperature).
+QC_LLM = ChatLiteLLM(
+    api_base=settings.AI_GATEWAY_BASE_URL,
+    api_key=settings.AI_GATEWAY_API_KEY,
+    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
+)
+
 ### Multi-Agent Router
 # Leading Agent
 from services.tstation.agents.a_leading_agent.agent import LeadingAgent

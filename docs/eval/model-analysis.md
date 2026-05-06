@@ -3,7 +3,7 @@
 - **Date:** 2026-05-03
 - **v1 (Baseline):** 45 models × 35 TCs — selects top 10 for v2
 - **v2 (r2):** Top 10 models × 67 TCs
-- **Scripts:** `python eval/summarize_results.py --v1` · `python eval/r2_summary.py`
+- **Scripts:** `python eval/summarize_results.py --v1` · `python eval/summarize_results.py --consistency --tag r2`
 
 ---
 

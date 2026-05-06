@@ -280,6 +280,7 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
 
 
 @tool
+@tool_cache(ttl=3600)
 def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
     """
     차량-상품 타이어 호환 검증.
@@ -289,20 +290,14 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
     When NOT to use:
     - If tire_size is already confirmed → compare product's tire_size directly (no tool needed)
-    - If user only mentions car model name → use CAR MODEL DISPLAY (own knowledge) instead
+    - If user only mentions car model name → use CAR MODEL DISPLAY instead
 
     Args:
-        goods_no (str): 상품 번호
-        car_no (str): 차량 번호
-        owner_nm (str): 차량 소유주
+        goods_no (str): 상품 번호.
+        car_no (str): 차량 번호 (e.g., "12가3456").
+        owner_nm (str): 차량 소유주명.
 
-    Example Inputs:
-        - {"goods_no": "GXXXXXXXXXXXX", "car_no": "12가3456", "owner_nm": "홍길동"}
-        - {"goods_no": "GXXXXXXXXXXXX", "car_no": "34나5678", "owner_nm": "홍길동"}
-        - {"goods_no": "GXXXXXXXXXXXX", "car_no": "56다7890", "owner_nm": "홍길동"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "car_no": "12가3456", "owner_nm": "홍길동"}
     """
     logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, owner_nm=%s", goods_no, car_no, owner_nm)
 
@@ -322,7 +317,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
 
 @tool
-@tool_cache(ttl=300)
+@tool_cache(ttl=600)
 def search_product_tool(
     keyword: str | None = None,
     limit: int = 5,
@@ -336,22 +331,19 @@ def search_product_tool(
     When to use:
     - User searches for a specific tire by name/keyword
     - Resolving goods_no for price/stock/order handoff (Flow C/D)
-    - User mentions ONLY a brand name with size (e.g. "브리지스톤 235/55R19")
-      → keyword 를 None 으로 두고 brand_cd + size 만 전달한다.
+    - User mentions ONLY a brand name with size → keyword=None, use brand_cd + size
 
     Important: keyword는 **한글로 전달**한다. BE는 한글 GOODS_NM에 LIKE 매칭하고
     alias.json으로 한글→영문을 자동 확장한다 (영문→한글 역확장은 없음).
     - 사용자가 한글로 입력 → 그대로 전달 (벤투스 S2, 다이나프로 HPX, 키너지 EX 등)
-    - 사용자가 영문/로마자로 입력 → 한글로 변환 후 전달 (Ventus→벤투스, Kinergy→키너지,
+    - 사용자가 영문/로마자로 입력 → 한글로 변환 (Ventus→벤투스, Kinergy→키너지,
       Optimo→옵티모, Dynapro→다이나프로, iON→아이온)
     - 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지
-    - ❌ NEVER translate Korean → English (BE 한글 매칭 실패)
-    - ❌ NEVER put a brand name into keyword (e.g. "브리지스톤", "미쉐린", "피렐리").
-      brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이
-      저장돼 있지 않아 결과가 0건이 된다. 모델명까지 들어온 경우만 keyword 사용.
+    - ❌ NEVER translate Korean → English
+    - ❌ NEVER put a brand name into keyword — use brand_cd instead
 
-    Brand detection: Set brand_cd from product name (MC=Michelin, PI=Pirelli, BS=Bridgestone,
-    CT=Continental, GY=Goodyear, LF=Laufenn). Default: HK.
+    Brand codes: HK=Hankook (default), LF=Laufenn, MC=Michelin, PI=Pirelli,
+                 BS=Bridgestone, CT=Continental, GY=Goodyear.
     Unsupported brands (금호, 넥센 etc.) → decline, do not search.
 
     Args:
@@ -375,7 +367,7 @@ def search_product_tool(
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 BE 기본 순서 유지.
 
-    Example Inputs:
+    Examples:
         - {"keyword": "벤투스 S2", "limit": 5, "size": "225/45R17"}
         - {"keyword": "다이나프로 HPX", "limit": 5, "size": "235/55R19"}
         - {"keyword": "Pilot Sport", "limit": 5, "brand_cd": "MC"}
@@ -418,6 +410,7 @@ def search_product_tool(
 
 
 @tool
+@tool_cache(ttl=3600)
 def get_user_vehicles_tool(car_no: str, owner_nm: str):
     """
     차량번호+소유주명으로 차량 조회.
@@ -431,16 +424,10 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
     - Do NOT use if tire_size is already confirmed
 
     Args:
-        car_no (str): Vehicle registration number (차량번호).
-        owner_nm (str): Owner name (소유주명).
+        car_no (str): 차량번호 (e.g., "12가3456").
+        owner_nm (str): 소유주명.
 
-    Example Inputs:
-        - {"car_no": "12가3456", "owner_nm": "홍길동"}
-        - {"car_no": "34나5678", "owner_nm": "홍길동"}
-        - {"car_no": "56다7890", "owner_nm": "홍길동"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"car_no": "12가3456", "owner_nm": "홍길동"}
     """
     logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s, owner_nm=%s", car_no, owner_nm)
 
@@ -460,6 +447,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
 
 
 @tool
+@tool_cache(ttl=600)
 def get_my_cars_tool(mbr_no: str):
     """
     사용자 등록 차량 조회 (회원번호 기준).
@@ -474,14 +462,9 @@ def get_my_cars_tool(mbr_no: str):
     - 0 cars → guide user to provide car_no+owner_nm or car model name
 
     Args:
-        mbr_no (str): Member number (from user context provided by the system).
+        mbr_no (str): 회원번호 (from user context).
 
-    Example Inputs:
-        - {"mbr_no": "MXXXXXXXXX"}
-        - {"mbr_no": "MXXXXXXXXX"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"mbr_no": "MXXXXXXXXX"}
     """
     logger.info("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
 
@@ -511,20 +494,14 @@ def search_car_model_tool(keyword: str, limit: int = 20):
     - When another flow explicitly requires car_lnc_cd lookup
 
     When NOT to use:
-    - Do NOT call when user just mentions a car model name for tire recommendation
-      → Instead, use your own knowledge to describe representative trims/tire sizes (CAR MODEL DISPLAY)
+    - Do NOT call when user just mentions a car model name → use search_car_model_groups_tool (CAR MODEL DISPLAY)
     - Do NOT call as first step for car model mentions
 
     Args:
-        keyword (str): 차량 모델명 키워드 (한국어, 브랜드명 제외. 예: '소나타', '그랜저', 'BMW')
+        keyword (str): 차량 모델명 키워드 (한국어, e.g., '소나타', '그랜저').
         limit (int): 최대 결과 수. Default: 20.
 
-    Example Inputs:
-        - {"keyword": "소나타", "limit": 20}
-        - {"keyword": "그랜저", "limit": 20}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"keyword": "소나타", "limit": 20}
     """
     logger.info("[TOOL][search_car_model_tool] Called with: keyword=%s, limit=%s", keyword, limit)
 
@@ -551,26 +528,18 @@ def search_car_model_groups_tool(keyword: str):
 
     When to use:
     - User mentions a car model name (e.g., "K7", "소나타", "팰리세이드") for tire recommendation
-    - Use this INSTEAD of LLM own knowledge for the CAR MODEL DISPLAY flow
     - Step 1 of 2: returns model groups with year ranges → user selects → call get_car_trims_tool
 
     When NOT to use:
     - Do NOT call when user already provided car_no + owner_nm (use get_user_vehicles_tool)
     - Do NOT call when car is already confirmed from get_my_cars_tool result
 
-    Returns grouped car models with year range so user can identify their generation.
     Each group has car_model_det (e.g., "더 뉴 K7(VG)"), year_from, year_to, trim_count.
 
     Args:
-        keyword (str): 차량 모델명 키워드 (예: 'K7', '소나타', '팰리세이드', 'BMW 5시리즈')
+        keyword (str): 차량 모델명 키워드 (e.g., 'K7', '소나타', '팰리세이드').
 
-    Example Inputs:
-        - {"keyword": "K7"}
-        - {"keyword": "소나타"}
-        - {"keyword": "팰리세이드"}
-
-    Returns:
-        dict: {"status": "success", "data": {"keyword": "...", "items": [{"car_model_det": "...", "year_from": 2019, "year_to": 2023, "trim_count": 8}]}}
+    Example: {"keyword": "K7"}
     """
     logger.info("[TOOL][search_car_model_groups_tool] Called with: keyword=%s", keyword)
 
@@ -597,23 +566,15 @@ def get_car_trims_tool(car_model_det: str):
 
     When to use:
     - After search_car_model_groups_tool, user selects a car_model_det
-    - Returns all trims with car_lnc_cd AND tire_size_fr/re directly
-    - Step 2 of 2: once user selects a trim, extract tire_size_fr → RECOMMEND ENGINE
+    - Step 2 of 2: returns trims with car_lnc_cd AND tire_size_fr/re
 
-    Returns each trim with: car_lnc_cd, car_nm, car_year, tire_size_fr, tire_size_re.
-    If user selects a trim → use tire_size_fr directly for get_products_recommendations_tool.
-    If only 1 trim exists → auto-select, extract tire_size_fr, proceed to RECOMMEND ENGINE.
+    If user selects a trim → use tire_size_fr for get_products_recommendations_tool.
+    If only 1 trim → auto-select and proceed to RECOMMEND ENGINE.
 
     Args:
-        car_model_det (str): 차량 상세 모델명 from search_car_model_groups_tool result
-            (예: "더 뉴 K7(VG)", "쏘나타 DN8")
+        car_model_det (str): 차량 상세 모델명 from search_car_model_groups_tool (e.g., "더 뉴 K7(VG)").
 
-    Example Inputs:
-        - {"car_model_det": "더 뉴 K7(VG)"}
-        - {"car_model_det": "쏘나타 DN8"}
-
-    Returns:
-        dict: {"status": "success", "data": {"car_model_det": "...", "items": [{"car_lnc_cd": "...", "car_nm": "...", "car_year": 2021, "tire_size_fr": "225/45R18", "tire_size_re": "225/45R18"}]}}
+    Example: {"car_model_det": "더 뉴 K7(VG)"}
     """
     logger.info("[TOOL][get_car_trims_tool] Called with: car_model_det=%s", car_model_det)
 
@@ -636,29 +597,12 @@ def get_car_trims_tool(car_model_det: str):
 @tool_cache(ttl=600)
 def get_product_description_tool(goods_no: str):
     """
-    Get product description.
-
-    Retrieve detailed product information by joining PR_GOODS_BASE and PR_PATTERN_BASE
-    using the product number.
-
-    The API returns:
-    - Key features (PC_PROD_REMARK_DESC)
-    - Technology description (PC_PROD_TECH_DESC)
-    - Product slogan (SLOGAN)
-    - Product images (images)
-    - Rating info: review_count (리뷰 수), rating_avg (평점 평균)
-    - Review list: gdas_score (평점), gdas_cont (리뷰 내용), reg_dtime (등록일)
+    Get detailed product information (features, tech description, slogan, images, rating, reviews).
 
     Args:
         goods_no (str): Product number.
 
-    Example Inputs:
-        - {"goods_no": "GXXXXXXXXXXXX"}
-        - {"goods_no": "GXXXXXXXXXXXX"}
-        - {"goods_no": "GXXXXXXXXXXXX"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+    Example: {"goods_no": "GXXXXXXXXXXXX"}
     """
     logger.info("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
 
@@ -688,42 +632,30 @@ def get_products_recommendations_tool(
     sort_by: str | None = None,
 ):
     """
-    Product Recommendation
+    Product Recommendation — top N products by rcmd_type.
 
-    Returns the top N products based on the selected recommendation type (rcmd_type).
+    제휴 회원 여부(entr_yn)/제휴사 번호(entr_no)는 JWT에서 자동 추출됩니다.
 
-    제휴 회원 여부(entr_yn) 및 제휴사 번호(entr_no)는 JWT 토큰에서 자동 추출됩니다.
-    Tool 호출 시 별도로 입력하지 않습니다.
-
-    **API UPDATE: 차량 정보로 추천 가능합니다**
-    - car_lnc_cd: 차량 런칭 코드 (car_lnc_cd 입력 시 tire_size보다 우선 적용)
-    - tire_size: 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
-
-    **기존 타입 (전용 SQL)**
-    - tstation: 티스테이션 추천
-      (TOT_SCR (FST_DISP_YN='Y'면 ×10) 높은 순, PR_GOODS_RCMD_SUM)
-    - discount: 최고 할인율
-      (EXTRA_FVR_SALE_PER 높은 순, PR_GOODS_DSCNT_PRC_INFO)
-    - value: 가성비 Good
-      (할인가 ≤ 200,000원, 수명·연비 높은 순, PR_GOODS_DSCNT_PRC_INFO + PR_GOODS_RCMD_SUM)
-
-    **신규 타입 (베이스 템플릿 + 설정 기반, 제휴 회원이면 제휴사 가격 자동 적용)**
-    - wet: 빗길에 강한 타이어 (WET 높은 순)
+    rcmd_type values:
+    - tstation: 티스테이션 추천 (TOT_SCR 높은 순)
+    - discount: 최고 할인율 (EXTRA_FVR_SALE_PER 높은 순)
+    - value: 가성비 (할인가 ≤200,000원, 수명·연비 우선)
+    - wet: 빗길 (WET 높은 순)
     - snow: 눈길/빙판 (T_SNOW, T_ICE 높은 순)
     - high_speed: 고속 주행 (T_HIGHSPD 높은 순)
     - handling: 핸들링 (T_HIGH_HAND_AVG 높은 순)
-    - low_vibration: 진동 적은 / 정숙성 (T_COM_SIL_AVG, T_COM_CVS 높은 순)
-    - performance: 퍼포먼스 / 스포츠 (GOODS_PFM_NM='SPORT' + T_HIGH_HAND_AVG 높은 순)
-    - commute: 출퇴근 (SEASON_NM='사계절' + T_MILG_CVS 높은 순)
-    - long_distance: 장거리 (T_COM_SIL_AVG / T_COM_CVS / T_MILG_CVS 높은 순)
-    - urban: 도심 주행 (SEASON_NM='사계절' + GOODS_PFM_NM='COMFORT')
+    - low_vibration: 진동 적음/정숙 (T_COM_SIL_AVG, T_COM_CVS 높은 순)
+    - performance: 퍼포먼스/스포츠 (GOODS_PFM_NM='SPORT')
+    - commute: 출퇴근 (SEASON_NM='사계절', T_MILG_CVS 높은 순)
+    - long_distance: 장거리 (T_COM_SIL_AVG, T_MILG_CVS 높은 순)
+    - urban: 도심 주행 (SEASON_NM='사계절', GOODS_PFM_NM='COMFORT')
     - family: 가족용 (GOODS_PFM_NM IN ('COMFORT','RUNFLAT'))
     - ev: 전기차용 (CAR_KND_NM='전기차')
     - heavy_load: 짐 많이 싣는 차 (T_WGT_IDX, T_WGT_IDX_KG 높은 순)
-    - weekend: 주말용 (SEASON_NM='사계절' + PRC_GRD_NM='스탠다드', T_TRAY_WARE 높은 순)
-    - safe_kids: 아이 태우는 안전 (T_RLX_ISN_YN='O' + 정숙·하중 높은 순)
-    - all_weather: 눈길/비 전천후 (WET / T_SNOW / T_ICE 높은 순)
-    - warranty: 워런티 가능 상품 (ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y', WRT_GRTE_TERM 긴 순)
+    - weekend: 주말용 (SEASON_NM='사계절', T_TRAY_WARE 높은 순)
+    - safe_kids: 안전 (T_RLX_ISN_YN='O', 정숙·하중 우선)
+    - all_weather: 전천후 (WET, T_SNOW, T_ICE 높은 순)
+    - warranty: 워런티 가능 (WRT_GRTE_TERM 긴 순)
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
@@ -746,7 +678,7 @@ def get_products_recommendations_tool(
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 rcmd_type 의 BE 정렬 그대로 유지.
 
-    Example Inputs:
+    Examples:
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
         - {"rcmd_type": "wet", "limit": 5, "brand_cd": "HK", "tire_size": "245/45R18"}
         - {"rcmd_type": "ev", "limit": 5, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX"}
@@ -791,20 +723,12 @@ def get_products_recommendations_tool(
 @tool
 @tool_cache(ttl=600)
 def get_events_tool(lang_cd: str = "ko"):
-    """이벤트 목록 조회
-
-    현재 전시 중인 이벤트 목록을 조회합니다.
-    (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)
+    """이벤트 목록 조회 — 현재 전시 중인 이벤트 목록.
 
     Args:
-        lang_cd (str): 언어코드 (기본값: ko)
+        lang_cd (str): 언어코드 (default: 'ko').
 
-    Example Inputs:
-        - {"lang_cd": "ko"}
-        - {"lang_cd": "en"}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    Example: {"lang_cd": "ko"}
     """
     logger.info("[TOOL][get_events_tool] Called with: lang_cd=%s", lang_cd)
 
@@ -826,17 +750,7 @@ def get_events_tool(lang_cd: str = "ko"):
 @tool
 @tool_cache(ttl=600)
 def get_deals_tool():
-    """기획전 목록 조회
-
-    현재 전시 중인 기획전 목록을 조회합니다.
-    (전시여부, 전시기간, 적용시각, 전시요일 조건 적용)
-
-    Example Inputs:
-        - {}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
-    """
+    """기획전 목록 조회 — 현재 전시 중인 기획전 목록."""
     logger.info("[TOOL][get_deals_tool] Called")
 
     try:
@@ -858,35 +772,14 @@ def get_deals_tool():
 def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     """Compare discount prices across multiple products.
 
-    Input multiple product numbers and quantity to compare:
-    - Regular price (sale_prc)
-    - Product discount (product_discount)
-    - Coupon discount (coupon_discount)
-    - Final unit price (final_unit_price)
-    - Total final price (final_price)
-    - Cheapest product number (cheapest_goods_no)
-
-    JWT token's affiliate_yn value automatically distinguishes general/affiliate members.
-    Returns cheapest_goods_no to identify the lowest-priced product.
-
-    Use this when:
-    - User wants to compare prices between two or more products
-    - User asks "which is cheaper", "price comparison", "비교" (compare)
-    - User has multiple product numbers and wants to find the best deal
-    - User asks for "cheapest", "가장 저렴한", "가장 싼" product
+    Use when user asks to compare prices, "가장 저렴한/싼" product, or "비교".
+    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price, cheapest_goods_no.
 
     Args:
-        goods_no_list (list[str]): List of product numbers (e.g., ['GXXXXXXXXXXXX', 'GXXXXXXXXXXXX']).
-            Supports 2 or more products for comparison.
-        quantity (int): Quantity (minimum 1, default 1). Use 4 for full tire set.
+        goods_no_list (list[str]): 2+ product numbers to compare.
+        quantity (int): Quantity (min 1, default 1; use 4 for full tire set).
 
-    Example Inputs:
-        - {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 4}
-        - {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 2}
-        - {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 1}
-
-    Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
+    Example: {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 4}
     """
     logger.info("[TOOL][compare_discount_tool] Called with: goods_no_list=%s, quantity=%s", goods_no_list, quantity)
 
@@ -909,18 +802,11 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
 
 @tool
 def search_youtube_video_tool(query: str, max_results: int = 3):
-    """유튜브 영상 검색 (YouTube Video Search)
-    
-    Searches YouTube for official videos related to a specific tire or brand.
-    This tool is strictly filtered to ONLY return videos from the official 
-    'Hankook Tire' and 'Tstation TV' channels.
-    
+    """유튜브 영상 검색 — 한국타이어/Tstation TV 공식 채널만 반환.
+
     Args:
-        query (str): The search query (e.g., '벤투스 S1 evo3 리뷰', 'iON evo').
-        max_results (int): The maximum number of videos to return. Default is 3.
-        
-    Returns:
-        dict: A dictionary containing the video titles, channel names, and direct URLs.
+        query (str): 검색어 (e.g., '벤투스 S1 evo3 리뷰', 'iON evo').
+        max_results (int): 최대 반환 영상 수. Default 3.
     """
     logger.info("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
 
@@ -981,6 +867,7 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
 
 
 @tool
+@tool_cache(ttl=300)
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """Get product final price and discount info.
 

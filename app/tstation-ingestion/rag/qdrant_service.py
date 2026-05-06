@@ -193,6 +193,56 @@ class QdrantService:
     # Multi-vector collection support
     # ---------------------------------------------------------------------------
 
+    def ensure_collection_multi_vector(
+        self,
+        collection_name: str,
+        vector_size: int,
+        distance: Distance = Distance.COSINE,
+    ) -> bool:
+        """
+        Create the multi-vector collection only if it does not already exist.
+
+        Safe to call on every ingestion run — idempotent by design.
+
+        Race condition handling: if two workers start simultaneously and both
+        see the collection as absent, one create() will win and the other will
+        receive a 'collection already exists' error from Qdrant. We catch that
+        specific case and verify the collection is now present, then proceed.
+
+        Returns True if collection already existed, False if it was just created.
+        """
+        try:
+            existing = {c.name for c in self.client.get_collections().collections}
+            if collection_name in existing:
+                logger.debug("Collection %s already exists — skipping create", collection_name)
+                return True
+
+            self.client.create_collection(
+                collection_name=collection_name,
+                vectors_config={
+                    "question": VectorParams(size=vector_size, distance=distance),
+                    "answer": VectorParams(size=vector_size, distance=distance),
+                },
+            )
+            logger.info("Created multi-vector collection: %s (vector_size=%d)", collection_name, vector_size)
+            return False
+
+        except Exception:
+            # Another worker may have won the race and created the collection.
+            # Verify it now exists before re-raising.
+            try:
+                existing = {c.name for c in self.client.get_collections().collections}
+                if collection_name in existing:
+                    logger.warning(
+                        "Collection %s create conflict (race) — collection now exists, proceeding",
+                        collection_name,
+                    )
+                    return True
+            except Exception:
+                pass  # original exception is more informative
+            logger.exception("Failed to ensure collection %s", collection_name)
+            raise
+
     def create_collection_multi_vector(
         self,
         collection_name: str,
@@ -229,6 +279,7 @@ class QdrantService:
         documents: list[dict],
         question_vectors: list[list[float]],
         answer_vectors: list[list[float]],
+        point_ids: Optional[list[str]] = None,
         batch_size: int = 50,
     ) -> dict:
         """
@@ -239,10 +290,16 @@ class QdrantService:
         Batching keeps each request well under the limit.
 
         Args:
+            point_ids: Optional list of deterministic UUIDs (same length as documents).
+                       When provided, Qdrant will update an existing point with the same
+                       ID instead of inserting a duplicate (idempotent upsert).
+                       When None, random UUIDs are generated (default for bulk re-index).
             batch_size: Points per upsert request (default 50 ≈ ~5 MB/batch).
         """
         if not (len(documents) == len(question_vectors) == len(answer_vectors)):
             raise ValueError("documents, question_vectors, answer_vectors must have equal length")
+        if point_ids is not None and len(point_ids) != len(documents):
+            raise ValueError("point_ids must have the same length as documents")
 
         total_upserted = 0
         n_batches = (len(documents) + batch_size - 1) // batch_size
@@ -250,16 +307,18 @@ class QdrantService:
         for batch_idx in range(n_batches):
             start = batch_idx * batch_size
             end = start + batch_size
+            ids_slice = point_ids[start:end] if point_ids is not None else [None] * (end - start)
             batch_points = [
                 PointStruct(
-                    id=uuid.uuid4(),
+                    id=pid if pid is not None else uuid.uuid4(),
                     vector={"question": q_vec, "answer": a_vec},
                     payload=doc,
                 )
-                for doc, q_vec, a_vec in zip(
+                for doc, q_vec, a_vec, pid in zip(
                     documents[start:end],
                     question_vectors[start:end],
                     answer_vectors[start:end],
+                    ids_slice,
                 )
             ]
             try:
@@ -358,19 +417,11 @@ class QdrantService:
         """Get collection statistics."""
         try:
             collection_info = self.client.get_collection(collection_name)
-            print(f"Collection info: {collection_info}")
-            print(f"Collection points count: {collection_info.model_dump()}")
             return {
                 "collection_name": collection_name,
                 "points_count": collection_info.points_count,
-                # "vectors_count": collection_info.vectors_count,
-                # "vectors_count": (
-                #     collection_info.config.params.vectors.size
-                #     if hasattr(collection_info.config.params, "vectors")
-                #     else None
-            # ),
             }
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to get stats for {collection_name}")
             raise
 

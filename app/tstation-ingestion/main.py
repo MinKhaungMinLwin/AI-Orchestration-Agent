@@ -21,11 +21,14 @@ BASE_DIR = Path(__file__).parent
 logger = logging.getLogger("ingestion")
 
 def load_documents():
-    """Load FAQ data"""
+    """Load and normalise FAQ data from the local data file."""
+    from rag.document_processor import DocumentProcessor
+
     data_path = BASE_DIR / "data" / "faq_data.json"
     with open(data_path, "r", encoding="utf-8") as f:
-        documents = json.load(f)
+        raw_docs = json.load(f)
 
+    documents = [DocumentProcessor._normalize_document(doc, idx) for idx, doc in enumerate(raw_docs)]
     logger.info(f"Loaded {len(documents)} documents")
     return documents
 
@@ -128,23 +131,45 @@ def upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc):
     logger.info(f"Indexed {result['upserted_count']} documents")
 
 
+def collection_has_data(qdrant_svc, collection_name: str) -> bool:
+    """Return True if the collection exists and contains at least one point."""
+    try:
+        stats = qdrant_svc.get_collection_stats(collection_name)
+        count = stats.get("points_count") or 0
+        return count > 0
+    except Exception:
+        return False
+
+
 def main():
     """ENTRYPOINT - ingestion pipeline"""
-    logger.info("🚀 Starting ingestion pipeline")
+    logger.info("Starting ingestion bootstrap check")
+
+    from config.env import settings
+
+    # Init services first so we can query Qdrant state
+    qdrant_svc, embedding_svc = init_services()
+
+    if collection_has_data(qdrant_svc, settings.QDRANT_COLLECTION_FAQ):
+        logger.info(
+            "Collection '%s' already has data — skipping bootstrap. "
+            "Qdrant state is the source of truth.",
+            settings.QDRANT_COLLECTION_FAQ,
+        )
+        return
+
+    logger.info("Collection is empty — running bootstrap from faq_data.json")
 
     # 1. Load data
     documents = load_documents()
 
-    # 2. Init services
-    qdrant_svc, embedding_svc = init_services()
-
-    # 3. Embed
+    # 2. Embed
     q_vecs, a_vecs = build_embeddings(documents, embedding_svc)
 
-    # 4. Upsert
+    # 3. Upsert
     upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc)
 
-    logger.info("✅ Ingestion completed successfully")
+    logger.info("Bootstrap completed successfully")
 
 
 if __name__ == "__main__":
