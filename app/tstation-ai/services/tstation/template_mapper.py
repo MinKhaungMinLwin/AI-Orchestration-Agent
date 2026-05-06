@@ -581,7 +581,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     if not items:
         return None
-    items, metadata = items[:5], metadata[:5]
+    items, metadata = items[:10], metadata[:10]
 
     # `isBookingFlow` controls FE click routing (True → /chat to advance the
     # flow; False → /append, just renders the description bubble). True when

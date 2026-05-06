@@ -402,13 +402,13 @@ def get_nearby_stores_tool(
         logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
-        # Truncate to top 5 stores so the LLM's `location` template (max_length=5
+        # Truncate to top 10 stores so the LLM's `location` template (max_length=10
         # per LocationTemplate schema) doesn't fail structured-output validation
         # and silently drop the entire response. Sort: is_installable=true first
         # (matters for purchase flows), then by distance_km ascending. Response
         # shape is preserved.
         stores = data.get("stores") if isinstance(data, dict) else None
-        if isinstance(stores, list) and len(stores) > 5:
+        if isinstance(stores, list) and len(stores) > 10:
             original_count = len(stores)
             sorted_stores = sorted(
                 stores,
@@ -417,9 +417,9 @@ def get_nearby_stores_tool(
                     s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
                 ),
             )
-            data["stores"] = sorted_stores[:5]
+            data["stores"] = sorted_stores[:10]
             logger.info(
-                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 5 (installable-first, distance-asc)",
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 10 (installable-first, distance-asc)",
                 original_count,
             )
 
@@ -434,7 +434,7 @@ def get_nearby_stores_tool(
 def get_store_list_tool(
     region_code: str | None = None,
     store_nm: str | None = None,
-    limit: int = 5,
+    limit: int = 10,
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,

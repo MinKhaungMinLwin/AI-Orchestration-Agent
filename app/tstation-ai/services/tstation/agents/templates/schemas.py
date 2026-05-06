@@ -157,8 +157,8 @@ class LocationTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "location"
 
     assistantResponse: str = Field(..., min_length=1)
-    stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
-    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
+    stores: list[LocationItem] = Field(..., min_length=1, max_length=10)
+    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=10)
     # Routing hint for the FE click handler. When True, the FE should treat a
     # store-card click as a flow-advancement signal and call /chat so the
     # agent can return the next step (typically datepick). When False
@@ -367,8 +367,8 @@ class ProductTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "product"
 
     assistantResponse: str = Field(..., min_length=1)
-    products: list[ProductItem] = Field(..., min_length=1, max_length=5)
-    metadata: list[ProductMeta] = Field(..., min_length=1, max_length=5)
+    products: list[ProductItem] = Field(..., min_length=1, max_length=10)
+    metadata: list[ProductMeta] = Field(..., min_length=1, max_length=10)
     # Routing hint mirroring LocationTemplate.isBookingFlow. When True, the FE
     # should treat a product-card click as a flow-advancement signal and call
     # /chat (so the next checklist step — qty / shop / inventory / order —
