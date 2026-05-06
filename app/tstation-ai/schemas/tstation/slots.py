@@ -20,6 +20,7 @@ PendingIntent = Literal["price", "stock", "order"]
 # (handled by extract_from_user_text re-running on each turn).
 GoalType = Literal[
     "product_recommend",
+    "product_search",
     "store_with_stock",
     "price_inquiry",
     "place_order",
@@ -112,6 +113,7 @@ class ConversationSlots(BaseModel):
     # block so agents see a human-readable destination rather than the raw enum.
     GOAL_LABELS: ClassVar[dict[str, str]] = {
         "product_recommend": "타이어 추천",
+        "product_search": "상품 검색",
         "store_with_stock": "재고 있는 매장 찾기",
         "price_inquiry": "가격 조회",
         "place_order": "주문 진행",
@@ -124,6 +126,16 @@ class ConversationSlots(BaseModel):
     # deterministic checklist to gate progress on.
     GOAL_PLANS: ClassVar[dict[str, list[tuple[str, str, frozenset[str]]]]] = {
         "product_recommend": [],
+        # product_search: single-step plan that completes when goods_no resolves.
+        # Until then, route to Discovery so search_product_tool runs immediately
+        # on bare product-keyword turns ("벤투스 S2", "다이나프로 HPX 어때?",
+        # "dynapro HPX, dynapro HP3 중에 최신상품이 뭐야?"). After goods_no is
+        # set, no completion-domain is registered → falls through to LLM
+        # classifier so the user's next intent (price / stock / order / etc.)
+        # determines the chain.
+        "product_search": [
+            ("search", "상품 검색", frozenset({"goods_no"})),
+        ],
         "store_with_stock": [
             ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
             ("size", "타이어 사이즈", frozenset({"tire_size"})),
@@ -294,6 +306,12 @@ class ConversationSlots(BaseModel):
             slots.goal_type = "price_inquiry"
         elif slots.pending_intent == "order":
             slots.goal_type = "place_order"
+        elif cls.has_product_keyword(user_text):
+            # Bare product-keyword turn — no transactional intent, no recommend
+            # verb, but a known brand/model is mentioned. Drive Discovery to
+            # search the product immediately instead of letting the LLM emit a
+            # "검색해 드릴까요?" confirmation quickReply.
+            slots.goal_type = "product_search"
 
         return slots
 

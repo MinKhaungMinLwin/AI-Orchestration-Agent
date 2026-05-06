@@ -1259,6 +1259,10 @@ _TRANSACTION_FAST_RE = re.compile(
 # in slots.py's GOAL_PLANS appear here; mismatches simply fall through to the
 # next classifier.
 _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
+    # product_search: bare product-keyword turn (no transactional intent, no
+    # recommend verb). Goal completes when goods_no resolves; until then the
+    # search step lives in Discovery (search_product_tool).
+    ("product_search", "search"): MultiAgentDomain.Domain.DISCOVERY,
     # store_with_stock: model/size live in Discovery (search_product_tool),
     # qty/shop in Transaction (qty quickReply + store search).
     ("store_with_stock", "model"): MultiAgentDomain.Domain.DISCOVERY,
@@ -1359,42 +1363,6 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
         logger.info(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
     return None
-
-
-def _discovery_fast_path(text: str, merged_slots) -> "list[MultiAgentDomain.Domain] | None":
-    """Always-on DISCOVERY fast-path for bare product-search queries.
-
-    DECISION_LLM (small QC-tier model) has been observed to mis-route bare
-    product-keyword messages without an explicit intent verb (e.g. "벤투스 air S",
-    "벤투스 s2 as", "벤투스 air S 검색") to TRANSACTION or LEADING. TRANSACTION
-    has no search tool and falls back to "상품을 검색하겠습니다." while LEADING
-    has no tools at all — both leave the user stranded with no product cards.
-
-    Force-route to DISCOVERY when a product brand/model keyword is present AND
-    no transactional anchor (가격/재고/주문/매장/예약/장착 등) appears in the same
-    turn AND goods_no is not already resolved. Discovery's search_product_tool
-    runs immediately and emits the product card.
-
-    Guard precedence:
-      1. goods_no already resolved → defer (TX or DISC continuation handles it).
-      2. No product keyword → defer to next classifier.
-      3. Transactional anchor present → defer (P0/P0b/LLM picks the chain).
-      4. Otherwise → DISCOVERY.
-
-    Independent of `_RULE_BASED_ROUTING_ENABLED` (same rationale as
-    `_support_fast_path`).
-    """
-    if not text:
-        return None
-    if getattr(merged_slots, "goods_no", None) is not None:
-        return None
-    from schemas.tstation.slots import ConversationSlots
-    if not ConversationSlots.has_product_keyword(text):
-        return None
-    if _TRANSACTION_FAST_RE.search(text):
-        return None
-    logger.info(f"[DISCOVERY_FAST_PATH] → DISCOVERY: {text[:60]!r}")
-    return [MultiAgentDomain.Domain.DISCOVERY]
 
 
 def _rule_based_classify(
@@ -2385,7 +2353,6 @@ class TStationChatServiceV2:
         ) as _classify_span:
             fast_domains = (
                 _support_fast_path(last_user_text)
-                or _discovery_fast_path(last_user_text, merged_slots)
                 or _goal_based_classify(last_user_text, merged_slots)
                 or _rule_based_classify(last_user_text, merged_slots)
             )
