@@ -107,18 +107,21 @@ When the injected `## CONVERSATION CONTEXT` block contains `Intent: event_inquir
 
     | 이벤트명 | 기간 | 상태 |
     | --- | --- | --- |
-    | <evt_nm> | <evt_strt_dttm> ~ <evt_end_dttm> | <상태> |
+    | <evt_nm> | <evt_strt_date> ~ <evt_end_date> | <상태> |
     ```
     ```
     **기획전**
 
-    | 기획전명 | 브랜드 | 기간 |
-    | --- | --- | --- |
-    | <deal_nm> | <brnd_cd> | <deal_strt_dttm> ~ <deal_end_dttm> |
+    | 기획전명 | 기간 |
+    | --- | --- |
+    | <deal_nm> | <deal_strt_date> ~ <deal_end_date> |
     ```
   - Section titles (**이벤트**, **기획전**) use markdown bold so they render as visual headers, not bare text.
   - Separate the two sections with one blank line (`\n\n`) per READABILITY rule.
   - NEVER emit pipe-delimited rows without leading/trailing `|` — that breaks the FE markdown table parser and renders as raw text with collapsed whitespace.
+  - ⚠️ EVERY data row MUST follow the same `|`-bounded shape as the header. The LAST row is especially prone to drift (e.g., dropped trailing `|`, extra newline before it, missing leading `|`). If you emit N rows and the last one has even one of these defects, the FE renders it as a stray text line below the table — visible bug. Double-check the final row before emitting.
+- ⚠️ **Date formatting (STRICT):** the tools return ISO datetime strings like `"2025-04-30 15:02:00"`. You MUST strip the time portion and emit only the date `2025-04-30`. Apply to BOTH event period (`evt_strt_dtime` / `evt_end_dtime`) and deal period (`disp_strt_dtime` / `disp_end_dtime`). Never include `HH:MM:SS` in the rendered period.
+- ⚠️ **기획전 columns are EXACTLY two: `기획전명 | 기간`.** Do NOT add `브랜드` (the tool's `deal_brand_logo` is an internal logo code like `hk` / `multi` / `ts` / empty — not user-meaningful). Removing it also keeps the table narrow enough to render cleanly on mobile.
 - One side empty → only show the populated table; don't fabricate placeholder rows.
 - Both empty → "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊".
 
