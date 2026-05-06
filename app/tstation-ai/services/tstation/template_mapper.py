@@ -284,6 +284,76 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     )
 
 
+def inject_product_tags_and_sanitize(
+    data_event: dict | None,
+    accumulated_tool_data: list[dict],
+) -> None:
+    """LLM-driven product event 후처리: tags 결정형 주입 + 알수없는 필드 strip.
+
+    LLM 이 OUTPUT_TEMPLATE 을 통해 fenced JSON 으로 product 템플릿을 직접
+    emit 하는 경로 (`base_agent._build_data_event_from_text`) 에서, tags 는
+    BE row 에서 결정되어야 하므로 매퍼와 동일 규칙으로 덮어쓰고, comfort 같은
+    스키마 외 hallucinated 필드는 제거한다.
+
+    Mutation in place. data_event 가 product 템플릿이 아니면 no-op.
+    """
+    if not isinstance(data_event, dict) or data_event.get("template") != "product":
+        return
+    data = data_event.get("data")
+    if not isinstance(data, dict):
+        return
+    products = data.get("products")
+    metadata = data.get("metadata")
+    if not isinstance(products, list):
+        return
+
+    # Build goodsId → BE row lookup from accumulated tool data
+    rows_by_goods: dict[str, dict] = {}
+    for entry in _find_entries(
+        accumulated_tool_data,
+        "search_product_tool",
+        "get_products_recommendations_tool",
+    ):
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            goods_no = _get_str(row, "goods_no")
+            if goods_no:
+                rows_by_goods[goods_no] = row
+
+    # Allowed keys derived from ProductItem schema (single source of truth).
+    # Lazy import — avoid template_mapper ↔ schemas circular imports at module load.
+    from services.tstation.agents.templates.schemas import ProductItem
+    allowed_keys = frozenset(ProductItem.model_fields.keys())
+
+    meta_list = metadata if isinstance(metadata, list) else []
+    for i, product in enumerate(products):
+        if not isinstance(product, dict):
+            continue
+        # Strip unknown keys (LLM hallucinations like comfort)
+        for key in list(product.keys()):
+            if key not in allowed_keys:
+                product.pop(key, None)
+        # Inject deterministic tags from BE row matched by metadata[i].goodsId.
+        meta = meta_list[i] if i < len(meta_list) and isinstance(meta_list[i], dict) else {}
+        goods_id = meta.get("goodsId")
+        row = rows_by_goods.get(goods_id) if isinstance(goods_id, str) else None
+        tags: list[dict] = []
+        if row is not None:
+            prc_grd = _get_str(row, "prc_grd_nm")
+            if prc_grd in _PRC_GRD_ALLOWED:
+                tags.append({"text": prc_grd, "primary": True})
+            goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
+            goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
+            if goods_pfm_label:
+                tags.append({"text": goods_pfm_label, "primary": False})
+        product["tags"] = tags
+
+
 # ── 2. listCar ──────────────────────────────────────────────────────────────────
 
 def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | None:

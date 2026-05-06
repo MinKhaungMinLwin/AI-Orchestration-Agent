@@ -334,6 +334,10 @@ class BaseAgent(ABC):
             data_event = self._build_data_event_from_text(accumulated_text, prompt_template)
             already_streamed = response_streamer is not None and response_streamer.streamed_any
             if data_event is not None:
+                # LLM 이 product 템플릿을 직접 emit 한 경우, tags 결정형 주입 +
+                # 스키마 외 hallucinated 필드 (comfort 등) 제거. 다른 템플릿은 no-op.
+                from services.tstation.template_mapper import inject_product_tags_and_sanitize
+                inject_product_tags_and_sanitize(data_event, accumulated_tool_data)
                 assistant_response = self._get_assistant_response(data_event)
                 if assistant_response:
                     if not answering_emitted:
