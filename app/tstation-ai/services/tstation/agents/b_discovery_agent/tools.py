@@ -130,7 +130,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count",
+    "rating_avg", "rate", "review_count", "comfort",
 })
 
 

@@ -356,6 +356,7 @@ class ProductItem(BaseModel):
     imageUrl: str
     title: str = Field(..., min_length=1)
     tires: str
+    comfort: str
     price: Optional[int] = Field(None, ge=0)
     rate: float = Field(..., ge=0.0, le=5.0)
     totalQuantity: int = Field(..., ge=0)

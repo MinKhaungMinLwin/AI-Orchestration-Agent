@@ -231,6 +231,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
                 "tires": "",
+                "comfort": "",
                 "price": price,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
