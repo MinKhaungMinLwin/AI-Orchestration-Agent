@@ -17,6 +17,8 @@ class RcmdGoodsItem:
     Attributes:
         goods_no (str): 상품 번호
         goods_nm (None | str | Unset): 상품명
+        tire_size_1 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_1, 예: '245/45R18')
+        tire_size_2 (None | str | Unset): 타이어 사이즈 후륜 (TIRE_SIZE_2, 전후륜 다른 차량용)
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
         tot_scr (int | None | Unset): 추천 점수 (TOT_SCR (FST_DISP_YN = ‘Y’ 이면 TOT_SCR * 10), 티스테이션 추천 전용)
@@ -57,6 +59,8 @@ class RcmdGoodsItem:
 
     goods_no: str
     goods_nm: None | str | Unset = UNSET
+    tire_size_1: None | str | Unset = UNSET
+    tire_size_2: None | str | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
     tot_scr: int | None | Unset = UNSET
@@ -101,6 +105,18 @@ class RcmdGoodsItem:
             goods_nm = UNSET
         else:
             goods_nm = self.goods_nm
+
+        tire_size_1: None | str | Unset
+        if isinstance(self.tire_size_1, Unset):
+            tire_size_1 = UNSET
+        else:
+            tire_size_1 = self.tire_size_1
+
+        tire_size_2: None | str | Unset
+        if isinstance(self.tire_size_2, Unset):
+            tire_size_2 = UNSET
+        else:
+            tire_size_2 = self.tire_size_2
 
         extra_fvr_sale_prc: int | None | Unset
         if isinstance(self.extra_fvr_sale_prc, Unset):
@@ -315,6 +331,10 @@ class RcmdGoodsItem:
         )
         if goods_nm is not UNSET:
             field_dict["goods_nm"] = goods_nm
+        if tire_size_1 is not UNSET:
+            field_dict["tire_size_1"] = tire_size_1
+        if tire_size_2 is not UNSET:
+            field_dict["tire_size_2"] = tire_size_2
         if extra_fvr_sale_prc is not UNSET:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
@@ -399,6 +419,24 @@ class RcmdGoodsItem:
             return cast(None | str | Unset, data)
 
         goods_nm = _parse_goods_nm(d.pop("goods_nm", UNSET))
+
+        def _parse_tire_size_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tire_size_1 = _parse_tire_size_1(d.pop("tire_size_1", UNSET))
+
+        def _parse_tire_size_2(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tire_size_2 = _parse_tire_size_2(d.pop("tire_size_2", UNSET))
 
         def _parse_extra_fvr_sale_prc(data: object) -> int | None | Unset:
             if data is None:
@@ -709,6 +747,8 @@ class RcmdGoodsItem:
         rcmd_goods_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
+            tire_size_1=tire_size_1,
+            tire_size_2=tire_size_2,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
             tot_scr=tot_scr,
