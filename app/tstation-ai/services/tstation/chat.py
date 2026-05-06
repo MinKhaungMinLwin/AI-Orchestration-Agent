@@ -572,6 +572,44 @@ bare re-trigger is NOT a valid continuation; it's an ambiguous request that
 needs clarification before any agent runs.
 
 ====================================================
+FRESH TOPIC OVERRIDE (highest precedence)
+====================================================
+
+When the user's CURRENT message clearly introduces a NEW topic — even if the conversation just finished a cart save, order confirmation, store selection, or any other transaction-domain state — classify the message by the topic in the message itself, NOT by the surrounding conversation context. The slot context (`[목표: 주문 진행]`, `[확인된 고객 정보]`) and recent transaction history must NOT bias the classification when the user has clearly pivoted.
+
+Topic keywords that ALWAYS trigger the listed domain regardless of conversation history:
+
+- "이벤트", "이벤트 목록", "진행 중인 이벤트", "기획전", "기획전 보여줘", "기획전 내용"
+  → DISCOVERY, intent=event_inquiry
+- "영상", "리뷰 영상", "유튜브", "동영상"
+  → DISCOVERY, intent=video_inquiry
+- "내 차 목록", "내 차량", "등록차 보여줘", "내 등록차"
+  → DISCOVERY, intent=vehicle_lookup
+- "타이어 추천", "어떤 타이어", "추천해줘" (with no specific tire name in current message)
+  → DISCOVERY, intent=recommend
+- "껴도 돼?", "맞아?", "써도 돼?", "장착 돼?" (yes/no fit question)
+  → DISCOVERY, intent=compatibility
+- "내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함", "다운로드 가능 쿠폰", "쿠폰 조회"
+  → TRANSACTION, intent=coupon
+- "내 주문내역", "주문 내역", "주문 조회", "내가 주문한"
+  → TRANSACTION, intent=other (order history)
+- "강남 매장", "근처 매장", "매장 찾아줘", "올마이티", "All My T"
+  → TRANSACTION, intent=store_search
+- "환불", "반품", "교환", "보증", "워런티", "1:1 문의", "상담원 연결"
+  → SUPPORT (intent per Support taxonomy)
+
+⚠️ This override beats CONTINUATION DETECTION below. A user who just finished cart-save and types "이벤트 목록" has NOT continued the cart flow — they've changed topic. Do NOT classify as TRANSACTION just because the recent history is transactional.
+
+⚠️ The override does NOT apply to ambiguous short messages (bare ordinals "1번", bare product names without verb, bare yes/no "네") — those follow CONTINUATION DETECTION below.
+
+Worked examples (post-cart context):
+- Just emitted preOrder/cartComplete → User: "이벤트 목록" → DISCOVERY/event_inquiry (NOT TRANSACTION)
+- Just confirmed order → User: "내 쿠폰 보여줘" → TRANSACTION/coupon (different intent within same domain — not continuation of order flow)
+- Just showed store list → User: "타이어 추천해줘" → DISCOVERY/recommend (NOT continuation of store selection)
+- Just showed tire cards → User: "환불은 어떻게 해?" → SUPPORT (NOT DISCOVERY)
+
+
+====================================================
 CONTINUATION DETECTION
 ====================================================
 
