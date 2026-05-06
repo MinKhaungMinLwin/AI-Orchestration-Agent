@@ -760,6 +760,60 @@ Output: domains (EXACTLY ONE) + intent + entities + reason (english).
 class StreamingMultiAgentCoordinator:
     """Orchestrates multiple agents with streaming support."""
 
+    # ---------------------------------------------------------------------
+    # Hardcoded keyword routing (RULE 0 in code form)
+    # ---------------------------------------------------------------------
+    # The LLM router was observed ignoring its own prompt-level RULE 0 under
+    # heavy slot/context bias (e.g., post-cart "이벤트 목록" got routed to
+    # TRANSACTION because the conversation history was order-flow heavy).
+    # This list runs BEFORE the LLM is invoked. If the user's CURRENT message
+    # contains any of the listed phrases, we hard-pin the (domain, intent)
+    # without calling the LLM at all.
+    #
+    # Match style: case-sensitive substring match on the cleaned current
+    # user input (after stripping the injected "# Respond in Korean language"
+    # wrapper and the trailing [current_time: ...] suffix). Phrases are
+    # ordered so the most-specific match wins.
+    _KEYWORD_FORCE_TABLE: ClassVar[
+        list[tuple[list[str], "MultiAgentDomain.Domain", "MultiAgentDomain.Intent"]]
+    ] = [
+        # SUPPORT — return / refund / warranty / 1:1
+        (
+            ["1:1 문의", "상담원 연결"],
+            MultiAgentDomain.Domain.SUPPORT,
+            MultiAgentDomain.Intent.FAQ,
+        ),
+        (
+            ["환불", "반품", "교환", "보증", "워런티"],
+            MultiAgentDomain.Domain.SUPPORT,
+            MultiAgentDomain.Intent.RETURN,
+        ),
+        # TRANSACTION — coupon
+        (
+            ["내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함", "쿠폰 조회", "다운로드 가능 쿠폰"],
+            MultiAgentDomain.Domain.TRANSACTION,
+            MultiAgentDomain.Intent.COUPON,
+        ),
+        # DISCOVERY — vehicle lookup
+        (
+            ["내 차 목록", "내 차량", "내 등록차", "등록차 보여", "등록차량 보여"],
+            MultiAgentDomain.Domain.DISCOVERY,
+            MultiAgentDomain.Intent.VEHICLE_LOOKUP,
+        ),
+        # DISCOVERY — video inquiry
+        (
+            ["리뷰 영상", "유튜브", "동영상", "영상 보여"],
+            MultiAgentDomain.Domain.DISCOVERY,
+            MultiAgentDomain.Intent.VIDEO_INQUIRY,
+        ),
+        # DISCOVERY — event inquiry (events / deals / promotions)
+        (
+            ["이벤트", "기획전"],
+            MultiAgentDomain.Domain.DISCOVERY,
+            MultiAgentDomain.Intent.EVENT_INQUIRY,
+        ),
+    ]
+
     def __init__(self):
         self.agent_map = {
             MultiAgentDomain.Domain.DISCOVERY: discovery_subagent,
@@ -767,6 +821,62 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT: support_subagent,
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
+
+    @staticmethod
+    def _extract_current_user_input(message_content: str) -> str:
+        """Strip the injected `# Respond in Korean language` wrapper and the
+        trailing `[current_time: ...]` block from a user message so the result
+        is just the user's typed text.
+
+        Matches whether or not the wrapper / trailer / conversation context
+        block is present.
+        """
+        if not message_content:
+            return ""
+        text = message_content
+        if "# Respond in Korean language" in text:
+            text = text.split("# Respond in Korean language", 1)[1]
+        # Trailing time annotation
+        if "[current_time:" in text:
+            text = text.split("[current_time:", 1)[0]
+        return text.strip()
+
+    @classmethod
+    def _force_keyword_routing(cls, user_input: str) -> "MultiAgentDomain | None":
+        """Return a forced MultiAgentDomain when the user's current message
+        clearly names a topic that should not depend on conversation context.
+
+        Returns None when no keyword matches — caller should then fall through
+        to the LLM-based router.
+        """
+        if not user_input:
+            return None
+
+        text = user_input.strip()
+        if not text:
+            return None
+
+        for keywords, domain, intent in cls._KEYWORD_FORCE_TABLE:
+            for kw in keywords:
+                if kw in text:
+                    return MultiAgentDomain(
+                        reason=f"hardcoded keyword routing matched '{kw}'",
+                        domains=[domain],
+                        intent=intent,
+                        entities=RouterEntities(
+                            vehicle_mention=None,
+                            vehicle_possessive=False,
+                            vehicle_number=None,
+                            tire_size=None,
+                            tire_attribute=None,
+                            product_name=None,
+                            scenario=None,
+                            question_form=None,
+                        ),
+                        user_behavior=f"topic shift to {intent.value} via keyword '{kw}'",
+                        flow="hardcoded keyword routing — bypassed LLM router",
+                    )
+        return None
 
     def classify_multi_intent(
         self,
@@ -792,6 +902,25 @@ class StreamingMultiAgentCoordinator:
         """
         from langchain_core.messages import SystemMessage
         from config.tracing import build_trace_config
+
+        # ---------- Hardcoded keyword routing (bypasses LLM) ----------
+        # Find the most recent user message and check for force-routing keywords.
+        last_user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_text = self._extract_current_user_input(msg.get("content", ""))
+                break
+
+        forced_result = self._force_keyword_routing(last_user_text)
+        if forced_result is not None:
+            logger.info(
+                "[MULTI-DOMAIN] Hardcoded routing: domain=%s, intent=%s, msg=%r",
+                forced_result.domains,
+                forced_result.intent,
+                last_user_text[:80],
+            )
+            return forced_result.domains, forced_result
+        # --------------------------------------------------------------
 
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
