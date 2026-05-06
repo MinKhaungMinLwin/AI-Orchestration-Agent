@@ -43,6 +43,10 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "goods_no", "goods_nm", "tire_size_1",
             # EU 소음 라벨 (정숙성 점수와 별개)
             "label_pnwave", "label_pnwave_nm", "label_pndb",
+            # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
+            "prc_grd_nm",
+            # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
+            "goods_pfm_nm",
         },
     },
     "get_faq_tool": {
@@ -105,6 +109,10 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc",
             # EU 소음 라벨 (정숙성 점수와 별개)
             "label_pnwave", "label_pnwave_nm", "label_pndb",
+            # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 후속 턴에서 등급 질문 답변용
+            "prc_grd_nm",
+            # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 후속 턴 답변용
+            "goods_pfm_nm",
         },
     },
     "get_nearby_stores_tool": {

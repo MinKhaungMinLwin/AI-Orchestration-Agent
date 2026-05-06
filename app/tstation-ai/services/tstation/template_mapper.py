@@ -180,6 +180,18 @@ def _normalize_time(s: str) -> str:
 
 # ── 1. product ──────────────────────────────────────────────────────────────────
 
+# Tag chip 매핑 (BE → FE)
+# - primary chip (chatbox-product-tag-primary): prc_grd_nm 화이트리스트만 통과.
+#   BE 가 이미 한글로 저장 (PR_GOODS_BASE.PRC_GRD_NM) → 그대로 노출.
+# - secondary chip (chatbox-product-tag-secondary): goods_pfm_nm 영문 코드를
+#   한글 라벨로 매핑. 매핑되지 않은 코드 (RUNFLAT 등) 는 chip skip.
+_PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
+_GOODS_PFM_LABELS: dict[str, str] = {
+    "COMFORT": "정숙/승차감",
+    "SPORT": "고속/제동성",
+}
+
+
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # TEMP DEBUG: dump entry shape so we can see what keys actually arrive at runtime.
     logger.info(
@@ -227,19 +239,34 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             # Price priority: matched get_final_price_tool result > inline row field.
             price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            # Tag chips:
+            # - primary: prc_grd_nm 화이트리스트 (한글 그대로). 그 외 값은 skip.
+            # - secondary: goods_pfm_nm 영문 코드 → 한글 라벨 매핑. 매핑 외 코드는 skip.
+            # 각 chip 의 primary 플래그는 FE 클래스 결정 (위치 무관) — primary 누락 시
+            # secondary 가 primary 로 보일 일 없음.
+            tags: list[dict] = []
+            prc_grd = _get_str(row, "prc_grd_nm")
+            if prc_grd in _PRC_GRD_ALLOWED:
+                tags.append({"text": prc_grd, "primary": True})
+            goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
+            goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
+            if goods_pfm_label:
+                tags.append({"text": goods_pfm_label, "primary": False})
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
                 "tires": "",
+                "comfort": "",
                 "price": price,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
+                "tags": tags,
                 "description": "",
             })
             metadata.append({"goodsId": goods_no})
     if not items:
         return None
-    items, metadata = items[:5], metadata[:5]
+    items, metadata = items[:10], metadata[:10]
     # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
     # product cards don't co-occur with the inventory/schedule signal tools.
     # When the active goal is checklist-driven (stock/order/price), a click on
@@ -255,6 +282,76 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         assistant_text,
         len(items),
     )
+
+
+def inject_product_tags_and_sanitize(
+    data_event: dict | None,
+    accumulated_tool_data: list[dict],
+) -> None:
+    """LLM-driven product event 후처리: tags 결정형 주입 + 알수없는 필드 strip.
+
+    LLM 이 OUTPUT_TEMPLATE 을 통해 fenced JSON 으로 product 템플릿을 직접
+    emit 하는 경로 (`base_agent._build_data_event_from_text`) 에서, tags 는
+    BE row 에서 결정되어야 하므로 매퍼와 동일 규칙으로 덮어쓰고, comfort 같은
+    스키마 외 hallucinated 필드는 제거한다.
+
+    Mutation in place. data_event 가 product 템플릿이 아니면 no-op.
+    """
+    if not isinstance(data_event, dict) or data_event.get("template") != "product":
+        return
+    data = data_event.get("data")
+    if not isinstance(data, dict):
+        return
+    products = data.get("products")
+    metadata = data.get("metadata")
+    if not isinstance(products, list):
+        return
+
+    # Build goodsId → BE row lookup from accumulated tool data
+    rows_by_goods: dict[str, dict] = {}
+    for entry in _find_entries(
+        accumulated_tool_data,
+        "search_product_tool",
+        "get_products_recommendations_tool",
+    ):
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            goods_no = _get_str(row, "goods_no")
+            if goods_no:
+                rows_by_goods[goods_no] = row
+
+    # Allowed keys derived from ProductItem schema (single source of truth).
+    # Lazy import — avoid template_mapper ↔ schemas circular imports at module load.
+    from services.tstation.agents.templates.schemas import ProductItem
+    allowed_keys = frozenset(ProductItem.model_fields.keys())
+
+    meta_list = metadata if isinstance(metadata, list) else []
+    for i, product in enumerate(products):
+        if not isinstance(product, dict):
+            continue
+        # Strip unknown keys (LLM hallucinations like comfort)
+        for key in list(product.keys()):
+            if key not in allowed_keys:
+                product.pop(key, None)
+        # Inject deterministic tags from BE row matched by metadata[i].goodsId.
+        meta = meta_list[i] if i < len(meta_list) and isinstance(meta_list[i], dict) else {}
+        goods_id = meta.get("goodsId")
+        row = rows_by_goods.get(goods_id) if isinstance(goods_id, str) else None
+        tags: list[dict] = []
+        if row is not None:
+            prc_grd = _get_str(row, "prc_grd_nm")
+            if prc_grd in _PRC_GRD_ALLOWED:
+                tags.append({"text": prc_grd, "primary": True})
+            goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
+            goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
+            if goods_pfm_label:
+                tags.append({"text": goods_pfm_label, "primary": False})
+        product["tags"] = tags
 
 
 # ── 2. listCar ──────────────────────────────────────────────────────────────────
@@ -581,7 +678,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     if not items:
         return None
-    items, metadata = items[:5], metadata[:5]
+    items, metadata = items[:10], metadata[:10]
 
     # `isBookingFlow` controls FE click routing (True → /chat to advance the
     # flow; False → /append, just renders the description bubble). True when

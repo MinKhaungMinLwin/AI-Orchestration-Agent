@@ -132,7 +132,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count",
+    "rating_avg", "rate", "review_count", "comfort",
 })
 
 
@@ -627,7 +627,7 @@ def get_product_description_tool(goods_no: str):
 @tool_cache(ttl=300)
 def get_products_recommendations_tool(
     rcmd_type: RcmdType,
-    limit: int = 5,
+    limit: int = 10,
     brand_cd: str = "HK",
     car_lnc_cd: str | None = None,
     tire_size: str | None = None,
@@ -664,7 +664,7 @@ def get_products_recommendations_tool(
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 5, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜

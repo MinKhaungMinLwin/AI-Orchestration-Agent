@@ -157,8 +157,8 @@ class LocationTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "location"
 
     assistantResponse: str = Field(..., min_length=1)
-    stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
-    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
+    stores: list[LocationItem] = Field(..., min_length=1, max_length=10)
+    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=10)
     # Routing hint for the FE click handler. When True, the FE should treat a
     # store-card click as a flow-advancement signal and call /chat so the
     # agent can return the next step (typically datepick). When False
@@ -348,10 +348,31 @@ class ProductMeta(BaseModel):
     goodsId: str = Field(..., min_length=1)
 
 
-class ProductItem(BaseModel):
-    """Visible product card content for the FE."""
+class ProductTag(BaseModel):
+    """Tag chip rendered on a product card.
+
+    primary=True → 강조 스타일 (chatbox-product-tag-primary, prc_grd_nm 매핑)
+    primary=False → 일반 스타일 (chatbox-product-tag-secondary, goods_pfm_nm 매핑)
+    """
 
     model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., min_length=1)
+    primary: bool = False
+
+
+class ProductItem(BaseModel):
+    """Visible product card content for the FE.
+
+    extra="ignore" — LLM 이 종종 BE row 의 필드명(comfort, review_count 등)을
+    그대로 emit 하는 hallucination 이 발생한다. forbid 로 두면 validation 이
+    실패해 카드 자체가 안 나오므로(quickReply fallback 발생), ignore 로 풀어
+    검증을 통과시키고 model_dump 시점에 자동 strip 한다.
+    `inject_product_tags_and_sanitize` 가 한 번 더 schema-키 화이트리스트로
+    sanitize 하므로 wire 에는 정의된 필드만 노출된다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     imageUrl: str
     title: str = Field(..., min_length=1)
@@ -359,6 +380,7 @@ class ProductItem(BaseModel):
     price: Optional[int] = Field(None, ge=0)
     rate: float = Field(..., ge=0.0, le=5.0)
     totalQuantity: int = Field(..., ge=0)
+    tags: list[ProductTag] = Field(default_factory=list)
 
 
 class ProductTemplate(TemplatePayload):
@@ -367,8 +389,8 @@ class ProductTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "product"
 
     assistantResponse: str = Field(..., min_length=1)
-    products: list[ProductItem] = Field(..., min_length=1, max_length=5)
-    metadata: list[ProductMeta] = Field(..., min_length=1, max_length=5)
+    products: list[ProductItem] = Field(..., min_length=1, max_length=10)
+    metadata: list[ProductMeta] = Field(..., min_length=1, max_length=10)
     # Routing hint mirroring LocationTemplate.isBookingFlow. When True, the FE
     # should treat a product-card click as a flow-advancement signal and call
     # /chat (so the next checklist step — qty / shop / inventory / order —
