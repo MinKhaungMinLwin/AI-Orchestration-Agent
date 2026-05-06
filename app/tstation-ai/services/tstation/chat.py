@@ -26,6 +26,9 @@ from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
+from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
+from services.tstation.agents.router import QC_LLM
+import anyio.from_thread as _anyio_ft
 
 logger = logging.getLogger(__name__)
 
@@ -1455,47 +1458,45 @@ def _sanitize_response(text: str) -> str:
 
 
 _FACTUAL_CLAIM_PATTERN = re.compile(
-    r"\d{1,3}(?:,\d{3})*\s*원"  # 가격 (e.g. 150,000원)
-    r"|G\d{9,}"  # goods_no (e.g. GXXXXXXXXXXXX)
-    r"|shop(?:Seq|_id|Id)"  # 매장 ID
-    r"|재고|할인|%\s*할인"  # 재고/할인
+    r"\d{1,3}(?:,\d{3})*\s*원"       # 가격 (e.g. 150,000원)
+    r"|G\d{9,}"                        # goods_no (e.g. G000000313150)
     r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r"|티스테이션\s*\S*점"  # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
-    r"|F\d{5}\b"  # shop_id (e.g. F01234)
-    r"|\d{4}\s*년"  # 연도 (e.g. 2025년)
-    r"|최신|신상|신제품|출시(?:일|연도|시기)?|등록\s*(?:일|상품|연도)"  # 시점/신제품 표현
-    r"|구형|구버전|이전\s*세대|차세대|신세대"  # 세대 비교
-    r"|\d+\s*세대|\d+\s*대\s*제품",  # n세대/n대 제품
+    r"|티스테이션\s*\S*점"             # 매장명 (e.g. 티스테이션양평점)
+    r"|F\d{5}\b",                      # shop_id (e.g. F01234)
     re.IGNORECASE,
 )
 
 
 def _has_factual_claims(text: str) -> bool:
-    """Check if draft contains factual commerce claims that need QC verification."""
     return bool(_FACTUAL_CLAIM_PATTERN.search(text))
 
 
-# Tools whose output is a deterministic DB passthrough — agent cannot hallucinate facts.
-_QC_SKIP_TOOLS = frozenset({
-    "get_my_cars_tool",
-    "transfer_to_qna_tool",
-})
-
-# Templates that carry no LLM-interpreted facts (car list, QnA escalation).
-_QC_SKIP_TEMPLATES = frozenset({
-    "listCar",
-    "qnaComplete",
-    "datepick",
-})
+_QC_SKIP_TOOLS = frozenset({"get_my_cars_tool", "transfer_to_qna_tool"})
+_QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
+# Path B: LLM writes the JSON → QC may correct field values
+_LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
 
 
 def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
-    """Return True when QC is provably unnecessary for this turn."""
     if last_template in _QC_SKIP_TEMPLATES:
         return True
     if called_tool_names and called_tool_names.issubset(_QC_SKIP_TOOLS):
         return True
     return False
+
+
+def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
+    """Returns (corrected_text, template_json | None)."""
+    if "[Template:" not in qc_result:
+        return qc_result, None
+    parts = qc_result.split("[Template:", 1)
+    corrected_text = parts[0].strip()
+    try:
+        newline_idx = parts[1].index("\n")
+        json_str = parts[1][newline_idx + 1:].strip()
+        return corrected_text, json.loads(json_str)
+    except (ValueError, json.JSONDecodeError):
+        return corrected_text, None
 
 
 # Singleton coordinator instance
@@ -2699,8 +2700,10 @@ class TStationChatServiceV2:
         )
 
         _t_stream_start = time.perf_counter()
-        draft_response = ""
+        draft_response = ""       # text only — used for history/message sync
+        draft_for_qc = ""         # text + template payload — passed to QC only
         source_data_chunks = []
+        buffered_data_events: list[dict] = []  # DATA events held until after QC
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
@@ -2755,6 +2758,7 @@ class TStationChatServiceV2:
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
+                    draft_for_qc += event["content"]
                     if not _lat_first_token_seen:
                         _lat_first_token_seen = True
                         _lat_first_token_time = _lat_now
@@ -2814,20 +2818,28 @@ class TStationChatServiceV2:
             if event_type == "data":
                 last_template = event.get("template") or last_template
                 event_data = event.get("data", {})
-                if isinstance(event_data, dict) and event_data.get("assistantResponse"):
-                    assistant_response = event_data["assistantResponse"]
-                    source_domain = str(event.get("source_domain", "ui_template")).upper()
-                    assistant_msg_event = {
-                        "type": "message",
-                        "content": assistant_response,
-                        "agent": f"[{source_domain} AGENT]",
-                    }
-                    original_message_events.append(assistant_msg_event)
-                    logger.info(
-                        f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
-                    )
-                # Pass through data event to frontend
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if isinstance(event_data, dict):
+                    if event_data.get("assistantResponse"):
+                        assistant_response = event_data["assistantResponse"]
+                        source_domain = str(event.get("source_domain", "ui_template")).upper()
+                        assistant_msg_event = {
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": f"[{source_domain} AGENT]",
+                        }
+                        original_message_events.append(assistant_msg_event)
+                        logger.info(
+                            f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
+                        )
+                    # For Path B templates only — LLM wrote the JSON so QC must verify it.
+                    # Path A templates (code mapper) are correct by construction; including their
+                    # JSON confuses QC into unnecessary text rewrites.
+                    if last_template in _LLM_WRITTEN_TEMPLATES:
+                        template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
+                        if template_payload:
+                            draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                # Buffer data event — yield after QC so assistantResponse is always verified
+                buffered_data_events.append(event)
                 continue
 
             # --- RESET DRAFT when a new sub-agent starts (multi-agent chaining) ---
@@ -2851,7 +2863,9 @@ class TStationChatServiceV2:
                             f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response"
                         )
                         draft_response = ""
+                        draft_for_qc = ""
                         original_message_events = []
+                        buffered_data_events = []
                 elif _sub_status == "done" and _lat_agent_start is not None:
                     _llm_gen = (_lat_now - _lat_first_token_time) * 1000 if _lat_first_token_time else 0
                     logger.info(
@@ -2885,17 +2899,18 @@ class TStationChatServiceV2:
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
 
+            _qc_passed = True  # default: no correction needed
+            qc_template_corrections: dict | None = None
+            _can_apply_json = False
             if _s.AI_QC_ENABLED:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
                 if (
-                    _has_factual_claims(draft_response)
-                    and source_data_chunks
+                    _has_factual_claims(draft_for_qc)
+                    and called_tool_names
                     and not _should_skip_qc(called_tool_names, last_template)
                 ):
                     try:
-                        from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
-                        from services.tstation.agents.router import QC_LLM
                         from config.tracing import build_trace_config
 
                         with _trace_span(
@@ -2904,7 +2919,7 @@ class TStationChatServiceV2:
                             parent_span_id=parent_span_id,
                             input={
                                 "user_query": user_query,
-                                "draft": draft_response,
+                                "draft": draft_for_qc,
                                 "source_data": source_data,
                             },
                         ) as _qc_span:
@@ -2918,14 +2933,20 @@ class TStationChatServiceV2:
                             )
                             async def _run_qc():
                                 return await ainvoke_qc(
-                                    QC_LLM, user_query, draft_response, source_data, config=trace_config
+                                    QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
                                 )
-                            import anyio.from_thread as _anyio_ft
                             qc_result = _anyio_ft.run(_run_qc)
-                            _qc_passed = not qc_result.strip() or qc_result.strip().upper() == "PASS"
+                            qc_result = qc_result.strip()
+                            _qc_passed = not qc_result or qc_result.upper() == "PASS"
+                            logger.info(f"[QC_LAYER] QC result: {qc_result[:300]}")
                             if not _qc_passed:
-                                draft_response = qc_result.strip()
-                                logger.info("[QC_LAYER] QC corrected the response")
+                                corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
+                                draft_response = corrected_text or draft_response
+                                _can_apply_json = qc_template_corrections and last_template in _LLM_WRITTEN_TEMPLATES
+                                logger.info(
+                                    f"[QC_LAYER] QC corrected the response"
+                                    + (f" (+ {len(qc_template_corrections)} JSON field(s) applied)" if _can_apply_json else " (text only)")
+                                )
                             else:
                                 logger.info("[QC_LAYER] QC passed")
                             _qc_span.update(
@@ -2936,6 +2957,19 @@ class TStationChatServiceV2:
                             )
                     except Exception as e:
                         logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+
+            # Yield buffered DATA events — apply QC corrections (text + template fields) if needed
+            for buffered_evt in buffered_data_events:
+                if not _qc_passed:
+                    evt_data = buffered_evt.get("data", {})
+                    if isinstance(evt_data, dict):
+                        if "assistantResponse" in evt_data:
+                            evt_data["assistantResponse"] = draft_response
+                        if _can_apply_json:
+                            for k, v in qc_template_corrections.items():
+                                if k != "assistantResponse" and k in evt_data:
+                                    evt_data[k] = v
+                yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if original_message_events:
                 final_msg_event = original_message_events[-1]
