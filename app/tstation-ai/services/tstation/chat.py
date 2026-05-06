@@ -140,6 +140,67 @@ def decide_next_action(
         )
 
 
+class RouterEntities(BaseModel):
+    """Entities extracted by the router LLM from the user's current message.
+
+    Each field is independent — populate only the ones present in the message.
+    Surfaced to domain agents via `_inject_conversation_context` as advisory
+    context (not authoritative — agents still own flow logic).
+    """
+
+    vehicle_mention: str | None = Field(
+        default=None,
+        description="Car model name mentioned (e.g., '제타', 'GV70', 'K7'). Null if absent.",
+    )
+    vehicle_possessive: bool = Field(
+        default=False,
+        description="True only when the user references the car as their own ('내', '내 차', '등록차', 'my car'). False if just a model name with no ownership marker.",
+    )
+    vehicle_number: str | None = Field(
+        default=None,
+        description="Korean license plate when present (e.g., '12가3456'). Null if absent.",
+    )
+    owner_nm: str | None = Field(default=None, description="Vehicle owner name when paired with car_no. Null if absent.")
+    tire_size: str | None = Field(
+        default=None,
+        description="Normalized tire size (e.g., '225/45R17'). Null if absent.",
+    )
+    tire_attribute: str | None = Field(
+        default=None,
+        description="Tire-type attribute mentioned (e.g., '전기차용', '사계절', '런플랫', '광폭', '스노우'). Null if absent.",
+    )
+    product_name: str | None = Field(
+        default=None,
+        description="Product/model name (e.g., '벤투스 S2', 'Dynapro HPX', '키너지 GT'). Null if absent.",
+    )
+    goods_no: str | None = Field(default=None, description="goods_no when present in message (G+12 digits). Null otherwise.")
+    scenario: str | None = Field(
+        default=None,
+        description="Scenario keyword (e.g., '빗길', '눈길', '사계절', '주말', '가족', '전기차', '고속'). Null if absent.",
+    )
+    brand: str | None = Field(
+        default=None,
+        description="Brand mentioned (e.g., '한국타이어', '미쉐린', '브리지스톤'). Null if absent.",
+    )
+    quantity: int | None = Field(default=None, description="Quantity mentioned (e.g., '4개' → 4). Null if absent.")
+    store_keyword: str | None = Field(
+        default=None,
+        description="Store-related keyword/location (e.g., '강남', '한남점', '올마이티', 'All My T'). Null if absent.",
+    )
+    question_form: str | None = Field(
+        default=None,
+        description=(
+            "Form of the user's request — pick ONE of: "
+            "'yes_no' (yes/no question like '껴도 돼?', '맞아?', '써도 돼?'), "
+            "'info_request' (asking for information / explanation, e.g. '공기압 얼마?'), "
+            "'action_request' (wants the agent to do something / produce a list, e.g. '추천해줘'), "
+            "'selection' (picking from a previously shown list — bare item name, ordinal, plate number), "
+            "'confirmation' (yes/ok/맞아 confirming a previous prompt). "
+            "Null if none applies."
+        ),
+    )
+
+
 class MultiAgentDomain(BaseModel):
     """Router result that supports multiple domains (multi-intent)."""
 
@@ -149,8 +210,56 @@ class MultiAgentDomain(BaseModel):
         TRANSACTION = "transaction"
         SUPPORT = "support"
 
+    class Intent(str, Enum):
+        # ---- Discovery domain ----
+        RECOMMEND = "recommend"  # "추천해줘", "맞는 타이어 알려줘"
+        COMPATIBILITY = "compatibility"  # "X 타이어 껴도 돼?", "맞아?", yes/no fit question
+        INFO_QUESTION = "info_question"  # "언제 갈아야?", "공기압 얼마?", general knowledge q
+        PRODUCT_SEARCH = "product_search"  # 상품명/모델명 검색 (벤투스 S2, Dynapro HPX...)
+        VEHICLE_LOOKUP = "vehicle_lookup"  # "내 차 목록 보여줘"
+        COMPARE = "compare"  # "최저가", "가격 비교", compare_discount
+        EVENT_INQUIRY = "event_inquiry"  # 이벤트, 기획전
+        VIDEO_INQUIRY = "video_inquiry"  # 영상, 리뷰 영상, YouTube
+        # ---- Transaction domain ----
+        PRICE = "price"  # goods_no 가격 조회
+        STOCK = "stock"  # 재고 / 물류 / 매장 재고
+        ORDER = "order"  # 주문 생성, "주문할게"
+        CART = "cart"  # 장바구니 저장
+        STORE_SEARCH = "store_search"  # 매장 위치/이름 검색
+        RESERVATION = "reservation"  # 매장 예약 / 방문 일시
+        ORDER_TRACKING = "order_tracking"  # 주문 추적
+        COUPON = "coupon"  # 쿠폰 조회
+        ORDER_HISTORY = "order_history"  # 주문 내역 조회
+        # ---- Support domain ----
+        WARRANTY = "warranty"
+        RETURN = "return"
+        FAQ = "faq"
+        ESCALATION = "escalation"  # 1:1 문의, 상담원 연결
+        COMPLAINT = "complaint"  # 불만/짜증/엉망
+        # ---- Leading domain ----
+        GREETING = "greeting"
+        UNCLEAR = "unclear"
+        # ---- Cross-domain ----
+        SELECTION = "selection"  # 이전 턴에서 보여준 목록에서 선택 (continuation)
+        CONFIRMATION = "confirmation"  # "네", "맞아", 직전 질문에 대한 확인
+        OTHER = "other"
+
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
+    intent: Intent = Field(
+        description=(
+            "PRIMARY intent of the user's CURRENT message. Choose the single best match. "
+            "Decoupled from `domains`: e.g., a yes/no compatibility question 'X 타이어 껴도 돼?' "
+            "→ domain=DISCOVERY but intent=COMPATIBILITY (not RECOMMEND). "
+            "Use SELECTION when the user is just picking an item from a list shown in a previous turn "
+            "(bare product/store name, ordinal, plate number) without a new action verb. "
+            "Use CONFIRMATION for short yes/ok answers to a prior agent question."
+        ),
+    )
+    entities: RouterEntities = Field(
+        default_factory=RouterEntities,
+        description="Structured entities extracted from the current message. Populate fields that apply, leave others null.",
+    )
     user_behavior: str = Field(
         description=(
             "What the user is currently doing in this conversation turn, inferred from full history. "
@@ -195,11 +304,24 @@ class _SlimMultiAgentDomain(BaseModel):
     once prior conversation history exists. On a fresh session they would
     be placeholders ("fresh start — no prior context"), so we skip
     generating them to save output tokens on every first message.
+
+    intent / entities ARE populated even on the first turn — they are the
+    primary routing signal that future agent refactors will consume.
     """
 
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[MultiAgentDomain.Domain] = Field(
         description="List of domains detected in the request, ordered by priority"
+    )
+    intent: MultiAgentDomain.Intent = Field(
+        description=(
+            "PRIMARY intent of the user's first message. See MultiAgentDomain.Intent for the full list. "
+            "yes/no compatibility question ('X 타이어 껴도 돼?') → COMPATIBILITY (not RECOMMEND)."
+        ),
+    )
+    entities: RouterEntities = Field(
+        default_factory=RouterEntities,
+        description="Structured entities extracted from the first message.",
     )
 
 
@@ -217,11 +339,92 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 4 outputs:
+Produce 6 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
-2. reason — why you chose these domains
-3. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
-4. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+2. intent — PRIMARY intent of the current message (see INTENT TAXONOMY below)
+3. entities — structured fields extracted from the current message (see ENTITY EXTRACTION below)
+4. reason — why you chose these domains/intent
+5. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
+6. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+
+====================================================
+INTENT TAXONOMY (always pick exactly ONE)
+====================================================
+
+DISCOVERY domain intents:
+- recommend         — user wants tire recommendations ("추천해줘", "맞는 타이어 알려줘", "어떤 타이어가 좋아?")
+- compatibility     — yes/no compatibility question ("X 타이어 껴도 돼?", "맞아?", "써도 돼?", "장착 돼?", "쓸 수 있어?")
+                      Pattern: tire-attribute or tire-size + yes/no question form. The user wants a fit/feasibility verdict, NOT a list.
+- info_question     — general knowledge / explanation question ("타이어 언제 갈아야?", "공기압 얼마가 적정?", "마모 한계가 어떻게 돼?")
+                      Pattern: educational / advisory question, not a recommendation request.
+- product_search    — user mentions a specific product/model name and wants info on it ("벤투스 S2", "Dynapro HPX 가격", "키너지 GT 재고")
+- vehicle_lookup    — user wants to see their registered vehicles ("내 차 목록", "내 등록차량 보여줘")
+- compare           — user wants comparison / cheapest among candidates ("최저가", "가격 비교", "이 중에 제일 싼 거")
+- event_inquiry     — events / 기획전 ("이벤트 알려줘", "기획전")
+- video_inquiry     — video reviews / YouTube ("리뷰 영상", "유튜브")
+
+TRANSACTION domain intents:
+- price             — price query when goods_no is already known
+- stock             — inventory / logistics / store stock check
+- order             — create order, "주문할게", "바로 주문"
+- cart              — "장바구니에 담아줘"
+- store_search      — store search by location / name ("강남 매장", "근처 매장", "올마이티")
+- reservation       — store visit reservation, time/date selection
+- order_tracking    — track existing order
+- coupon            — coupon inquiry ("내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함")
+- order_history     — order history ("내 주문내역", "주문 조회")
+
+SUPPORT domain intents:
+- warranty          — warranty terms / 보증
+- return            — returns / refunds / 반품 / 환불
+- faq               — general FAQ
+- escalation        — 1:1 문의, 상담원 연결
+- complaint         — frustration / anger ("짜증나", "엉망이야", "뭐 이런 서비스가")
+
+LEADING domain intents:
+- greeting          — pure greeting ("안녕하세요", "hi")
+- unclear           — unclear intent / bare re-trigger / general capability question
+
+Cross-domain intents (override the domain-specific intents above when applicable):
+- selection         — user is picking an item from a list shown in the IMMEDIATELY previous turn
+                      (bare product name like "벤투스 S2", ordinal like "1번", "첫번째", license plate like "12가3456",
+                      store name like "한남점", date/time like "내일 10시"). The current message contains
+                      no new action verb — just an identifier matching the previous list.
+                      ⚠️ Use this intent regardless of the resolved domain.
+- confirmation      — short yes/ok answer to the agent's previous question ("네", "맞아", "ok", "응")
+- other             — fallback when nothing else fits
+
+⚠️ INTENT vs DOMAIN — they are decoupled axes. Examples:
+- "내 제타에 전기차용 타이어 껴도 돼?"     → domain=DISCOVERY, intent=compatibility   (NOT recommend; it's a yes/no fit question)
+- "내 그랜저 공기압 얼마가 적정?"          → domain=DISCOVERY, intent=info_question   (NOT recommend; it's a knowledge question)
+- "내 K7 타이어 언제 갈아야 돼?"           → domain=DISCOVERY, intent=info_question
+- "내 GV70에 맞는 타이어 추천해줘"          → domain=DISCOVERY, intent=recommend
+- "벤투스 S2 가격 얼마야?"                  → domain=DISCOVERY, intent=product_search (goods_no not yet known)
+- "G012345678901 가격"                       → domain=TRANSACTION, intent=price
+- "내 쿠폰 보여줘"                           → domain=TRANSACTION, intent=coupon
+- (prev turn showed car list) "제타"        → domain=DISCOVERY, intent=selection      (continuation)
+- (prev turn asked confirmation) "네"       → domain=(prev domain), intent=confirmation
+
+====================================================
+ENTITY EXTRACTION
+====================================================
+
+Populate `entities` with whatever applies in the CURRENT user message; leave the rest null/false.
+- vehicle_mention      — car model name (e.g., "제타", "GV70", "K7", "쏘나타"). Null if absent.
+- vehicle_possessive   — true ONLY when the user marks the car as theirs ("내", "내 차", "등록차"). False otherwise.
+- vehicle_number       — Korean plate (e.g., "12가3456"). Null if absent.
+- owner_nm             — vehicle owner name when paired with car_no.
+- tire_size            — normalized "WWW/AAR DD" (e.g., "225/45R17"). Convert "2254517" / "225 45 17" to canonical form.
+- tire_attribute       — tire type/attribute mention (e.g., "전기차용", "사계절", "런플랫", "광폭", "스노우").
+- product_name         — model name (e.g., "벤투스 S2", "Dynapro HPX", "키너지 GT").
+- goods_no             — only when the literal G+12 digits appears.
+- scenario             — driving scenario (e.g., "빗길", "눈길", "주말", "가족", "전기차", "고속").
+- brand                — brand mention (e.g., "한국타이어", "미쉐린", "브리지스톤").
+- quantity             — integer quantity ("4개" → 4).
+- store_keyword        — store-related word (e.g., "강남", "한남점", "올마이티").
+- question_form        — one of: "yes_no" | "info_request" | "action_request" | "selection" | "confirmation"; null if none applies.
+
+⚠️ Extraction is structural only. Do NOT infer values that are not present. Empty/null is preferred over a guess.
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -441,10 +644,13 @@ def prompt_router_slim() -> str:
     Continuation / re-recommendation / bare re-trigger rules are dropped
     because there is no prior conversation context to leverage on a fresh
     session. Use only when the message history contains a single user message.
+
+    intent / entities ARE populated even on the first turn — they are the
+    primary routing signal that future agent refactors will consume.
     """
     return """
 You are a domain classifier for T-Station AI (Hankook Tire).
-Classify the user's FIRST message into EXACTLY ONE domain.
+Classify the user's FIRST message into EXACTLY ONE domain plus a primary intent and structured entities.
 
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT].
@@ -452,7 +658,7 @@ DOMAINS:
 - SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
-RULES:
+DOMAIN RULES:
 - G+12 digits in message → TRANSACTION
 - Product name only (벤투스/Ventus/다이나프로/Dynapro/...) + price/stock/buy, no goods_no → DISCOVERY
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
@@ -462,14 +668,61 @@ RULES:
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
 
-EXAMPLES (tricky cases):
+DOMAIN EXAMPLES (tricky cases):
 - "벤투스 S2 가격 얼마야?" → DISCOVERY (product name, no goods_no)
 - "G012345678901 가격" → TRANSACTION (goods_no present)
 - "내 쿠폰 보여줘" → TRANSACTION (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION (NOT SUPPORT)
 - "12가3456 타이어 추천" → DISCOVERY
 
-Output: domains (list with EXACTLY ONE domain) + reason (english).
+====================================================
+INTENT TAXONOMY (always pick exactly ONE)
+====================================================
+
+DISCOVERY: recommend | compatibility | info_question | product_search | vehicle_lookup | compare | event_inquiry | video_inquiry
+TRANSACTION: price | stock | order | cart | store_search | reservation | order_tracking | coupon | order_history
+SUPPORT: warranty | return | faq | escalation | complaint
+LEADING: greeting | unclear
+Cross-domain (overrides above when applicable, but rare on first turn): selection | confirmation | other
+
+⚠️ INTENT vs DOMAIN are decoupled. Common confusions on first turn:
+- "내 제타에 전기차용 타이어 껴도 돼?"     → domain=DISCOVERY, intent=compatibility   (yes/no fit question, NOT recommend)
+- "타이어 언제 갈아야 돼?"                  → domain=DISCOVERY, intent=info_question   (knowledge question, NOT recommend)
+- "공기압 얼마가 적정?"                     → domain=DISCOVERY, intent=info_question
+- "내 GV70에 맞는 타이어 추천해줘"          → domain=DISCOVERY, intent=recommend
+- "벤투스 S2 가격 얼마야?"                  → domain=DISCOVERY, intent=product_search
+- "G012345678901 가격"                       → domain=TRANSACTION, intent=price
+- "강남 매장 찾아줘"                         → domain=TRANSACTION, intent=store_search
+- "내 쿠폰 보여줘"                           → domain=TRANSACTION, intent=coupon
+- "환불하고 싶어"                            → domain=SUPPORT, intent=return
+- "안녕"                                     → domain=LEADING, intent=greeting
+
+Compatibility detection signals (intent=compatibility on DISCOVERY):
+- yes/no question form: ends with "돼?", "맞아?", "맞나?", "되나요?", "돼요?", "써도 돼?", "껴도 돼?", "장착 돼?", "OK?"
+- combined with a tire-attribute or tire-size mention.
+
+====================================================
+ENTITY EXTRACTION
+====================================================
+
+Populate `entities` with whatever applies; leave the rest null/false.
+- vehicle_mention      — car model name (e.g., "제타", "GV70", "K7"). Null if absent.
+- vehicle_possessive   — true ONLY when the user marks the car as theirs ("내", "내 차", "등록차").
+- vehicle_number       — Korean plate (e.g., "12가3456"). Null if absent.
+- owner_nm             — vehicle owner name when paired with car_no.
+- tire_size            — normalized "WWW/AAR DD" (e.g., "225/45R17"). Convert "2254517" / "225 45 17" to canonical.
+- tire_attribute       — tire type (e.g., "전기차용", "사계절", "런플랫", "광폭", "스노우").
+- product_name         — model name (e.g., "벤투스 S2", "Dynapro HPX").
+- goods_no             — only when literal G+12 digits appears.
+- scenario             — driving scenario (e.g., "빗길", "눈길", "주말", "가족", "전기차", "고속").
+- brand                — brand mention (e.g., "한국타이어", "미쉐린").
+- quantity             — integer quantity ("4개" → 4).
+- store_keyword        — store-related word (e.g., "강남", "한남점", "올마이티").
+- question_form        — one of: "yes_no" | "info_request" | "action_request" | "selection" | "confirmation"; null if none.
+
+⚠️ Extraction is structural. Do NOT infer values not present. Null is preferred over a guess.
+
+Output: domains (EXACTLY ONE) + intent + entities + reason (english).
 """
 
 
@@ -540,6 +793,8 @@ class StreamingMultiAgentCoordinator:
                 result = MultiAgentDomain(
                     reason=raw_result.reason,
                     domains=raw_result.domains,
+                    intent=raw_result.intent,
+                    entities=raw_result.entities,
                     user_behavior="",
                     flow="",
                 )
@@ -547,7 +802,11 @@ class StreamingMultiAgentCoordinator:
                 result = raw_result
 
             logger.info(
-                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, flow={result.flow!r}"
+                "[MULTI-DOMAIN] Classification result: domain=%s, intent=%s, behavior=%r, flow=%r",
+                result.domains,
+                result.intent,
+                result.user_behavior,
+                result.flow,
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -558,15 +817,18 @@ class StreamingMultiAgentCoordinator:
 
     @staticmethod
     def _inject_conversation_context(messages: list[dict], routing: MultiAgentDomain | None) -> list[dict]:
-        """Inject conversation context (user_behavior, flow) above the Korean instruction
-        in the last user message.
+        """Inject conversation context (intent, entities, user_behavior, flow) above
+        the Korean instruction in the last user message.
 
-        The current last user message already has the format:
-            # Respond in Korean language
-            <original user text>
+        Intent + Entities are surfaced as advisory context for the domain agent —
+        agent prompts may ignore them today, but observability (Langfuse traces +
+        logs) still benefits, and a future agent refactor can read them without
+        another schema change.
 
         After injection:
             ## CONVERSATION CONTEXT
+            - Intent: <intent>
+            - Entities: <key1=val1, key2=val2, ...>     (only non-null fields)
             - User behavior: ...
             - Flow so far: ...
 
@@ -576,8 +838,29 @@ class StreamingMultiAgentCoordinator:
         if routing is None:
             return messages
 
-        # Only inject if at least one field is non-empty
-        context_parts = []
+        context_parts: list[str] = []
+
+        if getattr(routing, "intent", None) is not None:
+            try:
+                intent_value = routing.intent.value
+            except AttributeError:
+                intent_value = str(routing.intent)
+            context_parts.append(f"- Intent: {intent_value}")
+
+        entities_kv: list[str] = []
+        entities = getattr(routing, "entities", None)
+        if entities is not None:
+            entity_dump = entities.model_dump(exclude_none=True)
+            for key, val in entity_dump.items():
+                # vehicle_possessive is bool — only surface when True (its False default carries no signal)
+                if key == "vehicle_possessive" and not val:
+                    continue
+                if val is None or val == "":
+                    continue
+                entities_kv.append(f"{key}={val}")
+        if entities_kv:
+            context_parts.append("- Entities: " + ", ".join(entities_kv))
+
         if routing.user_behavior:
             context_parts.append(f"- User behavior: {routing.user_behavior}")
         if routing.flow:
