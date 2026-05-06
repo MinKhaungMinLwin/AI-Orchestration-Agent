@@ -22,6 +22,11 @@ class StoreDetailResponse:
         is_tna_delivery (bool | Unset): T바로배송(한국타이어 퀵배송) 가능 매장 여부 Default: False.
         is_imported_car (bool | Unset): 수입차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default:
             False.
+        svc_codes (list[str] | None | Unset): 매장이 보유한 서비스 구분 코드 목록 (ET_SHOP_ITEM_SVC_INFO.SHOP_ITEM_SVC_SCT_CD). 노출 코드:
+            '113'=타이어(온라인), '116'=배터리(온라인), '119'=타이어 보관서비스(윈터타이어 주문 시 113과 함께 필요), '120'=수입타이어 취급(수입차 특화점은 별도
+            is_imported_car 플래그), '121'=경정비-온라인(엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비), '122'=경정비 오늘장착(당일 경정비), '124'=휠얼라이먼트-오프라인,
+            '125'=휠얼라이먼트-온라인, '126'=무상점검. 예: 윈터타이어 주문 가능 매장 = ['113','119'] 모두 포함, 배터리+엔진오일 같이 주문 = ['116','121'] 모두 포함,
+            휠얼라이먼트 가능 매장 = '124' 또는 '125' 보유
         holiday (None | str | Unset): 휴무일
         shop_biz_strt_time (None | str | Unset): 영업 시작 시간
         shop_biz_end_time (None | str | Unset): 영업 종료 시간
@@ -38,6 +43,7 @@ class StoreDetailResponse:
     is_installable: bool | Unset = False
     is_tna_delivery: bool | Unset = False
     is_imported_car: bool | Unset = False
+    svc_codes: list[str] | None | Unset = UNSET
     holiday: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
     shop_biz_end_time: None | str | Unset = UNSET
@@ -68,6 +74,15 @@ class StoreDetailResponse:
         is_tna_delivery = self.is_tna_delivery
 
         is_imported_car = self.is_imported_car
+
+        svc_codes: list[str] | None | Unset
+        if isinstance(self.svc_codes, Unset):
+            svc_codes = UNSET
+        elif isinstance(self.svc_codes, list):
+            svc_codes = self.svc_codes
+
+        else:
+            svc_codes = self.svc_codes
 
         holiday: None | str | Unset
         if isinstance(self.holiday, Unset):
@@ -130,6 +145,8 @@ class StoreDetailResponse:
             field_dict["is_tna_delivery"] = is_tna_delivery
         if is_imported_car is not UNSET:
             field_dict["is_imported_car"] = is_imported_car
+        if svc_codes is not UNSET:
+            field_dict["svc_codes"] = svc_codes
         if holiday is not UNSET:
             field_dict["holiday"] = holiday
         if shop_biz_strt_time is not UNSET:
@@ -178,6 +195,23 @@ class StoreDetailResponse:
         is_tna_delivery = d.pop("is_tna_delivery", UNSET)
 
         is_imported_car = d.pop("is_imported_car", UNSET)
+
+        def _parse_svc_codes(data: object) -> list[str] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                svc_codes_type_0 = cast(list[str], data)
+
+                return svc_codes_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(list[str] | None | Unset, data)
+
+        svc_codes = _parse_svc_codes(d.pop("svc_codes", UNSET))
 
         def _parse_holiday(data: object) -> None | str | Unset:
             if data is None:
@@ -251,6 +285,7 @@ class StoreDetailResponse:
             is_installable=is_installable,
             is_tna_delivery=is_tna_delivery,
             is_imported_car=is_imported_car,
+            svc_codes=svc_codes,
             holiday=holiday,
             shop_biz_strt_time=shop_biz_strt_time,
             shop_biz_end_time=shop_biz_end_time,
