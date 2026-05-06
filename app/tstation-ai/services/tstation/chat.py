@@ -143,15 +143,16 @@ def decide_next_action(
 class RouterEntities(BaseModel):
     """Entities extracted by the router LLM from the user's current message.
 
-    Each field is independent — populate only the ones present in the message.
-    Surfaced to domain agents via `_inject_conversation_context` as advisory
-    context (not authoritative — agents still own flow logic).
+    Slim schema: only fields directly consumed by Discovery agent intent
+    guards or with high routing signal. Agents requiring other fields
+    (brand, goods_no, store_keyword, owner_nm, quantity) re-extract from
+    the user message text — they're not worth the per-request output
+    tokens here.
 
-    All fields are declared without Pydantic defaults so they end up in the
-    JSON schema's `required` array — OpenAI's `strict` structured output
-    mode rejects schemas where any property is missing from `required`. The
-    LLM must explicitly emit `null` (or `false` for the bool) when a field
-    does not apply, which is documented in each field's description.
+    All fields are declared without Pydantic defaults so they end up in
+    the JSON schema's `required` array (OpenAI's strict structured output
+    requirement). The LLM must explicitly emit `null` / `false` when a
+    field does not apply.
     """
 
     vehicle_mention: str | None = Field(
@@ -163,7 +164,6 @@ class RouterEntities(BaseModel):
     vehicle_number: str | None = Field(
         description="Korean license plate when present (e.g., '12가3456'). Use null if absent.",
     )
-    owner_nm: str | None = Field(description="Vehicle owner name when paired with car_no. Use null if absent.")
     tire_size: str | None = Field(
         description="Normalized tire size (e.g., '225/45R17'). Use null if absent.",
     )
@@ -173,16 +173,8 @@ class RouterEntities(BaseModel):
     product_name: str | None = Field(
         description="Product/model name (e.g., '벤투스 S2', 'Dynapro HPX', '키너지 GT'). Use null if absent.",
     )
-    goods_no: str | None = Field(description="goods_no when present in message (G+12 digits). Use null otherwise.")
     scenario: str | None = Field(
         description="Scenario keyword (e.g., '빗길', '눈길', '사계절', '주말', '가족', '전기차', '고속'). Use null if absent.",
-    )
-    brand: str | None = Field(
-        description="Brand mentioned (e.g., '한국타이어', '미쉐린', '브리지스톤'). Use null if absent.",
-    )
-    quantity: int | None = Field(description="Quantity mentioned (e.g., '4개' → 4). Use null if absent.")
-    store_keyword: str | None = Field(
-        description="Store-related keyword/location (e.g., '강남', '한남점', '올마이티', 'All My T'). Use null if absent.",
     )
     question_form: str | None = Field(
         description=(
@@ -207,7 +199,12 @@ class MultiAgentDomain(BaseModel):
         SUPPORT = "support"
 
     class Intent(str, Enum):
-        # ---- Discovery domain ----
+        # Slim taxonomy (20 values). Removed values that rarely fire or
+        # collapse cleanly to a remaining one — kept by the agent's own
+        # internal classification (Transaction / Support agents).
+        #   cart → ORDER, reservation/order_tracking/order_history → OTHER,
+        #   warranty/escalation → FAQ, unclear → OTHER.
+        # ---- Discovery domain (full taxonomy — used by guards) ----
         RECOMMEND = "recommend"  # "추천해줘", "맞는 타이어 알려줘"
         COMPATIBILITY = "compatibility"  # "X 타이어 껴도 돼?", "맞아?", yes/no fit question
         INFO_QUESTION = "info_question"  # "언제 갈아야?", "공기압 얼마?", general knowledge q
@@ -216,29 +213,22 @@ class MultiAgentDomain(BaseModel):
         COMPARE = "compare"  # "최저가", "가격 비교", compare_discount
         EVENT_INQUIRY = "event_inquiry"  # 이벤트, 기획전
         VIDEO_INQUIRY = "video_inquiry"  # 영상, 리뷰 영상, YouTube
-        # ---- Transaction domain ----
+        # ---- Transaction domain (high-signal subset) ----
         PRICE = "price"  # goods_no 가격 조회
         STOCK = "stock"  # 재고 / 물류 / 매장 재고
-        ORDER = "order"  # 주문 생성, "주문할게"
-        CART = "cart"  # 장바구니 저장
-        STORE_SEARCH = "store_search"  # 매장 위치/이름 검색
-        RESERVATION = "reservation"  # 매장 예약 / 방문 일시
-        ORDER_TRACKING = "order_tracking"  # 주문 추적
+        ORDER = "order"  # 주문 / 장바구니 / 결제
+        STORE_SEARCH = "store_search"  # 매장 위치/이름 검색 / 예약 매장 찾기
         COUPON = "coupon"  # 쿠폰 조회
-        ORDER_HISTORY = "order_history"  # 주문 내역 조회
-        # ---- Support domain ----
-        WARRANTY = "warranty"
-        RETURN = "return"
-        FAQ = "faq"
-        ESCALATION = "escalation"  # 1:1 문의, 상담원 연결
-        COMPLAINT = "complaint"  # 불만/짜증/엉망
+        # ---- Support domain (high-signal subset) ----
+        FAQ = "faq"  # 보증·정책·일반 안내·반품 정책 문의
+        RETURN = "return"  # 환불/반품 액션 요청
+        COMPLAINT = "complaint"  # 불만/짜증/엉망 + 1:1 상담원 연결 요청
         # ---- Leading domain ----
-        GREETING = "greeting"
-        UNCLEAR = "unclear"
+        GREETING = "greeting"  # 인사
         # ---- Cross-domain ----
         SELECTION = "selection"  # 이전 턴에서 보여준 목록에서 선택 (continuation)
         CONFIRMATION = "confirmation"  # "네", "맞아", 직전 질문에 대한 확인
-        OTHER = "other"
+        OTHER = "other"  # 위 어디에도 안 맞는 경우 (unclear, 추적, 예약 등 포함)
 
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
@@ -342,42 +332,35 @@ Produce 6 outputs:
 6. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 
 ====================================================
-INTENT TAXONOMY (always pick exactly ONE)
+INTENT TAXONOMY (always pick exactly ONE — 20 values)
 ====================================================
 
-DISCOVERY domain intents:
-- recommend         — user wants tire recommendations ("추천해줘", "맞는 타이어 알려줘", "어떤 타이어가 좋아?")
-- compatibility     — yes/no compatibility question ("X 타이어 껴도 돼?", "맞아?", "써도 돼?", "장착 돼?", "쓸 수 있어?")
+DISCOVERY domain intents (full taxonomy — used by Discovery agent guards):
+- recommend         — user wants tire recommendations ("추천해줘", "맞는 타이어 알려줘")
+- compatibility     — yes/no compatibility question ("X 타이어 껴도 돼?", "맞아?", "써도 돼?", "장착 돼?")
                       Pattern: tire-attribute or tire-size + yes/no question form. The user wants a fit/feasibility verdict, NOT a list.
-- info_question     — general knowledge / explanation question ("타이어 언제 갈아야?", "공기압 얼마가 적정?", "마모 한계가 어떻게 돼?")
+- info_question     — general knowledge / explanation question ("타이어 언제 갈아야?", "공기압 얼마?", "마모 한계?")
                       Pattern: educational / advisory question, not a recommendation request.
-- product_search    — user mentions a specific product/model name and wants info on it ("벤투스 S2", "Dynapro HPX 가격", "키너지 GT 재고")
+- product_search    — user mentions a specific product/model name and wants info on it ("벤투스 S2", "Dynapro HPX 가격")
 - vehicle_lookup    — user wants to see their registered vehicles ("내 차 목록", "내 등록차량 보여줘")
 - compare           — user wants comparison / cheapest among candidates ("최저가", "가격 비교", "이 중에 제일 싼 거")
 - event_inquiry     — events / 기획전 ("이벤트 알려줘", "기획전")
 - video_inquiry     — video reviews / YouTube ("리뷰 영상", "유튜브")
 
-TRANSACTION domain intents:
+TRANSACTION domain intents (high-signal subset — Transaction agent re-classifies internally):
 - price             — price query when goods_no is already known
 - stock             — inventory / logistics / store stock check
-- order             — create order, "주문할게", "바로 주문"
-- cart              — "장바구니에 담아줘"
-- store_search      — store search by location / name ("강남 매장", "근처 매장", "올마이티")
-- reservation       — store visit reservation, time/date selection
-- order_tracking    — track existing order
+- order             — create order / cart save / checkout ("주문할게", "장바구니에 담아줘")
+- store_search      — store search by location / name / reservation ("강남 매장", "올마이티", "한남점 예약")
 - coupon            — coupon inquiry ("내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함")
-- order_history     — order history ("내 주문내역", "주문 조회")
 
-SUPPORT domain intents:
-- warranty          — warranty terms / 보증
-- return            — returns / refunds / 반품 / 환불
-- faq               — general FAQ
-- escalation        — 1:1 문의, 상담원 연결
+SUPPORT domain intents (high-signal subset — Support agent re-classifies internally):
+- faq               — general FAQ / warranty / 보증 / 정책 정보 / 1:1 문의 작성 / 상담원 연결
+- return            — returns / refunds / 반품 / 환불 (action request)
 - complaint         — frustration / anger ("짜증나", "엉망이야", "뭐 이런 서비스가")
 
 LEADING domain intents:
 - greeting          — pure greeting ("안녕하세요", "hi")
-- unclear           — unclear intent / bare re-trigger / general capability question
 
 Cross-domain intents (override the domain-specific intents above when applicable):
 - selection         — user is picking an item from a list shown in the IMMEDIATELY previous turn
@@ -386,7 +369,7 @@ Cross-domain intents (override the domain-specific intents above when applicable
                       no new action verb — just an identifier matching the previous list.
                       ⚠️ Use this intent regardless of the resolved domain.
 - confirmation      — short yes/ok answer to the agent's previous question ("네", "맞아", "ok", "응")
-- other             — fallback when nothing else fits
+- other             — fallback for cases that don't fit cleanly above (order tracking, order history, reservation date selection, unclear intent, bare re-trigger, general capability question, etc.)
 
 ⚠️ INTENT vs DOMAIN — they are decoupled axes. Examples:
 - "내 제타에 전기차용 타이어 껴도 돼?"     → domain=DISCOVERY, intent=compatibility   (NOT recommend; it's a yes/no fit question)
@@ -400,25 +383,21 @@ Cross-domain intents (override the domain-specific intents above when applicable
 - (prev turn asked confirmation) "네"       → domain=(prev domain), intent=confirmation
 
 ====================================================
-ENTITY EXTRACTION
+ENTITY EXTRACTION (8 fields)
 ====================================================
 
 Populate `entities` with whatever applies in the CURRENT user message; leave the rest null/false.
 - vehicle_mention      — car model name (e.g., "제타", "GV70", "K7", "쏘나타"). Null if absent.
 - vehicle_possessive   — true ONLY when the user marks the car as theirs ("내", "내 차", "등록차"). False otherwise.
 - vehicle_number       — Korean plate (e.g., "12가3456"). Null if absent.
-- owner_nm             — vehicle owner name when paired with car_no.
 - tire_size            — normalized "WWW/AAR DD" (e.g., "225/45R17"). Convert "2254517" / "225 45 17" to canonical form.
 - tire_attribute       — tire type/attribute mention (e.g., "전기차용", "사계절", "런플랫", "광폭", "스노우").
 - product_name         — model name (e.g., "벤투스 S2", "Dynapro HPX", "키너지 GT").
-- goods_no             — only when the literal G+12 digits appears.
 - scenario             — driving scenario (e.g., "빗길", "눈길", "주말", "가족", "전기차", "고속").
-- brand                — brand mention (e.g., "한국타이어", "미쉐린", "브리지스톤").
-- quantity             — integer quantity ("4개" → 4).
-- store_keyword        — store-related word (e.g., "강남", "한남점", "올마이티").
 - question_form        — one of: "yes_no" | "info_request" | "action_request" | "selection" | "confirmation"; null if none applies.
 
 ⚠️ Extraction is structural only. Do NOT infer values that are not present. Empty/null is preferred over a guess.
+⚠️ goods_no, brand, quantity, store_keyword, owner_nm fields were removed from the schema — agents extract these from the user message text directly when needed.
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -670,14 +649,14 @@ DOMAIN EXAMPLES (tricky cases):
 - "12가3456 타이어 추천" → DISCOVERY
 
 ====================================================
-INTENT TAXONOMY (always pick exactly ONE)
+INTENT TAXONOMY (always pick exactly ONE — 20 values)
 ====================================================
 
 DISCOVERY: recommend | compatibility | info_question | product_search | vehicle_lookup | compare | event_inquiry | video_inquiry
-TRANSACTION: price | stock | order | cart | store_search | reservation | order_tracking | coupon | order_history
-SUPPORT: warranty | return | faq | escalation | complaint
-LEADING: greeting | unclear
-Cross-domain (overrides above when applicable, but rare on first turn): selection | confirmation | other
+TRANSACTION: price | stock | order | store_search | coupon
+SUPPORT: faq | return | complaint
+LEADING: greeting
+Cross-domain: selection | confirmation | other (use `other` for unclear intent / re-trigger / order tracking / reservation / etc.)
 
 ⚠️ INTENT vs DOMAIN are decoupled. Common confusions on first turn:
 - "내 제타에 전기차용 타이어 껴도 돼?"     → domain=DISCOVERY, intent=compatibility   (yes/no fit question, NOT recommend)
@@ -696,22 +675,17 @@ Compatibility detection signals (intent=compatibility on DISCOVERY):
 - combined with a tire-attribute or tire-size mention.
 
 ====================================================
-ENTITY EXTRACTION
+ENTITY EXTRACTION (8 fields)
 ====================================================
 
 Populate `entities` with whatever applies; leave the rest null/false.
 - vehicle_mention      — car model name (e.g., "제타", "GV70", "K7"). Null if absent.
 - vehicle_possessive   — true ONLY when the user marks the car as theirs ("내", "내 차", "등록차").
 - vehicle_number       — Korean plate (e.g., "12가3456"). Null if absent.
-- owner_nm             — vehicle owner name when paired with car_no.
 - tire_size            — normalized "WWW/AAR DD" (e.g., "225/45R17"). Convert "2254517" / "225 45 17" to canonical.
 - tire_attribute       — tire type (e.g., "전기차용", "사계절", "런플랫", "광폭", "스노우").
 - product_name         — model name (e.g., "벤투스 S2", "Dynapro HPX").
-- goods_no             — only when literal G+12 digits appears.
 - scenario             — driving scenario (e.g., "빗길", "눈길", "주말", "가족", "전기차", "고속").
-- brand                — brand mention (e.g., "한국타이어", "미쉐린").
-- quantity             — integer quantity ("4개" → 4).
-- store_keyword        — store-related word (e.g., "강남", "한남점", "올마이티").
 - question_form        — one of: "yes_no" | "info_request" | "action_request" | "selection" | "confirmation"; null if none.
 
 ⚠️ Extraction is structural. Do NOT infer values not present. Null is preferred over a guess.
