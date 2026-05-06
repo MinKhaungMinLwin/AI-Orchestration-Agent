@@ -1281,6 +1281,11 @@ _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
     ("place_order", "size"): MultiAgentDomain.Domain.DISCOVERY,
     ("place_order", "qty"): MultiAgentDomain.Domain.TRANSACTION,
     ("place_order", "shop"): MultiAgentDomain.Domain.TRANSACTION,
+    # store_finder: pure store search. region is the only checklist step.
+    # Missing region → Transaction asks (with quickReply chips); the
+    # user_preferences_text slot persists across the clarification turn so
+    # the criteria carry into the completion step (see _GOAL_COMPLETE_DOMAIN).
+    ("store_finder", "region"): MultiAgentDomain.Domain.TRANSACTION,
 }
 
 # Where to route when every checklist step is satisfied — final tool call lives
@@ -1290,6 +1295,9 @@ _GOAL_COMPLETE_DOMAIN: "dict[str, MultiAgentDomain.Domain]" = {
     "store_with_stock": MultiAgentDomain.Domain.TRANSACTION,
     "price_inquiry": MultiAgentDomain.Domain.TRANSACTION,
     "place_order": MultiAgentDomain.Domain.TRANSACTION,
+    # store_finder: once region is filled, Transaction runs the store search
+    # and applies the captured user_preferences_text (if any) to filter/rank.
+    "store_finder": MultiAgentDomain.Domain.TRANSACTION,
 }
 
 # When the user's latest turn signals a deliberate pivot away from the persisted
