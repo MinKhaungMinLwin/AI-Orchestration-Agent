@@ -348,6 +348,19 @@ class ProductMeta(BaseModel):
     goodsId: str = Field(..., min_length=1)
 
 
+class ProductTag(BaseModel):
+    """Tag chip rendered on a product card.
+
+    primary=True → 강조 스타일 (chatbox-product-tag-primary, prc_grd_nm 매핑)
+    primary=False → 일반 스타일 (chatbox-product-tag-secondary, goods_pfm_nm 매핑)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., min_length=1)
+    primary: bool = False
+
+
 class ProductItem(BaseModel):
     """Visible product card content for the FE."""
 
@@ -359,6 +372,7 @@ class ProductItem(BaseModel):
     price: Optional[int] = Field(None, ge=0)
     rate: float = Field(..., ge=0.0, le=5.0)
     totalQuantity: int = Field(..., ge=0)
+    tags: list[ProductTag] = Field(default_factory=list)
 
 
 class ProductTemplate(TemplatePayload):

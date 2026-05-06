@@ -227,6 +227,15 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             # Price priority: matched get_final_price_tool result > inline row field.
             price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            # Tag chips: prc_grd_nm → primary 강조, goods_pfm_nm → secondary 일반.
+            # 빈 값은 칩에서 제외 (FE 가 빈 chip 그리지 않게).
+            tags: list[dict] = []
+            prc_grd = _get_str(row, "prc_grd_nm")
+            if prc_grd:
+                tags.append({"text": prc_grd, "primary": True})
+            goods_pfm = _get_str(row, "goods_pfm_nm")
+            if goods_pfm:
+                tags.append({"text": goods_pfm, "primary": False})
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
@@ -234,6 +243,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "price": price,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
+                "tags": tags,
                 "description": "",
             })
             metadata.append({"goodsId": goods_no})
