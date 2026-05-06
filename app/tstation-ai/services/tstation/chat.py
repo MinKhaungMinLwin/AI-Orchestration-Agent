@@ -2871,12 +2871,21 @@ class TStationChatServiceV2:
         # 2. QC AGENT
         # Gated by AI_QC_ENABLED. When enabled, fact-checks the draft against
         # filtered tool source data using AI_MODEL_QC_AGENT (lightweight model).
+        # AI_QC_PARALLEL=true: yield data events before QC so FE renders immediately;
+        # a qc_correction event is emitted afterward only when a correction is needed.
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
 
             _qc_passed = True  # default: no correction needed
             qc_template_corrections: dict | None = None
             _can_apply_json = False
+            _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL
+
+            # PARALLEL MODE: yield data events immediately so FE can render before QC completes
+            if _parallel_qc:
+                for buffered_evt in buffered_data_events:
+                    yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
+
             if _s.AI_QC_ENABLED:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
@@ -2933,18 +2942,28 @@ class TStationChatServiceV2:
                     except Exception as e:
                         logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
 
-            # Yield buffered DATA events — apply QC corrections (text + template fields) if needed
-            for buffered_evt in buffered_data_events:
+            if _parallel_qc:
+                # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
                 if not _qc_passed:
-                    evt_data = buffered_evt.get("data", {})
-                    if isinstance(evt_data, dict):
-                        if "assistantResponse" in evt_data:
-                            evt_data["assistantResponse"] = draft_response
-                        if _can_apply_json:
-                            for k, v in qc_template_corrections.items():
-                                if k != "assistantResponse" and k in evt_data:
-                                    evt_data[k] = v
-                yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
+                    correction_evt: dict = {"type": "qc_correction", "assistantResponse": draft_response}
+                    if _can_apply_json:
+                        correction_evt["template"] = last_template
+                        correction_evt["corrections"] = qc_template_corrections
+                    yield f"data: {json.dumps(correction_evt, ensure_ascii=False)}\n\n"
+                    logger.info("[QC_LAYER] Parallel mode: emitted qc_correction patch")
+            else:
+                # SEQUENTIAL (default): yield buffered DATA events with corrections applied
+                for buffered_evt in buffered_data_events:
+                    if not _qc_passed:
+                        evt_data = buffered_evt.get("data", {})
+                        if isinstance(evt_data, dict):
+                            if "assistantResponse" in evt_data:
+                                evt_data["assistantResponse"] = draft_response
+                            if _can_apply_json:
+                                for k, v in qc_template_corrections.items():
+                                    if k != "assistantResponse" and k in evt_data:
+                                        evt_data[k] = v
+                    yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if original_message_events:
                 final_msg_event = original_message_events[-1]
