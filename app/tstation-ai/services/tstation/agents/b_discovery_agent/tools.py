@@ -22,6 +22,8 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 
 # Product Recommendation
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync_detailed as get_products_recommendations
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_best_sellers_api_product_best_sellers_get import sync_detailed as get_best_sellers
+from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 
 
@@ -917,3 +919,66 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
         return {"status": "error", "reason": str(e), "message": "Failed to get product price"}
+
+
+_BEST_SELLER_PERIOD_MAP: dict[str, BestSellerPeriod] = {
+    "day": BestSellerPeriod.DAY,
+    "week": BestSellerPeriod.WEEK,
+    "month": BestSellerPeriod.MONTH,
+    "3months": BestSellerPeriod.VALUE_3,
+}
+
+
+@tool
+@tool_cache(ttl=600)
+def get_best_selling_products_tool(period: str = "month", limit: int = 5):
+    """
+    기간별 베스트셀러 상품 조회 (PR_GOODS_SUM 판매 수량 기준 정렬).
+
+    Period mapping (사용자 표현 → period 값):
+    - "오늘 가장 많이 팔린 상품 / 오늘의 베스트" → period="day"
+    - "이번 주 / 금주 베스트" → period="week"
+    - "이번 달 / 이달의 / 월별 베스트" → period="month"
+    - "요즘 / 최근 / 인기 / 잘 나가는 / 잘 팔리는" → period="month" (모호한 최근성 표현은 month로 매핑)
+    - "최근 3개월 / 분기 베스트" → period="3months"
+
+    Args:
+        period (str): "day" | "week" | "month" | "3months". Default "month".
+        limit (int): 반환 상품 수 (1-50). Default 5.
+
+    Response: BestSellerResponse — items 의 각 행에 goods_no, goods_nm,
+        tire_size_1/2, image_url, extra_fvr_sale_prc, extra_fvr_sale_per, sale_qty.
+
+    Example: {"period": "month", "limit": 5}
+    """
+    logger.info("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
+
+    period_enum = _BEST_SELLER_PERIOD_MAP.get(period)
+    if period_enum is None:
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": f"period must be one of {sorted(_BEST_SELLER_PERIOD_MAP.keys())}; got {period!r}",
+        }
+    if not isinstance(limit, int) or not (1 <= limit <= 50):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "limit must be an int between 1 and 50",
+        }
+
+    try:
+        response = get_best_sellers(client=get_client(), period=period_enum, limit=limit)
+        if response.parsed is None:
+            return {
+                "status": "error",
+                "http_status": response.status_code,
+                "reason": f"HTTP {response.status_code}",
+                "message": response.content.decode(errors="ignore") or "Failed to get best-selling products",
+            }
+        logger.info("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
+        data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
+        return {"status": "success", "http_status": response.status_code, "data": data}
+    except Exception as e:
+        logger.exception("[TOOL][get_best_selling_products_tool] Failed")
+        return {"status": "error", "reason": str(e), "message": "Failed to get best-selling products"}

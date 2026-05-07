@@ -49,6 +49,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # product
     "search_product_tool": "product",
     "get_products_recommendations_tool": "product",
+    "get_best_selling_products_tool": "product",
     # listCar
     "get_my_cars_tool": "listCar",
     "get_user_vehicles_tool": "listCar",
@@ -225,7 +226,12 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             price_map[goods_no] = price
 
     items, metadata = [], []
-    for entry in _find_entries(tool_data_list, "search_product_tool", "get_products_recommendations_tool"):
+    for entry in _find_entries(
+        tool_data_list,
+        "search_product_tool",
+        "get_products_recommendations_tool",
+        "get_best_selling_products_tool",
+    ):
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
         if not isinstance(rows, list):
@@ -313,6 +319,7 @@ def inject_product_tags_and_sanitize(
         accumulated_tool_data,
         "search_product_tool",
         "get_products_recommendations_tool",
+        "get_best_selling_products_tool",
     ):
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
@@ -901,6 +908,7 @@ def _summarize(full_text: str, template: str, item_count: int) -> str:
 _MAPPERS: dict[str, Any] = {
     "search_product_tool": _map_product,
     "get_products_recommendations_tool": _map_product,
+    "get_best_selling_products_tool": _map_product,
     "get_my_cars_tool": _map_list_car,
     "get_user_vehicles_tool": _map_list_car,
     "get_available_coupons_tool": _map_voucher,
@@ -941,6 +949,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_store_schedule_tool", _map_datepick),
         ("search_product_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
+        ("get_best_selling_products_tool", _map_product),
         ("get_my_cars_tool", _map_list_car),
         ("get_user_vehicles_tool", _map_list_car),
         ("get_available_coupons_tool", _map_voucher),

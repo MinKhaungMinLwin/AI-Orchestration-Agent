@@ -16,6 +16,7 @@ from services.tstation.agents.b_discovery_agent.tools import get_product_descrip
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
+from services.tstation.agents.b_discovery_agent.tools import get_best_selling_products_tool
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -85,6 +86,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | search_car_model_groups_tool | ⚠️ Do NOT use when user mentions car model name. Only for internal fallback. |
 | get_car_trims_tool | ⚠️ Do NOT use when user mentions car model name. Only for internal fallback. |
 | get_products_recommendations_tool | Recommend tires by tire_size |
+| get_best_selling_products_tool | "가장 많이 팔린 / 베스트셀러 / 잘 팔리는 / 잘 나가는 / 인기 상품" — 기간별 판매량 정렬 (period: day/week/month/3months) |
 | search_product_tool | User searches by product name/keyword (keyword는 한글로 전달; 영문 입력은 한글로 변환) |
 | get_product_description_tool | Product details, after recommending top product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only) OR price comparison between multiple products |
@@ -626,6 +628,26 @@ Trigger: "내 차 목록", "my registered vehicles"
 3. If 0 cars → emit `quickReply` with the 3-path guidance from Flow A Case 3.
 
 
+### Flow H — Best-Selling Products (판매량 정렬)
+
+Trigger keywords (사용자 표현 → period 매핑):
+
+| 사용자 표현 | period |
+|------------|--------|
+| "오늘 가장 많이 팔린", "오늘의 베스트", "오늘 인기" | `day` |
+| "이번 주", "금주 베스트", "이번주 잘 팔리는" | `week` |
+| "이번 달", "이달의 베스트", "월별 베스트" | `month` |
+| "요즘", "최근", "잘 나가는", "인기 상품", "잘 팔리는" (기간 미지정) | `month` (default) |
+| "최근 3개월", "분기 베스트", "3개월 동안" | `3months` |
+
+Action:
+1. `get_best_selling_products_tool(period=<매핑값>, limit=5)` 즉시 호출 (사이즈/차량 컨텍스트 없어도 호출 가능).
+2. items 가 비어 있으면 → `quickReply` 로 "현재 해당 기간의 판매 데이터가 없어요 😊".
+3. items 가 있으면 → `product` 템플릿(아래 TEMPLATE 표 참고)으로 렌더. `assistantResponse` 는 1문장으로 짧게: "이번 달 가장 많이 팔린 상품을 안내드립니다." 등.
+4. ⚠️ `sale_qty` 등 내부 판매 수량 숫자는 사용자에게 노출 금지 (정렬 근거로만 사용).
+5. ⚠️ 사용자가 "추천해줘"가 아닌 "많이 팔린/베스트" 표현일 땐 Flow A(rcmd_type 추천)로 가지 말고 이 Flow H 로 처리. 둘 다 명시적으로 요청한 경우(예: "추천 + 베스트셀러도 같이")엔 두 도구를 같은 턴에서 병렬 호출.
+
+
 ## HANDOVER RULES
 - Price inquiry → Flow C → hand over WITH goods_no
 - Stock inquiry → Flow C → hand over WITH goods_no
@@ -963,6 +985,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_car_trims_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
+        "get_best_selling_products_tool": "Product Recommendation",
         # Product Description
         "get_product_description_tool": "Product Description",
         # Product Reviews
@@ -988,6 +1011,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_car_trims_tool,
                 get_product_description_tool,
                 get_products_recommendations_tool,
+                get_best_selling_products_tool,
                 search_youtube_video_tool,
                 get_events_tool,
                 get_deals_tool,
