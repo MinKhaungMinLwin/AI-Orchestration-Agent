@@ -1151,10 +1151,15 @@ Style rules for PROSE MODE:
   "template": "quickReply",
   "data": {{
     "assistantResponse": "<answer synthesized from tool output — see ANSWER RULES>",
-    "quickReplies": ["<chip 1>", "<chip 2>"]
+    "quickReplies": [
+      {{"label": "<chip 1>", "domain": "TRANSACTION"}},
+      {{"label": "<chip 2>", "domain": "TRANSACTION"}}
+    ]
   }}
 }}
 ```
+
+`domain` rules: set to the domain the chip leads to — `"TRANSACTION"` for store/price/order follow-ups, `"DISCOVERY"` for product search follow-ups, `"SUPPORT"` for escalation chips ("상담사 연결"), `"LEADING"` for restart chips ("처음으로").
 
 `voucher` — coupon tool results:
 ```json

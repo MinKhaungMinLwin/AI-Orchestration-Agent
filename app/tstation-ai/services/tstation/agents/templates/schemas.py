@@ -27,13 +27,26 @@ class DataEvent(BaseModel):
     data: dict
 
 
+class QuickReplyChip(BaseModel):
+    """A single quick reply chip with optional routing metadata for classifier skip."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(..., min_length=1)
+    domain: Optional[str] = Field(
+        default=None,
+        description="Target domain for this chip. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING. "
+                    "Set by the emitting agent so the backend can skip the LLM classifier on the next turn.",
+    )
+
+
 class QuickReplyTemplate(TemplatePayload):
     """`quickReply` template — used for text-only responses with suggestion chips."""
 
     TEMPLATE_NAME: ClassVar[str] = "quickReply"
 
     assistantResponse: str = Field(..., min_length=1)
-    quickReplies: list[str] = Field(default_factory=list, max_length=4)
+    quickReplies: list[QuickReplyChip] = Field(default_factory=list, max_length=4)
 
 
 class QuickReplyDataEvent(BaseModel):

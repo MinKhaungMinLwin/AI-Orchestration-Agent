@@ -23,6 +23,9 @@ class TStationChatRequest(BaseModel):
     tracing_id: str = Field(default_factory=lambda: uuid.uuid4().hex, description="Tracing ID")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Extra metadata")
 
+    # Quick reply chip routing — set when user taps a chip; allows classifier skip
+    chip_context: Optional[Dict[str, Any]] = Field(default=None, description="Quick reply chip routing context")
+
     @field_validator("messages")
     def validate_messages_not_empty(cls, v):
         if not v:

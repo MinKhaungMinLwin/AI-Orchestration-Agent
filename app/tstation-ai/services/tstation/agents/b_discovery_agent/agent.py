@@ -747,10 +747,16 @@ Hard rules:
   "template": "quickReply",
   "data": {{
     "assistantResponse": "<the full user-facing Korean answer>",
-    "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
+    "quickReplies": [
+      {{"label": "<chip 1>", "domain": "DISCOVERY"}},
+      {{"label": "<chip 2>", "domain": "DISCOVERY"}},
+      {{"label": "<chip 3>", "domain": "SUPPORT"}}
+    ]
   }}
 }}
 ```
+
+`domain` rules: set to the domain the chip leads to — `"DISCOVERY"` for product/recommendation follow-ups, `"TRANSACTION"` for price/store/order follow-ups, `"SUPPORT"` for escalation chips ("상담사 연결"), `"LEADING"` for restart chips ("처음으로").
 
 `product` shape (max 10 items):
 
