@@ -1524,19 +1524,6 @@ def _sanitize_response(text: str) -> str:
     return text
 
 
-_FACTUAL_CLAIM_PATTERN = re.compile(
-    r"\d{1,3}(?:,\d{3})*\s*원"       # 가격 (e.g. 150,000원)
-    r"|G\d{9,}"                        # goods_no (e.g. G000000313150)
-    r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r"|티스테이션\s*\S*점"             # 매장명 (e.g. 티스테이션양평점)
-    r"|F\d{5}\b",                      # shop_id (e.g. F01234)
-    re.IGNORECASE,
-)
-
-
-def _has_factual_claims(text: str) -> bool:
-    return bool(_FACTUAL_CLAIM_PATTERN.search(text))
-
 
 _QC_SKIP_TOOLS = frozenset({"get_my_cars_tool", "transfer_to_qna_tool"})
 _QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
@@ -3019,8 +3006,7 @@ class TStationChatServiceV2:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
                 if (
-                    _has_factual_claims(draft_for_qc)
-                    and called_tool_names
+                    called_tool_names
                     and not _should_skip_qc(called_tool_names, last_template)
                 ):
                     try:
@@ -3049,7 +3035,9 @@ class TStationChatServiceV2:
                             qc_result = _anyio_ft.run(_run_qc)
                             qc_result = qc_result.strip()
                             _qc_passed = not qc_result or qc_result.upper() == "PASS"
-                            logger.info(f"[QC_LAYER] QC result: {qc_result[:300]}")
+                            logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
+                            logger.debug(f"[QC_LAYER] Source: {source_data[:500]}")
+                            logger.info(f"[QC_LAYER] QC result: {qc_result[:500]}")
                             if not _qc_passed:
                                 corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
                                 draft_response = corrected_text or draft_response
