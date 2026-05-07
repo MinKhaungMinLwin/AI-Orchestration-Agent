@@ -1588,7 +1588,12 @@ _coordinator = StreamingMultiAgentCoordinator()
 _TEMPLATE_ENRICH_MAX_TURNS = 1
 
 
-def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
+def _enrich_messages_with_template_data(
+    messages: list[dict],
+    session_id: str,
+    *,
+    redis_history: list[dict] | None = None,
+) -> list[dict]:
     """Attach template_data from Redis to recent assistant card turns.
 
     Walks messages in reverse and enriches up to _TEMPLATE_ENRICH_MAX_TURNS
@@ -1600,14 +1605,19 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
     Token-context concerns are bounded by the cap; the BE-filtered
     tool_context (loaded as a separate system message) preserves additional
     older-turn structured data.
+
+    Pass `redis_history` to reuse an already-fetched history list and skip
+    the extra Redis round-trip.
     """
     if not session_id:
         return messages
 
     try:
-        from services.tstation.chat_history_service import get_chat_history_service
+        if redis_history is None:
+            from services.tstation.chat_history_service import get_chat_history_service
+            redis_history = get_chat_history_service().get_history(session_id)
 
-        redis_messages = get_chat_history_service().get_history(session_id)
+        redis_messages = redis_history
 
         # content -> template_data map. If two assistant turns share identical
         # content, the chronologically-latest template_data wins — acceptable
@@ -2190,21 +2200,18 @@ class TStationChatServiceV2:
             )
             _parent_span_id = _parent_span.id
 
-        # Step 1: Enrich messages with template_data from Redis history
-        enriched_messages = _enrich_messages_with_template_data(
-            [dict(msg) for msg in request.messages],
-            request.session_id,
-        )
-        # Step 2: Build messages with user info
-        request_with_enriched = TStationChatRequest(
-            messages=enriched_messages,
+        # Step 1: Prep raw messages — enrichment happens after Redis prefetch below.
+        # Build plain messages now as a fallback (used if Redis prefetch fails entirely).
+        raw_messages = [dict(msg) for msg in request.messages]
+        _request_plain = TStationChatRequest(
+            messages=raw_messages,
             session_id=request.session_id,
             user_id=request.user_id,
             access_token=request.access_token,
             stream=request.stream,
             user_info=request.user_info,
         )
-        messages = TStationChatServiceV2._build_messages_with_user_info(request_with_enriched)
+        messages = TStationChatServiceV2._build_messages_with_user_info(_request_plain)
 
         # Keep at most 20 messages (10 turns) before sending to LLM.
         # Slots and last_user_text are extracted from request.messages (untouched above).
@@ -2213,8 +2220,6 @@ class TStationChatServiceV2:
             dropped = len(messages) - _MAX_HISTORY_MESSAGES
             messages = messages[-_MAX_HISTORY_MESSAGES:]
             logger.info(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
-
-        logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
         # Wrapped in try/except so slot failures never block the main chat flow
@@ -2236,14 +2241,35 @@ class TStationChatServiceV2:
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load existing slots + tool context from Redis in parallel (independent reads)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pool:
-                _slots_f = _pool.submit(chat_history_svc.get_slots, request.session_id)
+            # 1) Load history, slots, and tool context from Redis in parallel (3 independent reads).
+            # history is needed for template enrichment; slots and tool_context for agent injection.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _pool:
+                _history_f  = _pool.submit(chat_history_svc.get_history, request.session_id)
+                _slots_f    = _pool.submit(chat_history_svc.get_slots, request.session_id)
                 _tool_ctx_f = _pool.submit(chat_history_svc.get_tool_context, request.session_id)
+                redis_history  = _history_f.result()
                 existing_slots = _slots_f.result()
                 prev_tool_data = _tool_ctx_f.result()
             _t_slots = time.perf_counter()
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+
+            # 1a) Enrich messages with template_data from prefetched history and rebuild.
+            # Overrides the plain fallback built above — no extra Redis round-trip.
+            enriched_messages = _enrich_messages_with_template_data(
+                raw_messages, request.session_id, redis_history=redis_history
+            )
+            _request_enriched = TStationChatRequest(
+                messages=enriched_messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                access_token=request.access_token,
+                stream=request.stream,
+                user_info=request.user_info,
+            )
+            messages = TStationChatServiceV2._build_messages_with_user_info(_request_enriched)
+            if len(messages) > _MAX_HISTORY_MESSAGES:
+                messages = messages[-_MAX_HISTORY_MESSAGES:]
+            logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
             # 2) Extract regex-based slots from the LATEST user message only
             for msg in reversed(request.messages):
