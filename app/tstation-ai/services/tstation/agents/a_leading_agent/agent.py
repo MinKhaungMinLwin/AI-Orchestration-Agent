@@ -480,8 +480,12 @@ Format strictly:
   "type": "data",
   "template": "quickReply",
   "data": {{
-    "assistantResponse": "<the full user-facing answer>",    
-    "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
+    "assistantResponse": "<the full user-facing answer>",
+    "quickReplies": [
+      {{"label": "<chip 1>", "domain": "DISCOVERY"}},
+      {{"label": "<chip 2>", "domain": "TRANSACTION"}},
+      {{"label": "<chip 3>", "domain": "SUPPORT"}}
+    ]
   }}
 }}
 ```
@@ -494,19 +498,25 @@ Rules:
 4. Never leave `assistantResponse` empty.
 5. Never return more than one template.
 
+`domain` rules for each chip — set the domain the chip leads to:
+- `"DISCOVERY"` — product/tire recommendation, compatibility, vehicle lookup
+- `"TRANSACTION"` — price, store search, order lookup, stock check
+- `"SUPPORT"` — warranty, returns, FAQ, 1:1 escalation
+- `"LEADING"` — restart / go back to main menu ("처음으로")
+
 Quick reply guidance by case:
-- Greeting: recommendation, store search, order lookup, support
-- Self introduction: recommendation, store search, price lookup
-- Complaint: support connection, retry
-- Out of scope: tire recommendation, price lookup
+- Greeting: recommendation (DISCOVERY), store search (TRANSACTION), order lookup (TRANSACTION), support (SUPPORT)
+- Self introduction: recommendation (DISCOVERY), store search (TRANSACTION), price lookup (TRANSACTION)
+- Complaint: support connection (SUPPORT), retry (LEADING)
+- Out of scope: tire recommendation (DISCOVERY), price lookup (TRANSACTION)
 
 Good quick reply examples:
-- "타이어 추천"
-- "매장 찾기"
-- "주문 조회"
-- "1:1 문의"
-- "가격 조회"
-- "상담사 연결"
+- {{"label": "타이어 추천", "domain": "DISCOVERY"}}
+- {{"label": "매장 찾기", "domain": "TRANSACTION"}}
+- {{"label": "주문 조회", "domain": "TRANSACTION"}}
+- {{"label": "1:1 문의", "domain": "SUPPORT"}}
+- {{"label": "가격 조회", "domain": "TRANSACTION"}}
+- {{"label": "상담사 연결", "domain": "SUPPORT"}}
 """
 
 

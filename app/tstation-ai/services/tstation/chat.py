@@ -28,6 +28,7 @@ from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
 from services.tstation.agents.router import QC_LLM
+from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
 import anyio.from_thread as _anyio_ft
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,6 @@ def decide_next_action(
     parent_span_id: str | None = None,
 ) -> AgentDecision:
     from langchain_core.messages import SystemMessage, HumanMessage
-    from config.tracing import build_trace_config
 
     structured_model = _decision_structured_model
 
@@ -507,7 +507,6 @@ class StreamingMultiAgentCoordinator:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
         from langchain_core.messages import SystemMessage
-        from config.tracing import build_trace_config
 
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
@@ -798,8 +797,6 @@ class StreamingMultiAgentCoordinator:
         Yields:
             Stream events from all agents in sequence
         """
-        from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
-
         # Classify if domains not provided
         # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
         original_messages = list(messages)
@@ -1451,6 +1448,8 @@ _QC_SKIP_TOOLS = frozenset({"get_my_cars_tool", "transfer_to_qna_tool"})
 _QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
 # Path B: LLM writes the JSON → QC may correct field values
 _LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
+# Valid domains a quick reply chip may declare for classifier skip
+_VALID_CHIP_DOMAINS = frozenset({"DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING"})
 
 
 def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
@@ -2346,13 +2345,19 @@ class TStationChatServiceV2:
             slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
-        # Fast-path order: goal-based (deterministic checklist) → rule-based
-        # (regex) → LLM classifier (multi-intent, conversational context).
+        # Fast-path order: chip_context (FE-declared domain) → goal-based (deterministic
+        # checklist) → rule-based (regex) → LLM classifier (multi-intent, conversational context).
         # Each layer returns None to defer to the next.
         # Wrapped in a manual `classify` span so Langfuse shows a single clean
         # node: input=last user text, output=domains. Any nested LLM call from
         # classify_multi_intent attaches under this span via parent_span_id.
-        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+        _chip_domain: str | None = None
+        _chip_ctx = request.chip_context or {}
+        if isinstance(_chip_ctx, dict):
+            _d = _chip_ctx.get("domain")
+            if _d in _VALID_CHIP_DOMAINS:
+                _chip_domain = _d
+
         routing_result = None
         with _trace_span(
             "classify",
@@ -2360,25 +2365,30 @@ class TStationChatServiceV2:
             parent_span_id=_parent_span_id,
             input=last_user_text,
         ) as _classify_span:
-            fast_domains = (
-                _support_fast_path(last_user_text)
-                or _goal_based_classify(last_user_text, merged_slots)
-                or _rule_based_classify(last_user_text, merged_slots)
-            )
-            if fast_domains is not None:
-                domains = fast_domains
-                _classify_path = "fast"
-                # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+            if _chip_domain:
+                domains = [MultiAgentDomain.Domain[_chip_domain]]
+                _classify_path = "chip"
+                logger.info(f"[CLASSIFIER] chip_context.domain={_chip_domain!r} — skipping LLM classifier")
             else:
-                domains, routing_result = _coordinator.classify_multi_intent(
-                    messages,
-                    session_id=request.session_id,
-                    user_id=request.user_id,
-                    trace_id=request.tracing_id,
-                    parent_span_id=_classify_span.id or _parent_span_id,
+                fast_domains = (
+                    _support_fast_path(last_user_text)
+                    or _goal_based_classify(last_user_text, merged_slots)
+                    or _rule_based_classify(last_user_text, merged_slots)
                 )
-                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
-                _classify_path = "llm"
+                if fast_domains is not None:
+                    domains = fast_domains
+                    _classify_path = "fast"
+                    # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+                else:
+                    domains, routing_result = _coordinator.classify_multi_intent(
+                        messages,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        trace_id=request.tracing_id,
+                        parent_span_id=_classify_span.id or _parent_span_id,
+                    )
+                    messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                    _classify_path = "llm"
             _classify_span.update(
                 output=_truncate({
                     "domains": [d.value for d in domains],
@@ -2663,7 +2673,6 @@ class TStationChatServiceV2:
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
-        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
         logger.info(
             "[REQUEST_CONFIG] "
             f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
@@ -2895,8 +2904,6 @@ class TStationChatServiceV2:
                     and not _should_skip_qc(called_tool_names, last_template)
                 ):
                     try:
-                        from config.tracing import build_trace_config
-
                         with _trace_span(
                             "qc",
                             trace_id=trace_id,
