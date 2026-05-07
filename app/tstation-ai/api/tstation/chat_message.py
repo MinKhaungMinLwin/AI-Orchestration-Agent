@@ -179,6 +179,11 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
                 template_data = event
                 logger.info(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
 
+            # QC parallel mode: override assistantResponse with the verified correction
+            if event.get("type") == "qc_correction" and event.get("assistantResponse"):
+                assistant_response_ui = event["assistantResponse"]
+                logger.info(f"[CHAT_MESSAGE] QC correction applied: {assistant_response_ui[:50]}...")
+
             # When we receive a message event with assistant content, accumulate it
             if event.get("type") == "message" and event.get("content"):
                 content = event.get("content", "")

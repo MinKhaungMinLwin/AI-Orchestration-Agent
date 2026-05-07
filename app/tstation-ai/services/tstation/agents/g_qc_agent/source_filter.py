@@ -16,11 +16,11 @@ MAX_LIST_ITEMS = 10
 _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
     "get_nearby_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base"},
+        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
     },
     "get_store_list_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "addr_base"},
+        "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
     },
     "get_products_recommendations_tool": {
         "list_key": "items",
@@ -33,11 +33,21 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
             "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
             "wrt_grte_term", "rating_avg",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
         },
     },
     "search_product_tool": {
         "list_key": "items",
-        "keep": {"goods_no", "goods_nm", "tire_size_1"},
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
+            # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
+            "prc_grd_nm",
+            # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
+            "goods_pfm_nm",
+        },
     },
     "get_faq_tool": {
         "list_key": "faqs",
@@ -89,19 +99,29 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "t_wgt_idx", "t_tray_ware", "t_rlx_isn_yn",
             "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
             "wrt_grte_term", "rating_avg",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
         },
     },
     "search_product_tool": {
         "list_key": "items",
-        "keep": {"goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc"},
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc",
+            # EU 소음 라벨 (정숙성 점수와 별개)
+            "label_pnwave", "label_pnwave_nm", "label_pndb",
+            # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 후속 턴에서 등급 질문 답변용
+            "prc_grd_nm",
+            # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 후속 턴 답변용
+            "goods_pfm_nm",
+        },
     },
     "get_nearby_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "tel_no"},
+        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
     },
     "get_store_list_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "addr_base", "tel_no"},
+        "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
     },
     "get_store_inventory_tool": {
         "list_key": "items",

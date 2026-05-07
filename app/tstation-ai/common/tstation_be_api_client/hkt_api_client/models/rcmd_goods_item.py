@@ -17,11 +17,13 @@ class RcmdGoodsItem:
     Attributes:
         goods_no (str): 상품 번호
         goods_nm (None | str | Unset): 상품명
+        tire_size_1 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_1, 예: '245/45R18')
+        tire_size_2 (None | str | Unset): 타이어 사이즈 후륜 (TIRE_SIZE_2, 전후륜 다른 차량용)
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
         tot_scr (int | None | Unset): 추천 점수 (TOT_SCR (FST_DISP_YN = ‘Y’ 이면 TOT_SCR * 10), 티스테이션 추천 전용)
         t_comfort (float | None | Unset): 승차감 (T_COMFORT)
-        t_silence (float | None | Unset): 정숙성 (T_SILENCE)
+        t_silence (float | None | Unset): 정숙성 점수 (T_SILENCE). 내부 추천 점수 — EU 소음 라벨(label_pnwave)과 별개
         t_life_span (float | None | Unset): 수명 (T_LIFE_SPAN)
         t_fuel_eff_convert (float | None | Unset): 연비 (T_FUEL_EFF_CONVERT)
         wet (float | None | Unset): 빗길 성능 (WET)
@@ -30,17 +32,24 @@ class RcmdGoodsItem:
         t_highspd (float | None | Unset): 고속 주행 성능 (T_HIGHSPD)
         t_highspd_cd (None | str | Unset): 고속 주행 등급 코드 (T_HIGHSPD_CD)
         t_high_hand_avg (float | None | Unset): 핸들링 평균 (T_HIGH_HAND_AVG)
-        t_com_sil_avg (float | None | Unset): 정숙성 평균 (T_COM_SIL_AVG)
-        t_com_cvs (float | None | Unset): 승차감/정숙성 종합 (T_COM_CVS)
+        t_com_sil_avg (float | None | Unset): 정숙성 평균 점수 (T_COM_SIL_AVG). 내부 추천 점수 — EU 소음 라벨과 별개
+        t_com_cvs (float | None | Unset): 승차감/정숙성 종합 점수 (T_COM_CVS). 내부 추천 점수 — EU 소음 라벨과 별개
         t_milg_cvs (float | None | Unset): 마일리지 종합 (T_MILG_CVS)
         t_wgt_idx (float | None | Unset): 하중 지수 (T_WGT_IDX)
         t_wgt_idx_kg (float | None | Unset): 하중 지수 KG (T_WGT_IDX_KG)
         t_tray_ware (float | None | Unset): 마모 (T_TRAY_WARE)
         t_rlx_isn_yn (None | str | Unset): 안심 보험 여부 (T_RLX_ISN_YN)
-        goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (GOODS_PFM_NM)
+        goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 값 매핑: 'COMFORT'(정숙/승차감) /
+            'SPORT'(고속/제동성) / 'RUNFLAT'(런플랫) 등. 표시·답변용 — 추천 정렬 기준 아님 (orthogonal pfm_nm 필터에서만 사용)
         season_nm (None | str | Unset): 계절 분류명 (SEASON_NM)
         car_knd_nm (None | str | Unset): 차종 분류명 (CAR_KND_NM)
-        prc_grd_nm (None | str | Unset): 가격 등급명 (PRC_GRD_NM)
+        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 값 매핑: '프리미엄+'/'프리미엄' (프리미엄 계열, LIKE '프리미엄%')
+            / '스탠다드' / '이코노미'. 표시·답변용 — 추천 정렬/필터 기준 아님
+        label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외. 정숙성 내부
+            점수(t_silence/t_com_sil_avg)와 별개의 라벨 정보
+        label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''. 라벨 표기 — 추천 정렬 기준
+            아님
+        label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB, VARCHAR2). 라벨 표기용 — 정숙성 내부 점수와 별개
         wrt_grte_term (int | None | Unset): 워런티 보증 기간 개월 (WRT_GRTE_TERM)
         rating_avg (float | None | Unset): 평균 평점 (RATING_AVG)
         image_url (None | str | Unset):
@@ -52,6 +61,8 @@ class RcmdGoodsItem:
 
     goods_no: str
     goods_nm: None | str | Unset = UNSET
+    tire_size_1: None | str | Unset = UNSET
+    tire_size_2: None | str | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
     tot_scr: int | None | Unset = UNSET
@@ -76,6 +87,9 @@ class RcmdGoodsItem:
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
+    label_pnwave: None | str | Unset = UNSET
+    label_pnwave_nm: None | str | Unset = UNSET
+    label_pndb: None | str | Unset = UNSET
     wrt_grte_term: int | None | Unset = UNSET
     rating_avg: float | None | Unset = UNSET
     image_url: None | str | Unset = UNSET
@@ -93,6 +107,18 @@ class RcmdGoodsItem:
             goods_nm = UNSET
         else:
             goods_nm = self.goods_nm
+
+        tire_size_1: None | str | Unset
+        if isinstance(self.tire_size_1, Unset):
+            tire_size_1 = UNSET
+        else:
+            tire_size_1 = self.tire_size_1
+
+        tire_size_2: None | str | Unset
+        if isinstance(self.tire_size_2, Unset):
+            tire_size_2 = UNSET
+        else:
+            tire_size_2 = self.tire_size_2
 
         extra_fvr_sale_prc: int | None | Unset
         if isinstance(self.extra_fvr_sale_prc, Unset):
@@ -238,6 +264,24 @@ class RcmdGoodsItem:
         else:
             prc_grd_nm = self.prc_grd_nm
 
+        label_pnwave: None | str | Unset
+        if isinstance(self.label_pnwave, Unset):
+            label_pnwave = UNSET
+        else:
+            label_pnwave = self.label_pnwave
+
+        label_pnwave_nm: None | str | Unset
+        if isinstance(self.label_pnwave_nm, Unset):
+            label_pnwave_nm = UNSET
+        else:
+            label_pnwave_nm = self.label_pnwave_nm
+
+        label_pndb: None | str | Unset
+        if isinstance(self.label_pndb, Unset):
+            label_pndb = UNSET
+        else:
+            label_pndb = self.label_pndb
+
         wrt_grte_term: int | None | Unset
         if isinstance(self.wrt_grte_term, Unset):
             wrt_grte_term = UNSET
@@ -289,6 +333,10 @@ class RcmdGoodsItem:
         )
         if goods_nm is not UNSET:
             field_dict["goods_nm"] = goods_nm
+        if tire_size_1 is not UNSET:
+            field_dict["tire_size_1"] = tire_size_1
+        if tire_size_2 is not UNSET:
+            field_dict["tire_size_2"] = tire_size_2
         if extra_fvr_sale_prc is not UNSET:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
@@ -337,6 +385,12 @@ class RcmdGoodsItem:
             field_dict["car_knd_nm"] = car_knd_nm
         if prc_grd_nm is not UNSET:
             field_dict["prc_grd_nm"] = prc_grd_nm
+        if label_pnwave is not UNSET:
+            field_dict["label_pnwave"] = label_pnwave
+        if label_pnwave_nm is not UNSET:
+            field_dict["label_pnwave_nm"] = label_pnwave_nm
+        if label_pndb is not UNSET:
+            field_dict["label_pndb"] = label_pndb
         if wrt_grte_term is not UNSET:
             field_dict["wrt_grte_term"] = wrt_grte_term
         if rating_avg is not UNSET:
@@ -367,6 +421,24 @@ class RcmdGoodsItem:
             return cast(None | str | Unset, data)
 
         goods_nm = _parse_goods_nm(d.pop("goods_nm", UNSET))
+
+        def _parse_tire_size_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tire_size_1 = _parse_tire_size_1(d.pop("tire_size_1", UNSET))
+
+        def _parse_tire_size_2(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tire_size_2 = _parse_tire_size_2(d.pop("tire_size_2", UNSET))
 
         def _parse_extra_fvr_sale_prc(data: object) -> int | None | Unset:
             if data is None:
@@ -584,6 +656,33 @@ class RcmdGoodsItem:
 
         prc_grd_nm = _parse_prc_grd_nm(d.pop("prc_grd_nm", UNSET))
 
+        def _parse_label_pnwave(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pnwave = _parse_label_pnwave(d.pop("label_pnwave", UNSET))
+
+        def _parse_label_pnwave_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pnwave_nm = _parse_label_pnwave_nm(d.pop("label_pnwave_nm", UNSET))
+
+        def _parse_label_pndb(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pndb = _parse_label_pndb(d.pop("label_pndb", UNSET))
+
         def _parse_wrt_grte_term(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -650,6 +749,8 @@ class RcmdGoodsItem:
         rcmd_goods_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
+            tire_size_1=tire_size_1,
+            tire_size_2=tire_size_2,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
             tot_scr=tot_scr,
@@ -674,6 +775,9 @@ class RcmdGoodsItem:
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             prc_grd_nm=prc_grd_nm,
+            label_pnwave=label_pnwave,
+            label_pnwave_nm=label_pnwave_nm,
+            label_pndb=label_pndb,
             wrt_grte_term=wrt_grte_term,
             rating_avg=rating_avg,
             image_url=image_url,

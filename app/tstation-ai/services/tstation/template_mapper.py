@@ -180,6 +180,18 @@ def _normalize_time(s: str) -> str:
 
 # ── 1. product ──────────────────────────────────────────────────────────────────
 
+# Tag chip 매핑 (BE → FE)
+# - primary chip (chatbox-product-tag-primary): prc_grd_nm 화이트리스트만 통과.
+#   BE 가 이미 한글로 저장 (PR_GOODS_BASE.PRC_GRD_NM) → 그대로 노출.
+# - secondary chip (chatbox-product-tag-secondary): goods_pfm_nm 영문 코드를
+#   한글 라벨로 매핑. 매핑되지 않은 코드 (RUNFLAT 등) 는 chip skip.
+_PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
+_GOODS_PFM_LABELS: dict[str, str] = {
+    "COMFORT": "정숙/승차감",
+    "SPORT": "고속/제동성",
+}
+
+
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # TEMP DEBUG: dump entry shape so we can see what keys actually arrive at runtime.
     logger.info(
@@ -227,24 +239,34 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             # Price priority: matched get_final_price_tool result > inline row field.
             price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            # Tag chips:
+            # - primary: prc_grd_nm 화이트리스트 (한글 그대로). 그 외 값은 skip.
+            # - secondary: goods_pfm_nm 영문 코드 → 한글 라벨 매핑. 매핑 외 코드는 skip.
+            # 각 chip 의 primary 플래그는 FE 클래스 결정 (위치 무관) — primary 누락 시
+            # secondary 가 primary 로 보일 일 없음.
+            tags: list[dict] = []
+            prc_grd = _get_str(row, "prc_grd_nm")
+            if prc_grd in _PRC_GRD_ALLOWED:
+                tags.append({"text": prc_grd, "primary": True})
+            goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
+            goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
+            if goods_pfm_label:
+                tags.append({"text": goods_pfm_label, "primary": False})
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
-                # FE renders these as tag chips (primary/secondary) only when truthy.
-                # Tool output has no `tires` field, and `comfort` arrives as a numeric
-                # score (e.g. 5.0); stringifying it produced a label that looked like a
-                # rating. Skip both — keep the cards clean (FE still shows the rate stars).
                 "tires": "",
                 "comfort": "",
                 "price": price,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
+                "tags": tags,
                 "description": "",
             })
             metadata.append({"goodsId": goods_no})
     if not items:
         return None
-    items, metadata = items[:5], metadata[:5]
+    items, metadata = items[:10], metadata[:10]
     # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
     # product cards don't co-occur with the inventory/schedule signal tools.
     # When the active goal is checklist-driven (stock/order/price), a click on
@@ -260,6 +282,76 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         assistant_text,
         len(items),
     )
+
+
+def inject_product_tags_and_sanitize(
+    data_event: dict | None,
+    accumulated_tool_data: list[dict],
+) -> None:
+    """LLM-driven product event 후처리: tags 결정형 주입 + 알수없는 필드 strip.
+
+    LLM 이 OUTPUT_TEMPLATE 을 통해 fenced JSON 으로 product 템플릿을 직접
+    emit 하는 경로 (`base_agent._build_data_event_from_text`) 에서, tags 는
+    BE row 에서 결정되어야 하므로 매퍼와 동일 규칙으로 덮어쓰고, comfort 같은
+    스키마 외 hallucinated 필드는 제거한다.
+
+    Mutation in place. data_event 가 product 템플릿이 아니면 no-op.
+    """
+    if not isinstance(data_event, dict) or data_event.get("template") != "product":
+        return
+    data = data_event.get("data")
+    if not isinstance(data, dict):
+        return
+    products = data.get("products")
+    metadata = data.get("metadata")
+    if not isinstance(products, list):
+        return
+
+    # Build goodsId → BE row lookup from accumulated tool data
+    rows_by_goods: dict[str, dict] = {}
+    for entry in _find_entries(
+        accumulated_tool_data,
+        "search_product_tool",
+        "get_products_recommendations_tool",
+    ):
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            goods_no = _get_str(row, "goods_no")
+            if goods_no:
+                rows_by_goods[goods_no] = row
+
+    # Allowed keys derived from ProductItem schema (single source of truth).
+    # Lazy import — avoid template_mapper ↔ schemas circular imports at module load.
+    from services.tstation.agents.templates.schemas import ProductItem
+    allowed_keys = frozenset(ProductItem.model_fields.keys())
+
+    meta_list = metadata if isinstance(metadata, list) else []
+    for i, product in enumerate(products):
+        if not isinstance(product, dict):
+            continue
+        # Strip unknown keys (LLM hallucinations like comfort)
+        for key in list(product.keys()):
+            if key not in allowed_keys:
+                product.pop(key, None)
+        # Inject deterministic tags from BE row matched by metadata[i].goodsId.
+        meta = meta_list[i] if i < len(meta_list) and isinstance(meta_list[i], dict) else {}
+        goods_id = meta.get("goodsId")
+        row = rows_by_goods.get(goods_id) if isinstance(goods_id, str) else None
+        tags: list[dict] = []
+        if row is not None:
+            prc_grd = _get_str(row, "prc_grd_nm")
+            if prc_grd in _PRC_GRD_ALLOWED:
+                tags.append({"text": prc_grd, "primary": True})
+            goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
+            goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
+            if goods_pfm_label:
+                tags.append({"text": goods_pfm_label, "primary": False})
+        product["tags"] = tags
 
 
 # ── 2. listCar ──────────────────────────────────────────────────────────────────
@@ -464,6 +556,35 @@ def _map_preview_youtube(tool_data_list: list[dict], assistant_text: str) -> dic
 
 # ── 8. location ─────────────────────────────────────────────────────────────────
 
+# 매장 보유 서비스 코드 → 사용자 노출 라벨 매핑.
+# 113 (타이어 - 온라인) 은 거의 모든 매장 보유라 노출 생략 (가독성).
+# 124/125 (얼라인먼트 오프라인/온라인) 은 사용자 입장에서 동일 의미라 같은 라벨로 통합.
+_SVC_CODE_LABELS: dict[str, str] = {
+    "116": "배터리",
+    "119": "타이어 보관",
+    "120": "수입타이어",
+    "121": "경정비",
+    "122": "경정비 당일",
+    "124": "얼라인먼트",
+    "125": "얼라인먼트",
+    "126": "무상점검",
+}
+
+
+def _svc_code_label_list(svc_codes: object) -> list[str]:
+    """svc_codes (list[str]) → 중복 제거된 사용자 라벨 리스트 (입력 순서 유지)."""
+    if not isinstance(svc_codes, list):
+        return []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for code in svc_codes:
+        label = _SVC_CODE_LABELS.get(str(code))
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return labels
+
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     # Flow 3.5 (빠른 방문) calls store_list + multi_store_schedule and renders a
@@ -519,7 +640,13 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             road_base = _get_str(row, "road_addr_base")
             road_dtl = _get_str(row, "road_addr_dtl")
             road_full = " ".join(p for p in [road_base, road_dtl] if p).strip()
-            detail_addr = road_full or _get_str(row, "addr_base", "addr_dtl")
+            # Fallback when no road address — combine base + dtl so the user
+            # sees the full address ("경상남도 거창군 거창읍 강남로 72") instead
+            # of just the prefecture/gu portion ("경상남도 거창군").
+            jibun_base = _get_str(row, "addr_base")
+            jibun_dtl = _get_str(row, "addr_dtl")
+            jibun_full = " ".join(p for p in [jibun_base, jibun_dtl] if p).strip()
+            detail_addr = road_full or jibun_full
 
             # Detail endpoint overrides the list endpoint where overlapping (it
             # is the more authoritative source for is_all_my_t / is_installable
@@ -540,7 +667,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             biz_sat_str = f"토요일 {sat_strt_time}~{sat_end_time}" if sat_strt_time and sat_end_time else ""
             biz_hours = " / ".join(p for p in [biz_weekday_str, biz_sat_str] if p)
 
-            tel_no = _get_str(detail, "tel_no")
+            # tel_no: prefer detail (most authoritative when get_store_detail_tool
+            # ran in the same turn), fall back to the list row so basic store
+            # search results always show the phone number.
+            tel_no = _get_str(detail, "tel_no") or _get_str(row, "tel_no")
             holiday = _get_str(detail, "holiday")
 
             services: list[str] = []
@@ -549,6 +679,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             services.append("온라인 장착 가능" if is_installable else "온라인 장착 불가")
             if is_tna_delivery:
                 services.append("T바로배송")
+            # 매장 보유 svc_codes (BE 화이트리스트: 113/116/119/120/121/122/124/125/126)
+            # 를 사용자 라벨로 변환해 description 의 "서비스:" 라인에 노출.
+            svc_codes_raw = detail.get("svc_codes") or row.get("svc_codes")
+            services.extend(_svc_code_label_list(svc_codes_raw))
             services_text = " | ".join(services)
 
             description_lines: list[str] = []
@@ -586,7 +720,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     if not items:
         return None
-    items, metadata = items[:5], metadata[:5]
+    items, metadata = items[:10], metadata[:10]
 
     # `isBookingFlow` controls FE click routing (True → /chat to advance the
     # flow; False → /append, just renders the description bubble). True when
@@ -617,13 +751,40 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
 # ── 9. datepick ─────────────────────────────────────────────────────────────────
 
+def _parse_tm_to_hour(tm: str) -> int | None:
+    """Parse a BE `tm` slot value to an integer hour (0-23).
+
+    BE OpenAPI spec says `tm` is `HHMM` (e.g. "0900", "1030"), but observed
+    runtime payloads also send hour-only ("13"). Accept both, return the hour
+    portion. Returns None for unparseable / out-of-range values.
+    """
+    s = (tm or "").strip()
+    if not s.isdigit():
+        return None
+    if len(s) <= 2:
+        h = int(s)
+    elif len(s) == 4:
+        h = int(s[:2])
+    else:
+        return None
+    return h if 0 <= h <= 23 else None
+
+
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Map `get_store_schedule_tool` output to a `datepick` event.
 
-    Only handles the schedule tool (single shop, multi-day, response carries cal_day).
-    `get_store_detail_tool` is intentionally skipped — its response does not include
-    cal_day, and reconstructing it from input args is not currently supported by
-    BaseAgent's tool-result accumulator.
+    BE response shape (per StoreScheduleResponse in tstation-be-openapi.json):
+        {
+          "shop_id": "...", "shop_nm": "...", "mode": "...",
+          "is_installable": bool, "is_tna_delivery": bool,
+          "slots": [{"cal_day": "YYYYMMDD", "tm": "HHMM"}, ...]
+        }
+
+    Slots are flat (one entry per available time), not grouped by day. Group by
+    `cal_day` and dedupe to integer hours for the FE `availableTimes` contract.
+    `get_store_detail_tool` is intentionally skipped — its response does not
+    include cal_day, and reconstructing it from input args is not currently
+    supported by BaseAgent's tool-result accumulator.
     """
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
     if not entries:
@@ -632,38 +793,46 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if not isinstance(raw, dict):
         return None
 
-    schedule = raw.get("schedule")
     shop_id = _get_str(raw, "shop_id")
-    if not shop_id or not isinstance(schedule, list) or not schedule:
+    slots = raw.get("slots")
+    if not shop_id or not isinstance(slots, list):
+        return None
+
+    # Response-level installable flag: when False, treat as no available times
+    # (BE may still echo cal_day rows in some modes; FE expects empty list).
+    is_installable = bool(raw.get("is_installable", True))
+
+    # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
+    # but we sort cal_day strings before emitting to avoid relying on that.
+    by_day: dict[str, set[int]] = {}
+    for s in slots:
+        if not isinstance(s, dict):
+            continue
+        cal_day = _get_str(s, "cal_day")
+        hour = _parse_tm_to_hour(_get_str(s, "tm"))
+        if not cal_day or hour is None:
+            continue
+        bucket = by_day.setdefault(cal_day, set())
+        if is_installable:
+            bucket.add(hour)
+
+    if not by_day:
         return None
 
     dates: list[dict] = []
     selected_idx: int | None = None
-    for i, entry in enumerate(schedule):
-        if not isinstance(entry, dict):
-            continue
-        cal_day = _get_str(entry, "cal_day")
-        if not cal_day:
-            continue
-        slots = entry.get("available_slots") or []
-        # If this date is not installable at this store, treat slots as empty
-        # (the FE schema validator also drops noon=12 separately).
-        if not entry.get("is_installable", False):
-            available_times: list[int] = []
-        else:
-            available_times = [int(s) for s in slots if isinstance(s, str) and s.isdigit()]
-        available = bool(available_times)
+    for i, cal_day in enumerate(sorted(by_day.keys())):
+        times = sorted(by_day[cal_day])
+        available = bool(times)
         dates.append({
             "date": _yyyymmdd_to_korean_date(cal_day),
             "available": available,
-            "availableTimes": available_times,
+            "availableTimes": times,
             "index": i,
         })
         if selected_idx is None and available:
             selected_idx = i
 
-    if not dates:
-        return None
     # All days empty → let the LLM emit the "no slots" friendly quickReply
     # ("현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?").
     if selected_idx is None:

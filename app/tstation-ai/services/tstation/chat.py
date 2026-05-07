@@ -26,6 +26,9 @@ from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
+from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
+from services.tstation.agents.router import QC_LLM
+import anyio.from_thread as _anyio_ft
 
 logger = logging.getLogger(__name__)
 
@@ -116,12 +119,12 @@ def decide_next_action(
     )
 
     trace_config = build_trace_config(
-        run_name="decide_next_action",
         session_id=session_id,
         user_id=user_id,
         trace_id=trace_id,
         parent_span_id=parent_span_id,
         tags=["router", "decide_next_action"],
+        prompt_name="router",
     )
 
     try:
@@ -473,6 +476,43 @@ Output: domains (list with EXACTLY ONE domain) + reason (english).
 class StreamingMultiAgentCoordinator:
     """Orchestrates multiple agents with streaming support."""
 
+    # ---------------------------------------------------------------------
+    # Hardcoded keyword routing (runs BEFORE the LLM router)
+    # ---------------------------------------------------------------------
+    # The LLM router was observed ignoring its own prompt-level routing rules
+    # under heavy slot/context bias (e.g., post-cart "이벤트 목록" got routed
+    # to TRANSACTION because the conversation history was order-flow heavy).
+    # When the user's CURRENT message contains any of the listed phrases, we
+    # hard-pin the domain without invoking the LLM at all — fast and
+    # deterministic.
+    #
+    # Match style: case-sensitive substring match on the cleaned current
+    # user input (after stripping the injected "# Respond in Korean language"
+    # wrapper and the trailing [current_time: ...] suffix).
+    _KEYWORD_FORCE_TABLE: ClassVar[
+        list[tuple[list[str], "MultiAgentDomain.Domain"]]
+    ] = [
+        # SUPPORT — return / refund / warranty / 1:1
+        (
+            ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # TRANSACTION — coupon
+        (
+            ["내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함", "쿠폰 조회", "다운로드 가능 쿠폰"],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
+        # DISCOVERY — vehicle lookup / video / event
+        (
+            [
+                "내 차 목록", "내 차량", "내 등록차", "등록차 보여", "등록차량 보여",
+                "리뷰 영상", "유튜브", "동영상", "영상 보여",
+                "이벤트", "기획전",
+            ],
+            MultiAgentDomain.Domain.DISCOVERY,
+        ),
+    ]
+
     def __init__(self):
         self.agent_map = {
             MultiAgentDomain.Domain.DISCOVERY: discovery_subagent,
@@ -480,6 +520,46 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT: support_subagent,
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
+
+    @staticmethod
+    def _extract_current_user_input(message_content: str) -> str:
+        """Strip the injected `# Respond in Korean language` wrapper and the
+        trailing `[current_time: ...]` block so the result is just the user's
+        typed text.
+        """
+        if not message_content:
+            return ""
+        text = message_content
+        if "# Respond in Korean language" in text:
+            text = text.split("# Respond in Korean language", 1)[1]
+        if "[current_time:" in text:
+            text = text.split("[current_time:", 1)[0]
+        return text.strip()
+
+    @classmethod
+    def _force_keyword_routing(cls, user_input: str) -> "MultiAgentDomain | None":
+        """Return a forced MultiAgentDomain when the user's CURRENT message
+        clearly names a topic that should not depend on conversation context.
+
+        Returns None when no keyword matches — caller should then fall through
+        to the LLM-based router.
+        """
+        if not user_input:
+            return None
+        text = user_input.strip()
+        if not text:
+            return None
+
+        for keywords, domain in cls._KEYWORD_FORCE_TABLE:
+            for kw in keywords:
+                if kw in text:
+                    return MultiAgentDomain(
+                        reason=f"hardcoded keyword routing matched '{kw}'",
+                        domains=[domain],
+                        user_behavior=f"topic shift via keyword '{kw}'",
+                        flow="hardcoded keyword routing — bypassed LLM router",
+                    )
+        return None
 
     def classify_multi_intent(
         self,
@@ -506,6 +586,23 @@ class StreamingMultiAgentCoordinator:
         from langchain_core.messages import SystemMessage
         from config.tracing import build_trace_config
 
+        # ---------- Hardcoded keyword routing (bypasses LLM) ----------
+        last_user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_text = self._extract_current_user_input(msg.get("content", ""))
+                break
+
+        forced_result = self._force_keyword_routing(last_user_text)
+        if forced_result is not None:
+            logger.info(
+                "[MULTI-DOMAIN] Hardcoded routing: domain=%s, msg=%r",
+                forced_result.domains,
+                last_user_text[:80],
+            )
+            return forced_result.domains, forced_result
+        # --------------------------------------------------------------
+
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
 
@@ -522,12 +619,12 @@ class StreamingMultiAgentCoordinator:
             all_messages = [system_msg] + list(messages)
 
             trace_config = build_trace_config(
-                run_name=run_name,
                 session_id=session_id,
                 user_id=user_id,
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
                 tags=["router", run_name],
+                prompt_name="router",
             )
             raw_result = structured_model.invoke(all_messages, config=trace_config)
 
@@ -795,7 +892,7 @@ class StreamingMultiAgentCoordinator:
         Yields:
             Stream events from all agents in sequence
         """
-        from config.tracing import build_trace_config
+        from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
 
         # Classify if domains not provided
         # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
@@ -922,57 +1019,87 @@ class StreamingMultiAgentCoordinator:
             # Stream from agent and yield events immediately
             full_response = ""
             last_agent_called_tools = False
-            agent_trace_config = build_trace_config(
-                run_name=f"{domain_key}_agent",
-                session_id=session_id,
-                user_id=user_id,
+            agent_tools_called: list[str] = []
+
+            # Last user message becomes the agent span's input — keeps the
+            # trace readable instead of dumping the entire enriched_messages
+            # array (which includes slot/tool context blocks).
+            _agent_input_msg = next(
+                (m.get("content", "") for m in reversed(enriched_messages) if m.get("role") == "user"),
+                "",
+            )
+
+            with _trace_span(
+                f"agent:{domain_key}",
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
-                tags=[domain_key, "agent"],
-            )
-            for event in agent.stream(enriched_messages, config=agent_trace_config):
-                # Tag with source domain for UI
-                event["source_domain"] = domain_key
-                yield event
+                input=_agent_input_msg,
+            ) as _agent_span:
+                # Nest LangChain auto-captured spans (LLM generations, tools)
+                # under this manual agent span. Falls back to the chat root
+                # when tracing is disabled (span.id is None).
+                agent_trace_config = build_trace_config(
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    parent_span_id=_agent_span.id or parent_span_id,
+                    tags=[domain_key, "agent"],
+                    prompt_name=f"{domain_key}_agent",
+                )
+                for event in agent.stream(enriched_messages, config=agent_trace_config):
+                    # Tag with source domain for UI
+                    event["source_domain"] = domain_key
+                    yield event
 
-                # Track direct data events emitted by the domain agent (JSON output).
-                # When present, skip the UI Template stage below.
-                if event.get("type") == "data":
-                    domain_data_event_emitted = True
+                    # Track direct data events emitted by the domain agent (JSON output).
+                    # When present, skip the UI Template stage below.
+                    if event.get("type") == "data":
+                        domain_data_event_emitted = True
 
-                # Capture message content for context passing
-                if event.get("type") == "message":
-                    content = event.get("content", "")
-                    if content:
-                        accumulated_context[domain_key] = content
-                        full_response = content
-                        logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
+                    # Capture message content for context passing
+                    if event.get("type") == "message":
+                        content = event.get("content", "")
+                        if content:
+                            accumulated_context[domain_key] = content
+                            full_response = content
+                            logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
-                # Capture tool outputs for UI Template Agent
-                if event.get("type") == "tool":
-                    last_agent_called_tools = True
-                    tool_output = event.get("output", "")
-                    if tool_output:
-                        try:
-                            parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "input": event.get("input", {}),
-                                "data": parsed,
-                            })
+                    # Capture tool outputs for UI Template Agent
+                    if event.get("type") == "tool":
+                        last_agent_called_tools = True
+                        tool_name = event.get("tool", "")
+                        if tool_name:
+                            agent_tools_called.append(tool_name)
+                        tool_output = event.get("output", "")
+                        if tool_output:
+                            try:
+                                parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                                accumulated_tool_data.append({
+                                    "tool": tool_name,
+                                    "input": event.get("input", {}),
+                                    "data": parsed,
+                                })
 
-                            # Persist tool-derived goods_no, shop_id, and tire_size to slots
-                            if session_id and isinstance(parsed, dict):
-                                self._save_tool_derived_slots(
-                                    session_id, event.get("tool", ""), parsed, event.get("input", {})
-                                )
+                                # Persist tool-derived goods_no, shop_id, and tire_size to slots
+                                if session_id and isinstance(parsed, dict):
+                                    self._save_tool_derived_slots(
+                                        session_id, tool_name, parsed, event.get("input", {})
+                                    )
 
-                        except (json.JSONDecodeError, TypeError):
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "input": event.get("input", {}),
-                                "data": tool_output,
-                            })
+                            except (json.JSONDecodeError, TypeError):
+                                accumulated_tool_data.append({
+                                    "tool": tool_name,
+                                    "input": event.get("input", {}),
+                                    "data": tool_output,
+                                })
+
+                _agent_span.update(
+                    output=_truncate({
+                        "response": full_response,
+                        "tools_called": agent_tools_called,
+                        "data_event_emitted": domain_data_event_emitted,
+                    }),
+                )
 
             # Yield agent completion event
             yield {
@@ -1229,6 +1356,10 @@ _TRANSACTION_FAST_RE = re.compile(
 # in slots.py's GOAL_PLANS appear here; mismatches simply fall through to the
 # next classifier.
 _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
+    # product_search: bare product-keyword turn (no transactional intent, no
+    # recommend verb). Goal completes when goods_no resolves; until then the
+    # search step lives in Discovery (search_product_tool).
+    ("product_search", "search"): MultiAgentDomain.Domain.DISCOVERY,
     # store_with_stock: model/size live in Discovery (search_product_tool),
     # qty/shop in Transaction (qty quickReply + store search).
     ("store_with_stock", "model"): MultiAgentDomain.Domain.DISCOVERY,
@@ -1244,6 +1375,11 @@ _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
     ("place_order", "size"): MultiAgentDomain.Domain.DISCOVERY,
     ("place_order", "qty"): MultiAgentDomain.Domain.TRANSACTION,
     ("place_order", "shop"): MultiAgentDomain.Domain.TRANSACTION,
+    # store_finder: pure store search. region is the only checklist step.
+    # Missing region → Transaction asks (with quickReply chips); the
+    # user_preferences_text slot persists across the clarification turn so
+    # the criteria carry into the completion step (see _GOAL_COMPLETE_DOMAIN).
+    ("store_finder", "region"): MultiAgentDomain.Domain.TRANSACTION,
 }
 
 # Where to route when every checklist step is satisfied — final tool call lives
@@ -1253,6 +1389,9 @@ _GOAL_COMPLETE_DOMAIN: "dict[str, MultiAgentDomain.Domain]" = {
     "store_with_stock": MultiAgentDomain.Domain.TRANSACTION,
     "price_inquiry": MultiAgentDomain.Domain.TRANSACTION,
     "place_order": MultiAgentDomain.Domain.TRANSACTION,
+    # store_finder: once region is filled, Transaction runs the store search
+    # and applies the captured user_preferences_text (if any) to filter/rank.
+    "store_finder": MultiAgentDomain.Domain.TRANSACTION,
 }
 
 # When the user's latest turn signals a deliberate pivot away from the persisted
@@ -1307,6 +1446,27 @@ def _goal_based_classify(
     if domain is not None:
         logger.info(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
         return [domain]
+    return None
+
+
+def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
+    """Always-on SUPPORT fast-path for unambiguous escalation/policy keywords.
+
+    DECISION_LLM (small QC-tier model) has been observed to mis-route
+    '상담사 연결' / '상담원 연결' to LEADING — leaving LeadingAgent (which has
+    no transfer_to_qna_tool) to refuse the request and surface a "상담사 연결"
+    quickReply chip that, when tapped, loops back into the same refusal.
+
+    Bypass classification when an explicit support trigger is present so the
+    request always reaches SupportAgent's transfer_to_qna_tool. Independent of
+    `_RULE_BASED_ROUTING_ENABLED` so escalation cannot be silently disabled
+    alongside the broader rule-based path.
+    """
+    if not text:
+        return None
+    if _SUPPORT_FAST_RE.search(text):
+        logger.info(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
+        return [MultiAgentDomain.Domain.SUPPORT]
     return None
 
 
@@ -1368,47 +1528,45 @@ def _sanitize_response(text: str) -> str:
 
 
 _FACTUAL_CLAIM_PATTERN = re.compile(
-    r"\d{1,3}(?:,\d{3})*\s*원"  # 가격 (e.g. 150,000원)
-    r"|G\d{9,}"  # goods_no (e.g. GXXXXXXXXXXXX)
-    r"|shop(?:Seq|_id|Id)"  # 매장 ID
-    r"|재고|할인|%\s*할인"  # 재고/할인
+    r"\d{1,3}(?:,\d{3})*\s*원"       # 가격 (e.g. 150,000원)
+    r"|G\d{9,}"                        # goods_no (e.g. G000000313150)
     r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r"|티스테이션\s*\S*점"  # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
-    r"|F\d{5}\b"  # shop_id (e.g. F01234)
-    r"|\d{4}\s*년"  # 연도 (e.g. 2025년)
-    r"|최신|신상|신제품|출시(?:일|연도|시기)?|등록\s*(?:일|상품|연도)"  # 시점/신제품 표현
-    r"|구형|구버전|이전\s*세대|차세대|신세대"  # 세대 비교
-    r"|\d+\s*세대|\d+\s*대\s*제품",  # n세대/n대 제품
+    r"|티스테이션\s*\S*점"             # 매장명 (e.g. 티스테이션양평점)
+    r"|F\d{5}\b",                      # shop_id (e.g. F01234)
     re.IGNORECASE,
 )
 
 
 def _has_factual_claims(text: str) -> bool:
-    """Check if draft contains factual commerce claims that need QC verification."""
     return bool(_FACTUAL_CLAIM_PATTERN.search(text))
 
 
-# Tools whose output is a deterministic DB passthrough — agent cannot hallucinate facts.
-_QC_SKIP_TOOLS = frozenset({
-    "get_my_cars_tool",
-    "transfer_to_qna_tool",
-})
-
-# Templates that carry no LLM-interpreted facts (car list, QnA escalation).
-_QC_SKIP_TEMPLATES = frozenset({
-    "listCar",
-    "qnaComplete",
-    "datepick",
-})
+_QC_SKIP_TOOLS = frozenset({"get_my_cars_tool", "transfer_to_qna_tool"})
+_QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
+# Path B: LLM writes the JSON → QC may correct field values
+_LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
 
 
 def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
-    """Return True when QC is provably unnecessary for this turn."""
     if last_template in _QC_SKIP_TEMPLATES:
         return True
     if called_tool_names and called_tool_names.issubset(_QC_SKIP_TOOLS):
         return True
     return False
+
+
+def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
+    """Returns (corrected_text, template_json | None)."""
+    if "[Template:" not in qc_result:
+        return qc_result, None
+    parts = qc_result.split("[Template:", 1)
+    corrected_text = parts[0].strip()
+    try:
+        newline_idx = parts[1].index("\n")
+        json_str = parts[1][newline_idx + 1:].strip()
+        return corrected_text, json.loads(json_str)
+    except (ValueError, json.JSONDecodeError):
+        return corrected_text, None
 
 
 # Singleton coordinator instance
@@ -2018,14 +2176,16 @@ class TStationChatServiceV2:
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
         _parent_span_id = None
-        from config.tracing import _tracing_enabled, tracer
+        from config.tracing import _tracing_enabled, tracer, truncate_for_trace as _truncate_root, set_trace_name as _set_trace_name
+        _set_trace_name(last_user_msg[:60] if last_user_msg else None)
         if _tracing_enabled:
             _parent_span = tracer.start_span(
                 name="chat",
                 trace_context={"trace_id": request.tracing_id},
-                input=last_user_msg,
+                input=_truncate_root(last_user_msg),
             )
             _parent_span.update_trace(
+                name=(last_user_msg[:60] if last_user_msg else "chat"),
                 session_id=request.session_id,
                 user_id=request.user_id,
             )
@@ -2283,23 +2443,44 @@ class TStationChatServiceV2:
         # Fast-path order: goal-based (deterministic checklist) → rule-based
         # (regex) → LLM classifier (multi-intent, conversational context).
         # Each layer returns None to defer to the next.
+        # Wrapped in a manual `classify` span so Langfuse shows a single clean
+        # node: input=last user text, output=domains. Any nested LLM call from
+        # classify_multi_intent attaches under this span via parent_span_id.
+        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
         routing_result = None
-        fast_domains = (
-            _goal_based_classify(last_user_text, merged_slots)
-            or _rule_based_classify(last_user_text, merged_slots)
-        )
-        if fast_domains is not None:
-            domains = fast_domains
-            # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
-        else:
-            domains, routing_result = _coordinator.classify_multi_intent(
-                messages,
-                session_id=request.session_id,
-                user_id=request.user_id,
-                trace_id=request.tracing_id,
-                parent_span_id=_parent_span_id,
+        with _trace_span(
+            "classify",
+            trace_id=request.tracing_id,
+            parent_span_id=_parent_span_id,
+            input=last_user_text,
+        ) as _classify_span:
+            fast_domains = (
+                _support_fast_path(last_user_text)
+                or _goal_based_classify(last_user_text, merged_slots)
+                or _rule_based_classify(last_user_text, merged_slots)
             )
-            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+            if fast_domains is not None:
+                domains = fast_domains
+                _classify_path = "fast"
+                # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+            else:
+                domains, routing_result = _coordinator.classify_multi_intent(
+                    messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_classify_span.id or _parent_span_id,
+                )
+                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                _classify_path = "llm"
+            _classify_span.update(
+                output=_truncate({
+                    "domains": [d.value for d in domains],
+                    "path": _classify_path,
+                    "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
+                    "flow": getattr(routing_result, "flow", None) if routing_result else None,
+                }),
+            )
         _t_classify = time.perf_counter()
 
         # Post-classification redirect: when the user's current-turn reply was a
@@ -2483,8 +2664,9 @@ class TStationChatServiceV2:
         if request.tracing_id:
             from config.tracing import _tracing_enabled, tracer
             if _tracing_enabled:
+                # slots has no manual span — keep as score. classify/agents/qc
+                # are now covered by business spans in Langfuse.
                 tracer.create_score(trace_id=request.tracing_id, name="latency.slots_ms", value=round((_t_slots - _t0) * 1000))
-                tracer.create_score(trace_id=request.tracing_id, name="latency.classify_ms", value=round((_t_classify - _t_slots) * 1000))
 
         # STREAM MODE
         if request.stream:
@@ -2575,6 +2757,7 @@ class TStationChatServiceV2:
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
+        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
         logger.info(
             "[REQUEST_CONFIG] "
             f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
@@ -2586,8 +2769,10 @@ class TStationChatServiceV2:
         )
 
         _t_stream_start = time.perf_counter()
-        draft_response = ""
+        draft_response = ""       # text only — used for history/message sync
+        draft_for_qc = ""         # text + template payload — passed to QC only
         source_data_chunks = []
+        buffered_data_events: list[dict] = []  # DATA events held until after QC
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
@@ -2642,6 +2827,7 @@ class TStationChatServiceV2:
             if event_type == "token":
                 if event.get("content"):
                     draft_response += event["content"]
+                    draft_for_qc += event["content"]
                     if not _lat_first_token_seen:
                         _lat_first_token_seen = True
                         _lat_first_token_time = _lat_now
@@ -2701,20 +2887,28 @@ class TStationChatServiceV2:
             if event_type == "data":
                 last_template = event.get("template") or last_template
                 event_data = event.get("data", {})
-                if isinstance(event_data, dict) and event_data.get("assistantResponse"):
-                    assistant_response = event_data["assistantResponse"]
-                    source_domain = str(event.get("source_domain", "ui_template")).upper()
-                    assistant_msg_event = {
-                        "type": "message",
-                        "content": assistant_response,
-                        "agent": f"[{source_domain} AGENT]",
-                    }
-                    original_message_events.append(assistant_msg_event)
-                    logger.info(
-                        f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
-                    )
-                # Pass through data event to frontend
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if isinstance(event_data, dict):
+                    if event_data.get("assistantResponse"):
+                        assistant_response = event_data["assistantResponse"]
+                        source_domain = str(event.get("source_domain", "ui_template")).upper()
+                        assistant_msg_event = {
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": f"[{source_domain} AGENT]",
+                        }
+                        original_message_events.append(assistant_msg_event)
+                        logger.info(
+                            f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
+                        )
+                    # For Path B templates only — LLM wrote the JSON so QC must verify it.
+                    # Path A templates (code mapper) are correct by construction; including their
+                    # JSON confuses QC into unnecessary text rewrites.
+                    if last_template in _LLM_WRITTEN_TEMPLATES:
+                        template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
+                        if template_payload:
+                            draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                # Buffer data event — yield after QC so assistantResponse is always verified
+                buffered_data_events.append(event)
                 continue
 
             # --- RESET DRAFT when a new sub-agent starts (multi-agent chaining) ---
@@ -2738,7 +2932,9 @@ class TStationChatServiceV2:
                             f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response"
                         )
                         draft_response = ""
+                        draft_for_qc = ""
                         original_message_events = []
+                        buffered_data_events = []
                 elif _sub_status == "done" and _lat_agent_start is not None:
                     _llm_gen = (_lat_now - _lat_first_token_time) * 1000 if _lat_first_token_time else 0
                     logger.info(
@@ -2769,38 +2965,99 @@ class TStationChatServiceV2:
         # 2. QC AGENT
         # Gated by AI_QC_ENABLED. When enabled, fact-checks the draft against
         # filtered tool source data using AI_MODEL_QC_AGENT (lightweight model).
+        # AI_QC_PARALLEL=true: yield data events before QC so FE renders immediately;
+        # a qc_correction event is emitted afterward only when a correction is needed.
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
+
+            _qc_passed = True  # default: no correction needed
+            qc_template_corrections: dict | None = None
+            _can_apply_json = False
+            _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL
+
+            # PARALLEL MODE: yield data events immediately so FE can render before QC completes
+            if _parallel_qc:
+                for buffered_evt in buffered_data_events:
+                    yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if _s.AI_QC_ENABLED:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
                 if (
-                    _has_factual_claims(draft_response)
-                    and source_data_chunks
+                    _has_factual_claims(draft_for_qc)
+                    and called_tool_names
                     and not _should_skip_qc(called_tool_names, last_template)
                 ):
                     try:
-                        from services.tstation.agents.g_qc_agent.agent import invoke_qc
-                        from services.tstation.agents.router import QC_LLM
                         from config.tracing import build_trace_config
 
-                        trace_config = build_trace_config(
-                            run_name="qc_agent",
-                            session_id=session_id,
-                            user_id=user_id,
+                        with _trace_span(
+                            "qc",
                             trace_id=trace_id,
                             parent_span_id=parent_span_id,
-                            tags=["qc"],
-                        )
-                        qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data, config=trace_config)
-                        if qc_result.strip() and qc_result.strip().upper() != "PASS":
-                            draft_response = qc_result.strip()
-                            logger.info("[QC_LAYER] QC corrected the response")
-                        else:
-                            logger.info("[QC_LAYER] QC passed")
+                            input={
+                                "user_query": user_query,
+                                "draft": draft_for_qc,
+                                "source_data": source_data,
+                            },
+                        ) as _qc_span:
+                            trace_config = build_trace_config(
+                                session_id=session_id,
+                                user_id=user_id,
+                                trace_id=trace_id,
+                                parent_span_id=_qc_span.id or parent_span_id,
+                                tags=["qc"],
+                                prompt_name="qc_agent",
+                            )
+                            async def _run_qc():
+                                return await ainvoke_qc(
+                                    QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
+                                )
+                            qc_result = _anyio_ft.run(_run_qc)
+                            qc_result = qc_result.strip()
+                            _qc_passed = not qc_result or qc_result.upper() == "PASS"
+                            logger.info(f"[QC_LAYER] QC result: {qc_result[:300]}")
+                            if not _qc_passed:
+                                corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
+                                draft_response = corrected_text or draft_response
+                                _can_apply_json = qc_template_corrections and last_template in _LLM_WRITTEN_TEMPLATES
+                                logger.info(
+                                    f"[QC_LAYER] QC corrected the response"
+                                    + (f" (+ {len(qc_template_corrections)} JSON field(s) applied)" if _can_apply_json else " (text only)")
+                                )
+                            else:
+                                logger.info("[QC_LAYER] QC passed")
+                            _qc_span.update(
+                                output=_truncate({
+                                    "verdict": "PASS" if _qc_passed else "CORRECTED",
+                                    "result": qc_result,
+                                }),
+                            )
                     except Exception as e:
                         logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+
+            if _parallel_qc:
+                # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
+                if not _qc_passed:
+                    correction_evt: dict = {"type": "qc_correction", "assistantResponse": draft_response}
+                    if _can_apply_json:
+                        correction_evt["template"] = last_template
+                        correction_evt["corrections"] = qc_template_corrections
+                    yield f"data: {json.dumps(correction_evt, ensure_ascii=False)}\n\n"
+                    logger.info("[QC_LAYER] Parallel mode: emitted qc_correction patch")
+            else:
+                # SEQUENTIAL (default): yield buffered DATA events with corrections applied
+                for buffered_evt in buffered_data_events:
+                    if not _qc_passed:
+                        evt_data = buffered_evt.get("data", {})
+                        if isinstance(evt_data, dict):
+                            if "assistantResponse" in evt_data:
+                                evt_data["assistantResponse"] = draft_response
+                            if _can_apply_json:
+                                for k, v in qc_template_corrections.items():
+                                    if k != "assistantResponse" and k in evt_data:
+                                        evt_data[k] = v
+                    yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if original_message_events:
                 final_msg_event = original_message_events[-1]
@@ -2829,15 +3086,18 @@ class TStationChatServiceV2:
             f"qc={(_t_qc - _t_agents)*1000:.0f}ms "
             f"total={(_t_qc - _t_stream_start)*1000:.0f}ms"
         )
-        if trace_id:
-            from config.tracing import _tracing_enabled, tracer
-            if _tracing_enabled:
-                tracer.create_score(trace_id=trace_id, name="latency.agents_ms", value=round((_t_agents - _t_stream_start) * 1000))
-                tracer.create_score(trace_id=trace_id, name="latency.qc_ms", value=round((_t_qc - _t_agents) * 1000))
-                tracer.create_score(trace_id=trace_id, name="latency.stream_total_ms", value=round((_t_qc - _t_stream_start) * 1000))
+        # agents / qc / stream_total latency is now tracked via manual Langfuse
+        # spans ("agent:*", "qc") — no need to submit redundant scores.
 
         if parent_span is not None:
-            parent_span.update_trace(name="chat", output=draft_response)
+            from config.tracing import truncate_for_trace as _truncate_root_out
+            _last_user = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
+            )
+            parent_span.update_trace(
+                name=(_last_user[:60] if _last_user else "chat"),
+                output=_truncate_root_out(draft_response),
+            )
             parent_span.end()
 
         # 5. FINALIZE THE STREAM

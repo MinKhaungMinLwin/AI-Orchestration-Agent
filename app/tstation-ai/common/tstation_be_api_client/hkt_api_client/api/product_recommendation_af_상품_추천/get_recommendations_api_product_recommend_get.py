@@ -18,6 +18,8 @@ def _get_kwargs(
     brand_cd: str,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
+    season_nm: None | str | Unset = UNSET,
+    pfm_nm: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -42,6 +44,20 @@ def _get_kwargs(
     else:
         json_tire_size = tire_size
     params["tire_size"] = json_tire_size
+
+    json_season_nm: None | str | Unset
+    if isinstance(season_nm, Unset):
+        json_season_nm = UNSET
+    else:
+        json_season_nm = season_nm
+    params["season_nm"] = json_season_nm
+
+    json_pfm_nm: None | str | Unset
+    if isinstance(pfm_nm, Unset):
+        json_pfm_nm = UNSET
+    else:
+        json_pfm_nm = pfm_nm
+    params["pfm_nm"] = json_pfm_nm
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -92,6 +108,8 @@ def sync_detailed(
     brand_cd: str,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
+    season_nm: None | str | Unset = UNSET,
+    pfm_nm: None | str | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -120,6 +138,7 @@ def sync_detailed(
     - **safe_kids**: 아이 안전 (`T_RLX_ISN_YN='O'` + 정숙·하중 높은 순)
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
+    - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
     Args:
         rcmd_type (RcmdType):
@@ -128,6 +147,9 @@ def sync_detailed(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            에만 적용됨.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -143,6 +165,8 @@ def sync_detailed(
         brand_cd=brand_cd,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
+        season_nm=season_nm,
+        pfm_nm=pfm_nm,
     )
 
     response = client.get_httpx_client().request(
@@ -160,6 +184,8 @@ def sync(
     brand_cd: str,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
+    season_nm: None | str | Unset = UNSET,
+    pfm_nm: None | str | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -188,6 +214,7 @@ def sync(
     - **safe_kids**: 아이 안전 (`T_RLX_ISN_YN='O'` + 정숙·하중 높은 순)
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
+    - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
     Args:
         rcmd_type (RcmdType):
@@ -196,6 +223,9 @@ def sync(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            에만 적용됨.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -212,6 +242,8 @@ def sync(
         brand_cd=brand_cd,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
+        season_nm=season_nm,
+        pfm_nm=pfm_nm,
     ).parsed
 
 
@@ -223,6 +255,8 @@ async def asyncio_detailed(
     brand_cd: str,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
+    season_nm: None | str | Unset = UNSET,
+    pfm_nm: None | str | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -251,6 +285,7 @@ async def asyncio_detailed(
     - **safe_kids**: 아이 안전 (`T_RLX_ISN_YN='O'` + 정숙·하중 높은 순)
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
+    - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
     Args:
         rcmd_type (RcmdType):
@@ -259,6 +294,9 @@ async def asyncio_detailed(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            에만 적용됨.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -274,6 +312,8 @@ async def asyncio_detailed(
         brand_cd=brand_cd,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
+        season_nm=season_nm,
+        pfm_nm=pfm_nm,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -289,6 +329,8 @@ async def asyncio(
     brand_cd: str,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
+    season_nm: None | str | Unset = UNSET,
+    pfm_nm: None | str | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -317,6 +359,7 @@ async def asyncio(
     - **safe_kids**: 아이 안전 (`T_RLX_ISN_YN='O'` + 정숙·하중 높은 순)
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
+    - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
     Args:
         rcmd_type (RcmdType):
@@ -325,6 +368,9 @@ async def asyncio(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            에만 적용됨.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -342,5 +388,7 @@ async def asyncio(
             brand_cd=brand_cd,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
+            season_nm=season_nm,
+            pfm_nm=pfm_nm,
         )
     ).parsed

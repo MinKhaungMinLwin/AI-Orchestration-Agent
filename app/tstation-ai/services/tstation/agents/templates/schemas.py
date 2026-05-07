@@ -157,8 +157,8 @@ class LocationTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "location"
 
     assistantResponse: str = Field(..., min_length=1)
-    stores: list[LocationItem] = Field(..., min_length=1, max_length=5)
-    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=5)
+    stores: list[LocationItem] = Field(..., min_length=1, max_length=10)
+    metadata: list[LocationMeta] = Field(..., min_length=1, max_length=10)
     # Routing hint for the FE click handler. When True, the FE should treat a
     # store-card click as a flow-advancement signal and call /chat so the
     # agent can return the next step (typically datepick). When False
@@ -228,14 +228,15 @@ class OrderInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # carInfo: 사용자가 차량 미등록인 상태로 주문/예약을 진행할 수 있어
-    # optional. FE는 빈 값을 "—"로 그래스풀 처리(chatbox-order-summary.js
-    # valOrDash). required로 두면 LLM이 빈 문자열을 채워 schema validation
-    # 실패 → silent terminator(\n\n)만 emit되어 다음 단계 진행이 막힌다.
+    # carInfo / storeName: 사용자가 차량 미등록 상태로 주문/예약을 진행하거나
+    # cart-save 흐름(매장 선택 전 단계)에 들어올 수 있어 optional. FE는 빈 값을
+    # "—"로 그래스풀 처리(chatbox-order-summary.js valOrDash). required로 두면
+    # LLM이 cart-save 단계에서 null을 emit해 schema validation 실패 → silent
+    # terminator(\n\n) + fallback chips만 사용자에게 보여 cart 진행이 막힌다.
     carInfo: str | None = None
     product: str = Field(..., min_length=1)
     quantity: int = Field(..., ge=0)
-    storeName: str = Field(..., min_length=1)
+    storeName: str | None = None
     bookingDateTime: str | None = None
     paymentAmount: int | None = Field(default=None, ge=0)
 
@@ -255,7 +256,10 @@ class PreOrderMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goodsId: str = Field(..., min_length=1)
-    shopId: str = Field(..., min_length=1)
+    # shopId: optional during cart-save flow (before store selection). Same
+    # rationale as OrderInfo.storeName / carInfo — required would fail
+    # validation and show fallback chips to the user instead of the cart card.
+    shopId: str | None = None
     carNo: str | None = None
     carLncCd: str | None = None
 
@@ -348,18 +352,39 @@ class ProductMeta(BaseModel):
     goodsId: str = Field(..., min_length=1)
 
 
-class ProductItem(BaseModel):
-    """Visible product card content for the FE."""
+class ProductTag(BaseModel):
+    """Tag chip rendered on a product card.
+
+    primary=True → 강조 스타일 (chatbox-product-tag-primary, prc_grd_nm 매핑)
+    primary=False → 일반 스타일 (chatbox-product-tag-secondary, goods_pfm_nm 매핑)
+    """
 
     model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., min_length=1)
+    primary: bool = False
+
+
+class ProductItem(BaseModel):
+    """Visible product card content for the FE.
+
+    extra="ignore" — LLM 이 종종 BE row 의 필드명(comfort, review_count 등)을
+    그대로 emit 하는 hallucination 이 발생한다. forbid 로 두면 validation 이
+    실패해 카드 자체가 안 나오므로(quickReply fallback 발생), ignore 로 풀어
+    검증을 통과시키고 model_dump 시점에 자동 strip 한다.
+    `inject_product_tags_and_sanitize` 가 한 번 더 schema-키 화이트리스트로
+    sanitize 하므로 wire 에는 정의된 필드만 노출된다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     imageUrl: str
     title: str = Field(..., min_length=1)
     tires: str
-    comfort: str
     price: Optional[int] = Field(None, ge=0)
     rate: float = Field(..., ge=0.0, le=5.0)
     totalQuantity: int = Field(..., ge=0)
+    tags: list[ProductTag] = Field(default_factory=list)
 
 
 class ProductTemplate(TemplatePayload):
@@ -368,8 +393,8 @@ class ProductTemplate(TemplatePayload):
     TEMPLATE_NAME: ClassVar[str] = "product"
 
     assistantResponse: str = Field(..., min_length=1)
-    products: list[ProductItem] = Field(..., min_length=1, max_length=5)
-    metadata: list[ProductMeta] = Field(..., min_length=1, max_length=5)
+    products: list[ProductItem] = Field(..., min_length=1, max_length=10)
+    metadata: list[ProductMeta] = Field(..., min_length=1, max_length=10)
     # Routing hint mirroring LocationTemplate.isBookingFlow. When True, the FE
     # should treat a product-card click as a flow-advancement signal and call
     # /chat (so the next checklist step — qty / shop / inventory / order —

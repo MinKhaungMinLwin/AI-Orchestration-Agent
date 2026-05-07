@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     AI_MODEL_QC_AGENT: str
     AI_MODEL_TRANSACTION_AGENT: str
     AI_QC_ENABLED: bool = False
+    AI_QC_PARALLEL: bool = False
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str

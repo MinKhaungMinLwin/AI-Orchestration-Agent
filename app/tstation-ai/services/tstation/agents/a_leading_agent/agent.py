@@ -480,7 +480,7 @@ Format strictly:
   "type": "data",
   "template": "quickReply",
   "data": {{
-    "assistantResponse": "<the full user-facing answer>",
+    "assistantResponse": "<the full user-facing answer>",    
     "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
   }}
 }}

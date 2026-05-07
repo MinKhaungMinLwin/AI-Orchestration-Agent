@@ -129,6 +129,8 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
+    # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
+    "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
     "rating_avg", "rate", "review_count", "comfort",
 })
@@ -625,11 +627,13 @@ def get_product_description_tool(goods_no: str):
 @tool_cache(ttl=300)
 def get_products_recommendations_tool(
     rcmd_type: RcmdType,
-    limit: int = 5,
+    limit: int = 10,
     brand_cd: str = "HK",
     car_lnc_cd: str | None = None,
     tire_size: str | None = None,
     sort_by: str | None = None,
+    season_nm: str | None = None,
+    pfm_nm: str | None = None,
 ):
     """
     Product Recommendation — top N products by rcmd_type.
@@ -656,10 +660,11 @@ def get_products_recommendations_tool(
     - safe_kids: 안전 (T_RLX_ISN_YN='O', 정숙·하중 우선)
     - all_weather: 전천후 (WET, T_SNOW, T_ICE 높은 순)
     - warranty: 워런티 가능 (WRT_GRTE_TERM 긴 순)
+    - summer: 여름용 (SEASON_NM='여름', WET·T_HIGH_HAND_AVG 높은 순)
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 5, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -677,6 +682,23 @@ def get_products_recommendations_tool(
             - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 rcmd_type 의 BE 정렬 그대로 유지.
+        season_nm (str | None, optional): 계절 직교 필터. rcmd_type 과 직교로 적용된다.
+            - "여름": 여름용 타이어만
+            - "겨울": 겨울용 타이어만
+            - "사계절": 사계절 타이어만
+            ⚠️ 신규(동적) rcmd_type 에만 적용됨 (tstation/discount/value 제외).
+            "여름용 타이어 추천" 단일 의도면 rcmd_type="summer" 사용 (필터 불필요).
+        pfm_nm (str | None, optional): 성능 등급 직교 필터. rcmd_type 과 직교로 적용된다.
+            - "SPORT": 스포츠/퍼포먼스
+            - "COMFORT": 편안한 승차감
+            - "RUNFLAT": 런플랫
+            ⚠️ 신규(동적) rcmd_type 에만 적용됨.
+            "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
+
+    Combined-intent guidance (직교 필터):
+        - "퍼포먼스 좋은 여름용" → rcmd_type="performance", season_nm="여름"
+        - "조용한 사계절" → rcmd_type="low_vibration", season_nm="사계절"
+        - "런플랫 중에 빗길 강한" → rcmd_type="wet", pfm_nm="RUNFLAT"
 
     Examples:
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
@@ -685,13 +707,15 @@ def get_products_recommendations_tool(
         - {"rcmd_type": "warranty", "limit": 5, "brand_cd": "HK"}
         - {"rcmd_type": "all_weather", "tire_size": "245/45R18", "sort_by": "price_asc"}  # 가장 저렴한 사계절 타이어
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
+        - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
+        - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     logger.info(
-        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by,
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s",
+        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm,
     )
 
     try:
@@ -702,6 +726,8 @@ def get_products_recommendations_tool(
             brand_cd=brand_cd,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
+            season_nm=season_nm,
+            pfm_nm=pfm_nm,
         )
         if response.parsed is None:
             return _error_response(
