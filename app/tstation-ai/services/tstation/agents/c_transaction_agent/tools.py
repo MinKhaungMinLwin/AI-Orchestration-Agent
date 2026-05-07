@@ -22,6 +22,9 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_available_coupons_api_prices_coupons_available_get import sync_detailed as get_available_coupons
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_my_coupons_api_prices_coupons_mine_get import sync_detailed as get_my_coupons
 
+# EVENT / DEAL AF — 상품번호 기준 진행 중 기획전+쿠폰 조회
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_by_product_api_events_deals_by_product_get import sync_detailed as get_deals_by_product
+
 # COUPON AF — 쿠폰 발급
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_goods_api_coupons_issue_goods_post import sync_detailed as issue_coupon_by_goods
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_cpn_api_coupons_issue_cpn_post import sync_detailed as issue_coupon_by_cpn
@@ -240,6 +243,68 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
     except Exception as e:
         logger.exception("[TOOL][issue_coupon_tool] Failed")
         return _error_response(None, str(e), "Failed to issue coupon")
+
+
+# =====================================================
+# PROMOTION (DEAL + COUPON BY PRODUCT) TOOLS
+# =====================================================
+
+@tool
+@tool_cache(ttl=300)
+def get_product_promotions_tool(goods_no: str):
+    """
+    상품번호 기준 진행 중 기획전 + 매핑된 활성 쿠폰(C301) 목록 조회.
+
+    Use when:
+    - 상품이 특정된(goods_no 확보) 상태에서 사용자가 다음과 같이 물을 때:
+      "이 상품에 적용 가능한 쿠폰 알려줘", "이 상품 기획전 알려줘",
+      "이 상품에 진행 중인 프로모션 / 혜택 / 행사 / 이벤트 있어?".
+    - 일반 다운로드 가능 쿠폰 조회(get_available_coupons_tool)와 다름:
+      이 도구는 "특정 상품에 매핑된 진행 중 기획전쿠폰"만 반환.
+
+    Pre-condition:
+    - goods_no must be confirmed (slot 또는 직전 도구 결과). 없으면 사용 금지.
+
+    Args:
+        goods_no (str): 상품 번호 (예: GXXXXXXXXXXXX).
+
+    Response shape:
+        {
+          "goods_no": "...",
+          "total": <int>,
+          "items": [
+            {
+              "deal_no": "...",
+              "deal_nm": "...",
+              "disp_strt_dtime": "YYYY-MM-DD HH:MM:SS",
+              "disp_end_dtime": "YYYY-MM-DD HH:MM:SS",
+              "coupons": [
+                {"cpn_no": "...", "cpn_knd_cd": "C301", "cpn_prgs_stat_cd": "40"}
+              ]
+            }
+          ]
+        }
+
+    Example: {"goods_no": "G000000314254"}
+    """
+    logger.info("[TOOL][get_product_promotions_tool] Called with: goods_no=%s", goods_no)
+
+    if not goods_no or not goods_no.strip():
+        return _error_response(None, "InvalidArguments", "goods_no는 필수 입력입니다.")
+
+    try:
+        response = get_deals_by_product(client=get_client(), goods_no=goods_no.strip())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get product promotions",
+            )
+        logger.info("[TOOL][get_product_promotions_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_product_promotions_tool] Failed")
+        return _error_response(None, str(e), "Failed to get product promotions")
 
 
 # =====================================================

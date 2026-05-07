@@ -6,6 +6,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_available_coupons_tool,
     get_my_coupons_tool,
     issue_coupon_tool,
+    get_product_promotions_tool,
     get_logistics_inventory_tool,
     get_store_inventory_tool,
     search_place_tool,
@@ -153,6 +154,7 @@ Store name examples (for get_store_list_tool store_nm only):
 | get_final_price_tool | User asks for price (goods_no required) |
 | get_available_coupons_tool | User asks "받을 수 있는 쿠폰", "available coupons" |
 | get_my_coupons_tool | User asks "내 쿠폰", "my coupons" |
+| get_product_promotions_tool | goods_no 확보된 상태에서 사용자가 "이 상품에 적용 가능한 쿠폰/기획전/프로모션/혜택 알려줘" — 상품에 매핑된 진행 중 기획전+쿠폰 묶음 조회 |
 | issue_coupon_tool | User wants to download/receive a coupon — goods_no for 최저가 혜택 쿠폰 묶음, cpn_no for specific coupon |
 | get_logistics_inventory_tool | Check warehouse stock |
 | get_store_inventory_tool | Check stock at specific store(s) |
@@ -924,6 +926,16 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
 
+⚠️ 상품 컨텍스트 분기 (goods_no 확보 + 사용자가 "이 상품" 같은 지시어 사용 시):
+- "이 상품에 적용 가능한 쿠폰 알려줘" / "이 상품 기획전 알려줘"
+  / "이 상품에 진행 중인 프로모션/혜택/행사 있어?"
+  → get_product_promotions_tool(goods_no=...)
+- 일반 "쿠폰 알려줘"(상품 지시어 없음) → get_available_coupons_tool 사용
+- get_product_promotions_tool 결과:
+  - items 비어있으면 → "현재 이 상품에 적용 가능한 기획전/쿠폰이 없어요 😊"
+  - items 존재 시 → 기획전명, 진행 기간(disp_strt~end_dtime), 매핑된 쿠폰 개수를 자연어로 요약
+  - ⚠️ cpn_no, deal_no 등 내부 식별자는 사용자에게 노출 금지
+
 발급 (issue_coupon_tool):
 - 트리거 키워드: "쿠폰 받아줘", "다운로드", "쿠폰 받기", "발급해줘", "혜택쿠폰 적용", "이 쿠폰 받을래"
 - 분기 규칙 (XOR — 정확히 한 인자만 사용):
@@ -962,6 +974,7 @@ Choose the output template based on the tool called:
 | Tool(s) | Template |
 |---------|----------|
 | get_available_coupons_tool, get_my_coupons_tool | `voucher` |
+| get_product_promotions_tool | `quickReply` (기획전명/기간/쿠폰 수를 자연어로 요약) |
 | issue_coupon_tool | `quickReply` |
 | get_store_list_tool, get_nearby_stores_tool | `location` |
 | get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
@@ -1350,6 +1363,8 @@ class TransactionSubAgent(BaseAgent):
         "get_final_price_tool": "Price",
         "get_available_coupons_tool": "Price",
         "get_my_coupons_tool": "Price",
+        # Promotion (deals + coupons by product)
+        "get_product_promotions_tool": "Promotion",
         # Coupon Issue
         "issue_coupon_tool": "Coupon Issue",
         # Inventory
@@ -1378,6 +1393,7 @@ class TransactionSubAgent(BaseAgent):
                 get_available_coupons_tool,
                 get_my_coupons_tool,
                 issue_coupon_tool,
+                get_product_promotions_tool,
                 get_logistics_inventory_tool,
                 get_store_inventory_tool,
                 search_place_tool,
