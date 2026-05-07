@@ -28,6 +28,7 @@ from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
 from services.tstation.agents.router import QC_LLM
+from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
 import anyio.from_thread as _anyio_ft
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,6 @@ def decide_next_action(
     parent_span_id: str | None = None,
 ) -> AgentDecision:
     from langchain_core.messages import SystemMessage, HumanMessage
-    from config.tracing import build_trace_config
 
     structured_model = _decision_structured_model
 
@@ -584,7 +584,6 @@ class StreamingMultiAgentCoordinator:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
         from langchain_core.messages import SystemMessage
-        from config.tracing import build_trace_config
 
         # ---------- Hardcoded keyword routing (bypasses LLM) ----------
         last_user_text = ""
@@ -892,8 +891,6 @@ class StreamingMultiAgentCoordinator:
         Yields:
             Stream events from all agents in sequence
         """
-        from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
-
         # Classify if domains not provided
         # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
         original_messages = list(messages)
@@ -1527,24 +1524,13 @@ def _sanitize_response(text: str) -> str:
     return text
 
 
-_FACTUAL_CLAIM_PATTERN = re.compile(
-    r"\d{1,3}(?:,\d{3})*\s*원"       # 가격 (e.g. 150,000원)
-    r"|G\d{9,}"                        # goods_no (e.g. G000000313150)
-    r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r"|티스테이션\s*\S*점"             # 매장명 (e.g. 티스테이션양평점)
-    r"|F\d{5}\b",                      # shop_id (e.g. F01234)
-    re.IGNORECASE,
-)
-
-
-def _has_factual_claims(text: str) -> bool:
-    return bool(_FACTUAL_CLAIM_PATTERN.search(text))
-
 
 _QC_SKIP_TOOLS = frozenset({"get_my_cars_tool", "transfer_to_qna_tool"})
 _QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
 # Path B: LLM writes the JSON → QC may correct field values
 _LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
+# Valid domains a quick reply chip may declare for classifier skip
+_VALID_CHIP_DOMAINS = frozenset({"DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING"})
 
 
 def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
@@ -1589,7 +1575,12 @@ _coordinator = StreamingMultiAgentCoordinator()
 _TEMPLATE_ENRICH_MAX_TURNS = 1
 
 
-def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
+def _enrich_messages_with_template_data(
+    messages: list[dict],
+    session_id: str,
+    *,
+    redis_history: list[dict] | None = None,
+) -> list[dict]:
     """Attach template_data from Redis to recent assistant card turns.
 
     Walks messages in reverse and enriches up to _TEMPLATE_ENRICH_MAX_TURNS
@@ -1601,14 +1592,19 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
     Token-context concerns are bounded by the cap; the BE-filtered
     tool_context (loaded as a separate system message) preserves additional
     older-turn structured data.
+
+    Pass `redis_history` to reuse an already-fetched history list and skip
+    the extra Redis round-trip.
     """
     if not session_id:
         return messages
 
     try:
-        from services.tstation.chat_history_service import get_chat_history_service
+        if redis_history is None:
+            from services.tstation.chat_history_service import get_chat_history_service
+            redis_history = get_chat_history_service().get_history(session_id)
 
-        redis_messages = get_chat_history_service().get_history(session_id)
+        redis_messages = redis_history
 
         # content -> template_data map. If two assistant turns share identical
         # content, the chronologically-latest template_data wins — acceptable
@@ -2191,21 +2187,18 @@ class TStationChatServiceV2:
             )
             _parent_span_id = _parent_span.id
 
-        # Step 1: Enrich messages with template_data from Redis history
-        enriched_messages = _enrich_messages_with_template_data(
-            [dict(msg) for msg in request.messages],
-            request.session_id,
-        )
-        # Step 2: Build messages with user info
-        request_with_enriched = TStationChatRequest(
-            messages=enriched_messages,
+        # Step 1: Prep raw messages — enrichment happens after Redis prefetch below.
+        # Build plain messages now as a fallback (used if Redis prefetch fails entirely).
+        raw_messages = [dict(msg) for msg in request.messages]
+        _request_plain = TStationChatRequest(
+            messages=raw_messages,
             session_id=request.session_id,
             user_id=request.user_id,
             access_token=request.access_token,
             stream=request.stream,
             user_info=request.user_info,
         )
-        messages = TStationChatServiceV2._build_messages_with_user_info(request_with_enriched)
+        messages = TStationChatServiceV2._build_messages_with_user_info(_request_plain)
 
         # Keep at most 20 messages (10 turns) before sending to LLM.
         # Slots and last_user_text are extracted from request.messages (untouched above).
@@ -2214,8 +2207,6 @@ class TStationChatServiceV2:
             dropped = len(messages) - _MAX_HISTORY_MESSAGES
             messages = messages[-_MAX_HISTORY_MESSAGES:]
             logger.info(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
-
-        logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
         # Wrapped in try/except so slot failures never block the main chat flow
@@ -2237,14 +2228,35 @@ class TStationChatServiceV2:
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load existing slots + tool context from Redis in parallel (independent reads)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pool:
-                _slots_f = _pool.submit(chat_history_svc.get_slots, request.session_id)
+            # 1) Load history, slots, and tool context from Redis in parallel (3 independent reads).
+            # history is needed for template enrichment; slots and tool_context for agent injection.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _pool:
+                _history_f  = _pool.submit(chat_history_svc.get_history, request.session_id)
+                _slots_f    = _pool.submit(chat_history_svc.get_slots, request.session_id)
                 _tool_ctx_f = _pool.submit(chat_history_svc.get_tool_context, request.session_id)
+                redis_history  = _history_f.result()
                 existing_slots = _slots_f.result()
                 prev_tool_data = _tool_ctx_f.result()
             _t_slots = time.perf_counter()
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+
+            # 1a) Enrich messages with template_data from prefetched history and rebuild.
+            # Overrides the plain fallback built above — no extra Redis round-trip.
+            enriched_messages = _enrich_messages_with_template_data(
+                raw_messages, request.session_id, redis_history=redis_history
+            )
+            _request_enriched = TStationChatRequest(
+                messages=enriched_messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                access_token=request.access_token,
+                stream=request.stream,
+                user_info=request.user_info,
+            )
+            messages = TStationChatServiceV2._build_messages_with_user_info(_request_enriched)
+            if len(messages) > _MAX_HISTORY_MESSAGES:
+                messages = messages[-_MAX_HISTORY_MESSAGES:]
+            logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
 
             # 2) Extract regex-based slots from the LATEST user message only
             for msg in reversed(request.messages):
@@ -2440,13 +2452,19 @@ class TStationChatServiceV2:
             slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
-        # Fast-path order: goal-based (deterministic checklist) → rule-based
-        # (regex) → LLM classifier (multi-intent, conversational context).
+        # Fast-path order: chip_context (FE-declared domain) → goal-based (deterministic
+        # checklist) → rule-based (regex) → LLM classifier (multi-intent, conversational context).
         # Each layer returns None to defer to the next.
         # Wrapped in a manual `classify` span so Langfuse shows a single clean
         # node: input=last user text, output=domains. Any nested LLM call from
         # classify_multi_intent attaches under this span via parent_span_id.
-        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+        _chip_domain: str | None = None
+        _chip_ctx = request.chip_context or {}
+        if isinstance(_chip_ctx, dict):
+            _d = _chip_ctx.get("domain")
+            if _d in _VALID_CHIP_DOMAINS:
+                _chip_domain = _d
+
         routing_result = None
         with _trace_span(
             "classify",
@@ -2454,25 +2472,30 @@ class TStationChatServiceV2:
             parent_span_id=_parent_span_id,
             input=last_user_text,
         ) as _classify_span:
-            fast_domains = (
-                _support_fast_path(last_user_text)
-                or _goal_based_classify(last_user_text, merged_slots)
-                or _rule_based_classify(last_user_text, merged_slots)
-            )
-            if fast_domains is not None:
-                domains = fast_domains
-                _classify_path = "fast"
-                # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+            if _chip_domain:
+                domains = [MultiAgentDomain.Domain[_chip_domain]]
+                _classify_path = "chip"
+                logger.info(f"[CLASSIFIER] chip_context.domain={_chip_domain!r} — skipping LLM classifier")
             else:
-                domains, routing_result = _coordinator.classify_multi_intent(
-                    messages,
-                    session_id=request.session_id,
-                    user_id=request.user_id,
-                    trace_id=request.tracing_id,
-                    parent_span_id=_classify_span.id or _parent_span_id,
+                fast_domains = (
+                    _support_fast_path(last_user_text)
+                    or _goal_based_classify(last_user_text, merged_slots)
+                    or _rule_based_classify(last_user_text, merged_slots)
                 )
-                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
-                _classify_path = "llm"
+                if fast_domains is not None:
+                    domains = fast_domains
+                    _classify_path = "fast"
+                    # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+                else:
+                    domains, routing_result = _coordinator.classify_multi_intent(
+                        messages,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        trace_id=request.tracing_id,
+                        parent_span_id=_classify_span.id or _parent_span_id,
+                    )
+                    messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                    _classify_path = "llm"
             _classify_span.update(
                 output=_truncate({
                     "domains": [d.value for d in domains],
@@ -2757,7 +2780,6 @@ class TStationChatServiceV2:
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
-        from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
         logger.info(
             "[REQUEST_CONFIG] "
             f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
@@ -2984,13 +3006,10 @@ class TStationChatServiceV2:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
 
                 if (
-                    _has_factual_claims(draft_for_qc)
-                    and called_tool_names
+                    called_tool_names
                     and not _should_skip_qc(called_tool_names, last_template)
                 ):
                     try:
-                        from config.tracing import build_trace_config
-
                         with _trace_span(
                             "qc",
                             trace_id=trace_id,
@@ -3016,7 +3035,9 @@ class TStationChatServiceV2:
                             qc_result = _anyio_ft.run(_run_qc)
                             qc_result = qc_result.strip()
                             _qc_passed = not qc_result or qc_result.upper() == "PASS"
-                            logger.info(f"[QC_LAYER] QC result: {qc_result[:300]}")
+                            logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
+                            logger.debug(f"[QC_LAYER] Source: {source_data[:500]}")
+                            logger.info(f"[QC_LAYER] QC result: {qc_result[:500]}")
                             if not _qc_passed:
                                 corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
                                 draft_response = corrected_text or draft_response

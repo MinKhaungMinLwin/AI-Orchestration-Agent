@@ -26,7 +26,11 @@ _VALIDATION_FALLBACK_MESSAGE = (
     "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
     "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
 )
-_VALIDATION_FALLBACK_QUICK_REPLIES = ["다시 시도", "상담사 연결", "처음으로"]
+_VALIDATION_FALLBACK_QUICK_REPLIES = [
+    {"label": "다시 시도", "domain": "LEADING"},
+    {"label": "상담사 연결", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
 
 
 class _AssistantResponseStreamer:

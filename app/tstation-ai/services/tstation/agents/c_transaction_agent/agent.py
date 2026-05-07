@@ -515,8 +515,8 @@ Steps:
 A user message is a STORE LIST PICK when ALL three are true:
   (a) the previous assistant turn emitted a `location` template (a store list),
   (b) the current user message matches one of these patterns:
-      • `^\s*\d+\.?\s+\S+` (e.g. "1. 티스테이션 판교점", "2 티스테이션 한남점")
-      • `^\s*\d+\s*번` (e.g. "1번", "3번 매장")
+      • `^\\s*\\d+\\.?\\s+\\S+` (e.g. "1. 티스테이션 판교점", "2 티스테이션 한남점")
+      • `^\\s*\\d+\\s*번` (e.g. "1번", "3번 매장")
       • exact / partial store name from the list shown (e.g. "판교점", "한남점", "티스테이션 판교점")
       • bare list index "1" / "2" / "3" / "4" / "5"
   (c) the message contains NOTHING ELSE (no question, no new keyword like "영업시간 알려줘").
@@ -525,7 +525,7 @@ When the message is a STORE LIST PICK, you MUST resolve to one path: either (A) 
 
 🚨 **GATE — ALWAYS check this BEFORE picking any tool, BEFORE priorities 1–6:**
 Scan the entire conversation thread:
-  • Does ANY prior user message contain booking/installation keywords: `장착`, `장착\s*가능`, `예약`, `방문`, `빨리`, `주문`, `구매`? OR
+  • Does ANY prior user message contain booking/installation keywords: `장착`, `장착\\s*가능`, `예약`, `방문`, `빨리`, `주문`, `구매`? OR
   • Is `goods_no` in confirmed slots (a tire was searched / priced / described / selected earlier in this thread)?
 
 → If EITHER is true: this is a BOOKING context. Apply ONE of two paths based on the **active goal**:
@@ -603,7 +603,7 @@ Context signals to check (in priority order, ONLY if STEP 0 did not fire):
    → This rule fires even if `pending_intent` was already cleared (e.g. by a successful
      `get_final_price_tool` run) — once a tire is in scope, the journey is purchase-bound.
 4. ANY recent user turn (current OR within the last ~5 turns of the same product/store thread)
-   contains booking/installation keywords (예약, 장착, 장착\s*가능, 방문, 빨리, 주문, 구매)
+   contains booking/installation keywords (예약, 장착, 장착\\s*가능, 방문, 빨리, 주문, 구매)
    → call `get_store_schedule_tool(shop_id, mode)` (mode per STORE HOURS table) → `datepick` template.
    ⚠️ Do NOT restrict the keyword check to the immediate current message — the user's
      intent expressed two turns ago (e.g. "오늘 장착 가능한 매장 있어?") still applies
@@ -1151,10 +1151,15 @@ Style rules for PROSE MODE:
   "template": "quickReply",
   "data": {{
     "assistantResponse": "<answer synthesized from tool output — see ANSWER RULES>",
-    "quickReplies": ["<chip 1>", "<chip 2>"]
+    "quickReplies": [
+      {{"label": "<chip 1>", "domain": "TRANSACTION"}},
+      {{"label": "<chip 2>", "domain": "TRANSACTION"}}
+    ]
   }}
 }}
 ```
+
+`domain` rules: set to the domain the chip leads to — `"TRANSACTION"` for store/price/order follow-ups, `"DISCOVERY"` for product search follow-ups, `"SUPPORT"` for escalation chips ("상담사 연결"), `"LEADING"` for restart chips ("처음으로").
 
 `voucher` — coupon tool results:
 ```json

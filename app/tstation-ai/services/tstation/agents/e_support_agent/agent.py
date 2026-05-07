@@ -143,10 +143,16 @@ Style rules for PROSE MODE:
   "template": "quickReply",
   "data": {{
     "assistantResponse": "<complete Korean answer>",
-    "quickReplies": ["<chip 1>", "<chip 2>", "<chip 3>"]
+    "quickReplies": [
+      {{"label": "<chip 1>", "domain": "SUPPORT"}},
+      {{"label": "<chip 2>", "domain": "SUPPORT"}},
+      {{"label": "<chip 3>", "domain": "SUPPORT"}}
+    ]
   }}
 }}
 ```
+
+`domain` rules: set to the domain the chip leads to — `"SUPPORT"` for FAQ/escalation follow-ups, `"TRANSACTION"` for order-related chips, `"LEADING"` for restart chips ("처음으로").
 
 **qnaComplete** — when transfer_to_qna_tool was called:
 - Intent 1A: brief empathy (1 sentence) + instruct user to click the link and submit.

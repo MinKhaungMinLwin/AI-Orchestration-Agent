@@ -5,6 +5,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class ChipContext(BaseModel):
+    """Routing metadata attached by the FE when the user taps a quick reply chip."""
+
+    domain: Optional[str] = Field(
+        default=None,
+        description="Target domain declared by the chip emitter. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING.",
+    )
+
+
 class ChatMessageRequest(BaseModel):
     """Chat request - auth via Bearer token in header."""
     content: str = Field(..., description="User message content")
@@ -12,6 +21,10 @@ class ChatMessageRequest(BaseModel):
     stream: bool = Field(default=False, description="Stream mode")
     user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
     tracing_id: Optional[str] = Field(default=None, description="Tracing ID for Langfuse (eval use)")
+    chip_context: Optional[ChipContext] = Field(
+        default=None,
+        description="Set by FE when the user taps a quick reply chip. Allows backend to skip LLM classifier.",
+    )
 
     model_config = {
         "json_schema_extra": {
