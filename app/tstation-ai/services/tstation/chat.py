@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from typing import ClassVar, Iterator, Optional
+from typing import Any, ClassVar, Iterator
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -11,6 +11,7 @@ from enum import Enum
 
 from services.tstation.common.tstation_be_client import set_tstation_be_token
 from config.env import settings
+from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
@@ -28,7 +29,14 @@ from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
 from services.tstation.agents.router import QC_LLM
-from config.tracing import build_trace_config, trace_span as _trace_span, truncate_for_trace as _truncate
+from config.tracing import (
+    build_trace_config,
+    trace_span as _trace_span,
+    truncate_for_trace as _truncate,
+    _tracing_enabled,
+    tracer,
+    set_trace_name as _set_trace_name,
+)
 import anyio.from_thread as _anyio_ft
 
 logger = logging.getLogger(__name__)
@@ -693,6 +701,23 @@ class StreamingMultiAgentCoordinator:
                 break
 
         return messages
+
+    @staticmethod
+    def _inject_client_prompt(messages: list[dict]) -> list[dict]:
+        """Inject client custom prompt from Langfuse as a system message.
+
+        Client sets the prompt on Langfuse UI under the name 'client_prompt'.
+        Changes propagate within ~60 seconds, no redeploy needed.
+        If no prompt is configured, messages are returned unchanged.
+        """
+        injection = load_client_injection()
+        if not injection:
+            logger.debug("[CLIENT_PROMPT] No client prompt configured, skipping injection.")
+            return messages
+
+        system_msg = {"role": "system", "content": f"## CLIENT INSTRUCTIONS\n{injection}"}
+        logger.info("[CLIENT_PROMPT] Injected as system message (chars=%d).", len(injection))
+        return [system_msg] + list(messages)
 
     def _build_context_message(
         self,
@@ -2172,13 +2197,12 @@ class TStationChatServiceV2:
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
         _parent_span_id = None
-        from config.tracing import _tracing_enabled, tracer, truncate_for_trace as _truncate_root, set_trace_name as _set_trace_name
         _set_trace_name(last_user_msg[:60] if last_user_msg else None)
         if _tracing_enabled:
             _parent_span = tracer.start_span(
                 name="chat",
                 trace_context={"trace_id": request.tracing_id},
-                input=_truncate_root(last_user_msg),
+                input=_truncate(last_user_msg),
             )
             _parent_span.update_trace(
                 name=(last_user_msg[:60] if last_user_msg else "chat"),
@@ -2496,6 +2520,7 @@ class TStationChatServiceV2:
                     )
                     messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
                     _classify_path = "llm"
+            messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
             _classify_span.update(
                 output=_truncate({
                     "domains": [d.value for d in domains],
@@ -2684,12 +2709,13 @@ class TStationChatServiceV2:
             f"other={(_t_prestream - _t_classify)*1000:.0f}ms "
             f"total={(_t_prestream - _t0)*1000:.0f}ms"
         )
-        if request.tracing_id:
-            from config.tracing import _tracing_enabled, tracer
-            if _tracing_enabled:
-                # slots has no manual span — keep as score. classify/agents/qc
-                # are now covered by business spans in Langfuse.
+        if request.tracing_id and _tracing_enabled:
+            # slots has no manual span — keep as score. classify/agents/qc
+            # are now covered by business spans in Langfuse.
+            try:
                 tracer.create_score(trace_id=request.tracing_id, name="latency.slots_ms", value=round((_t_slots - _t0) * 1000))
+            except Exception as exc:
+                logger.debug("[TRACE] Failed to create score: %s", exc)
 
         # STREAM MODE
         if request.stream:
@@ -2773,7 +2799,7 @@ class TStationChatServiceV2:
         tool_context: str | None = None,
         user_id: str | None = None,
         trace_id: str | None = None,
-        parent_span=None,
+        parent_span: Any | None = None,
         parent_span_id: str | None = None,
         skip_decision: bool = False,
         slot_context_with_intent: str | None = None,
@@ -3111,13 +3137,12 @@ class TStationChatServiceV2:
         # spans ("agent:*", "qc") — no need to submit redundant scores.
 
         if parent_span is not None:
-            from config.tracing import truncate_for_trace as _truncate_root_out
             _last_user = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
             )
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                output=_truncate_root_out(draft_response),
+                output=_truncate(draft_response),
             )
             parent_span.end()
 

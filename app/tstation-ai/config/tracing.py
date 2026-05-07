@@ -43,7 +43,8 @@ def truncate_for_trace(value: Any, max_chars: int = MAX_TRACE_OUTPUT_CHARS) -> A
     """Recursively clip large str/dict/list values before sending to Langfuse."""
     if isinstance(value, str):
         if len(value) > max_chars:
-            return value[:max_chars] + f"... ({len(value)} chars total)"
+            suffix = f"... ({len(value)} chars total)"
+            return value[:max_chars - len(suffix)] + suffix
         return value
     if isinstance(value, dict):
         return {k: truncate_for_trace(v, max_chars) for k, v in value.items()}
