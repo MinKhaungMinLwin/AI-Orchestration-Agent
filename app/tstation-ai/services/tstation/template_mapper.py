@@ -556,6 +556,35 @@ def _map_preview_youtube(tool_data_list: list[dict], assistant_text: str) -> dic
 
 # ── 8. location ─────────────────────────────────────────────────────────────────
 
+# 매장 보유 서비스 코드 → 사용자 노출 라벨 매핑.
+# 113 (타이어 - 온라인) 은 거의 모든 매장 보유라 노출 생략 (가독성).
+# 124/125 (얼라인먼트 오프라인/온라인) 은 사용자 입장에서 동일 의미라 같은 라벨로 통합.
+_SVC_CODE_LABELS: dict[str, str] = {
+    "116": "배터리",
+    "119": "타이어 보관",
+    "120": "수입타이어",
+    "121": "경정비",
+    "122": "경정비 당일",
+    "124": "얼라인먼트",
+    "125": "얼라인먼트",
+    "126": "무상점검",
+}
+
+
+def _svc_code_label_list(svc_codes: object) -> list[str]:
+    """svc_codes (list[str]) → 중복 제거된 사용자 라벨 리스트 (입력 순서 유지)."""
+    if not isinstance(svc_codes, list):
+        return []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for code in svc_codes:
+        label = _SVC_CODE_LABELS.get(str(code))
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return labels
+
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     # Flow 3.5 (빠른 방문) calls store_list + multi_store_schedule and renders a
@@ -650,6 +679,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             services.append("온라인 장착 가능" if is_installable else "온라인 장착 불가")
             if is_tna_delivery:
                 services.append("T바로배송")
+            # 매장 보유 svc_codes (BE 화이트리스트: 113/116/119/120/121/122/124/125/126)
+            # 를 사용자 라벨로 변환해 description 의 "서비스:" 라인에 노출.
+            svc_codes_raw = detail.get("svc_codes") or row.get("svc_codes")
+            services.extend(_svc_code_label_list(svc_codes_raw))
             services_text = " | ".join(services)
 
             description_lines: list[str] = []

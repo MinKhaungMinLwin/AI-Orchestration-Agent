@@ -362,14 +362,27 @@ def get_nearby_stores_tool(
     """
     Get nearby stores within radius based on coordinates.
 
-    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점).
+    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점),
+    svc_codes (매장이 보유한 서비스 코드 리스트).
+
     ⚠️ 수입차 특화점: 사용자가 "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 언급 시 imported_car_only=True.
 
     Args:
         user_xpos (float): X 좌표 (경도).
         user_ypos (float): Y 좌표 (위도).
         radius_km (float): 검색 반경 km (default 10).
-        svc_codes (List[str] | None): 서비스 코드 필터 (e.g., ["101", "102"]).
+        svc_codes (List[str] | None): 매장 서비스 필터 (OR 조건: 하나라도 보유한 매장 반환).
+            응답의 svc_codes 필드와 동일 코드 체계.
+            - "113": 타이어 (온라인 주문)
+            - "116": 배터리 (온라인 주문)
+            - "119": 타이어 보관서비스 (윈터타이어 주문 시 113과 함께 필요)
+            - "120": 수입타이어 취급 (수입차 특화점은 imported_car_only 별도 사용)
+            - "121": 경정비 - 온라인 (엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비)
+            - "122": 경정비 - 오늘장착 (당일 경정비)
+            - "124": 휠얼라이먼트 - 오프라인
+            - "125": 휠얼라이먼트 - 온라인
+            - "126": 무상점검
+            예: 엔진오일 가능 매장 = ["121"], 휠얼라이먼트 가능 매장 = ["124","125"]
         all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
@@ -435,6 +448,7 @@ def get_store_list_tool(
     region_code: str | None = None,
     store_nm: str | None = None,
     limit: int = 10,
+    svc_codes: List[str] | None = None,
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
@@ -451,13 +465,27 @@ def get_store_list_tool(
     - all_my_t_only=True: "all my T"/"올마이티"/"올마이T" 표현 시. 결과에 is_all_my_t 포함, True면 "[all my T]" 표시.
     - imported_car_only=True: "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 표현 시. True면 "[수입차 특화점]" 표시.
     - chl_sct_cd: "티스테이션/t'station/티스테" → "F", "더타이어샵/the tire shop/타이어샵" → "S", None=전체.
+    - svc_codes: 매장 보유 서비스 코드 (OR 필터 + 응답에 동일 필드 노출). 아래 코드 매핑 참고.
 
-    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점).
+    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점),
+    svc_codes (매장이 보유한 서비스 코드 리스트, 예: ["113","121","124"]).
 
     Args:
         region_code (str | None): 지역명 키워드 (e.g., '서울', '강남', '부산').
         store_nm (str | None): 매장명 키워드 (e.g., '티스테', '극동상사').
         limit (int): 최대 반환 매장 수 (default 5).
+        svc_codes (List[str] | None): 매장 서비스 필터 (OR 조건: 하나라도 보유한 매장 반환).
+            응답의 svc_codes 필드와 동일 코드 체계.
+            - "113": 타이어 (온라인 주문)
+            - "116": 배터리 (온라인 주문)
+            - "119": 타이어 보관서비스 (윈터타이어 주문 시 113과 함께 필요)
+            - "120": 수입타이어 취급 (수입차 특화점은 imported_car_only 별도 사용)
+            - "121": 경정비 - 온라인 (엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비)
+            - "122": 경정비 - 오늘장착 (당일 경정비)
+            - "124": 휠얼라이먼트 - 오프라인
+            - "125": 휠얼라이먼트 - 온라인
+            - "126": 무상점검
+            예: 엔진오일 가능 매장 = ["121"], 휠얼라이먼트 가능 매장 = ["124","125"]
         all_my_t_only (bool): True → all my T 매장만. Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
@@ -467,6 +495,8 @@ def get_store_list_tool(
         - {"region_code": "서울", "limit": 5}
         - {"region_code": None, "store_nm": "극동상사", "limit": 5}
         - {"region_code": "강남", "limit": 5, "imported_car_only": True}
+        - {"region_code": "강남", "svc_codes": ["121"], "limit": 5}  # 강남에서 경정비 가능
+        - {"store_nm": "광교신도시", "svc_codes": ["121"]}  # 광교신도시점이 경정비 가능한지 확인
     """
     # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
     if store_nm:
@@ -474,8 +504,8 @@ def get_store_list_tool(
 
     logger.info(
         "[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
-        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        region_code, store_nm, limit, all_my_t_only, imported_car_only, chl_sct_cd,
+        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
+        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
     )
 
     try:
@@ -484,6 +514,7 @@ def get_store_list_tool(
             region_code=region_code,
             store_nm=store_nm,
             limit=limit,
+            svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,

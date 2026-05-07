@@ -476,6 +476,43 @@ Output: domains (list with EXACTLY ONE domain) + reason (english).
 class StreamingMultiAgentCoordinator:
     """Orchestrates multiple agents with streaming support."""
 
+    # ---------------------------------------------------------------------
+    # Hardcoded keyword routing (runs BEFORE the LLM router)
+    # ---------------------------------------------------------------------
+    # The LLM router was observed ignoring its own prompt-level routing rules
+    # under heavy slot/context bias (e.g., post-cart "이벤트 목록" got routed
+    # to TRANSACTION because the conversation history was order-flow heavy).
+    # When the user's CURRENT message contains any of the listed phrases, we
+    # hard-pin the domain without invoking the LLM at all — fast and
+    # deterministic.
+    #
+    # Match style: case-sensitive substring match on the cleaned current
+    # user input (after stripping the injected "# Respond in Korean language"
+    # wrapper and the trailing [current_time: ...] suffix).
+    _KEYWORD_FORCE_TABLE: ClassVar[
+        list[tuple[list[str], "MultiAgentDomain.Domain"]]
+    ] = [
+        # SUPPORT — return / refund / warranty / 1:1
+        (
+            ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # TRANSACTION — coupon
+        (
+            ["내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함", "쿠폰 조회", "다운로드 가능 쿠폰"],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
+        # DISCOVERY — vehicle lookup / video / event
+        (
+            [
+                "내 차 목록", "내 차량", "내 등록차", "등록차 보여", "등록차량 보여",
+                "리뷰 영상", "유튜브", "동영상", "영상 보여",
+                "이벤트", "기획전",
+            ],
+            MultiAgentDomain.Domain.DISCOVERY,
+        ),
+    ]
+
     def __init__(self):
         self.agent_map = {
             MultiAgentDomain.Domain.DISCOVERY: discovery_subagent,
@@ -483,6 +520,46 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT: support_subagent,
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
+
+    @staticmethod
+    def _extract_current_user_input(message_content: str) -> str:
+        """Strip the injected `# Respond in Korean language` wrapper and the
+        trailing `[current_time: ...]` block so the result is just the user's
+        typed text.
+        """
+        if not message_content:
+            return ""
+        text = message_content
+        if "# Respond in Korean language" in text:
+            text = text.split("# Respond in Korean language", 1)[1]
+        if "[current_time:" in text:
+            text = text.split("[current_time:", 1)[0]
+        return text.strip()
+
+    @classmethod
+    def _force_keyword_routing(cls, user_input: str) -> "MultiAgentDomain | None":
+        """Return a forced MultiAgentDomain when the user's CURRENT message
+        clearly names a topic that should not depend on conversation context.
+
+        Returns None when no keyword matches — caller should then fall through
+        to the LLM-based router.
+        """
+        if not user_input:
+            return None
+        text = user_input.strip()
+        if not text:
+            return None
+
+        for keywords, domain in cls._KEYWORD_FORCE_TABLE:
+            for kw in keywords:
+                if kw in text:
+                    return MultiAgentDomain(
+                        reason=f"hardcoded keyword routing matched '{kw}'",
+                        domains=[domain],
+                        user_behavior=f"topic shift via keyword '{kw}'",
+                        flow="hardcoded keyword routing — bypassed LLM router",
+                    )
+        return None
 
     def classify_multi_intent(
         self,
@@ -507,6 +584,23 @@ class StreamingMultiAgentCoordinator:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
         from langchain_core.messages import SystemMessage
+
+        # ---------- Hardcoded keyword routing (bypasses LLM) ----------
+        last_user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_text = self._extract_current_user_input(msg.get("content", ""))
+                break
+
+        forced_result = self._force_keyword_routing(last_user_text)
+        if forced_result is not None:
+            logger.info(
+                "[MULTI-DOMAIN] Hardcoded routing: domain=%s, msg=%r",
+                forced_result.domains,
+                last_user_text[:80],
+            )
+            return forced_result.domains, forced_result
+        # --------------------------------------------------------------
 
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"

@@ -241,14 +241,15 @@ class OrderInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # carInfo: 사용자가 차량 미등록인 상태로 주문/예약을 진행할 수 있어
-    # optional. FE는 빈 값을 "—"로 그래스풀 처리(chatbox-order-summary.js
-    # valOrDash). required로 두면 LLM이 빈 문자열을 채워 schema validation
-    # 실패 → silent terminator(\n\n)만 emit되어 다음 단계 진행이 막힌다.
+    # carInfo / storeName: 사용자가 차량 미등록 상태로 주문/예약을 진행하거나
+    # cart-save 흐름(매장 선택 전 단계)에 들어올 수 있어 optional. FE는 빈 값을
+    # "—"로 그래스풀 처리(chatbox-order-summary.js valOrDash). required로 두면
+    # LLM이 cart-save 단계에서 null을 emit해 schema validation 실패 → silent
+    # terminator(\n\n) + fallback chips만 사용자에게 보여 cart 진행이 막힌다.
     carInfo: str | None = None
     product: str = Field(..., min_length=1)
     quantity: int = Field(..., ge=0)
-    storeName: str = Field(..., min_length=1)
+    storeName: str | None = None
     bookingDateTime: str | None = None
     paymentAmount: int | None = Field(default=None, ge=0)
 
@@ -268,7 +269,10 @@ class PreOrderMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goodsId: str = Field(..., min_length=1)
-    shopId: str = Field(..., min_length=1)
+    # shopId: optional during cart-save flow (before store selection). Same
+    # rationale as OrderInfo.storeName / carInfo — required would fail
+    # validation and show fallback chips to the user instead of the cart card.
+    shopId: str | None = None
     carNo: str | None = None
     carLncCd: str | None = None
 
