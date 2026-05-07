@@ -52,10 +52,13 @@ MESSAGES_KEY = "chat:messages:{session_id}"
 META_KEY = "chat:meta:{session_id}"
 # Custom messages with template_data (sorted set)
 TEMPLATE_MESSAGES_KEY = "chat:tmpl:{session_id}"
+# Rolling conversation summary (plain string, encrypted)
+SUMMARY_KEY = "chat:summary:{session_id}"
 
 # Maximum chat history retention (sliding TTL). Refreshed on every write so
 # active sessions stay alive; inactive sessions auto-expire after this window.
 CHAT_HISTORY_TTL_SECONDS = 7 * 24 * 60 * 60  # 1 week
+
 
 
 def _get_session_set_key(user_id: str) -> str:
@@ -76,6 +79,11 @@ def _get_meta_key(session_id: str) -> str:
 def _get_template_messages_key(session_id: str) -> str:
     """Get Redis key for template messages (sorted set for messages with template_data)."""
     return TEMPLATE_MESSAGES_KEY.format(session_id=session_id)
+
+
+def _get_summary_key(session_id: str) -> str:
+    """Get Redis key for the rolling conversation summary."""
+    return SUMMARY_KEY.format(session_id=session_id)
 
 
 def _decode_template_data(value, crypto):
@@ -305,10 +313,11 @@ class ChatHistoryService:
         tmpl_key = _get_template_messages_key(session_id)
         messages_deleted = self.redis.zcard(tmpl_key)
 
-        # Delete all keys (including tool context)
+        # Delete all keys (including tool context and summary)
         messages_key = _get_messages_key(session_id)
         tool_ctx_key = f"chat:tool_ctx:{session_id}"
-        self.redis.delete(messages_key, meta_key, tmpl_key, tool_ctx_key)
+        summary_key = _get_summary_key(session_id)
+        self.redis.delete(messages_key, meta_key, tmpl_key, tool_ctx_key, summary_key)
 
         # Remove from user's session set
         if user_id:
@@ -380,6 +389,75 @@ class ChatHistoryService:
             except (json.JSONDecodeError, TypeError):
                 logger.warning(f"[TOOL_CTX] Failed to parse tool context for session {session_id}")
         return []
+
+    def get_message_count(self, session_id: str) -> int:
+        """Return the total number of messages stored for this session."""
+        return self.redis.zcard(_get_template_messages_key(session_id))
+
+    def save_summary(self, session_id: str, content: str, covered_count: int) -> None:
+        """Persist a rolling summary that covers the first *covered_count* messages."""
+        crypto = get_crypto_service()
+        payload = json.dumps(
+            {"content": content, "covered_count": covered_count},
+            ensure_ascii=False,
+        )
+        key = _get_summary_key(session_id)
+        self.redis.set(key, crypto.encrypt(payload))
+        self.redis.expire(key, CHAT_HISTORY_TTL_SECONDS)
+        logger.info(
+            f"[SUMMARY] Saved summary for session {session_id} "
+            f"(covered_count={covered_count})"
+        )
+
+    def get_summary(self, session_id: str) -> dict | None:
+        """Load the rolling summary. Returns {content, covered_count} or None."""
+        raw = self.redis.get(_get_summary_key(session_id))
+        if not raw:
+            return None
+        crypto = get_crypto_service()
+        plaintext = crypto.decrypt(raw)
+        try:
+            return json.loads(plaintext)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"[SUMMARY] Failed to parse summary for session {session_id}")
+            return None
+
+    def get_history_for_llm(self, session_id: str) -> list[dict]:
+        """Return [summary_msg] + last N messages when summary exists, else full history."""
+        summary = self.get_summary(session_id)
+        if summary is None:
+            return self.get_history(session_id)
+
+        crypto = get_crypto_service()
+        tmpl_key = _get_template_messages_key(session_id)
+        raw_items = self.redis.zrange(tmpl_key, summary["covered_count"], -1)
+        recent = []
+        for raw in raw_items:
+            try:
+                data = json.loads(raw)
+                recent.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": data.get("role", "assistant"),
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+            except json.JSONDecodeError:
+                logger.warning(f"[SUMMARY] Failed to parse recent message: {raw[:100]}")
+                continue
+
+        summary_msg = {
+            "msg_id": "summary",
+            "session_id": session_id,
+            "role": "assistant",
+            "content": f"[이전 대화 요약]\n{summary['content']}",
+            "status": "completed",
+            "template_data": None,
+            "created_at": recent[0]["created_at"] if recent else datetime.now().isoformat(),
+        }
+        return [summary_msg] + recent
 
     def save_slots(self, session_id: str, slots: ConversationSlots) -> None:
         """Save conversation slots to session metadata (encrypted)."""

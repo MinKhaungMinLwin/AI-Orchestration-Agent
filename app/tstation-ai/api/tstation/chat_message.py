@@ -9,6 +9,7 @@ Endpoints:
 - GET /api/messages/user-info - Get user info from JWT
 - POST /api/messages/validate-token - Validate JWT token
 """
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -77,8 +78,8 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     # Save user message
     msg_id = service.save_message(session_id, "user", request.content)
 
-    # Build messages list from history
-    history = service.get_history(session_id)
+    # Build messages list from history (compressed when a rolling summary exists)
+    history = service.get_history_for_llm(session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Add current user message only if not duplicate of last history
@@ -200,6 +201,10 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
         service.save_message(session_id, "assistant", message_to_save, template_data=template_data)
         logger.info(f"[CHAT_MESSAGE] Saved assistant message" +
                   (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
+
+        # Fire-and-forget: compress old turns into a rolling summary every 4 turns.
+        from services.tstation.history_summarizer import maybe_summarize
+        asyncio.create_task(maybe_summarize(session_id))
 
     yield "data: [DONE]\n\n"
 
