@@ -10,6 +10,7 @@ operation refreshes TTL on the session's keys (tmpl, meta, user session set),
 so active conversations stay alive while inactive sessions auto-expire after
 1 week of no writes. Tool context has its own shorter TTL (see save_tool_context).
 """
+import asyncio
 import json
 import logging
 import uuid
@@ -52,10 +53,13 @@ MESSAGES_KEY = "chat:messages:{session_id}"
 META_KEY = "chat:meta:{session_id}"
 # Custom messages with template_data (sorted set)
 TEMPLATE_MESSAGES_KEY = "chat:tmpl:{session_id}"
+# Rolling conversation summary (plain string, encrypted)
+SUMMARY_KEY = "chat:summary:{session_id}"
 
 # Maximum chat history retention (sliding TTL). Refreshed on every write so
 # active sessions stay alive; inactive sessions auto-expire after this window.
 CHAT_HISTORY_TTL_SECONDS = 7 * 24 * 60 * 60  # 1 week
+
 
 
 def _get_session_set_key(user_id: str) -> str:
@@ -76,6 +80,11 @@ def _get_meta_key(session_id: str) -> str:
 def _get_template_messages_key(session_id: str) -> str:
     """Get Redis key for template messages (sorted set for messages with template_data)."""
     return TEMPLATE_MESSAGES_KEY.format(session_id=session_id)
+
+
+def _get_summary_key(session_id: str) -> str:
+    """Get Redis key for the rolling conversation summary."""
+    return SUMMARY_KEY.format(session_id=session_id)
 
 
 def _decode_template_data(value, crypto):
@@ -265,6 +274,46 @@ class ChatHistoryService:
 
         return messages
 
+    def get_history_range(self, session_id: str, start: int, end: int) -> List[dict]:
+        """Get a specific range of messages from the sorted set to avoid full decryption."""
+        messages = []
+        crypto = get_crypto_service()
+
+        tmpl_key = _get_template_messages_key(session_id)
+        tmpl_raw = self.redis.zrange(tmpl_key, start, end)
+        for raw in tmpl_raw:
+            try:
+                data = json.loads(raw)
+                messages.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": data.get("role", "assistant"),
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+            except json.JSONDecodeError:
+                continue
+
+        def get_timestamp(msg):
+            try:
+                return datetime.fromisoformat(msg["created_at"]).timestamp()
+            except (ValueError, KeyError):
+                return 0
+        messages.sort(key=get_timestamp)
+        return messages
+
+    def acquire_summary_lock(self, session_id: str) -> bool:
+        """Acquire a lock for summarization to prevent concurrent race conditions."""
+        key = f"chat:summary_lock:{session_id}"
+        return bool(self.redis.set(key, "1", nx=True, ex=30))
+
+    def release_summary_lock(self, session_id: str) -> None:
+        """Release the summarization lock."""
+        key = f"chat:summary_lock:{session_id}"
+        self.redis.delete(key)
+
     def list_sessions(self, user_id: str) -> List[dict]:
         """List all sessions for a user (decrypts last_message preview)."""
         session_set_key = _get_session_set_key(user_id)
@@ -305,10 +354,11 @@ class ChatHistoryService:
         tmpl_key = _get_template_messages_key(session_id)
         messages_deleted = self.redis.zcard(tmpl_key)
 
-        # Delete all keys (including tool context)
+        # Delete all keys (including tool context and summary)
         messages_key = _get_messages_key(session_id)
         tool_ctx_key = f"chat:tool_ctx:{session_id}"
-        self.redis.delete(messages_key, meta_key, tmpl_key, tool_ctx_key)
+        summary_key = _get_summary_key(session_id)
+        self.redis.delete(messages_key, meta_key, tmpl_key, tool_ctx_key, summary_key)
 
         # Remove from user's session set
         if user_id:
@@ -381,6 +431,137 @@ class ChatHistoryService:
                 logger.warning(f"[TOOL_CTX] Failed to parse tool context for session {session_id}")
         return []
 
+    def get_message_count(self, session_id: str) -> int:
+        """Return the total number of messages stored for this session."""
+        return self.redis.zcard(_get_template_messages_key(session_id))
+
+    def save_summary(self, session_id: str, content: str, covered_count: int) -> None:
+        """Persist a rolling summary that covers the first *covered_count* messages."""
+        crypto = get_crypto_service()
+        payload = json.dumps(
+            {"content": content, "covered_count": covered_count},
+            ensure_ascii=False,
+        )
+        key = _get_summary_key(session_id)
+        self.redis.set(key, crypto.encrypt(payload))
+        self.redis.expire(key, CHAT_HISTORY_TTL_SECONDS)
+        logger.info(
+            f"[SUMMARY] Saved summary for session {session_id} "
+            f"(covered_count={covered_count})"
+        )
+
+    def get_summary(self, session_id: str) -> dict | None:
+        """Load the rolling summary. Returns {content, covered_count} or None."""
+        raw = self.redis.get(_get_summary_key(session_id))
+        if not raw:
+            return None
+        crypto = get_crypto_service()
+        plaintext = crypto.decrypt(raw)
+        try:
+            return json.loads(plaintext)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"[SUMMARY] Failed to parse summary for session {session_id}")
+            return None
+
+    def get_history_for_llm(self, session_id: str) -> list[dict]:
+        """Return [summary_msg] + last N messages when summary exists, else full history."""
+        summary = self.get_summary(session_id)
+        if summary is None:
+            return self.get_history(session_id)
+
+        crypto = get_crypto_service()
+        tmpl_key = _get_template_messages_key(session_id)
+        raw_items = self.redis.zrange(tmpl_key, summary["covered_count"], -1)
+        recent = []
+        for raw in raw_items:
+            try:
+                data = json.loads(raw)
+                recent.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": data.get("role", "assistant"),
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+            except json.JSONDecodeError:
+                logger.warning(f"[SUMMARY] Failed to parse recent message: {raw[:100]}")
+                continue
+
+        summary_msg = {
+            "msg_id": "summary",
+            "session_id": session_id,
+            "role": "assistant",
+            "content": f"[이전 대화 요약]\n{summary['content']}",
+            "status": "completed",
+            "template_data": None,
+            "created_at": recent[0]["created_at"] if recent else datetime.now().isoformat(),
+        }
+        return [summary_msg] + recent
+
+
+    def get_recent_assistant_messages_with_template_data(
+        self,
+        session_id: str,
+        limit: int,
+    ) -> list[dict]:
+        """Return the newest `limit` assistant messages that have template_data.
+
+        Scans from the tail of the sorted set in small batches so sessions
+        with many non-template messages do not force a full scan.
+        """
+        if limit <= 0:
+            return []
+
+        crypto = get_crypto_service()
+        tmpl_key = _get_template_messages_key(session_id)
+        result = []
+        start = 0
+        batch_size = max(limit * 4, 10)
+
+        while len(result) < limit:
+            raw_items = self.redis.zrevrange(tmpl_key, start, start + batch_size - 1)
+            if not raw_items:
+                break
+            for raw in raw_items:
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("role") != "assistant":
+                    continue
+                if not data.get("template_data"):
+                    continue
+                result.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": "assistant",
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+                if len(result) >= limit:
+                    break
+            start += batch_size
+
+        return result
+
+    def get_latest_template_data(self, session_id: str, template_name: str) -> dict | None:
+        """Return the data payload of the newest assistant message with the given template name."""
+        if not template_name:
+            return None
+        for message in self.get_recent_assistant_messages_with_template_data(session_id, limit=10):
+            td = message.get("template_data")
+            if not isinstance(td, dict):
+                continue
+            if td.get("template") != template_name:
+                continue
+            data = td.get("data")
+            if isinstance(data, dict):
+                return data
+        return None
     def save_slots(self, session_id: str, slots: ConversationSlots) -> None:
         """Save conversation slots to session metadata (encrypted)."""
         meta_key = _get_meta_key(session_id)
@@ -402,6 +583,74 @@ class ChatHistoryService:
             except (ValueError, TypeError) as exc:
                 logger.warning(f"[CHAT_HISTORY] Failed to parse slots for session {session_id}: {exc}")
         return ConversationSlots()
+
+    async def get_chat_context_pipeline_async(
+        self, session_id: str, limit: int
+    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None]:
+        """Fetch template msgs, slots, and tool context concurrently using a Redis pipeline."""
+        tmpl_key = _get_template_messages_key(session_id)
+        meta_key = _get_meta_key(session_id)
+        tool_ctx_key = f"chat:tool_ctx:{session_id}"
+
+        pipe = self.redis.pipeline()
+        batch_size = max(limit * 4, 40)
+        pipe.zrevrange(tmpl_key, 0, batch_size - 1)
+        pipe.hget(meta_key, "slots")
+        pipe.get(tool_ctx_key)
+
+        raw_items, raw_slots, raw_tool_ctx = await asyncio.to_thread(pipe.execute)
+
+        crypto = get_crypto_service()
+        recent_template_msgs = []
+        latest_listcar_tmpl = None
+
+        # Parse template messages
+        for raw in raw_items:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if data.get("role") != "assistant":
+                continue
+            td_raw = data.get("template_data")
+            if not td_raw:
+                continue
+
+            td_decoded = _decode_template_data(td_raw, crypto)
+
+            if latest_listcar_tmpl is None and td_decoded and td_decoded.get("template") == "listCar":
+                inner = td_decoded.get("data")
+                if isinstance(inner, dict):
+                    latest_listcar_tmpl = inner
+
+            if len(recent_template_msgs) < limit:
+                recent_template_msgs.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": "assistant",
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": td_decoded,
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+
+        # Parse slots
+        slots = ConversationSlots()
+        if raw_slots:
+            try:
+                slots = ConversationSlots.model_validate_json(crypto.decrypt(raw_slots))
+            except (ValueError, TypeError):
+                pass
+
+        # Parse tool context
+        tool_ctx = []
+        if raw_tool_ctx:
+            try:
+                tool_ctx = json.loads(crypto.decrypt(raw_tool_ctx))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl
 
 
 # Singleton instance

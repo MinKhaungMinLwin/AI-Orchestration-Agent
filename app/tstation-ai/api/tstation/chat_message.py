@@ -9,6 +9,7 @@ Endpoints:
 - GET /api/messages/user-info - Get user info from JWT
 - POST /api/messages/validate-token - Validate JWT token
 """
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -77,8 +78,8 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     # Save user message
     msg_id = service.save_message(session_id, "user", request.content)
 
-    # Build messages list from history
-    history = service.get_history(session_id)
+    # Build messages list from history (compressed when a rolling summary exists)
+    history = service.get_history_for_llm(session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Add current user message only if not duplicate of last history
@@ -115,7 +116,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )
 
     # Non-stream mode
-    response = TStationChatServiceV2.chat(chat_request)
+    response = await TStationChatServiceV2.chat(chat_request)
 
     if isinstance(response, TStationChatResponse):
         # Save assistant response to history
@@ -141,7 +142,7 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     template_data = None  # Captured from UI Template Agent data events
 
     # Stream from chat service
-    stream_response = TStationChatServiceV2.chat(chat_request)
+    stream_response = await TStationChatServiceV2.chat(chat_request)
 
     # Send initial response with session_id
     initial_response = {
@@ -200,6 +201,10 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
         service.save_message(session_id, "assistant", message_to_save, template_data=template_data)
         logger.info(f"[CHAT_MESSAGE] Saved assistant message" +
                   (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
+
+        # Fire-and-forget: update the rolling summary when enough new history accumulates.
+        from services.tstation.history_summarizer import refresh_summary
+        asyncio.create_task(refresh_summary(session_id))
 
     yield "data: [DONE]\n\n"
 
@@ -410,3 +415,4 @@ async def validate_token_endpoint(user: dict = Security(get_api_key)):
         return ValidateTokenResponse(valid=True, user_id=user_id)
     else:
         return ValidateTokenResponse(valid=False, reason="Invalid token")
+

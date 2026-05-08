@@ -1604,7 +1604,7 @@ def _enrich_messages_with_template_data(
     messages: list[dict],
     session_id: str,
     *,
-    redis_history: list[dict] | None = None,
+    assistant_template_messages: list[dict] | None = None,
 ) -> list[dict]:
     """Attach template_data from Redis to recent assistant card turns.
 
@@ -1618,18 +1618,21 @@ def _enrich_messages_with_template_data(
     tool_context (loaded as a separate system message) preserves additional
     older-turn structured data.
 
-    Pass `redis_history` to reuse an already-fetched history list and skip
-    the extra Redis round-trip.
+    Pass `assistant_template_messages` to reuse already-fetched recent
+    assistant messages with template_data and skip the extra Redis round-trip.
     """
     if not session_id:
         return messages
 
     try:
-        if redis_history is None:
+        if assistant_template_messages is None:
             from services.tstation.chat_history_service import get_chat_history_service
-            redis_history = get_chat_history_service().get_history(session_id)
+            assistant_template_messages = (
+                get_chat_history_service()
+                .get_recent_assistant_messages_with_template_data(session_id, _TEMPLATE_ENRICH_MAX_TURNS)
+            )
 
-        redis_messages = redis_history
+        redis_messages = assistant_template_messages
 
         # content -> template_data map. If two assistant turns share identical
         # content, the chronologically-latest template_data wins — acceptable
@@ -1903,7 +1906,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def _resolve_tire_size_from_history_template(user_text: str, history: list[dict]) -> str | None:
+    def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
         """Match a user's vehicle-selection reply against the metadata of the
         most recent assistant message that rendered a `listCar` template, and
         return the picked car's tireSize.
@@ -2078,7 +2081,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def _resolve_shop_id_from_history_template(user_text: str, history: list[dict]) -> str | None:
+    def _resolve_shop_id_from_history_template(user_text: str, template_data: dict | None) -> str | None:
         """Match a user's list-selection reply against the metadata of the most
         recent assistant message that rendered a `location` template.
 
@@ -2162,7 +2165,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def chat(request: TStationChatRequest):
+    async def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
         """
@@ -2252,22 +2255,24 @@ class TStationChatServiceV2:
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load history, slots, and tool context from Redis in parallel (3 independent reads).
-            # history is needed for template enrichment; slots and tool_context for agent injection.
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _pool:
-                _history_f  = _pool.submit(chat_history_svc.get_history, request.session_id)
-                _slots_f    = _pool.submit(chat_history_svc.get_slots, request.session_id)
-                _tool_ctx_f = _pool.submit(chat_history_svc.get_tool_context, request.session_id)
-                redis_history  = _history_f.result()
-                existing_slots = _slots_f.result()
-                prev_tool_data = _tool_ctx_f.result()
+            # 1) Load only the targeted Redis data needed on the hot path (using async Pipeline).
+            (
+                recent_template_msgs,
+                existing_slots,
+                prev_tool_data,
+                latest_listcar_tmpl,
+            ) = await chat_history_svc.get_chat_context_pipeline_async(
+                request.session_id, _TEMPLATE_ENRICH_MAX_TURNS
+            )
+            
+            latest_location_tmpl = None
             _t_slots = time.perf_counter()
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
             # 1a) Enrich messages with template_data from prefetched history and rebuild.
             # Overrides the plain fallback built above — no extra Redis round-trip.
             enriched_messages = _enrich_messages_with_template_data(
-                raw_messages, request.session_id, redis_history=redis_history
+                raw_messages, request.session_id, assistant_template_messages=recent_template_msgs
             )
             _request_enriched = TStationChatRequest(
                 messages=enriched_messages,
@@ -2380,9 +2385,8 @@ class TStationChatServiceV2:
             # Transaction.
             if merged_slots.tire_size is None:
                 try:
-                    history = chat_history_svc.get_history(request.session_id)
                     resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
-                        last_user_text, history
+                        last_user_text, latest_listcar_tmpl
                     )
                     if resolved_tire_size:
                         merged_slots.tire_size = resolved_tire_size
@@ -2432,9 +2436,12 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    history = chat_history_svc.get_history(request.session_id)
+                    if latest_location_tmpl is None:
+                        latest_location_tmpl = chat_history_svc.get_latest_template_data(
+                            request.session_id, "location"
+                        )
                     resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
-                        last_user_text, history
+                        last_user_text, latest_location_tmpl
                     )
                     if resolved_shop_id:
                         merged_slots.shop_id = resolved_shop_id
@@ -2511,7 +2518,9 @@ class TStationChatServiceV2:
                     _classify_path = "fast"
                     # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
                 else:
-                    domains, routing_result = _coordinator.classify_multi_intent(
+                    import asyncio
+                    domains, routing_result = await asyncio.to_thread(
+                        _coordinator.classify_multi_intent,
                         messages,
                         session_id=request.session_id,
                         user_id=request.user_id,
