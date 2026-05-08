@@ -1088,6 +1088,7 @@ NEVER use: "에러", "조회 결과 없습니다", "데이터가 없습니다", 
 - ✅ `\n\n` — 2문장 이상이면 문장 사이 빈 줄 삽입 (16px line-height에서 가독성 확보)
 - ❌ `**굵게**` / `*이탤릭*` — font-weight:400 / font-style:Regular와 충돌, 사용 금지
 - ❌ `# ## ###` — 헤더 금지 (12px 기준 font-size 과도하게 커짐)
+- ❌ 번호 매김 prefix 금지 — 매장/상품/쿠폰/예약 시간 등 어떤 항목 나열에서도 줄 앞에 "1. ", "2. ", "1) ", "2) " 식의 숫자 prefix 절대 출력 금지. 카드(`location`, `product`, `voucher`, `datepick` 등)가 순서를 표시하므로 텍스트엔 번호 불필요. 항목 구분이 꼭 필요하면 "•" 불릿만 사용
 
 
 ## READABILITY (multi-sentence `assistantResponse`)

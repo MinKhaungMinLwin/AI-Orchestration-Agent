@@ -89,6 +89,7 @@ NEVER use: "조회 결과 없습니다", "데이터가 없습니다", "에러가
 - ✅ `\n\n` — 2문장 이상이면 문장 사이 빈 줄 삽입 (READABILITY 규칙 참조)
 - ❌ `**굵게**` / `*이탤릭*` — font-weight:400 / font-style:Regular와 충돌, 사용 금지
 - ❌ `# ## ###` — 헤더 금지 (12px 기준 font-size 과도하게 커짐)
+- ❌ 번호 매김 prefix 금지 — FAQ/안내 항목 나열에서도 줄 앞에 "1. ", "2. ", "1) ", "2) " 식의 숫자 prefix 절대 출력 금지. 항목 구분이 꼭 필요하면 "•" 불릿만 사용
 
 ## READABILITY (CRITICAL for FAQ / multi-sentence answers)
 When `assistantResponse` carries 2+ sentences, separate **EACH sentence with a blank line**
