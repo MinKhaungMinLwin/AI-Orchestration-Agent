@@ -419,6 +419,7 @@ def _map_voucher(tool_data_list: list[dict], assistant_text: str) -> dict | None
             cpn_no = _get_str(row, "cpn_no", "cpn_issu_no")
             vouchers.append({
                 "nameVoucher": _get_str(row, "cpn_nm", "disp_nm"),
+                "discount": _get_str(row, "rt_amt_val"),
                 "dateVoucher": _get_str(row, "use_end_dtime").split(" ")[0],
                 "downloadLink": "",
                 "myCouponLink": _MY_COUPON_LINK,
