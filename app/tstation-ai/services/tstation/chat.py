@@ -270,28 +270,10 @@ In RE-RECOMMENDATION cases:
     into wrong behavior. The Discovery agent has its own Branch A/B logic that
     reads user_behavior to decide whether to re-call the recommendation tool.
 
-Worked example 1 (with 다시 keyword):
-  - Previous: get_products_recommendations_tool(rcmd_type="wet") returned 4 items
-  - Current user message: "주말 나들이용으로 다시"
-  - CORRECT user_behavior: "requesting new recommendation with weekend scenario after previous wet recommendation"
-  - WRONG user_behavior: "selecting weekend-suitable items from previous tire list"
-  - WRONG user_behavior: "filter previous recommendations for weekend use"
-
-Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
-  - Earlier turn: get_products_recommendations_tool(rcmd_type="ev") returned 4 items (235/55R19)
-  - Intervening turn: get_product_description_tool (description only — does NOT reset PREV)
-  - Current user message: "패밀리 SUV에 잘 맞는 사계절용 추천"
-  - PREV rcmd_type = "ev"; user mentions "패밀리/가족" + "사계절" — clearly
-    different scenario family from "ev" → RE-RECOMMENDATION applies.
-  - CORRECT user_behavior: "requesting NEW recommendation with family + 사계절 scenario; previous rcmd_type='ev' no longer matches"
-  - WRONG user_behavior: "filter previous EV list for family-friendly all-season options"
-  - WRONG user_behavior: "pick 사계절 candidates from previous list"
-
-Worked example 3 (PREV=CUR escape — NOT re-recommendation):
-  - Previous: get_products_recommendations_tool(rcmd_type="ev") returned 4 items
-  - Current user message: "이 EV 타이어 중에서 18인치로"
-  - "EV" matches PREV; "이 중에서" is a demonstrative → continuation, NOT re-recommendation.
-  - user_behavior: "filtering previous EV recommendation list by size 18인치"
+Worked examples (RE-RECOMMENDATION vs FILTER):
+1. PREV="wet" → USER="주말 나들이용으로 다시" → CORRECT behavior: "requesting new recommendation with weekend scenario...". WRONG: "selecting/filtering previous tire list".
+2. PREV="ev" → intervening turn → USER="패밀리 SUV에 잘 맞는 사계절용 추천" → family+사계절 ≠ ev → RE-RECOMMENDATION. CORRECT: "requesting NEW recommendation...". WRONG: "filter previous EV list...".
+3. PREV="ev" → USER="이 EV 타이어 중에서 18인치로" → "이 중에서" (demonstrative) = filter/continuation. CORRECT: "filtering previous EV recommendation list...".
 
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
 
@@ -306,35 +288,18 @@ DOMAIN ROUTING EXAMPLES
 ====================================================
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
-1. "i want to buy tires for 12가3456" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
-2. "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
-3. "벤투스 S2 가격" / "Dynapro HPX 얼마야?" → DISCOVERY (resolve goods_no first → STOP)
-4. "벤투스 S2 재고 확인해줘" → DISCOVERY (resolve goods_no → STOP)
-5. "벤투스 S2 AS 살 수 있는 매장" → DISCOVERY (resolve goods_no → STOP)
-6. "이벤트 알려줘" / "기획전 정보" → DISCOVERY
-7. "타이어 리뷰 영상 보여줘" → DISCOVERY
-8. "추천 타이어들 가격 비교해줘" → DISCOVERY (compare_discount_tool is in Discovery)
+- "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "이벤트", "리뷰 영상", "추천 가격 비교해줘"
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
-1. "{{goods_no}} 가격 얼마야?" → TRANSACTION
-2. "주문할게" / "바로 주문할게" → TRANSACTION
-3. "장바구니에 담아줘" → TRANSACTION
-4. "강남 매장 찾아줘" / "근처 매장" → TRANSACTION
-5. "한남점 예약 가능한 날짜 알려줘" → TRANSACTION
-6. "주문 내역 확인해줘" / "내 주문내역 알려줘" / "주문 조회해줘" → TRANSACTION
-7. "내 쿠폰 보여줘" / "받을 수 있는 쿠폰" / "다운로드 가능 쿠폰은?" / "쿠폰함" → TRANSACTION
-8. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
+- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰"
 
 SUPPORT — policy, warranty, human agent:
-1. "보증 정책 알려줘" / "반품 가능해?" → SUPPORT
-2. "1:1 문의 작성해줘" / "상담원 연결" → SUPPORT
+- "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify these as SUPPORT — always TRANSACTION (handled by coupon/order tools, NOT FAQ):
-- 내 쿠폰 / 쿠폰 조회 / 쿠폰함 / 다운로드 가능 쿠폰
-- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "내 주문/주문 조회"
 
 LEADING — greeting, unclear intent:
-1. "안녕하세요" / "뭘 도와줄 수 있어?" → LEADING
+- "안녕하세요/도와줘"
 
 ====================================================
 DECISION RULES
@@ -389,15 +354,8 @@ following alongside the re-trigger word:
   - 구체적 의도 동사: 추천, 검색, 찾, 알려, 비교, 보여, 확인, 사고, 살래
 
 Examples:
-- "다시" → LEADING (bare, no context)
-- "다시 해줘" → LEADING (bare)
-- "다른 거 보여줘" → LEADING (bare; "보여줘" is generic, no domain anchor)
-- "이전 추천 말고" → LEADING (bare re-trigger only)
-- "주말 나들이용으로 다시" → DISCOVERY (has scenario keyword "주말")
-- "벤투스 S2 다시 알려줘" → DISCOVERY/TRANSACTION (has product name)
-- "가격 다시 알려줘" → 이전 컨텍스트의 도메인 그대로 (TRANSACTION if goods_no
-  known, DISCOVERY otherwise — "가격" is a clear domain anchor)
-- "다시 추천해줘" → DISCOVERY (has explicit intent verb "추천")
+- LEADING (bare): "다시", "다시 해줘", "다른 거 보여줘", "이전 추천 말고"
+- DISCOVERY/TRANSACTION (has context): "주말용 다시"(scenario), "벤투스 S2 다시"(product), "가격 다시"(domain anchor), "다시 추천해줘"(verb)
 
 ⚠️ This rule overrides CONTINUATION DETECTION below for bare re-triggers — a
 bare re-trigger is NOT a valid continuation; it's an ambiguous request that
@@ -412,14 +370,8 @@ If the previous agent showed a list and asked user to SELECT (cars, tires, store
 → Classify into that SAME domain — do NOT chain to another domain.
 
 Examples:
-- Previous: Discovery showed car list → User: "제타" → DISCOVERY (same domain continues)
-- Previous: Discovery showed tires → User: "벤투스 S2 AS" → DISCOVERY (same domain continues)
-- Previous: Discovery showed tires → User: "1. 벤투스 S2 AS" → DISCOVERY (ordinal prefix
-  does NOT change domain; the user is still picking a tire from the recommendation list,
-  not placing an order)
-- Previous: Discovery showed tires → User: "1번", "3", "첫번째" → DISCOVERY (pure ordinal)
-- Previous: Transaction showed stores → User: "한남점" → TRANSACTION (same domain continues)
-- Previous: Transaction showed schedule → User: "내일 10시" → TRANSACTION (same domain continues)
+- DISCOVERY continues: Pick car ("제타"), pick tire ("벤투스 S2", "1. 벤투스", "1번")
+- TRANSACTION continues: Pick store ("한남점"), pick date ("내일 10시")
 
 ⚠️ HARD RULE — Tire pick from a Discovery recommendation/search list stays in DISCOVERY.
 Even when user_behavior reads "confirming product selection" or "user picked a tire", the
