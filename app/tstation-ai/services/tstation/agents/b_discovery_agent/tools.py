@@ -313,7 +313,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to check tire compatibility"
             )
-        logger.info("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][check_compatibility_tool] Failed")
@@ -402,7 +402,7 @@ def search_product_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search products"
             )
-        logger.info("[TOOL][search_product_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][search_product_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             data["items"] = _enrich_items_with_descriptions(data["items"])
@@ -443,7 +443,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get user vehicles"
             )
-        logger.info("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
@@ -480,7 +480,7 @@ def get_my_cars_tool(mbr_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get member cars"
             )
-        logger.info("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_my_cars_tool] Failed")
@@ -517,7 +517,7 @@ def search_car_model_tool(keyword: str, limit: int = 20):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search car models"
             )
-        logger.info("[TOOL][search_car_model_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][search_car_model_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_car_model_tool] Failed")
@@ -555,7 +555,7 @@ def search_car_model_groups_tool(keyword: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search car model groups"
             )
-        logger.info("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_car_model_groups_tool] Failed")
@@ -590,7 +590,7 @@ def get_car_trims_tool(car_model_det: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get car trims"
             )
-        logger.info("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_car_trims_tool] Failed")
@@ -618,7 +618,7 @@ def get_product_description_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product description"
             )
-        logger.info("[TOOL][get_product_description_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_product_description_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
@@ -737,7 +737,7 @@ def get_products_recommendations_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product recommendations"
             )
-        logger.info("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             data["items"] = _enrich_items_with_descriptions(data["items"])
@@ -768,7 +768,7 @@ def get_events_tool(lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get events"
             )
-        logger.info("[TOOL][get_events_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_events_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_events_tool] Failed")
@@ -789,7 +789,7 @@ def get_deals_tool():
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get deals"
             )
-        logger.info("[TOOL][get_deals_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_deals_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_deals_tool] Failed")
@@ -819,7 +819,7 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to compare discount prices"
             )
-        logger.info("[TOOL][compare_discount_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][compare_discount_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][compare_discount_tool] Failed")
@@ -913,7 +913,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         response = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
         if response.parsed is None:
             return {"status": "error", "http_status": response.status_code, "reason": f"HTTP {response.status_code}", "message": "Failed to get product price"}
-        logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:
@@ -976,7 +976,7 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
                 "reason": f"HTTP {response.status_code}",
                 "message": response.content.decode(errors="ignore") or "Failed to get best-selling products",
             }
-        logger.info("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:

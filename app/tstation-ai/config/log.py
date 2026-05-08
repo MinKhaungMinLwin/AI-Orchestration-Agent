@@ -88,6 +88,18 @@ def setup_logging(service_name: str, ignored_paths: list):
                 "level": "INFO",
                 "propagate": False,
             },
+            # LiteLLM can emit repetitive provider-list/info logs.
+            # Keep it at WARNING to reduce container log noise.
+            "LiteLLM": {
+                "handlers": ["file", "console"],
+                "level": "WARNING",
+                "propagate": False,
+            },
+            "litellm": {
+                "handlers": ["file", "console"],
+                "level": "WARNING",
+                "propagate": False,
+            },
         },
 
         "root": {

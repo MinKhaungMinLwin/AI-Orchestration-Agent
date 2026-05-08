@@ -1,5 +1,5 @@
 from services.tstation.agents.base_agent import BaseAgent
-from services.tstation.agents.templates import DiscoveryDataEvent
+from services.tstation.agents.templates import DiscoveryAgentOutput
 from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
@@ -819,7 +819,11 @@ Rules:
    - `check_compatibility_tool`, `search_car_model_tool`, `search_car_model_groups_tool`, `get_car_trims_tool`, `get_events_tool`, `get_deals_tool`
    - Anything that needs a `quickReply`
 
-   → Output exactly ONE fenced ```json block as documented above. No prose outside the block.
+  → Output exactly ONE fenced ```json block as documented above. No prose outside the block.
+  → JSON mode payload MUST include top-level `nextAction`:
+    - stop: `{"type":"stop","domain":null}`
+    - continue to transaction: `{"type":"continue","domain":"transaction"}`
+    - continue to discovery (internal retry only): `{"type":"continue","domain":"discovery"}`
 
 2. `assistantResponse` (JSON MODE only) must never be empty.
 3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation.
@@ -834,7 +838,7 @@ def get_discovery_system_prompt():
 
 
 class DiscoverySubAgent(BaseAgent):
-    OUTPUT_TEMPLATE = DiscoveryDataEvent
+    OUTPUT_TEMPLATE = DiscoveryAgentOutput
 
     TOOL_TO_AF_MAP = {
         # Product Compatibility

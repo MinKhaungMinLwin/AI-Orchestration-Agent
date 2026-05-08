@@ -201,7 +201,9 @@ class BaseAgent(ABC):
         return create_agent(
             model=self._model,
             tools=self._tools,
-            debug=True,
+            # Keep LangGraph debug stream off in runtime to avoid noisy
+            # `[values]` / `[updates]` payload dumps in container logs.
+            debug=False,
             system_prompt=prompt,
             name=self.name,
         )

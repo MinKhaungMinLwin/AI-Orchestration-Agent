@@ -1,6 +1,6 @@
 
 from services.tstation.agents.base_agent import BaseAgent
-from services.tstation.agents.templates import TransactionDataEvent
+from services.tstation.agents.templates import TransactionAgentOutput
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_available_coupons_tool,
@@ -1119,6 +1119,12 @@ Style rules for PROSE MODE:
 - No tool was called (greeting, clarification, error fallback, etc.).
 
 → Output exactly ONE fenced ```json block as documented below.
+→ JSON mode payload MUST include top-level `nextAction`:
+  - stop: `{"type":"stop","domain":null}`
+  - continue to discovery when product resolution is required:
+    `{"type":"continue","domain":"discovery"}`
+  - continue to transaction for internal same-domain handoff/retry:
+    `{"type":"continue","domain":"transaction"}`
 
 `quickReply` — price, inventory, order tracking, text-only turns:
 Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quickReplies:[{label:str, domain:str}]}}`
@@ -1202,7 +1208,7 @@ def get_transaction_system_prompt():
 
 
 class TransactionSubAgent(BaseAgent):
-    OUTPUT_TEMPLATE = TransactionDataEvent
+    OUTPUT_TEMPLATE = TransactionAgentOutput
 
     TOOL_TO_AF_MAP = {
         # Price

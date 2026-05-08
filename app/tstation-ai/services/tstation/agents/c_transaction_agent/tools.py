@@ -128,7 +128,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product price"
             )
-        logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
@@ -157,7 +157,7 @@ def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get available coupons"
             )
-        logger.info("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_available_coupons_tool] Failed")
@@ -184,7 +184,7 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get my coupons"
             )
-        logger.info("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_my_coupons_tool] Failed")
@@ -238,7 +238,7 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to issue coupon",
             )
-        logger.info("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][issue_coupon_tool] Failed")
@@ -300,7 +300,7 @@ def get_product_promotions_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product promotions",
             )
-        logger.info("[TOOL][get_product_promotions_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_product_promotions_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_product_promotions_tool] Failed")
@@ -340,7 +340,7 @@ def get_logistics_inventory_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get logistics inventory"
             )
-        logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_logistics_inventory_tool] Failed")
@@ -373,7 +373,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store inventory"
             )
-        logger.info("[TOOL][get_store_inventory_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_store_inventory_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_inventory_tool] Failed")
@@ -407,7 +407,7 @@ def search_place_tool(query: str, size: int = 10):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search place"
             )
-        logger.info("[TOOL][search_place_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][search_place_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_place_tool] Failed")
@@ -477,7 +477,7 @@ def get_nearby_stores_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get nearby stores"
             )
-        logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
         # Truncate to top 10 stores so the LLM's `location` template (max_length=10
@@ -590,7 +590,7 @@ def get_store_list_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store list"
             )
-        logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -631,7 +631,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store details"
             )
-        logger.info("[TOOL][get_store_detail_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_store_detail_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_detail_tool] Failed")
@@ -684,7 +684,7 @@ def get_store_schedule_tool(shop_id: str, mode: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store schedule"
             )
-        logger.info("[TOOL][get_store_schedule_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_store_schedule_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_schedule_tool] Failed")
@@ -847,7 +847,7 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to save to cart"
             )
-        logger.info("[TOOL][save_to_cart_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][save_to_cart_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][save_to_cart_tool] Failed")
@@ -895,7 +895,7 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to create quick order"
             )
-        logger.info("[TOOL][quick_order_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][quick_order_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][quick_order_tool] Failed")
@@ -922,7 +922,7 @@ def get_order_status_tool(query_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to retrieve order status"
             )
-        logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_order_status_tool] Failed")
@@ -948,7 +948,7 @@ def get_orders_of_user_tool():
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to retrieve order list"
             )
-        logger.info("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
+        # logger.info("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("orders"), list):
             data["orders"] = _enrich_orders_with_detail(data["orders"])

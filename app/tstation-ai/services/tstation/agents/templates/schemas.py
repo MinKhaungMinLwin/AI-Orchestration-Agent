@@ -6,7 +6,7 @@ returns the final FE payload in a guaranteed shape.
 
 from typing import Annotated, ClassVar, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 
 class TemplatePayload(BaseModel):
@@ -25,6 +25,36 @@ class DataEvent(BaseModel):
     type: Literal["data"] = "data"
     template: str
     data: dict
+    nextAction: "NextActionPayload | None" = Field(
+        default=None,
+        description=(
+            "Internal coordinator hint for chaining. The backend strips this field "
+            "before streaming to FE."
+        ),
+    )
+
+
+class NextActionPayload(BaseModel):
+    """Agent-declared next action for coordinator chaining (B1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["stop", "continue"] = Field(
+        ...,
+        description="Whether coordinator should stop or continue chaining.",
+    )
+    domain: Literal["discovery", "transaction", "support"] | None = Field(
+        default=None,
+        description="Required when type='continue'; ignored for stop.",
+    )
+
+    @model_validator(mode="after")
+    def validate_type_domain_pair(self):
+        if self.type == "continue" and self.domain is None:
+            raise ValueError("nextAction.domain is required when nextAction.type='continue'")
+        if self.type == "stop" and self.domain is not None:
+            raise ValueError("nextAction.domain must be null when nextAction.type='stop'")
+        return self
 
 
 class QuickReplyChip(BaseModel):
@@ -362,6 +392,26 @@ TransactionDataEvent = Annotated[
 ]
 
 
+class TransactionAgentOutput(BaseModel):
+    """Transaction agent output with optional internal chain hint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: str
+    data: dict
+    nextAction: NextActionPayload | None = None
+
+    @model_validator(mode="after")
+    def validate_transaction_payload(self):
+        TypeAdapter(TransactionDataEvent).validate_python({
+            "type": self.type,
+            "template": self.template,
+            "data": self.data,
+        })
+        return self
+
+
 class ProductMeta(BaseModel):
     """Hidden FE metadata for a product card."""
 
@@ -569,3 +619,23 @@ DiscoveryDataEvent = Annotated[
     QuickReplyDataEvent | ProductDataEvent | ListCarDataEvent | CheapestProductDataEvent | PreviewYoutubeDataEvent,
     Field(discriminator="template"),
 ]
+
+
+class DiscoveryAgentOutput(BaseModel):
+    """Discovery agent output with optional internal chain hint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["data"] = "data"
+    template: str
+    data: dict
+    nextAction: NextActionPayload | None = None
+
+    @model_validator(mode="after")
+    def validate_discovery_payload(self):
+        TypeAdapter(DiscoveryDataEvent).validate_python({
+            "type": self.type,
+            "template": self.template,
+            "data": self.data,
+        })
+        return self

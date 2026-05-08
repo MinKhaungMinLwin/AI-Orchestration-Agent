@@ -57,6 +57,24 @@ class AgentDecision(BaseModel):
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 
 
+def _parse_agent_declared_next_action(payload: object) -> AgentDecision | None:
+    """Normalize agent-emitted nextAction payload into AgentDecision."""
+    if not isinstance(payload, dict):
+        return None
+    action = str(payload.get("type", "")).strip().lower()
+    reason = "agent_declared_next_action"
+    if action == NextAction.STOP.value:
+        if payload.get("domain") is not None:
+            return None
+        return AgentDecision(next_action=NextAction.STOP, next_domain="null", reason=reason)
+    if action != NextAction.CONTINUE.value:
+        return None
+    domain = str(payload.get("domain", "")).strip().lower()
+    if domain not in {"discovery", "transaction", "support"}:
+        return None
+    return AgentDecision(next_action=NextAction.CONTINUE, next_domain=domain, reason=reason)
+
+
 def prompt_router() -> str:
     return dedent("""
     You are a domain classifier and decision engine for T-Station AI.
@@ -979,9 +997,9 @@ class StreamingMultiAgentCoordinator:
                 logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
 
             domain_key = domain.value
-            logger.info(
-                f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
-            )
+            # logger.info(
+            #     f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
+            # )
 
             # Yield agent start event
             yield {
@@ -994,6 +1012,7 @@ class StreamingMultiAgentCoordinator:
             full_response = ""
             last_agent_called_tools = False
             agent_tools_called: list[str] = []
+            agent_declared_decision: AgentDecision | None = None
 
             # Last user message becomes the agent span's input — keeps the
             # trace readable instead of dumping the entire enriched_messages
@@ -1023,12 +1042,20 @@ class StreamingMultiAgentCoordinator:
                 for event in agent.stream(enriched_messages, config=agent_trace_config):
                     # Tag with source domain for UI
                     event["source_domain"] = domain_key
-                    yield event
 
                     # Track direct data events emitted by the domain agent (JSON output).
                     # When present, skip the UI Template stage below.
                     if event.get("type") == "data":
                         domain_data_event_emitted = True
+                        parsed_decision = _parse_agent_declared_next_action(event.pop("nextAction", None))
+                        if parsed_decision is not None:
+                            agent_declared_decision = parsed_decision
+                            logger.info(
+                                "[COORDINATOR] Agent-declared nextAction accepted: %s -> %s",
+                                parsed_decision.next_action.value,
+                                parsed_decision.next_domain,
+                            )
+                    yield event
 
                     # Capture message content for context passing
                     if event.get("type") == "message":
@@ -1124,7 +1151,7 @@ class StreamingMultiAgentCoordinator:
 
                 # Agent already produced a complete UI payload — decide_next_action
                 # would return STOP anyway (its prompt: "ONLY CONTINUE when agent cannot complete the task").
-                if domain_data_event_emitted:
+                if domain_data_event_emitted and agent_declared_decision is None:
                     logger.info("[COORDINATOR] Data event emitted — skipping decide_next_action")
                     break
 
@@ -1225,16 +1252,24 @@ class StreamingMultiAgentCoordinator:
                         skip_decision = True
                         continue
 
-                decision = decide_next_action(
-                    original_messages=messages,
-                    previous_agent_response=full_response,
-                    previous_domain=domain_key,
-                    session_id=session_id,
-                    user_id=user_id,
-                    trace_id=trace_id,
-                    parent_span_id=parent_span_id,
-                )
-                logger.info(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
+                if agent_declared_decision is not None:
+                    decision = agent_declared_decision
+                    logger.info(
+                        "[COORDINATOR] Using agent-declared nextAction: %s - %s",
+                        decision.next_action,
+                        decision.reason,
+                    )
+                else:
+                    decision = decide_next_action(
+                        original_messages=messages,
+                        previous_agent_response=full_response,
+                        previous_domain=domain_key,
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        parent_span_id=parent_span_id,
+                    )
+                    logger.info(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
 
                 if decision.next_action == NextAction.STOP or not decision.next_domain:
                     logger.info("[COORDINATOR] Stopping multi-agent chain")
