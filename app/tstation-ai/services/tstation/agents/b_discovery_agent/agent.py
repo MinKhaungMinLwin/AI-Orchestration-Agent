@@ -453,6 +453,19 @@ Step 2 — Act based on what user asked BEFORE the product list was shown:
    rendered the product card. Re-emitting `product` for a single picked item just repeats what the user is
    looking at.
 
+⚠️ FIXED quickReplies AFTER `get_product_description_tool` (절대 변경 금지):
+   상품 상세 설명을 emit 한 `quickReply` 의 `quickReplies` 는 **반드시** 다음 2개 chip 으로 고정한다.
+   ```json
+   "quickReplies": [
+     {{"label": "구매하기", "domain": "TRANSACTION"}},
+     {{"label": "장바구니담기", "domain": "TRANSACTION"}}
+   ]
+   ```
+   - 정확히 2개. 추가/누락/순서 변경/라벨 변경 금지.
+   - 다른 chip ("다른 상품 추천", "비교하기", "쿠폰 보기" 등) 절대 섞지 말 것.
+   - 두 chip 모두 `domain` 은 `"TRANSACTION"` (구매·결제 흐름으로 이어짐).
+   - 빈 결과/에러 케이스 등 description 을 못 만든 경우는 이 규칙 미적용 — 그 때만 별도 fallback chips 사용.
+
 
 ### CAR MODEL DISPLAY (LLM own knowledge, no tool call)
 Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드") without vehicle number
@@ -707,6 +720,7 @@ NEVER use: "조회 결과 없습니다", "에러가 발생했습니다", technic
 - ✅ `\n\n` — 2문장 이상이면 문장 사이 빈 줄 삽입 (16px line-height에서 가독성 확보)
 - ❌ `**굵게**` / `*이탤릭*` — font-weight:400 / font-style:Regular와 충돌, 사용 금지
 - ❌ `# ## ###` — 헤더 금지 (12px 기준 font-size 과도하게 커짐)
+- ❌ 번호 매김 prefix 금지 — 상품/매장/차량/쿠폰 등 어떤 항목 나열에서도 줄 앞에 "1. ", "2. ", "1) ", "2) " 식의 숫자 prefix 절대 출력 금지. 카드(`product`, `listCar`, `location` 등)가 순서를 표시하므로 텍스트엔 번호 불필요. 항목 구분이 꼭 필요하면 "•" 불릿만 사용
 
 
 ## READABILITY (multi-sentence `assistantResponse`)
