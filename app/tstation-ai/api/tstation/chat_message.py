@@ -116,7 +116,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )
 
     # Non-stream mode
-    response = TStationChatServiceV2.chat(chat_request)
+    response = await TStationChatServiceV2.chat(chat_request)
 
     if isinstance(response, TStationChatResponse):
         # Save assistant response to history
@@ -142,7 +142,7 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     template_data = None  # Captured from UI Template Agent data events
 
     # Stream from chat service
-    stream_response = TStationChatServiceV2.chat(chat_request)
+    stream_response = await TStationChatServiceV2.chat(chat_request)
 
     # Send initial response with session_id
     initial_response = {

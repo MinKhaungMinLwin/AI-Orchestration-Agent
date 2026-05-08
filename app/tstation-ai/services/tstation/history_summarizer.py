@@ -73,41 +73,47 @@ async def refresh_summary(session_id: str) -> None:
     from services.tstation.chat_history_service import get_chat_history_service
 
     history_service = get_chat_history_service()
-    message_count = history_service.get_message_count(session_id)
-
-    if message_count < MIN_MESSAGES_FOR_SUMMARY:
-        return
-
-    summary = history_service.get_summary(session_id)
-    covered_count = summary["covered_count"] if summary else 0
-    target_covered = message_count - RECENT_MESSAGES_TO_KEEP
-
-    if target_covered <= covered_count:
-        return
-
-    if summary and target_covered - covered_count < SUMMARY_UPDATE_INTERVAL:
+    
+    # Optimize Concurrency: Prevent race condition via Redis lock
+    if not history_service.acquire_summary_lock(session_id):
+        logger.info(f"[SUMMARY] Task skipped, another summarization is in progress for {session_id}")
         return
 
     try:
-        await _update_summary(session_id, history_service, message_count)
+        message_count = history_service.get_message_count(session_id)
+
+        if message_count < MIN_MESSAGES_FOR_SUMMARY:
+            return
+
+        summary = history_service.get_summary(session_id)
+        covered_count = summary["covered_count"] if summary else 0
+        target_covered = message_count - RECENT_MESSAGES_TO_KEEP
+
+        if target_covered <= covered_count:
+            return
+
+        if summary and target_covered - covered_count < SUMMARY_UPDATE_INTERVAL:
+            return
+
+        await _update_summary(session_id, history_service, message_count, summary, covered_count, target_covered)
     except Exception:
         logger.exception(
             f"[SUMMARY] Background summarization failed for session {session_id}"
         )
+    finally:
+        history_service.release_summary_lock(session_id)
 
 
-async def _update_summary(session_id: str, history_service, message_count: int) -> None:
+async def _update_summary(session_id: str, history_service, message_count: int, summary: dict | None, covered_count: int, target_covered: int) -> None:
     from langchain_core.messages import HumanMessage
     from services.tstation.agents.router import DECISION_LLM
 
-    messages = history_service.get_history(session_id)
-    slots = history_service.get_slots(session_id)
-    summary = history_service.get_summary(session_id)
-
-    covered_count = summary["covered_count"] if summary else 0
-    messages_to_summarize = messages[covered_count : message_count - RECENT_MESSAGES_TO_KEEP]
+    # Optimize Redis Fetch: Get only the range we actually need, skip fully decrypting history
+    messages_to_summarize = history_service.get_history_range(session_id, covered_count, target_covered - 1)
     if not messages_to_summarize:
         return
+
+    slots = history_service.get_slots(session_id)
 
     slots_info = _format_slots(slots)
     messages_text = _format_messages(messages_to_summarize)
@@ -128,7 +134,7 @@ async def _update_summary(session_id: str, history_service, message_count: int) 
     summary_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
 
     if summary_text:
-        new_covered_count = message_count - RECENT_MESSAGES_TO_KEEP
+        new_covered_count = target_covered
         history_service.save_summary(session_id, summary_text, new_covered_count)
         logger.info(
             f"[SUMMARY] Updated for session {session_id} "

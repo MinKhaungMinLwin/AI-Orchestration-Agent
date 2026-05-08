@@ -10,6 +10,7 @@ operation refreshes TTL on the session's keys (tmpl, meta, user session set),
 so active conversations stay alive while inactive sessions auto-expire after
 1 week of no writes. Tool context has its own shorter TTL (see save_tool_context).
 """
+import asyncio
 import json
 import logging
 import uuid
@@ -272,6 +273,46 @@ class ChatHistoryService:
         messages.sort(key=get_timestamp)
 
         return messages
+
+    def get_history_range(self, session_id: str, start: int, end: int) -> List[dict]:
+        """Get a specific range of messages from the sorted set to avoid full decryption."""
+        messages = []
+        crypto = get_crypto_service()
+
+        tmpl_key = _get_template_messages_key(session_id)
+        tmpl_raw = self.redis.zrange(tmpl_key, start, end)
+        for raw in tmpl_raw:
+            try:
+                data = json.loads(raw)
+                messages.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": data.get("role", "assistant"),
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+            except json.JSONDecodeError:
+                continue
+
+        def get_timestamp(msg):
+            try:
+                return datetime.fromisoformat(msg["created_at"]).timestamp()
+            except (ValueError, KeyError):
+                return 0
+        messages.sort(key=get_timestamp)
+        return messages
+
+    def acquire_summary_lock(self, session_id: str) -> bool:
+        """Acquire a lock for summarization to prevent concurrent race conditions."""
+        key = f"chat:summary_lock:{session_id}"
+        return bool(self.redis.set(key, "1", nx=True, ex=30))
+
+    def release_summary_lock(self, session_id: str) -> None:
+        """Release the summarization lock."""
+        key = f"chat:summary_lock:{session_id}"
+        self.redis.delete(key)
 
     def list_sessions(self, user_id: str) -> List[dict]:
         """List all sessions for a user (decrypts last_message preview)."""
@@ -542,6 +583,74 @@ class ChatHistoryService:
             except (ValueError, TypeError) as exc:
                 logger.warning(f"[CHAT_HISTORY] Failed to parse slots for session {session_id}: {exc}")
         return ConversationSlots()
+
+    async def get_chat_context_pipeline_async(
+        self, session_id: str, limit: int
+    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None]:
+        """Fetch template msgs, slots, and tool context concurrently using a Redis pipeline."""
+        tmpl_key = _get_template_messages_key(session_id)
+        meta_key = _get_meta_key(session_id)
+        tool_ctx_key = f"chat:tool_ctx:{session_id}"
+
+        pipe = self.redis.pipeline()
+        batch_size = max(limit * 4, 40)
+        pipe.zrevrange(tmpl_key, 0, batch_size - 1)
+        pipe.hget(meta_key, "slots")
+        pipe.get(tool_ctx_key)
+
+        raw_items, raw_slots, raw_tool_ctx = await asyncio.to_thread(pipe.execute)
+
+        crypto = get_crypto_service()
+        recent_template_msgs = []
+        latest_listcar_tmpl = None
+
+        # Parse template messages
+        for raw in raw_items:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if data.get("role") != "assistant":
+                continue
+            td_raw = data.get("template_data")
+            if not td_raw:
+                continue
+
+            td_decoded = _decode_template_data(td_raw, crypto)
+
+            if latest_listcar_tmpl is None and td_decoded and td_decoded.get("template") == "listCar":
+                inner = td_decoded.get("data")
+                if isinstance(inner, dict):
+                    latest_listcar_tmpl = inner
+
+            if len(recent_template_msgs) < limit:
+                recent_template_msgs.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": "assistant",
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": td_decoded,
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+
+        # Parse slots
+        slots = ConversationSlots()
+        if raw_slots:
+            try:
+                slots = ConversationSlots.model_validate_json(crypto.decrypt(raw_slots))
+            except (ValueError, TypeError):
+                pass
+
+        # Parse tool context
+        tool_ctx = []
+        if raw_tool_ctx:
+            try:
+                tool_ctx = json.loads(crypto.decrypt(raw_tool_ctx))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl
 
 
 # Singleton instance

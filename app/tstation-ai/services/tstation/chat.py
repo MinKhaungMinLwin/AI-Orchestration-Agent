@@ -1,4 +1,4 @@
-﻿import concurrent.futures
+import concurrent.futures
 import json
 import logging
 import re
@@ -2140,7 +2140,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def chat(request: TStationChatRequest):
+    async def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
         """
@@ -2231,22 +2231,16 @@ class TStationChatServiceV2:
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load only the targeted Redis data needed on the hot path.
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _pool:
-                _tmpl_f     = _pool.submit(
-                    chat_history_svc.get_recent_assistant_messages_with_template_data,
-                    request.session_id, _TEMPLATE_ENRICH_MAX_TURNS,
-                )
-                _slots_f    = _pool.submit(chat_history_svc.get_slots, request.session_id)
-                _tool_ctx_f = _pool.submit(chat_history_svc.get_tool_context, request.session_id)
-                _listcar_f  = _pool.submit(
-                    chat_history_svc.get_latest_template_data,
-                    request.session_id, "listCar",
-                )
-                recent_template_msgs = _tmpl_f.result()
-                existing_slots       = _slots_f.result()
-                prev_tool_data       = _tool_ctx_f.result()
-                latest_listcar_tmpl  = _listcar_f.result()
+            # 1) Load only the targeted Redis data needed on the hot path (using async Pipeline).
+            (
+                recent_template_msgs,
+                existing_slots,
+                prev_tool_data,
+                latest_listcar_tmpl,
+            ) = await chat_history_svc.get_chat_context_pipeline_async(
+                request.session_id, _TEMPLATE_ENRICH_MAX_TURNS
+            )
+            
             latest_location_tmpl = None
             _t_slots = time.perf_counter()
             logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
@@ -2500,7 +2494,9 @@ class TStationChatServiceV2:
                     _classify_path = "fast"
                     # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
                 else:
-                    domains, routing_result = _coordinator.classify_multi_intent(
+                    import asyncio
+                    domains, routing_result = await asyncio.to_thread(
+                        _coordinator.classify_multi_intent,
                         messages,
                         session_id=request.session_id,
                         user_id=request.user_id,
