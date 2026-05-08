@@ -323,7 +323,7 @@ available_dates_tool → {{"assistantResponse": "고객님, 예약 가능한 날
   {{"date": "2026년 4월 17일 (금)", "available": false, "availableTimes": [], "index": 2}}
 ], "selectedDate": 0, "metadata": {{"shopId": $shop_id}}}}
 
-preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 2, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true, "metadata": {{"goodsId": $goods_no, "shopId": $shop_id, "carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}}}
+preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 2, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": null}}, "isReadyToOrder": true, "isReadyToAddToCart": true, "metadata": {{"goodsId": $goods_no, "shopId": $shop_id, "carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}}}
 
 order_complete_tool → {{"assistantResponse": "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요. 배송지와 결제 수단을 입력하면 최종 주문이 완료됩니다.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 4, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "$goods_no|$qty", "shopSeq": $shop_id, "smrtPayYn": "N", "drtPurYn": "Y"}}, "metadata": {{"ordNo": $ord_no, "goodsId": $goods_no, "shopId": $shop_id}}}}
 
