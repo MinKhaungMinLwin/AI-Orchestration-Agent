@@ -29,6 +29,7 @@ from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
 from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
 from services.tstation.agents.router import QC_LLM
+from services.tstation.classifier_feedback import log_classifier_redirect
 from config.tracing import (
     build_trace_config,
     trace_span as _trace_span,
@@ -2564,6 +2565,19 @@ class TStationChatServiceV2:
                 f"resolved from list-selection + pending_intent={merged_slots.pending_intent!r} "
                 f"→ [DISCOVERY] → [TRANSACTION]"
             )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="post_classification",
+                classifier_domains=["discovery"],
+                corrected_domains=["transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "goods_no": merged_slots.goods_no,
+                    "pending_intent": merged_slots.pending_intent,
+                    "goods_no_resolved_this_turn": True,
+                },
+            )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
         # P0c redirect: classifier picked [DISCOVERY] but goods_no is ALREADY
@@ -2596,6 +2610,18 @@ class TStationChatServiceV2:
                 f"goods_no={merged_slots.goods_no!r} (carried), "
                 f"fresh_intent={regex_slots.pending_intent!r}, "
                 f"session_id={request.session_id} → domains=[TRANSACTION]"
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0c",
+                classifier_domains=["discovery"],
+                corrected_domains=["transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "goods_no_carried": merged_slots.goods_no,
+                    "fresh_intent": regex_slots.pending_intent,
+                },
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
@@ -2653,6 +2679,20 @@ class TStationChatServiceV2:
                 f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
             )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0_auto_chain",
+                classifier_domains=["discovery"],
+                corrected_domains=["discovery", "transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "pending_intent": merged_slots.pending_intent,
+                    "fresh_intent_this_turn": regex_slots.pending_intent,
+                    "tire_size": merged_slots.tire_size,
+                    "tire_model": merged_slots.tire_model,
+                },
+            )
 
         # P0b TRANSACTION → DISCOVERY+TRANSACTION redirect: when the classifier
         # picked [TRANSACTION] alone but the user actually provided product
@@ -2699,6 +2739,19 @@ class TStationChatServiceV2:
                 f"tire_model={merged_slots.tire_model!r}, "
                 f"has_product_keyword={ConversationSlots.has_product_keyword(last_user_text)}, "
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0b",
+                classifier_domains=["transaction"],
+                corrected_domains=["discovery", "transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "tire_size": merged_slots.tire_size,
+                    "tire_model": merged_slots.tire_model,
+                    "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
+                },
             )
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
