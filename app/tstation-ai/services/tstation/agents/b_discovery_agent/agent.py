@@ -827,7 +827,7 @@ Rules:
 
 2. `assistantResponse` (JSON MODE only) must never be empty.
 3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation.
-   Exception — when `get_product_description_tool` was called: set `quickReplies` to an empty array `[]`. The user should be free to ask follow-up questions naturally instead of being guided by predefined chips.
+   Exception — when `get_product_description_tool` was called: follow the **FIXED quickReplies** rule defined in Branch C (Flow Selection by Prior Context) above — emit exactly `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]`. Do NOT emit an empty array; do NOT improvise other chips.
 4. For `listCar` JSON: keep `assistantResponse` to 1–2 short Korean sentences; cards carry the detail. Do NOT also dump the items inside `assistantResponse`.
 5. Tool calls happen BEFORE your final response — the response (PROSE or JSON) is your final answer after all tool results are gathered.
 """
