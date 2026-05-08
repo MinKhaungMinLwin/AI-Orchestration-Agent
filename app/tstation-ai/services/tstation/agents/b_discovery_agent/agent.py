@@ -513,14 +513,10 @@ Format:
 ### Flow B — Product Search
 Trigger: User searches by name/keyword
 
-1. Normalize product name to **Korean** (한글 입력은 그대로, 영문 입력만 한글로 변환: Ventus→벤투스, Kinergy→키너지, Optimo→옵티모, Dynapro→다이나프로, iON→아이온; 모델 코드 S1/S2/evo/HPX 등은 원형 유지)
+1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
-3. **Brand-only 분기**: 사용자 입력에 모델명이 없고 브랜드명만 있는 경우 (예: "브리지스톤 235/55R19", "피렐리 추천", "미쉐린 225/45R18")
-   → `search_product_tool(size=if_provided, brand_cd=detected)` 로 호출 (keyword 인자 생략 / None).
-   ⚠️ NEVER pass `keyword="브리지스톤"` / `keyword="미쉐린"` / `keyword="피렐리"` 같은 브랜드명 단어.
-      brand_cd 가 이미 브랜드 필터링을 담당하므로, 브랜드명을 keyword 에 넣으면 GOODS_NM LIKE
-      매칭에서 0건이 반환된다 (DB GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않음).
+3. **Brand-only 분기**: brand name without model name → `search_product_tool(size=if_provided, brand_cd=detected)`, keyword omitted (per INPUT NORMALIZATION brand-only rule).
 4. **모델명 포함 분기**: 모델명이 함께 들어온 경우만 keyword 사용
    → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
    - 예: "브리지스톤 포텐자 235/55R19" → keyword="포텐자", brand_cd="BS"
@@ -546,7 +542,7 @@ Branching:
 - 1 result → declarative handoff (Coordinator auto-chains Transaction in the SAME turn).
 - Multiple results → fetch real prices and render `product` cards, then STOP for user selection.
 
-1. Normalize product name to **Korean** (한글 입력은 그대로; 영문 입력만 한글로 변환)
+1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
 2. Determine tire size:
    a. User specified in message → use it (highest priority)
    b. Confirmed tire_size in slots (same vehicle) → use as fallback
@@ -637,7 +633,7 @@ Trigger: User wants to ORDER by product name + size (goods_no unknown)
 Trigger: "내 차 목록", "my registered vehicles"
 1. get_my_cars_tool(mbr_no)
 2. If 1+ cars → emit `listCar` template (one short intro sentence in `assistantResponse`, e.g. "등록된 차량을 확인해 보세요.").
-   ⚠️ 1대만 등록되어 있어도 자동 선택/요약 quickReply로 대체하지 말고 반드시 `listCar` 카드를 노출한다.
+   ⚠️ Even 1 car → emit `listCar` (no auto-select — see Flow A Case 1).
 3. If 0 cars → emit `quickReply` with the 3-path guidance from Flow A Case 3.
 
 
@@ -679,7 +675,7 @@ Write the user-facing answer in natural Korean. Be concise but complete:
 
 ⚠️ Discovery turns return ONE of these templates:
 - `product` — when `search_product_tool` or `get_products_recommendations_tool` returned a non-empty list to display as cards.
-- `listCar` — when the user has 1+ registered cars AND the current turn needs the user to pick one (1대만 있어도 자동 선택하지 말고 listCar로 노출).
+- `listCar` — when the user has 1+ registered cars AND the current turn needs the user to pick one (no auto-select even for 1 car).
 - `cheapestProduct` — when `compare_discount_tool` returned a cheapest option.
 - `previewYoutube` — when `search_youtube_video_tool` returned video items.
 - `quickReply` — for every other case (text answers, no-result fallback, description, handoff confirmations).

@@ -434,13 +434,7 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 ── STEP C: Visit date (only when user picks "주문하기" or "방문 날짜 확인" in a SEPARATE turn) ──
 5. Trigger keywords from user: "주문하기", "방문 날짜 확인", "네", "확인해줘", "예약 진행" 등 명시적 다음 액션 표명.
    ⚠️ goal_type=store_with_stock 이거나 직전 STEP A/B에서 quickReply 응답을 emit한 직후라면, 같은 턴에 schedule을 호출하지 마라. 사용자의 다음 턴 픽을 받은 뒤에만 진행.
-   - shop_id 단일 확정 상태에서 — `mode` 결정 후 `get_store_schedule_tool(shop_id, mode)` 단일 호출:
-     | shop ∈ todayShopArray/tnaShopArray AND logistics_qty == 0 (매장재고 O + 물류 X)
-         → mode = "in_store_only"            (오늘 ∪ T바로배송 range)
-     | shop ∈ todayShopArray/tnaShopArray AND logistics_qty > 0  (매장재고 O + 물류 O)
-         → mode = "in_store_logistics_combined" (오늘 ∪ T바로배송 ∪ 일반배송 range)
-     | shop NOT in todayShopArray/tnaShopArray AND logistics_qty > 0 (매장재고 X + 물류 O)
-         → mode = "logistics_only"           (일반배송 range)
+   - shop_id 단일 확정 상태에서 — determine `mode` per STORE HOURS — TOOL SELECTION table → call `get_store_schedule_tool(shop_id, mode)`.
    - 사용자가 "다른 매장 보기" / "다른 매장 찾기" 픽 → Flow 3-Region 재실행 (지역 재질문 또는 새 지역 검색).
    → return `datepick` 템플릿 → STOP and wait for user to SELECT a date and time slot.
    → Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜를 확인해 보시겠어요?" → wait.
@@ -530,7 +524,7 @@ Scan the entire conversation thread:
   • Does ANY prior user message contain booking/installation keywords: `장착`, `장착\\s*가능`, `예약`, `방문`, `빨리`, `주문`, `구매`? OR
   • Is `goods_no` in confirmed slots (a tire was searched / priced / described / selected earlier in this thread)?
 
-→ If EITHER is true: this is a BOOKING context. Apply ONE of two paths based on the **active goal**:
+→ If EITHER is true: this is a BOOKING context. Apply PATH A or PATH B.
 
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    PATH A — When the active goal is `재고 있는 매장 찾기` (goal_type=store_with_stock)
@@ -585,31 +579,12 @@ Scan the entire conversation thread:
 When the SELECTION condition (above) is met AND the GATE above did not force datepick (only possible when no booking keywords AND no goods_no — extremely rare in real journeys), route by CONTEXT below:
 
 Context signals to check (in priority order, ONLY if STEP 0 did not fire):
-1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A
-   → **Flow 6 STEP 5A Step 4–5**: FIRST call `get_store_inventory_tool` + `get_logistics_inventory_tool`
-      for the selected shop (parallel OK), THEN call `get_store_schedule_tool(shop_id, mode)` with
-      `mode` decided from the inventory state per the STORE HOURS — TOOL SELECTION mapping
-      → `datepick` template. See Flow 6 STEP 5A for the full branching.
-2. `pending_intent="재고 확인"` OR `goal_type=store_with_stock` OR active stock flow (Flow 3)
-   → **PATH A in the GATE above**: call `get_store_inventory_tool(goods_no, shop_id)` ONLY (logistics call may be parallel).
-   → Emit `quickReply` with the stock result + ["주문하기", "방문 날짜 확인", "다른 매장 보기"] (or 재고 없음 분기 옵션) → STOP.
-   → DO NOT call `get_store_schedule_tool` in the same turn.
-   → Only when user explicitly picks "주문하기" / "방문 날짜 확인" in a SEPARATE next turn → call `get_store_schedule_tool(shop_id, mode)` with `mode` derived per the STORE HOURS table → `datepick`.
-3. **goods_no is confirmed in slots (a tire has been picked AND/OR priced earlier in the journey)**
-   → This is an ORDER/INSTALLATION context, not pure info lookup. Once the user has
-     selected a tire and is now picking a store, there is no realistic scenario in
-     which they want plain store hours/phone info. Treat it as booking:
-     → call `get_store_inventory_tool` + `get_logistics_inventory_tool` for the selected shop, THEN
-       `get_store_schedule_tool(shop_id, mode)` with `mode` derived per the STORE HOURS table
-       → `datepick` template (Flow 6 STEP 5A path).
-   → This rule fires even if `pending_intent` was already cleared (e.g. by a successful
-     `get_final_price_tool` run) — once a tire is in scope, the journey is purchase-bound.
-4. ANY recent user turn (current OR within the last ~5 turns of the same product/store thread)
-   contains booking/installation keywords (예약, 장착, 장착\\s*가능, 방문, 빨리, 주문, 구매)
-   → call `get_store_schedule_tool(shop_id, mode)` (mode per STORE HOURS table) → `datepick` template.
-   ⚠️ Do NOT restrict the keyword check to the immediate current message — the user's
-     intent expressed two turns ago (e.g. "오늘 장착 가능한 매장 있어?") still applies
-     when they reply with just a store pick ("1. 티스테이션 판교점").
+1. `pending_intent="주문 진행"` OR prior turn was Flow 6 STEP 5A → Follow **PATH B** (→ Flow 6 STEP 5A Step 4–5).
+2. `pending_intent="재고 확인"` OR `goal_type=store_with_stock` OR active stock flow (Flow 3) → Follow **PATH A**.
+3. **goods_no is confirmed in slots** → booking context (purchase-bound). Follow **PATH B**.
+   This rule fires even if `pending_intent` was cleared — once a tire is in scope, the journey is purchase-bound.
+4. Booking keywords in recent ~5 turns (예약, 장착, 방문, 빨리, 주문, 구매) → Follow **PATH B**.
+   ⚠️ Check ALL recent turns, not just current message.
 5. User mentions a specific date in this turn
    → **Flow 5.1**: call `get_store_detail_tool(shop_id, cal_day=YYYYMMDD)` → `datepick` template
    (Single-date inquiries use the detail endpoint, not the range-based schedule modes.)
