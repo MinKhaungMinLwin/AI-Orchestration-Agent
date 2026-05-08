@@ -900,7 +900,9 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             ord_no = _get_str(inner, "ord_no", "ordNo") or None
 
     # Enrich product label from same-turn product/recommend/cheapest tool data.
+    # 사용자 노출용이라 goods_no 는 표기하지 않고 "goods_nm tire_size" 로만 보여준다.
     goods_nm = ""
+    tire_size = ""
     for product_entry in _find_entries(
         tool_data_list,
         "search_product_tool",
@@ -915,10 +917,16 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
         for row in rows:
             if isinstance(row, dict) and _get_str(row, "goods_no") == goods_no:
                 goods_nm = _get_str(row, "goods_nm", "title")
+                tire_size = _get_str(row, "tire_size_1", "tire_size_2")
                 break
         if goods_nm:
             break
-    product_label = f"{goods_nm} ({goods_no})" if goods_nm else goods_no
+    if goods_nm and tire_size:
+        product_label = f"{goods_nm} {tire_size}"
+    elif goods_nm:
+        product_label = goods_nm
+    else:
+        product_label = goods_no
 
     # Enrich carInfo from same-turn vehicle tools (match by car_lnc_cd).
     car_info: str | None = None
