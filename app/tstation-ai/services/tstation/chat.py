@@ -1819,12 +1819,12 @@ class TStationChatServiceV2:
           3. Multiple items with matching tire_size → pick the one whose goods_nm
              has the highest token overlap (≥2 tokens required to avoid false hits)
 
-        Only the most recent search_product_tool entry is inspected.
+        Only the most recent product-listing tool entry is inspected.
         Returns None when no confident match is found.
 
         Expected tool_context entry shape (produced by filter_for_context in
         g_qc_agent/source_filter.py, which is what gets persisted to Redis):
-            {"tool": "search_product_tool",
+            {"tool": "search_product_tool" | "get_products_recommendations_tool",
              "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
              "input": {...}}
         Note: `data` is a LIST directly, and the size field is `tire_size_1`
@@ -1834,8 +1834,9 @@ class TStationChatServiceV2:
             return None
 
         items: list[dict] = []
+        PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
         for entry in prev_tool_data:
-            if entry.get("tool") != "search_product_tool":
+            if entry.get("tool") not in PRODUCT_LIST_TOOLS:
                 continue
             data = entry.get("data")
             # Primary shape: filter_for_context stores data as a list directly
@@ -1908,37 +1909,26 @@ class TStationChatServiceV2:
             tire_size can be recovered at selection time without an extra LLM
             tool call.
 
-        Expected history msg shape (from chat_history_service.get_history):
-            {"role": "assistant", "content": "...",
-             "template_data": {"type": "data", "template": "listCar",
-                               "data": {"listCar": [{"licensePlate": "12가3456",
-                                                     "info": "K7 2.5 GDI", ...}],
-                                        "metadata": [{"carNo": "12가3456",
-                                                      "carLncCd": "01",
-                                                      "tireSize": "225/45R17",
-                                                      "tireSizeRe": "225/45R17"}]}}}
+        Expected template_data shape (from chat_history_service.get_latest_template_data):
+            {"type": "data", "template": "listCar",
+             "data": {"listCar": [{"licensePlate": "12가3456", "info": "K7 2.5 GDI", ...}],
+                      "metadata": [{"carNo": "12가3456", "carLncCd": "01",
+                                    "tireSize": "225/45R17", "tireSizeRe": "225/45R17"}]}}
 
         Matching strategy (first hit wins):
           1. License plate verbatim ("12가3456", "123가4567") against carNo.
           2. Ordinal at the start ("1.", "1번", "2)") → metadata[idx-1].
           3. Token-overlap against listCar[i].info — unique top scorer required.
         """
-        if not user_text or not history:
+        if not user_text or not isinstance(template_data, dict):
             return None
 
         latest_listcar: dict | None = None
-        for msg in reversed(history):
-            if msg.get("role") != "assistant":
-                continue
-            template_data = msg.get("template_data")
-            if not isinstance(template_data, dict):
-                continue
-            if template_data.get("template") != "listCar":
-                continue
-            data = template_data.get("data")
-            if isinstance(data, dict):
-                latest_listcar = data
-                break
+        if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), dict):
+            latest_listcar = template_data.get("data")
+        elif isinstance(template_data.get("listCar"), list):
+            # Defensive: allow passing the inner payload directly.
+            latest_listcar = template_data
         if latest_listcar is None:
             return None
 
@@ -2078,38 +2068,27 @@ class TStationChatServiceV2:
         shown to the user", so matching against it is more robust than against
         raw tool output.
 
-        Expected history msg shape (from chat_history_service.get_history):
-            {"role": "assistant", "content": "...",
-             "template_data": {"type": "data", "template": "location",
-                               "data": {"stores": [{"nameAddress": "티스테이션 한남점", ...}],
-                                        "metadata": [{"shopId": "F07782"}]}}}
+        Expected template_data shape (from chat_history_service.get_latest_template_data):
+            {"type": "data", "template": "location",
+             "data": {"stores": [{"nameAddress": "티스테이션 한남점", ...}],
+                      "metadata": [{"shopId": "F07782"}]}}
 
         Matching strategy:
           1. Ordinal at the start ("1.", "5번", "3)") → metadata[idx-1].shopId
           2. Token-overlap against stores[].nameAddress — only resolves when
              exactly ONE store has the top score
         """
-        if not user_text or not history:
+        if not user_text or not isinstance(template_data, dict):
             return None
 
         text = user_text.strip()
 
-        # Find the most recent assistant message with a `location` template.
-        # Stop at the first such message; do not fall through to older lists,
-        # because the user's selection refers to the latest one shown.
         target_template: dict | None = None
-        for msg in reversed(history):
-            if msg.get("role") != "assistant":
-                continue
-            td = msg.get("template_data")
-            if not isinstance(td, dict):
-                continue
-            if td.get("template") != "location":
-                continue
-            inner = td.get("data")
-            if isinstance(inner, dict):
-                target_template = inner
-            break
+        if template_data.get("template") == "location" and isinstance(template_data.get("data"), dict):
+            target_template = template_data.get("data")
+        elif isinstance(template_data.get("stores"), list):
+            # Defensive: allow passing the inner payload directly.
+            target_template = template_data
 
         if not target_template:
             return None
