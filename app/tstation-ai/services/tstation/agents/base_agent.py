@@ -277,7 +277,8 @@ class BaseAgent(ABC):
                                     if wait_for_confirmation is not None and not wait_for_confirmation():
                                         logger.info("[%s] Speculative route rejected before %s", self.name, tool_name)
                                         return
-                                    confirm_event.wait()
+                                    if wait_for_confirmation is None:
+                                        confirm_event.wait()
                                 display_name = TOOL_DISPLAY_NAMES.get(tool_name, "답변 중...")
                                 yield {
                                     "type": "status",
