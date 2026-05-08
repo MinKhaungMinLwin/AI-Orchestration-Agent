@@ -319,7 +319,12 @@ class OrderCompleteMeta(BaseModel):
 
     ordNo: str | None = None
     goodsId: str = Field(..., min_length=1)
-    shopId: str = Field(..., min_length=1)
+    # shopId: optional during cart-save flow (no store selected). PreOrderMeta
+    # already treats shopId as optional for the same reason. Keeping it required
+    # here caused TransactionDataEvent validation to fail on cart success →
+    # base_agent fell back to quickReply + ["다시 시도", "상담사 연결", "처음으로"]
+    # chips. Aligning the two metas eliminates that silent fallback path.
+    shopId: str | None = None
 
 
 class OrderCompleteTemplate(TemplatePayload):

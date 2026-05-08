@@ -937,6 +937,13 @@ Choose the output template based on the tool called:
 | Pre-order preview / STEP 5.5 | `preOrder` |
 | All other cases (price, inventory, order tracking, text-only) | `quickReply` |
 
+⚠️ HARDCODED RULE — `save_to_cart_tool` / `quick_order_tool` 응답:
+- 도구가 success 로 반환 → 무조건 `orderComplete` 템플릿. `quickReply` 금지.
+- `orderComplete` 카드 자체가 완결된 UI(카트/주문 요약 + 액션 버튼)를 표시하므로 별도 chips 불필요.
+- ❌ 절대 안티패턴: cart 성공 후 `quickReply` + `quickReplies: ["다시 시도", "상담사 연결", "처음으로"]` 패턴. 이 chips 셋은 OUTPUT_TEMPLATE 검증 실패 시의 internal fallback 이고 정상 응답에선 절대 사용 금지.
+- ❌ cart/order 정상 응답에서 `["다시 시도", "상담사 연결", "처음으로"]` chips 를 emit 하면 명백한 오류 케이스로 간주.
+- 만약 어쩔 수 없이 `quickReply` 가 필요하면 (cart 성공이 아닌 다른 흐름) chips 는 맥락에 맞는 다음 액션 (예: "장바구니 보기", "다른 상품 추천", "처음으로") 으로 직접 작성. fallback 패턴 복붙 금지.
+
 **Template tools — short `assistantResponse` + populate template fields from tool output:**
 For `voucher` / `location` / `datepick` / `preOrder` / `orderComplete`:
 - `assistantResponse`: 1–2 sentence contextual message only — do NOT repeat data already in template fields

@@ -69,6 +69,9 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_nearby_stores_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
+    # orderComplete (cart-save / quick-order — terminal step in transaction flow)
+    "save_to_cart_tool": "orderComplete",
+    "quick_order_tool": "orderComplete",
 }
 
 # Booking-flow signals: tools that imply the customer is mid-purchase, not just
@@ -419,6 +422,7 @@ def _map_voucher(tool_data_list: list[dict], assistant_text: str) -> dict | None
             cpn_no = _get_str(row, "cpn_no", "cpn_issu_no")
             vouchers.append({
                 "nameVoucher": _get_str(row, "cpn_nm", "disp_nm"),
+                "discount": _get_str(row, "rt_amt_val"),
                 "dateVoucher": _get_str(row, "use_end_dtime").split(" ")[0],
                 "downloadLink": "",
                 "myCouponLink": _MY_COUPON_LINK,
@@ -857,6 +861,165 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     }
 
 
+# ── 10. orderComplete ───────────────────────────────────────────────────────────
+
+def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """save_to_cart_tool / quick_order_tool 결과를 orderComplete 카드로 변환.
+
+    cart 흐름은 LLM 의 fenced JSON 생성에 의존하면 종종 누락되어 base_agent 의
+    `_VALIDATION_FALLBACK_QUICK_REPLIES` 경로로 빠지면서 ["다시 시도", "상담사 연결",
+    "처음으로"] chips 가 사용자에게 노출됐다. 이 mapper 가 결정적으로 카드를
+    만들어 fallback 경로 자체를 우회한다.
+    """
+    entries = _find_entries(tool_data_list, "save_to_cart_tool", "quick_order_tool")
+    if not entries:
+        return None
+    entry = entries[-1]
+    flow_type = "cart" if entry.get("tool") == "save_to_cart_tool" else "order"
+
+    args = entry.get("args") if isinstance(entry.get("args"), dict) else {}
+    goods_no = _get_str(args, "goods_no")
+    if not goods_no:
+        return None
+    ord_qty = int(_get_num(args, "ord_qty", default=0)) or 1
+    shop_id = _get_str(args, "shop_id")
+    car_lnc_cd = _get_str(args, "car_lnc_cd")
+
+    raw = _unwrap(entry)
+    is_success = bool(raw.get("result")) if isinstance(raw, dict) else False
+    outer = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+    if outer.get("status") == "error":
+        is_success = False
+
+    ord_no: str | None = None
+    if isinstance(raw, dict):
+        inner = raw.get("data")
+        if isinstance(inner, str) and inner.strip():
+            ord_no = inner.strip()
+        elif isinstance(inner, dict):
+            ord_no = _get_str(inner, "ord_no", "ordNo") or None
+
+    # Enrich product label from same-turn product/recommend/cheapest tool data.
+    goods_nm = ""
+    for product_entry in _find_entries(
+        tool_data_list,
+        "search_product_tool",
+        "get_products_recommendations_tool",
+        "get_best_selling_products_tool",
+        "compare_discount_tool",
+    ):
+        praw = _unwrap(product_entry)
+        rows = praw.get("items") if isinstance(praw, dict) else (praw if isinstance(praw, list) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and _get_str(row, "goods_no") == goods_no:
+                goods_nm = _get_str(row, "goods_nm", "title")
+                break
+        if goods_nm:
+            break
+    product_label = f"{goods_nm} ({goods_no})" if goods_nm else goods_no
+
+    # Enrich carInfo from same-turn vehicle tools (match by car_lnc_cd).
+    car_info: str | None = None
+    if car_lnc_cd:
+        for car_entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
+            craw = _unwrap(car_entry)
+            if isinstance(craw, list):
+                rows = craw
+            elif isinstance(craw, dict):
+                rows = craw.get("items") if "items" in craw else [craw]
+            else:
+                rows = []
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and _get_str(row, "car_lnc_cd") == car_lnc_cd:
+                    car_nm = _get_str(row, "car_model_det", "car_nm")
+                    car_no = _get_str(row, "car_no")
+                    if car_nm and car_no:
+                        car_info = f"{car_nm} ({car_no})"
+                    elif car_nm:
+                        car_info = car_nm
+                    break
+            if car_info:
+                break
+
+    # Enrich storeName from same-turn store tools (match by shop_id).
+    store_name: str | None = None
+    if shop_id:
+        for store_entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool"):
+            sraw = _unwrap(store_entry)
+            stores = sraw.get("stores") if isinstance(sraw, dict) else []
+            if not isinstance(stores, list):
+                continue
+            for store in stores:
+                if isinstance(store, dict) and _get_str(store, "shop_id") == shop_id:
+                    shop_nm = _get_str(store, "shop_nm")
+                    if shop_nm:
+                        store_name = f"{shop_nm} ({shop_id})"
+                    break
+            if store_name:
+                break
+        if not store_name:
+            for detail_entry in _find_entries(tool_data_list, "get_store_detail_tool"):
+                dargs = detail_entry.get("args") if isinstance(detail_entry.get("args"), dict) else {}
+                if _get_str(dargs, "shop_id") != shop_id:
+                    continue
+                draw = _unwrap(detail_entry)
+                if isinstance(draw, dict):
+                    shop_nm = _get_str(draw, "shop_nm")
+                    if shop_nm:
+                        store_name = f"{shop_nm} ({shop_id})"
+                        break
+
+    # Enrich paymentAmount from same-turn price tool.
+    # Definition mirrors transaction_agent.py 최종 금액: (FINAL + wage_prc) × qty.
+    payment_amount: int | None = None
+    for price_entry in _find_entries(tool_data_list, "get_final_price_tool"):
+        praw = _unwrap(price_entry)
+        if not isinstance(praw, dict):
+            continue
+        final_unit = _get_num(praw, "extra_fvr_sale_prc", "final_unit_price", default=0)
+        wage = _get_num(praw, "wage_prc", default=0)
+        if final_unit:
+            payment_amount = int((final_unit + wage) * ord_qty)
+            break
+
+    if flow_type == "cart":
+        default_msg = "장바구니에 담았어요. 😊" if is_success else "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
+    else:
+        default_msg = "주문이 완료되었습니다. 😊" if is_success else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+
+    text = (assistant_text or "").strip()
+    assistant_response = text if text and len(text) <= 120 else default_msg
+
+    return {
+        "type": "data",
+        "template": "orderComplete",
+        "data": {
+            "assistantResponse": assistant_response,
+            "orderInfo": {
+                "carInfo": car_info,
+                "product": product_label,
+                "quantity": ord_qty,
+                "storeName": store_name,
+                "bookingDateTime": None,
+                "paymentAmount": payment_amount,
+            },
+            "isSuccess": is_success,
+            "type": flow_type,
+            "message": None if is_success else default_msg,
+            "data": {"status": "success" if is_success else "error"},
+            "metadata": {
+                "ordNo": ord_no,
+                "goodsId": goods_no,
+                "shopId": shop_id or None,
+            },
+        },
+    }
+
+
 # ── Common builder ──────────────────────────────────────────────────────────────
 
 def _build_event(template: str, data: dict, assistant_text: str, item_count: int) -> dict:
@@ -876,6 +1039,7 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
     "qnaComplete": "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요.",
     "location": "고객님, 매장 {n}곳을 안내드립니다. 원하시는 매장을 선택해 주세요.",
     "datepick": "예약 가능한 날짜와 시간을 선택해 주세요.",
+    "orderComplete": "처리되었습니다. 😊",
 }
 
 
@@ -919,6 +1083,8 @@ _MAPPERS: dict[str, Any] = {
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "get_store_schedule_tool": _map_datepick,
+    "save_to_cart_tool": _map_order_complete,
+    "quick_order_tool": _map_order_complete,
 }
 
 
@@ -945,6 +1111,11 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     #   compare_discount, where product cards should be shown, not
     #   cheapestProduct.
     _PRIORITY = [
+        # Cart/order are terminal steps in the transaction flow — when they ran,
+        # any other tool in the same turn was preparation (product lookup, store
+        # selection, price calc) and the orderComplete card is the answer.
+        ("save_to_cart_tool", _map_order_complete),
+        ("quick_order_tool", _map_order_complete),
         ("get_store_schedule_tool", _map_datepick),
         ("search_product_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
