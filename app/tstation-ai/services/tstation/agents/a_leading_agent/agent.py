@@ -488,7 +488,8 @@ Format strictly:
       {{"label": "<chip 1>", "domain": "DISCOVERY"}},
       {{"label": "<chip 2>", "domain": "TRANSACTION"}},
       {{"label": "<chip 3>", "domain": "SUPPORT"}}
-    ]
+    ],
+    "predictedDomains": ["DISCOVERY", "TRANSACTION", "SUPPORT"]
   }}
 }}
 ```
@@ -498,8 +499,9 @@ Rules:
 1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
 2. `assistantResponse` must contain the full natural Korean (or English when user wrote English) answer.
 3. `quickReplies` must contain 2 to 4 short, useful next-step suggestions.
-4. Never leave `assistantResponse` empty.
-5. Never return more than one template.
+4. `predictedDomains` must list the likely domains for the user's next free-text reply, derived from current user intent and your chips. Use only unique values from: "DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING".
+5. Never leave `assistantResponse` empty.
+6. Never return more than one template.
 
 `domain` rules for each chip — set the domain the chip leads to:
 - `"DISCOVERY"` — product/tire recommendation, compatibility, vehicle lookup

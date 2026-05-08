@@ -235,6 +235,10 @@ class BaseAgent(ABC):
 
         yield {"type": "status", "status": "생각 중..."}
 
+        speculative_guard = (config or {}).get("configurable", {}).get("speculative_tool_guard", {})
+        confirm_event = speculative_guard.get("confirm_event")
+        mutating_tools = set(speculative_guard.get("mutating_tools") or [])
+
         for mode, chunk in agent.stream(
             {"messages": messages},
             stream_mode=["messages", "updates"],
@@ -265,12 +269,16 @@ class BaseAgent(ABC):
                     if isinstance(message, AIMessage):
                         if hasattr(message, "tool_calls") and message.tool_calls:
                             for tc in message.tool_calls:
-                                tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
-                                display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "답변 중...")
+                                tool_name = tc["name"]
+                                tool_calls_map[tc["id"]] = {"name": tool_name, "args": tc.get("args", {})}
+                                if confirm_event is not None and tool_name in mutating_tools and not confirm_event.is_set():
+                                    logger.info("[%s] Waiting for speculative confirmation before %s", self.name, tool_name)
+                                    confirm_event.wait()
+                                display_name = TOOL_DISPLAY_NAMES.get(tool_name, "답변 중...")
                                 yield {
                                     "type": "status",
                                     "status": "tool_start",
-                                    "tool": tc["name"],
+                                    "tool": tool_name,
                                     "display_name": display_name,
                                 }
                         if suppress_tokens:

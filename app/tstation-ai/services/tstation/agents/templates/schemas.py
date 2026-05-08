@@ -71,12 +71,13 @@ class QuickReplyChip(BaseModel):
 
 
 class QuickReplyTemplate(TemplatePayload):
-    """`quickReply` template — used for text-only responses with suggestion chips."""
+    """`quickReply` template — text response with routing hints."""
 
     TEMPLATE_NAME: ClassVar[str] = "quickReply"
 
     assistantResponse: str = Field(..., min_length=1)
     quickReplies: list[QuickReplyChip] = Field(default_factory=list, max_length=4)
+    predictedDomains: list[str] = Field(default_factory=list, max_length=4)
 
 
 class QuickReplyDataEvent(BaseModel):

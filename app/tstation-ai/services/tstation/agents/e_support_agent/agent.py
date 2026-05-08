@@ -148,12 +148,14 @@ Style rules for PROSE MODE:
       {{"label": "<chip 1>", "domain": "SUPPORT"}},
       {{"label": "<chip 2>", "domain": "SUPPORT"}},
       {{"label": "<chip 3>", "domain": "SUPPORT"}}
-    ]
+    ],
+    "predictedDomains": ["SUPPORT"]
   }}
 }}
 ```
 
 `domain` rules: set to the domain the chip leads to — `"SUPPORT"` for FAQ/escalation follow-ups, `"TRANSACTION"` for order-related chips, `"LEADING"` for restart chips ("처음으로").
+`predictedDomains` rules: include likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"SUPPORT"`, `"TRANSACTION"`, `"DISCOVERY"`, `"LEADING"`.
 
 **qnaComplete** — when transfer_to_qna_tool was called:
 - Intent 1A: brief empathy (1 sentence) + instruct user to click the link and submit.
@@ -182,7 +184,7 @@ cnsl_clss_seq → cnslType: 10002→상품문의 / 10006→주문/결제/배송 
 Rules:
 1. Exactly ONE fenced ```json block — no prose outside it.
 2. `assistantResponse` must never be empty or a placeholder.
-3. `quickReply`: include 2–4 short next-step chips.
+3. `quickReply`: include 2–4 short next-step chips and always include `predictedDomains`.
 4. Never return more than one template per turn.
 """
 

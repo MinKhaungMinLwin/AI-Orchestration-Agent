@@ -571,6 +571,32 @@ class ChatHistoryService:
         self._refresh_session_ttl(session_id)
         logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
 
+    def save_quick_reply_domains(self, session_id: str, domains: list[str]) -> None:
+        """Save next-turn chip routing hints."""
+        crypto = get_crypto_service()
+        self.redis.hset(_get_meta_key(session_id), "quick_reply_domains", crypto.encrypt(json.dumps(domains)) or "")
+        self._refresh_session_ttl(session_id)
+        logger.info(f"[CHAT_HISTORY] Saved quick_reply_domains for session {session_id}: {domains}")
+
+    def get_quick_reply_domains(self, session_id: str) -> list[str]:
+        """Load next-turn chip routing hints."""
+        raw = self.redis.hget(_get_meta_key(session_id), "quick_reply_domains")
+        data = json.loads(get_crypto_service().decrypt(raw)) if raw else []
+        return [item for item in data if isinstance(item, str)] if isinstance(data, list) else []
+
+    def save_predicted_domains(self, session_id: str, domains: list[str]) -> None:
+        """Save model-predicted next-turn hints."""
+        crypto = get_crypto_service()
+        self.redis.hset(_get_meta_key(session_id), "predicted_domains", crypto.encrypt(json.dumps(domains)) or "")
+        self._refresh_session_ttl(session_id)
+        logger.info(f"[CHAT_HISTORY] Saved predicted_domains for session {session_id}: {domains}")
+
+    def get_predicted_domains(self, session_id: str) -> list[str]:
+        """Load model-predicted next-turn hints."""
+        raw = self.redis.hget(_get_meta_key(session_id), "predicted_domains")
+        data = json.loads(get_crypto_service().decrypt(raw)) if raw else []
+        return [item for item in data if isinstance(item, str)] if isinstance(data, list) else []
+
     def get_slots(self, session_id: str) -> ConversationSlots:
         """Load conversation slots from session metadata (decrypts)."""
         meta_key = _get_meta_key(session_id)
@@ -586,8 +612,8 @@ class ChatHistoryService:
 
     async def get_chat_context_pipeline_async(
         self, session_id: str, limit: int
-    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None]:
-        """Fetch template msgs, slots, and tool context concurrently using a Redis pipeline."""
+    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None, list[str], list[str]]:
+        """Fetch hot-path chat context in one Redis pipeline."""
         tmpl_key = _get_template_messages_key(session_id)
         meta_key = _get_meta_key(session_id)
         tool_ctx_key = f"chat:tool_ctx:{session_id}"
@@ -597,8 +623,10 @@ class ChatHistoryService:
         pipe.zrevrange(tmpl_key, 0, batch_size - 1)
         pipe.hget(meta_key, "slots")
         pipe.get(tool_ctx_key)
+        pipe.hget(meta_key, "quick_reply_domains")
+        pipe.hget(meta_key, "predicted_domains")
 
-        raw_items, raw_slots, raw_tool_ctx = await asyncio.to_thread(pipe.execute)
+        raw_items, raw_slots, raw_tool_ctx, raw_quick_reply_domains, raw_predicted_domains = await asyncio.to_thread(pipe.execute)
 
         crypto = get_crypto_service()
         recent_template_msgs = []
@@ -650,7 +678,25 @@ class ChatHistoryService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl
+        quick_reply_domains = []
+        if raw_quick_reply_domains:
+            try:
+                parsed = json.loads(crypto.decrypt(raw_quick_reply_domains))
+                if isinstance(parsed, list):
+                    quick_reply_domains = [item for item in parsed if isinstance(item, str)]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        predicted_domains = []
+        if raw_predicted_domains:
+            try:
+                parsed = json.loads(crypto.decrypt(raw_predicted_domains))
+                if isinstance(parsed, list):
+                    predicted_domains = [item for item in parsed if isinstance(item, str)]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl, quick_reply_domains, predicted_domains
 
 
 # Singleton instance
