@@ -459,6 +459,68 @@ class ChatHistoryService:
         }
         return [summary_msg] + recent
 
+
+    def get_recent_assistant_messages_with_template_data(
+        self,
+        session_id: str,
+        limit: int,
+    ) -> list[dict]:
+        """Return the newest `limit` assistant messages that have template_data.
+
+        Scans from the tail of the sorted set in small batches so sessions
+        with many non-template messages do not force a full scan.
+        """
+        if limit <= 0:
+            return []
+
+        crypto = get_crypto_service()
+        tmpl_key = _get_template_messages_key(session_id)
+        result = []
+        start = 0
+        batch_size = max(limit * 4, 10)
+
+        while len(result) < limit:
+            raw_items = self.redis.zrevrange(tmpl_key, start, start + batch_size - 1)
+            if not raw_items:
+                break
+            for raw in raw_items:
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("role") != "assistant":
+                    continue
+                if not data.get("template_data"):
+                    continue
+                result.append({
+                    "msg_id": data.get("msg_id", str(uuid.uuid4())),
+                    "session_id": session_id,
+                    "role": "assistant",
+                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "status": "completed",
+                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "created_at": data.get("created_at", datetime.now().isoformat()),
+                })
+                if len(result) >= limit:
+                    break
+            start += batch_size
+
+        return result
+
+    def get_latest_template_data(self, session_id: str, template_name: str) -> dict | None:
+        """Return the data payload of the newest assistant message with the given template name."""
+        if not template_name:
+            return None
+        for message in self.get_recent_assistant_messages_with_template_data(session_id, limit=10):
+            td = message.get("template_data")
+            if not isinstance(td, dict):
+                continue
+            if td.get("template") != template_name:
+                continue
+            data = td.get("data")
+            if isinstance(data, dict):
+                return data
+        return None
     def save_slots(self, session_id: str, slots: ConversationSlots) -> None:
         """Save conversation slots to session metadata (encrypted)."""
         meta_key = _get_meta_key(session_id)

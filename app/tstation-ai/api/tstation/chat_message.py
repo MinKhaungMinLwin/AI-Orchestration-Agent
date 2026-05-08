@@ -202,9 +202,9 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
         logger.info(f"[CHAT_MESSAGE] Saved assistant message" +
                   (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
 
-        # Fire-and-forget: compress old turns into a rolling summary every 4 turns.
-        from services.tstation.history_summarizer import maybe_summarize
-        asyncio.create_task(maybe_summarize(session_id))
+        # Fire-and-forget: update the rolling summary when enough new history accumulates.
+        from services.tstation.history_summarizer import refresh_summary
+        asyncio.create_task(refresh_summary(session_id))
 
     yield "data: [DONE]\n\n"
 
@@ -415,3 +415,4 @@ async def validate_token_endpoint(user: dict = Security(get_api_key)):
         return ValidateTokenResponse(valid=True, user_id=user_id)
     else:
         return ValidateTokenResponse(valid=False, reason="Invalid token")
+

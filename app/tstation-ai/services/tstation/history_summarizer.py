@@ -3,13 +3,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Trigger every 4 turns (8 messages: 4 user + 4 assistant).
-SUMMARIZE_EVERY_N = 8
+# Create the first summary after 3 turns (6 messages: 3 user + 3 assistant).
+MIN_MESSAGES_FOR_SUMMARY = 6
 
-# Keep the last 3 turns (6 messages) verbatim; summarise everything older.
-KEEP_RECENT_MESSAGES = 6
+# After the first summary, update it every 2 more turns (4 messages).
+SUMMARY_UPDATE_INTERVAL = 4
 
-_SUMMARIZE_PROMPT = """\
+# Keep the last 2 turns (4 messages) verbatim; summarise everything older.
+RECENT_MESSAGES_TO_KEEP = 4
+
+_SUMMARY_PROMPT = """\
 You are summarizing a customer service conversation for a tire advisor AI.
 The summary replaces older messages so the advisor can continue helping the customer.
 
@@ -28,7 +31,7 @@ Write in Korean. Let the content determine the length.
 [CONVERSATION]
 {messages_text}"""
 
-_UPDATE_PROMPT = """\
+_SUMMARY_UPDATE_PROMPT = """\
 You are updating a running summary of a customer service conversation for a tire advisor AI.
 
 Information already tracked separately — DO NOT repeat:
@@ -39,7 +42,7 @@ outdated or superseded. Keep everything the advisor still needs.
 Write in Korean.
 
 [EXISTING SUMMARY]
-{existing_summary}
+{summary}
 
 [NEW MESSAGES]
 {messages_text}"""
@@ -47,76 +50,76 @@ Write in Korean.
 
 def _format_messages(messages: list[dict]) -> str:
     lines = []
-    for m in messages:
-        role = "고객" if m.get("role") == "user" else "상담사"
-        content = m.get("content", "").strip()
+    for message in messages:
+        speaker = "고객" if message.get("role") == "user" else "상담사"
+        content = message.get("content", "").strip()
         if content:
-            lines.append(f"{role}: {content}")
+            lines.append(f"{speaker}: {content}")
     return "\n".join(lines)
 
 
 def _format_slots(slots) -> str:
     if slots is None:
         return "(없음)"
-    data = slots.model_dump() if hasattr(slots, "model_dump") else {}
-    filled = {k: v for k, v in data.items() if v is not None}
-    if not filled:
+    slot_values = slots.model_dump() if hasattr(slots, "model_dump") else {}
+    populated_slots = {key: value for key, value in slot_values.items() if value is not None}
+    if not populated_slots:
         return "(없음)"
-    return ", ".join(f"{k}={v}" for k, v in filled.items())
+    return ", ".join(f"{key}={value}" for key, value in populated_slots.items())
 
 
-async def maybe_summarize(session_id: str) -> None:
-    """Fire-and-forget: run summarization if due; swallows all exceptions."""
+async def refresh_summary(session_id: str) -> None:
+    """Run background summary maintenance when enough new history has accumulated."""
+    from services.tstation.chat_history_service import get_chat_history_service
+
+    history_service = get_chat_history_service()
+    message_count = history_service.get_message_count(session_id)
+
+    if message_count < MIN_MESSAGES_FOR_SUMMARY:
+        return
+
+    summary = history_service.get_summary(session_id)
+    covered_count = summary["covered_count"] if summary else 0
+    target_covered = message_count - RECENT_MESSAGES_TO_KEEP
+
+    if target_covered <= covered_count:
+        return
+
+    if summary and target_covered - covered_count < SUMMARY_UPDATE_INTERVAL:
+        return
+
     try:
-        from services.tstation.chat_history_service import get_chat_history_service
-
-        service = get_chat_history_service()
-        count = service.get_message_count(session_id)
-
-        if count < SUMMARIZE_EVERY_N or count % SUMMARIZE_EVERY_N != 0:
-            return
-
-        existing = service.get_summary(session_id)
-        covered = existing["covered_count"] if existing else 0
-        target_covered = count - KEEP_RECENT_MESSAGES
-
-        if target_covered <= covered:
-            return  # already up to date for this batch
-
-        await _do_summarize(session_id, service, count)
+        await _update_summary(session_id, history_service, message_count)
     except Exception:
         logger.exception(
             f"[SUMMARY] Background summarization failed for session {session_id}"
         )
 
 
-async def _do_summarize(session_id: str, service, total_count: int) -> None:
+async def _update_summary(session_id: str, history_service, message_count: int) -> None:
     from langchain_core.messages import HumanMessage
     from services.tstation.agents.router import DECISION_LLM
 
-    all_messages = service.get_history(session_id)
-    slots = service.get_slots(session_id)
-    existing = service.get_summary(session_id)
+    messages = history_service.get_history(session_id)
+    slots = history_service.get_slots(session_id)
+    summary = history_service.get_summary(session_id)
 
-    # Only summarise messages not yet covered by the existing summary.
-    # covered_count tells us how many messages were already processed last time,
-    # so we start from there — avoids re-sending already-summarised turns.
-    covered = existing["covered_count"] if existing else 0
-    to_summarize = all_messages[covered : total_count - KEEP_RECENT_MESSAGES]
-    if not to_summarize:
+    covered_count = summary["covered_count"] if summary else 0
+    messages_to_summarize = messages[covered_count : message_count - RECENT_MESSAGES_TO_KEEP]
+    if not messages_to_summarize:
         return
 
     slots_info = _format_slots(slots)
-    messages_text = _format_messages(to_summarize)
+    messages_text = _format_messages(messages_to_summarize)
 
-    if existing:
-        prompt = _UPDATE_PROMPT.format(
+    if summary:
+        prompt = _SUMMARY_UPDATE_PROMPT.format(
             slots_info=slots_info,
-            existing_summary=existing["content"],
+            summary=summary["content"],
             messages_text=messages_text,
         )
     else:
-        prompt = _SUMMARIZE_PROMPT.format(
+        prompt = _SUMMARY_PROMPT.format(
             slots_info=slots_info,
             messages_text=messages_text,
         )
@@ -125,9 +128,9 @@ async def _do_summarize(session_id: str, service, total_count: int) -> None:
     summary_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
 
     if summary_text:
-        covered_count = total_count - KEEP_RECENT_MESSAGES
-        service.save_summary(session_id, summary_text, covered_count)
+        new_covered_count = message_count - RECENT_MESSAGES_TO_KEEP
+        history_service.save_summary(session_id, summary_text, new_covered_count)
         logger.info(
             f"[SUMMARY] Updated for session {session_id} "
-            f"(covered_count={covered_count}, turns_summarised={covered_count // 2})"
+            f"(covered_count={new_covered_count}, turns_summarised={new_covered_count // 2})"
         )
