@@ -900,7 +900,9 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             ord_no = _get_str(inner, "ord_no", "ordNo") or None
 
     # Enrich product label from same-turn product/recommend/cheapest tool data.
+    # 사용자 노출용이라 goods_no 는 표기하지 않고 "goods_nm tire_size" 로만 보여준다.
     goods_nm = ""
+    tire_size = ""
     for product_entry in _find_entries(
         tool_data_list,
         "search_product_tool",
@@ -915,10 +917,16 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
         for row in rows:
             if isinstance(row, dict) and _get_str(row, "goods_no") == goods_no:
                 goods_nm = _get_str(row, "goods_nm", "title")
+                tire_size = _get_str(row, "tire_size_1", "tire_size_2")
                 break
         if goods_nm:
             break
-    product_label = f"{goods_nm} ({goods_no})" if goods_nm else goods_no
+    if goods_nm and tire_size:
+        product_label = f"{goods_nm} {tire_size}"
+    elif goods_nm:
+        product_label = goods_nm
+    else:
+        product_label = goods_no
 
     # Enrich carInfo from same-turn vehicle tools (match by car_lnc_cd).
     car_info: str | None = None
@@ -986,11 +994,33 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             payment_amount = int((final_unit + wage) * ord_qty)
             break
 
+    # cart 흐름은 카트 카드 대신 짧은 confirmation 메시지 + 다음 액션 chips
+    # ("주문하기" / "처음으로") 만 노출하기로 결정. orderComplete 카드는 quick_order
+    # 흐름에서만 사용한다.
     if flow_type == "cart":
-        default_msg = "장바구니에 담았어요. 😊" if is_success else "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
-    else:
-        default_msg = "주문이 완료되었습니다. 😊" if is_success else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+        if is_success:
+            cart_msg = "장바구니에 담았어요. 😊\n\n바로 주문하시겠어요?"
+            cart_chips = [
+                {"label": "주문하기", "domain": "TRANSACTION"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ]
+        else:
+            cart_msg = "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
+            cart_chips = [
+                {"label": "다시 시도", "domain": "TRANSACTION"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ]
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": cart_msg,
+                "quickReplies": cart_chips,
+            },
+        }
 
+    # order (quick_order_tool) 는 기존 orderComplete 카드 그대로 노출.
+    default_msg = "주문이 완료되었습니다. 😊" if is_success else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
     text = (assistant_text or "").strip()
     assistant_response = text if text and len(text) <= 120 else default_msg
 
