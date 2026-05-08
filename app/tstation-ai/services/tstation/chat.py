@@ -1041,6 +1041,17 @@ class StreamingMultiAgentCoordinator:
                 verified_domains, routing_result = classifier_result
                 return _domains_equal(verified_domains, domains), verified_domains, routing_result
 
+            def _wait_for_speculative_confirmation() -> bool:
+                is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                if is_match:
+                    if speculative_guard:
+                        speculative_guard["confirm_event"].set()
+                    return True
+                if speculative_guard:
+                    speculative_guard["mismatch_domains"] = verified_domains
+                    speculative_guard["routing_result"] = verified_routing_result
+                return False
+
             # Yield agent start event
             yield from _buffer_or_emit({
                 "type": "sub-agent",
@@ -1081,8 +1092,11 @@ class StreamingMultiAgentCoordinator:
                     prompt_name=f"{domain_key}_agent",
                 )
                 if speculative_guard:
+                    speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
                     agent_trace_config.setdefault("configurable", {})["speculative_tool_guard"] = speculative_guard
                 for event in agent.stream(enriched_messages, config=agent_trace_config):
+                    if speculative_buffer and speculative_guard and speculative_guard["confirm_event"].is_set():
+                        yield from _flush_speculative_buffer()
                     if classify_future is not None and classifier_done.is_set():
                         is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
                         if is_match:
@@ -1165,6 +1179,15 @@ class StreamingMultiAgentCoordinator:
                         "tools_called": agent_tools_called,
                         "data_event_emitted": domain_data_event_emitted,
                     }),
+                )
+
+            if restart_domains is None and speculative_guard and speculative_guard.get("mismatch_domains"):
+                restart_domains = speculative_guard.get("mismatch_domains")
+                restart_routing_result = speculative_guard.get("routing_result")
+                logger.info(
+                    "[COORDINATOR] speculative mismatch before mutating tool: predicted=%s classify=%s",
+                    [d.value for d in domains],
+                    [d.value for d in restart_domains],
                 )
 
             if restart_domains is None and classify_future is not None:
