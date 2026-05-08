@@ -190,6 +190,9 @@ def _normalize_time(s: str) -> str:
 # - secondary chip (chatbox-product-tag-secondary): goods_pfm_nm 영문 코드를
 #   한글 라벨로 매핑. 매핑되지 않은 코드 (RUNFLAT 등) 는 chip skip.
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
+# `프리미엄+` (플래그십)·`프리미엄` (고급) 두 등급은 FE chip 에서 동일하게 "프리미엄" 으로 노출.
+# BE 원본(`prc_grd_nm`)은 그대로 두고 표시 라벨만 통일.
+_PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
 _GOODS_PFM_LABELS: dict[str, str] = {
     "COMFORT": "정숙/승차감",
     "SPORT": "고속/제동성",
@@ -256,7 +259,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             tags: list[dict] = []
             prc_grd = _get_str(row, "prc_grd_nm")
             if prc_grd in _PRC_GRD_ALLOWED:
-                tags.append({"text": prc_grd, "primary": True})
+                tags.append({"text": _PRC_GRD_DISPLAY.get(prc_grd, prc_grd), "primary": True})
             goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
             goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
             if goods_pfm_label:
@@ -356,7 +359,7 @@ def inject_product_tags_and_sanitize(
         if row is not None:
             prc_grd = _get_str(row, "prc_grd_nm")
             if prc_grd in _PRC_GRD_ALLOWED:
-                tags.append({"text": prc_grd, "primary": True})
+                tags.append({"text": _PRC_GRD_DISPLAY.get(prc_grd, prc_grd), "primary": True})
             goods_pfm_code = _get_str(row, "goods_pfm_nm").upper()
             goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
             if goods_pfm_label:
