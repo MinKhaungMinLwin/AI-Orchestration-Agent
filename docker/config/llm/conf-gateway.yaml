@@ -322,6 +322,7 @@ model_list:
 #### Settings
 general_settings:
   master_key: "os.environ/AI_GATEWAY_API_KEY"
+  database_url: "os.environ/LITELLM_DB_URL"
 
 litellm_settings:
   drop_params: true
@@ -329,6 +330,3 @@ litellm_settings:
   retry_after: 2
   request_timeout: 180
   callbacks: ["otel"]
-
-# Note: fallbacks require a connected PostgreSQL database (LiteLLM spend tracking).
-# Removed to avoid "No connected db." 400 errors when running without a DB.
