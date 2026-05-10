@@ -12,6 +12,7 @@ Endpoints:
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -40,9 +41,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
 def get_current_time() -> str:
     """Get current timestamp in ISO format."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _valid_tracing_id(value: str | None) -> str | None:
+    """Langfuse trace IDs must be 32 lowercase hex chars."""
+    if not value:
+        return None
+    if _TRACE_ID_RE.fullmatch(value):
+        return value
+    logger.warning("[CHAT_MESSAGE] Ignoring invalid tracing_id: %r", value)
+    return None
 
 
 @router.post("/chat", dependencies=[Depends(get_api_key)])
@@ -90,6 +104,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     from schemas.tstation.chat import TStationChatRequest
     from schemas.tstation.chat import TStationChatResponse
 
+    tracing_id = _valid_tracing_id(request.tracing_id)
     chat_request = TStationChatRequest(
         messages=messages,
         stream=request.stream,
@@ -98,7 +113,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         access_token=user["token"],
         user_info=request.user_info,
         chip_context=request.chip_context.model_dump() if request.chip_context else None,
-        **({"tracing_id": request.tracing_id} if request.tracing_id else {}),
+        **({"tracing_id": tracing_id} if tracing_id else {}),
     )
 
     # Call chat service
