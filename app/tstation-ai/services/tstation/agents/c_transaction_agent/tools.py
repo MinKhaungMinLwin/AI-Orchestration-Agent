@@ -415,6 +415,7 @@ def search_place_tool(query: str, size: int = 10):
 
 
 @tool
+@tool_cache(ttl=300)
 def get_nearby_stores_tool(
     user_xpos: float,
     user_ypos: float,
@@ -639,6 +640,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 
 
 @tool
+@tool_cache(ttl=120)
 def get_store_schedule_tool(shop_id: str, mode: str):
     """
     Get reservation slots for a single store using mode-based cal_day range (single BE call).
