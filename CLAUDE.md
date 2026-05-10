@@ -13,6 +13,33 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 | tstation-be | 8000 | Backend service connecting to Oracle database |
 | tstation-ui-demo | 7777 | Streamlit-based demo UI |
 
+## Karpathy-Inspired Coding Guidelines
+
+Before coding, reviewing, or refactoring:
+
+1. Think Before Coding
+   - State assumptions explicitly.
+   - If uncertain, ask instead of guessing.
+   - Present trade-offs when multiple approaches exist.
+   - Push back if a simpler approach is better.
+
+2. Simplicity First
+   - Write the minimum code that solves the task.
+   - Do not add speculative features or abstractions.
+   - Avoid configurability or flexibility that was not requested.
+   - If the solution is bloated, simplify it.
+
+3. Surgical Changes
+   - Touch only files and lines required by the task.
+   - Do not refactor unrelated code.
+   - Match existing project style.
+   - Do not delete unrelated dead code unless asked.
+
+4. Goal-Driven Execution
+   - Define success criteria before implementation.
+   - Prefer tests or verifiable checks.
+   - Loop until the requested outcome is verified.
+
 ## Common Commands
 
 ### Setup

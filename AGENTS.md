@@ -20,12 +20,39 @@ Your role is to analyze user requirements, delegate tasks to appropriate sub-age
 - Documentation management: `./.claude/rules/documentation-management.md`
 - And other workflows: `./.claude/rules/*`
 
-**IMPORTANT:** Analyze the skills catalog and activate the skills that are needed for the task during the process.
-**IMPORTANT:** DO NOT modify skills in `~/.claude/skills` directory directly. **MUST** modify skills in this current working directory. Unless you are asked to do so.
+**IMPORTANT:** Use the Karpathy-inspired coding guidelines below before coding, reviewing, or refactoring.
+**IMPORTANT:** Do not modify skills in `~/.claude/skills` directly. If skills are needed, keep project-level guidance in this repo.
 **IMPORTANT:** You must follow strictly the development rules in `./.claude/rules/development-rules.md` file.
 **IMPORTANT:** Before you plan or proceed any implementation, always read the `./README.md` file first to get context.
 **IMPORTANT:** Sacrifice grammar for the sake of concision when writing reports.
 **IMPORTANT:** In reports, list any unresolved questions at the end, if any.
+
+## Karpathy-Inspired Coding Guidelines
+
+Before coding, reviewing, or refactoring:
+
+1. Think Before Coding
+   - State assumptions explicitly.
+   - If uncertain, ask instead of guessing.
+   - Present trade-offs when multiple approaches exist.
+   - Push back if a simpler approach is better.
+
+2. Simplicity First
+   - Write the minimum code that solves the task.
+   - Do not add speculative features or abstractions.
+   - Avoid configurability or flexibility that was not requested.
+   - If the solution is bloated, simplify it.
+
+3. Surgical Changes
+   - Touch only files and lines required by the task.
+   - Do not refactor unrelated code.
+   - Match existing project style.
+   - Do not delete unrelated dead code unless asked.
+
+4. Goal-Driven Execution
+   - Define success criteria before implementation.
+   - Prefer tests or verifiable checks.
+   - Loop until the requested outcome is verified.
 
 ## Development Principles
 
