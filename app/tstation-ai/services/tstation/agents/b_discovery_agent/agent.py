@@ -746,8 +746,9 @@ Hard rules:
 - List templates: `product` max 10 items, `listCar` / `previewYoutube` max 5 items. `cheapestProduct` always exactly 1 item.
 
 `quickReply` shape:
-Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quickReplies:[{label:str, domain:str}]}}`
+Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quickReplies:[{label:str, domain:str}], predictedDomains:[str]}}`
 - `domain`: `"DISCOVERY"` (product/recommend), `"TRANSACTION"` (price/order), `"SUPPORT"` (상담사 연결), `"LEADING"` (처음으로).
+- `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
 Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
@@ -826,8 +827,8 @@ Rules:
     - continue to discovery (internal retry only): `{"type":"continue","domain":"discovery"}`
 
 2. `assistantResponse` (JSON MODE only) must never be empty.
-3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation.
-   Exception — when `get_product_description_tool` was called: follow the **FIXED quickReplies** rule defined in Branch C (Flow Selection by Prior Context) above — emit exactly `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]`. Do NOT emit an empty array; do NOT improvise other chips.
+3. For `quickReply`: include 2 to 4 short, natural next-step suggestions reflecting the current situation, and always include `predictedDomains`.
+   Exception — when `get_product_description_tool` was called: follow the **FIXED quickReplies** rule defined in Branch C (Flow Selection by Prior Context) above — emit exactly `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]`; still include `predictedDomains`, likely `["TRANSACTION"]` unless the surrounding context suggests other likely domains. Do NOT emit an empty array; do NOT improvise other chips.
 4. For `listCar` JSON: keep `assistantResponse` to 1–2 short Korean sentences; cards carry the detail. Do NOT also dump the items inside `assistantResponse`.
 5. Tool calls happen BEFORE your final response — the response (PROSE or JSON) is your final answer after all tool results are gathered.
 """

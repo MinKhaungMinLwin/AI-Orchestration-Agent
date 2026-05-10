@@ -1137,8 +1137,9 @@ Style rules for PROSE MODE:
     `{"type":"continue","domain":"transaction"}`
 
 `quickReply` — price, inventory, order tracking, text-only turns:
-Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quickReplies:[{label:str, domain:str}]}}`
+Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quickReplies:[{label:str, domain:str}], predictedDomains:[str]}}`
 - 2–4 chips. `domain`: `"TRANSACTION"` (store/price/order), `"DISCOVERY"` (product search), `"SUPPORT"` (상담사 연결), `"LEADING"` (처음으로).
+- `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"TRANSACTION"`, `"DISCOVERY"`, `"SUPPORT"`, `"LEADING"`.
 
 `voucher` — coupon tool results:
 Schema: `{type:"data", template:"voucher", data:{assistantResponse:str, vouchers:[{nameVoucher:str, discount:str, dateVoucher:str, downloadLink:str, myCouponLink:{pc:str,mobile:str}}], metadata:[{couponId:str}]}}`
@@ -1180,7 +1181,7 @@ Schema: `{type:"data", template:"orderComplete", data:{assistantResponse:str, or
 Rules:
 1. Output exactly ONE fenced ```json block. No prose outside the block.
 2. `assistantResponse` must be a complete, substantive answer — never a placeholder.
-3. For `quickReply`: include 2–4 short next-step chips in `quickReplies`.
+3. For `quickReply`: include 2–4 short next-step chips in `quickReplies` and always include `predictedDomains`.
 4. For template tools: populate all fields from actual tool output — never fabricate values.
 5. Never return more than one template per turn.
 6. Never expose raw stock quantities, internal tool names, or backend field names in `assistantResponse`.

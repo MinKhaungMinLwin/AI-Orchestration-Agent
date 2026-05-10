@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import threading
 import logging
 import re
 import time
@@ -56,6 +57,7 @@ class AgentDecision(BaseModel):
 
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
+_speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 
 def _parse_agent_declared_next_action(payload: object) -> AgentDecision | None:
@@ -859,6 +861,8 @@ class StreamingMultiAgentCoordinator:
         parent_span_id: str | None = None,
         skip_decision: bool = False,
         slot_context_with_intent: str | None = None,
+        classify_future: concurrent.futures.Future | None = None,
+        speculative_guard: dict | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -1002,18 +1006,66 @@ class StreamingMultiAgentCoordinator:
             #     f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
             # )
 
+            speculative_buffer: list[dict] = []
+            classifier_done = threading.Event()
+            classifier_result: tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None] | None = None
+            restart_routing_result: MultiAgentDomain | None = None
+
+            if classify_future is not None:
+                def _on_classify_done(future: concurrent.futures.Future):
+                    nonlocal classifier_result
+                    classified_domains, routing = future.result()
+                    classifier_result = (_normalize_domains(classified_domains), routing)
+                    classifier_done.set()
+
+                classify_future.add_done_callback(_on_classify_done)
+
+            def _flush_speculative_buffer() -> Iterator[dict]:
+                nonlocal speculative_buffer
+                yield from speculative_buffer
+                speculative_buffer = []
+
+            def _buffer_or_emit(evt: dict) -> Iterator[dict]:
+                if classify_future is None:
+                    yield evt
+                    return
+                speculative_buffer.append(evt)
+
+            def _verify_speculative_branch() -> tuple[bool, list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
+                nonlocal classify_future, classifier_result
+                if classify_future is None:
+                    return True, domains, None
+                if classifier_result is None:
+                    classified_domains, routing = classify_future.result()
+                    classifier_result = (_normalize_domains(classified_domains), routing)
+                classify_future = None
+                verified_domains, routing_result = classifier_result
+                return _domains_equal(verified_domains, domains), verified_domains, routing_result
+
+            def _wait_for_speculative_confirmation() -> bool:
+                is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                if is_match:
+                    if speculative_guard:
+                        speculative_guard["confirm_event"].set()
+                    return True
+                if speculative_guard:
+                    speculative_guard["mismatch_domains"] = verified_domains
+                    speculative_guard["routing_result"] = verified_routing_result
+                return False
+
             # Yield agent start event
-            yield {
+            yield from _buffer_or_emit({
                 "type": "sub-agent",
                 "agent": f"[{domain_key.upper()} AGENT]",
                 "status": "start",
-            }
+            })
 
-            # Stream from agent and yield events immediately
+            # Stream from agent and yield events immediately after speculation is confirmed
             full_response = ""
             last_agent_called_tools = False
             agent_tools_called: list[str] = []
             agent_declared_decision: AgentDecision | None = None
+            restart_domains: list[MultiAgentDomain.Domain] | None = None
 
             # Last user message becomes the agent span's input — keeps the
             # trace readable instead of dumping the entire enriched_messages
@@ -1040,7 +1092,34 @@ class StreamingMultiAgentCoordinator:
                     tags=[domain_key, "agent"],
                     prompt_name=f"{domain_key}_agent",
                 )
+                if speculative_guard:
+                    speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
+                    agent_trace_config.setdefault("configurable", {})["speculative_tool_guard"] = speculative_guard
                 for event in agent.stream(enriched_messages, config=agent_trace_config):
+                    if speculative_buffer and speculative_guard and speculative_guard["confirm_event"].is_set():
+                        yield from _flush_speculative_buffer()
+                    if classify_future is not None and classifier_done.is_set():
+                        is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                        if is_match:
+                            logger.info(
+                                "[COORDINATOR] speculative confirmed: %s — flushing %d events",
+                                [d.value for d in verified_domains],
+                                len(speculative_buffer),
+                            )
+                            if speculative_guard:
+                                speculative_guard["confirm_event"].set()
+                            yield from _flush_speculative_buffer()
+                        else:
+                            logger.info(
+                                "[COORDINATOR] speculative mismatch during %s: predicted=%s classify=%s",
+                                domain.value,
+                                [d.value for d in domains],
+                                [d.value for d in verified_domains],
+                            )
+                            restart_domains = verified_domains
+                            restart_routing_result = verified_routing_result
+                            break
+
                     # Tag with source domain for UI
                     event["source_domain"] = domain_key
 
@@ -1056,7 +1135,7 @@ class StreamingMultiAgentCoordinator:
                                 parsed_decision.next_action.value,
                                 parsed_decision.next_domain,
                             )
-                    yield event
+                    yield from _buffer_or_emit(event)
 
                     # Capture message content for context passing
                     if event.get("type") == "message":
@@ -1102,6 +1181,61 @@ class StreamingMultiAgentCoordinator:
                         "data_event_emitted": domain_data_event_emitted,
                     }),
                 )
+
+            if restart_domains is None and speculative_guard and speculative_guard.get("mismatch_domains"):
+                restart_domains = speculative_guard.get("mismatch_domains")
+                restart_routing_result = speculative_guard.get("routing_result")
+                logger.info(
+                    "[COORDINATOR] speculative mismatch before mutating tool: predicted=%s classify=%s",
+                    [d.value for d in domains],
+                    [d.value for d in restart_domains],
+                )
+
+            if restart_domains is None and classify_future is not None:
+                is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                if is_match:
+                    if speculative_guard:
+                        speculative_guard["confirm_event"].set()
+                    logger.info(
+                        "[COORDINATOR] speculative confirmed after %s finished — flushing %d events",
+                        domain.value,
+                        len(speculative_buffer),
+                    )
+                    yield from _flush_speculative_buffer()
+                else:
+                    restart_domains = verified_domains
+                    restart_routing_result = verified_routing_result
+                    logger.info(
+                        "[COORDINATOR] speculative mismatch after %s finished: predicted=%s classify=%s",
+                        domain.value,
+                        [d.value for d in domains],
+                        [d.value for d in restart_domains],
+                    )
+
+            if restart_domains:
+                if speculative_guard:
+                    speculative_guard["confirm_event"].set()
+                restart_messages = StreamingMultiAgentCoordinator._inject_conversation_context(
+                    original_messages, restart_routing_result
+                )
+                logger.info(
+                    "[COORDINATOR] discarding speculative %s branch; restarting with %s",
+                    domain.value,
+                    [d.value for d in restart_domains],
+                )
+                yield from self.stream(
+                    messages=restart_messages,
+                    domains=restart_domains,
+                    slot_context=slot_context,
+                    session_id=session_id,
+                    tool_context=tool_context,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    parent_span_id=parent_span_id,
+                    skip_decision=skip_decision,
+                    slot_context_with_intent=slot_context_with_intent,
+                )
+                return
 
             # Yield agent completion event
             yield {
@@ -1414,6 +1548,77 @@ _GOAL_SWITCH_RE = re.compile(r"다른|새로|이번엔|바꿔|이전\s*추천\s*
 # code (useful if downstream telemetry shows mis-routes; the LLM classifier
 # remains the safety net regardless).
 _GOAL_FAST_PATH_ENABLED = True
+
+
+_SPECULATIVE_UNSAFE_DOMAINS = {MultiAgentDomain.Domain.TRANSACTION}
+_SPECULATIVE_MUTATING_TOOLS = {
+    "quick_order_tool",
+    "save_to_cart_tool",
+    "issue_coupon_tool",
+    "escalate_tool",
+    "transfer_to_qna_tool",
+}
+
+
+def _normalize_domains(domains: "list[MultiAgentDomain.Domain] | None") -> list[MultiAgentDomain.Domain]:
+    if not domains:
+        return [MultiAgentDomain.Domain.LEADING]
+    normalized = []
+    for domain in domains:
+        if domain not in normalized:
+            normalized.append(domain)
+    return normalized or [MultiAgentDomain.Domain.LEADING]
+
+
+def _domains_equal(left: "list[MultiAgentDomain.Domain] | None", right: "list[MultiAgentDomain.Domain] | None") -> bool:
+    return _normalize_domains(left) == _normalize_domains(right)
+
+
+def _domains_from_strings(values: list[str]) -> "list[MultiAgentDomain.Domain] | None":
+    domain_map = {domain.value: domain for domain in MultiAgentDomain.Domain}
+    domains = []
+    for value in values:
+        domain = domain_map.get(str(value).upper())
+        if domain is not None and domain not in domains:
+            domains.append(domain)
+    return domains or None
+
+
+def _dedupe_domain_values(values: list[str]) -> list[str]:
+    deduped = []
+    for value in values:
+        domain = str(value).upper()
+        if domain in _VALID_CHIP_DOMAINS and domain not in deduped:
+            deduped.append(domain)
+    return deduped
+
+
+def _quick_reply_domain_values_from_event(event: dict) -> list[str]:
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return []
+    quick_replies = event_data.get("quickReplies")
+    if not isinstance(quick_replies, list):
+        return []
+    return _dedupe_domain_values([
+        str(item.get("domain", "")).upper()
+        for item in quick_replies
+        if isinstance(item, dict)
+    ])
+
+
+def _predicted_domain_values_from_event(event: dict) -> list[str]:
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return []
+    predicted = event_data.get("predictedDomains") or event_data.get("predicted_domains")
+    if not isinstance(predicted, list):
+        return []
+    return _dedupe_domain_values([str(item).upper() for item in predicted])
+
+
+def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> bool:
+    return bool(domains) and not any(domain in _SPECULATIVE_UNSAFE_DOMAINS for domain in domains)
 
 
 def _goal_based_classify(
@@ -2218,6 +2423,8 @@ class TStationChatServiceV2:
         regex_slots = ConversationSlots()
         merged_slots = ConversationSlots()
         goods_no_resolved_this_turn = False
+        quick_reply_domain_values: list[str] = []
+        predicted_domain_values: list[str] = []
 
         try:
             chat_history_svc = get_chat_history_service()
@@ -2228,6 +2435,8 @@ class TStationChatServiceV2:
                 existing_slots,
                 prev_tool_data,
                 latest_listcar_tmpl,
+                quick_reply_domain_values,
+                predicted_domain_values,
             ) = await chat_history_svc.get_chat_context_pipeline_async(
                 request.session_id, _TEMPLATE_ENRICH_MAX_TURNS
             )
@@ -2450,8 +2659,7 @@ class TStationChatServiceV2:
             slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
-        # Fast-path order: chip_context (FE-declared domain) → goal-based (deterministic
-        # checklist) → rule-based (regex) → LLM classifier (multi-intent, conversational context).
+        # Fast-path order: chip_context → quickReplies → predictedDomains → goal/rule → LLM.
         # Each layer returns None to defer to the next.
         # Wrapped in a manual `classify` span so Langfuse shows a single clean
         # node: input=last user text, output=domains. Any nested LLM call from
@@ -2464,38 +2672,52 @@ class TStationChatServiceV2:
                 _chip_domain = _d
 
         routing_result = None
+        speculative_classify_future: concurrent.futures.Future | None = None
         with _trace_span(
             "classify",
             trace_id=request.tracing_id,
             parent_span_id=_parent_span_id,
             input=last_user_text,
         ) as _classify_span:
-            if _chip_domain:
-                domains = [MultiAgentDomain.Domain[_chip_domain]]
-                _classify_path = "chip"
-                logger.info(f"[CLASSIFIER] chip_context.domain={_chip_domain!r} — skipping LLM classifier")
-            else:
-                fast_domains = (
-                    _support_fast_path(last_user_text)
-                    or _goal_based_classify(last_user_text, merged_slots)
-                    or _rule_based_classify(last_user_text, merged_slots)
-                )
-                if fast_domains is not None:
-                    domains = fast_domains
-                    _classify_path = "fast"
-                    # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
+            import asyncio
+
+            classify_future = _speculative_classify_executor.submit(
+                _coordinator.classify_multi_intent,
+                messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+                parent_span_id=_classify_span.id or _parent_span_id,
+            )
+
+            if settings.AI_SPECULATIVE_CLASSIFY_ENABLED:
+                predicted_domains = None
+                if _chip_domain:
+                    predicted_domains = [MultiAgentDomain.Domain[_chip_domain]]
+                    _classify_path = "chip_speculative"
                 else:
-                    import asyncio
-                    domains, routing_result = await asyncio.to_thread(
-                        _coordinator.classify_multi_intent,
-                        messages,
-                        session_id=request.session_id,
-                        user_id=request.user_id,
-                        trace_id=request.tracing_id,
-                        parent_span_id=_classify_span.id or _parent_span_id,
+                    predicted_domains = (
+                        _domains_from_strings(quick_reply_domain_values)
+                        or _domains_from_strings(predicted_domain_values)
+                        or _goal_based_classify(last_user_text, merged_slots)
+                        or _support_fast_path(last_user_text)
+                        or _rule_based_classify(last_user_text, merged_slots)
                     )
-                    messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                    _classify_path = "speculative"
+
+                if predicted_domains is not None and (_chip_domain or _is_speculative_safe(predicted_domains)):
+                    domains = predicted_domains
+                    speculative_classify_future = classify_future
+                    logger.info("[CLASSIFIER] %s domains=%s — background verify", _classify_path, [d.value for d in domains])
+                else:
+                    domains, routing_result = await asyncio.to_thread(classify_future.result)
                     _classify_path = "llm"
+            else:
+                domains, routing_result = await asyncio.to_thread(classify_future.result)
+                _classify_path = "llm"
+
+            if routing_result is not None:
+                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
             messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
             _classify_span.update(
                 output=_truncate({
@@ -2758,6 +2980,7 @@ class TStationChatServiceV2:
                     trace_id=request.tracing_id,
                     skip_decision=skip_decision,
                     slot_context_with_intent=slot_context_with_intent,
+                    classify_future=speculative_classify_future,
                     parent_span=_parent_span,
                     parent_span_id=_parent_span_id,
                 ),
@@ -2784,6 +3007,7 @@ class TStationChatServiceV2:
                 trace_id=request.tracing_id,
                 skip_decision=skip_decision,
                 slot_context_with_intent=slot_context_with_intent,
+                classify_future=speculative_classify_future,
                 parent_span=_parent_span,
                 parent_span_id=_parent_span_id,
             ):
@@ -2831,6 +3055,7 @@ class TStationChatServiceV2:
         parent_span_id: str | None = None,
         skip_decision: bool = False,
         slot_context_with_intent: str | None = None,
+        classify_future: concurrent.futures.Future | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -2855,6 +3080,8 @@ class TStationChatServiceV2:
         last_template: str | None = None
         coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
+        next_quick_reply_domain_values: list[str] = []
+        next_predicted_domain_values: list[str] = []
 
         # Detailed latency tracking state
         _lat_tool_start: dict[str, float] = {}
@@ -2880,6 +3107,13 @@ class TStationChatServiceV2:
 
         _suppress_tokens = False
 
+        speculative_guard = None
+        if classify_future is not None:
+            speculative_guard = {
+                "confirm_event": threading.Event(),
+                "mutating_tools": _SPECULATIVE_MUTATING_TOOLS,
+            }
+
         for event in _coordinator.stream(
             messages,
             domains=domains,
@@ -2891,6 +3125,8 @@ class TStationChatServiceV2:
             parent_span_id=parent_span_id,
             skip_decision=skip_decision,
             slot_context_with_intent=slot_context_with_intent,
+            classify_future=classify_future,
+            speculative_guard=speculative_guard,
         ):
             _lat_now = time.perf_counter()
             event_type = event.get("type")
@@ -2962,6 +3198,12 @@ class TStationChatServiceV2:
             # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
             if event_type == "data":
                 last_template = event.get("template") or last_template
+                for value in _quick_reply_domain_values_from_event(event):
+                    if value not in next_quick_reply_domain_values:
+                        next_quick_reply_domain_values.append(value)
+                for value in _predicted_domain_values_from_event(event):
+                    if value not in next_predicted_domain_values:
+                        next_predicted_domain_values.append(value)
                 event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     if event_data.get("assistantResponse"):
@@ -3146,14 +3388,20 @@ class TStationChatServiceV2:
                 if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
                     yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
 
-        # 4. PERSIST TOOL CONTEXT for next turn (only overwrite when new tool results exist)
-        if session_id and tool_context_items:
+        # 4. PERSIST NEXT-TURN CONTEXT
+        if session_id and (tool_context_items or next_quick_reply_domain_values or next_predicted_domain_values):
             try:
                 from services.tstation.chat_history_service import get_chat_history_service
 
-                get_chat_history_service().save_tool_context(session_id, tool_context_items)
+                history_svc = get_chat_history_service()
+                if tool_context_items:
+                    history_svc.save_tool_context(session_id, tool_context_items)
+                if next_quick_reply_domain_values:
+                    history_svc.save_quick_reply_domains(session_id, next_quick_reply_domain_values)
+                if next_predicted_domain_values:
+                    history_svc.save_predicted_domains(session_id, next_predicted_domain_values)
             except Exception as e:
-                logger.warning(f"[TOOL_CTX] Failed to save tool context: {e}")
+                logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")
 
         _t_qc = time.perf_counter()
         logger.info(
