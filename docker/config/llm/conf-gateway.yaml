@@ -330,3 +330,4 @@ litellm_settings:
   retry_after: 2
   request_timeout: 180
   callbacks: ["otel"]
+  user_api_key_cache_ttl: 10
