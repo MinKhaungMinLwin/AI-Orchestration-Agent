@@ -144,6 +144,7 @@ def build_trace_config(
         metadata["langfuse_session_id"] = session_id
     if user_id:
         metadata["langfuse_user_id"] = user_id
+        metadata["user"] = user_id  # LiteLLM proxy uses this for per-user spend tracking
     all_tags = [settings.ENV.value if hasattr(settings.ENV, "value") else str(settings.ENV)]
     if tags:
         all_tags.extend(tags)
