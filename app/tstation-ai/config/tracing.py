@@ -32,9 +32,9 @@ try:
         settings.ENV,
     )
 except Exception as exc:
-    # Langfuse should never block API startup in container environments.
-    logger.warning(
-        "Langfuse unavailable during startup; continuing without tracing callbacks: %s",
+    # Langfuse is observability-only; keep chat startup clean when it is unavailable.
+    logger.info(
+        "Langfuse unavailable during startup; tracing callbacks disabled: %s",
         exc,
     )
 
