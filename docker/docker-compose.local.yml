@@ -1,0 +1,6 @@
+services:
+  ai-gateway:
+    environment:
+      # Local-only override: avoid external RDS dependency when running Docker on a laptop.
+      - LITELLM_DB_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse
+      - DATABASE_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse

@@ -2637,8 +2637,8 @@ class TStationChatServiceV2:
                 except Exception as e:
                     logger.warning(f"[SLOTS] history shop_id fallback failed: {e}")
 
-            # 4) Save merged slots to Redis
-            chat_history_svc.save_slots(request.session_id, merged_slots)
+            # 4) Save merged slots to Redis without blocking the async request path.
+            await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
 
             # 5) Build slot context strings for agent injection.
             # `slot_context` (no pending_intent) is the default for all agents — Discovery,
@@ -3423,12 +3423,17 @@ class TStationChatServiceV2:
                 from services.tstation.chat_history_service import get_chat_history_service
 
                 history_svc = get_chat_history_service()
-                if tool_context_items:
-                    history_svc.save_tool_context(session_id, tool_context_items)
-                if next_quick_reply_domain_values:
-                    history_svc.save_quick_reply_domains(session_id, next_quick_reply_domain_values)
-                if next_predicted_domain_values:
-                    history_svc.save_predicted_domains(session_id, next_predicted_domain_values)
+
+                async def _save_stream_context():
+                    await history_svc.finalize_chat_context_async(
+                        session_id=session_id,
+                        tool_data=tool_context_items,
+                        quick_reply_domains=next_quick_reply_domain_values,
+                        predicted_domains=next_predicted_domain_values,
+                        user_id=user_id,
+                    )
+
+                _anyio_ft.run(_save_stream_context)
             except Exception as e:
                 logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")
 

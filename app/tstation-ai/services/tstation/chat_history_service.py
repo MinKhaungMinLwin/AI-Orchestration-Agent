@@ -10,7 +10,6 @@ operation refreshes TTL on the session's keys (tmpl, meta, user session set),
 so active conversations stay alive while inactive sessions auto-expire after
 1 week of no writes. Tool context has its own shorter TTL (see save_tool_context).
 """
-import asyncio
 import json
 import logging
 import uuid
@@ -20,6 +19,7 @@ from typing import List, Optional
 from schemas.tstation.slots import ConversationSlots
 
 import redis
+import redis.asyncio as async_redis
 
 from common.crypto import get_crypto_service
 from common.jwt_utils import decode_jwt, get_user_info_from_token
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Redis client for conversation management
 _redis_client: Optional[redis.Redis] = None
+_async_redis_client: Optional[async_redis.Redis] = None
 
 
 def get_redis_client() -> redis.Redis:
@@ -45,6 +46,20 @@ def get_redis_client() -> redis.Redis:
             decode_responses=True,
         )
     return _redis_client
+
+
+def get_async_redis_client() -> async_redis.Redis:
+    """Get async Redis client for hot-path conversation operations."""
+    global _async_redis_client
+    if _async_redis_client is None:
+        redis_url = settings.REDIS_CONVERSATION_MANAGEMENT_URL
+        _async_redis_client = async_redis.from_url(
+            redis_url,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            decode_responses=True,
+        )
+    return _async_redis_client
 
 
 # Key prefixes
@@ -114,6 +129,7 @@ class ChatHistoryService:
 
     def __init__(self, redis_client: Optional[redis.Redis] = None):
         self.redis = redis_client or get_redis_client()
+        self.async_redis = get_async_redis_client()
 
     def _refresh_session_ttl(self, session_id: str, user_id: Optional[str] = None) -> None:
         """Refresh sliding 1-week TTL on a session's Redis keys.
@@ -431,6 +447,19 @@ class ChatHistoryService:
                 logger.warning(f"[TOOL_CTX] Failed to parse tool context for session {session_id}")
         return []
 
+    async def get_tool_context_async(self, session_id: str) -> list[dict]:
+        """Load accumulated structured tool results without blocking async callers."""
+        key = f"chat:tool_ctx:{session_id}"
+        raw = await self.async_redis.get(key)
+        if raw:
+            crypto = get_crypto_service()
+            plaintext = crypto.decrypt(raw)
+            try:
+                return json.loads(plaintext)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"[TOOL_CTX] Failed to parse tool context for session {session_id}")
+        return []
+
     def get_message_count(self, session_id: str) -> int:
         """Return the total number of messages stored for this session."""
         return self.redis.zcard(_get_template_messages_key(session_id))
@@ -571,6 +600,82 @@ class ChatHistoryService:
         self._refresh_session_ttl(session_id)
         logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
 
+    async def save_slots_async(
+        self, session_id: str, slots: ConversationSlots, user_id: Optional[str] = None
+    ) -> None:
+        """Save conversation slots without blocking the async chat request path."""
+        meta_key = _get_meta_key(session_id)
+        crypto = get_crypto_service()
+        encrypted = crypto.encrypt(slots.model_dump_json()) or ""
+
+        pipe = self.async_redis.pipeline()
+        pipe.hset(meta_key, "slots", encrypted)
+        pipe.expire(_get_template_messages_key(session_id), CHAT_HISTORY_TTL_SECONDS)
+        pipe.expire(meta_key, CHAT_HISTORY_TTL_SECONDS)
+        if user_id:
+            pipe.expire(_get_session_set_key(user_id), CHAT_HISTORY_TTL_SECONDS)
+        await pipe.execute()
+        logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
+
+    async def finalize_chat_context_async(
+        self,
+        session_id: str,
+        tool_data: list[dict] | None = None,
+        quick_reply_domains: list[str] | None = None,
+        predicted_domains: list[str] | None = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        """Persist end-of-stream context with async Redis and batched writes."""
+        tool_data = tool_data or []
+        quick_reply_domains = quick_reply_domains or []
+        predicted_domains = predicted_domains or []
+        if not (tool_data or quick_reply_domains or predicted_domains):
+            return
+
+        crypto = get_crypto_service()
+        meta_key = _get_meta_key(session_id)
+        pipe = self.async_redis.pipeline()
+
+        if tool_data:
+            existing = await self.get_tool_context_async(session_id)
+
+            def _dedup_key(item: dict) -> str:
+                dedup_input = item.get("_dedup_input", item.get("input", {}))
+                return json.dumps(
+                    {"tool": item.get("tool", ""), "input": dedup_input},
+                    sort_keys=True, ensure_ascii=False,
+                )
+
+            seen = set()
+            merged = []
+            for item in list(reversed(tool_data)) + existing:
+                dk = _dedup_key(item)
+                if dk not in seen:
+                    seen.add(dk)
+                    merged.append(item)
+            merged = merged[:self._MAX_TOOL_CONTEXT_ITEMS]
+            tool_ctx_key = f"chat:tool_ctx:{session_id}"
+            pipe.set(tool_ctx_key, crypto.encrypt(json.dumps(merged, ensure_ascii=False)))
+            pipe.expire(tool_ctx_key, 7200)
+            logger.info(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
+                        f"= {len(merged)} total tool results for session {session_id}")
+
+        if quick_reply_domains:
+            pipe.hset(meta_key, "quick_reply_domains", crypto.encrypt(json.dumps(quick_reply_domains)) or "")
+        if predicted_domains:
+            pipe.hset(meta_key, "predicted_domains", crypto.encrypt(json.dumps(predicted_domains)) or "")
+
+        pipe.expire(_get_template_messages_key(session_id), CHAT_HISTORY_TTL_SECONDS)
+        pipe.expire(meta_key, CHAT_HISTORY_TTL_SECONDS)
+        if user_id:
+            pipe.expire(_get_session_set_key(user_id), CHAT_HISTORY_TTL_SECONDS)
+        await pipe.execute()
+
+        if quick_reply_domains:
+            logger.info(f"[CHAT_HISTORY] Saved quick_reply_domains for session {session_id}: {quick_reply_domains}")
+        if predicted_domains:
+            logger.info(f"[CHAT_HISTORY] Saved predicted_domains for session {session_id}: {predicted_domains}")
+
     def save_quick_reply_domains(self, session_id: str, domains: list[str]) -> None:
         """Save next-turn chip routing hints."""
         crypto = get_crypto_service()
@@ -618,7 +723,7 @@ class ChatHistoryService:
         meta_key = _get_meta_key(session_id)
         tool_ctx_key = f"chat:tool_ctx:{session_id}"
 
-        pipe = self.redis.pipeline()
+        pipe = self.async_redis.pipeline()
         batch_size = max(limit * 4, 40)
         pipe.zrevrange(tmpl_key, 0, batch_size - 1)
         pipe.hget(meta_key, "slots")
@@ -626,7 +731,7 @@ class ChatHistoryService:
         pipe.hget(meta_key, "quick_reply_domains")
         pipe.hget(meta_key, "predicted_domains")
 
-        raw_items, raw_slots, raw_tool_ctx, raw_quick_reply_domains, raw_predicted_domains = await asyncio.to_thread(pipe.execute)
+        raw_items, raw_slots, raw_tool_ctx, raw_quick_reply_domains, raw_predicted_domains = await pipe.execute()
 
         crypto = get_crypto_service()
         recent_template_msgs = []
