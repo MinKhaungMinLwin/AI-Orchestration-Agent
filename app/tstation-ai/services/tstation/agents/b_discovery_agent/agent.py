@@ -506,14 +506,18 @@ Trigger: User searches by name/keyword
      - 예: "가장 저렴한 벤투스 S2 225/45R17" → search_product_tool(keyword="벤투스 S2", size="225/45R17", sort_by="price_asc")
      - 예: "평점 높은 미쉐린 235/55R19" → search_product_tool(size="235/55R19", brand_cd="MC", sort_by="rating_desc")
 6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
-7. If 1+ results → call get_final_price_tool(goods_no) for EACH item in the SAME tool-use turn (parallel, before answering)
-   - For EACH price response, extract the **`extra_fvr_sale_prc`** integer
-     (할인가, 사용자 실결제가) from `data` and put it into the matching item's `price` field.
-   - Worked example: response `{"data": {"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "wage_prc": 0, "wage_today_prc": 0, ...}}`
+7. If 1+ results → use the **`extra_fvr_sale_prc`** field that `search_product_tool`
+   already returned for each item (BE joins the price table in the same query,
+   so no extra round-trip is needed). Put that integer into `products[i].price`.
+   - Worked example: search_product_tool item
+     `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, ...}`
      → `products[i].price = 316200`. Never 405900, never 0.
-   - If get_final_price_tool fails for an item → use `null` for price (NEVER use 0).
-   ⚠️ NEVER render the product template before ALL get_final_price_tool calls complete.
-8. Render `product` template with real prices. STOP and wait for user to SELECT a product.
+   - If an item's `extra_fvr_sale_prc` is genuinely missing/0 → OMIT that item
+     from the products list (do NOT call get_final_price_tool just to retry —
+     the BE has already done the optimal lookup with member-type branching).
+   - `get_final_price_tool` is reserved for cases that need WAGE_PRC (공임비) or
+     a single canonical price for an order preview. Don't fan it out per card.
+8. Render `product` template with the in-context prices. STOP and wait for user to SELECT a product.
 
 
 ### Flow C — Price / Stock Inquiry (Search-First → Auto-Handoff or Price Cards)
@@ -536,22 +540,17 @@ Branching:
    ❌ Do NOT fetch prices here — Transaction's get_final_price_tool handles the full
    breakdown (base / discount / final). Calling get_final_price_tool in Discovery
    would duplicate the downstream call.
-6. If MULTIPLE results (2~5, max 5) → fetch prices and render a shortlist for the user.
-   - Call get_final_price_tool(goods_no) for EACH item — call ALL in the SAME tool-use turn before answering
-   - For EACH price response, extract the **`extra_fvr_sale_prc`** integer
-     (할인가, 사용자 실결제가) from the response's `data` object and put that
-     EXACT integer into the matching item's `price` field.
+6. If MULTIPLE results (2~5, max 5) → render a shortlist using the in-context prices.
+   - `search_product_tool` already includes `extra_fvr_sale_prc` (member-type-branched)
+     for each item. Use it directly — do NOT call `get_final_price_tool` per card.
    - **Worked example (follow this literally):**
-     get_final_price_tool returns:
-       `{"status": "success", "data": {"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "extra_fvr_sale_per": 22.0, "wage_prc": 0, "wage_today_prc": 0}}`
+     search_product_tool item: `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, "extra_fvr_sale_per": 22.0, ...}`
      → set `products[i].price = 316200`.
      ❌ Do NOT use 405900 (sale_prc / 정가).
-     ❌ Do NOT use 0 (wage_prc, wage_today_prc).
      ❌ Do NOT subtract anything — `extra_fvr_sale_prc` is already the final discounted price.
-   - Render `product` template with real prices from these calls.
-   ⚠️ NEVER render product cards before ALL get_final_price_tool calls complete.
-   ⚠️ The `price` field MUST be `extra_fvr_sale_prc` from `data`. Never `sale_prc`, `wage_prc`, `wage_today_prc`, or 0.
-   ⚠️ If `extra_fvr_sale_prc` is genuinely missing/0 for an item, OMIT that item from the products list — do NOT show with price=0.
+   - Render `product` template with these in-context prices.
+   ⚠️ The `price` field MUST be `extra_fvr_sale_prc` from the search result. Never `sale_prc` or 0.
+   ⚠️ If `extra_fvr_sale_prc` is genuinely missing/0 for an item, OMIT that item from the products list — do NOT show with price=0 and do NOT fan out get_final_price_tool to "retry" (the BE already did the optimal price lookup).
    → STOP and wait for user to SELECT a product. Coordinator stops the chain
    automatically because goods_no is not resolved (multi-result search).
 
@@ -633,6 +632,10 @@ intent.
      - name narrow: case-insensitive substring on `goods_nm`.
   c. Render filtered list as `product` template cards (same card schema as
      `search_product_tool` rendering). Include `goods_no` in metadata.
+     The applicable-products tool result already includes `extra_fvr_sale_prc`
+     per item (BE joins the price table with member-type branching), so set
+     `products[i].price = item.extra_fvr_sale_prc` directly — DO NOT call
+     `get_final_price_tool` per item.
   d. `assistantResponse`: ONE short Korean sentence that reminds which event
      filter is applied + which size/name was narrowed.
      Example: "한국타이어 페스타에 적용되는 225/40R19 상품이에요. 카드에서 원하시는 상품을 선택해 주세요 😊"
@@ -804,7 +807,7 @@ Backend → FE field mapping (all templates):
 | `goods_nm` + `tire_size_1` | `products[i].title` | e.g. `"벤투스 S2 AS 225/45R18"` — include tire_size_1 to differentiate SKUs |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
-| `extra_fvr_sale_prc` (from get_final_price_tool) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |
