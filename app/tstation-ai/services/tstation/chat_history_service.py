@@ -183,7 +183,7 @@ class ChatHistoryService:
 
         self._refresh_session_ttl(session_id, user_id=user_id)
 
-        logger.info(f"[CHAT_HISTORY] Created session {session_id} for user {user_id}")
+        logger.debug(f"[CHAT_HISTORY] Created session {session_id} for user {user_id}")
         return session_id
 
     def get_or_create_session_id(self, session_id: str, user_id: str) -> str:
@@ -196,7 +196,7 @@ class ChatHistoryService:
 
         # Session doesn't exist - create it with provided session_id
         if session_user_id is None:
-            logger.info(f"[CHAT_HISTORY] Creating session {session_id} for user {user_id}")
+            logger.debug(f"[CHAT_HISTORY] Creating session {session_id} for user {user_id}")
             # Add session_id to user's session set
             session_set_key = _get_session_set_key(user_id)
             self.redis.sadd(session_set_key, session_id)
@@ -252,7 +252,7 @@ class ChatHistoryService:
 
         self._refresh_session_ttl(session_id)
 
-        logger.info(f"[CHAT_HISTORY] Saved {role} message to session {session_id}" +
+        logger.debug(f"[CHAT_HISTORY] Saved {role} message to session {session_id}" +
                   (f" with template_data" if template_data is not None else ""))
         return msg_id
 
@@ -381,7 +381,7 @@ class ChatHistoryService:
             session_set_key = _get_session_set_key(user_id)
             self.redis.srem(session_set_key, session_id)
 
-        logger.info(f"[CHAT_HISTORY] Deleted session {session_id}, {messages_deleted} messages")
+        logger.debug(f"[CHAT_HISTORY] Deleted session {session_id}, {messages_deleted} messages")
         return messages_deleted
 
     def session_exists(self, session_id: str, user_id: str) -> bool:
@@ -431,7 +431,7 @@ class ChatHistoryService:
         plaintext_blob = json.dumps(merged, ensure_ascii=False)
         self.redis.set(key, crypto.encrypt(plaintext_blob))
         self.redis.expire(key, 7200)
-        logger.info(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
+        logger.debug(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
                      f"= {len(merged)} total tool results for session {session_id}")
 
     def get_tool_context(self, session_id: str) -> list[dict]:
@@ -474,7 +474,7 @@ class ChatHistoryService:
         key = _get_summary_key(session_id)
         self.redis.set(key, crypto.encrypt(payload))
         self.redis.expire(key, CHAT_HISTORY_TTL_SECONDS)
-        logger.info(
+        logger.debug(
             f"[SUMMARY] Saved summary for session {session_id} "
             f"(covered_count={covered_count})"
         )
@@ -598,7 +598,7 @@ class ChatHistoryService:
         encrypted = crypto.encrypt(slots.model_dump_json()) or ""
         self.redis.hset(meta_key, "slots", encrypted)
         self._refresh_session_ttl(session_id)
-        logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
+        logger.debug(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
 
     async def save_slots_async(
         self, session_id: str, slots: ConversationSlots, user_id: Optional[str] = None
@@ -615,7 +615,7 @@ class ChatHistoryService:
         if user_id:
             pipe.expire(_get_session_set_key(user_id), CHAT_HISTORY_TTL_SECONDS)
         await pipe.execute()
-        logger.info(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
+        logger.debug(f"[CHAT_HISTORY] Saved slots for session {session_id}: {slots.model_dump()}")
 
     async def finalize_chat_context_async(
         self,
@@ -657,7 +657,7 @@ class ChatHistoryService:
             tool_ctx_key = f"chat:tool_ctx:{session_id}"
             pipe.set(tool_ctx_key, crypto.encrypt(json.dumps(merged, ensure_ascii=False)))
             pipe.expire(tool_ctx_key, 7200)
-            logger.info(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
+            logger.debug(f"[TOOL_CTX] Saved {len(tool_data)} new + {len(existing)} existing "
                         f"= {len(merged)} total tool results for session {session_id}")
 
         if quick_reply_domains:
@@ -672,16 +672,16 @@ class ChatHistoryService:
         await pipe.execute()
 
         if quick_reply_domains:
-            logger.info(f"[CHAT_HISTORY] Saved quick_reply_domains for session {session_id}: {quick_reply_domains}")
+            logger.debug(f"[CHAT_HISTORY] Saved quick_reply_domains for session {session_id}: {quick_reply_domains}")
         if predicted_domains:
-            logger.info(f"[CHAT_HISTORY] Saved predicted_domains for session {session_id}: {predicted_domains}")
+            logger.debug(f"[CHAT_HISTORY] Saved predicted_domains for session {session_id}: {predicted_domains}")
 
     def save_quick_reply_domains(self, session_id: str, domains: list[str]) -> None:
         """Save next-turn chip routing hints."""
         crypto = get_crypto_service()
         self.redis.hset(_get_meta_key(session_id), "quick_reply_domains", crypto.encrypt(json.dumps(domains)) or "")
         self._refresh_session_ttl(session_id)
-        logger.info(f"[CHAT_HISTORY] Saved quick_reply_domains for session {session_id}: {domains}")
+        logger.debug(f"[CHAT_HISTORY] Saved quick_reply_domains for session {session_id}: {domains}")
 
     def get_quick_reply_domains(self, session_id: str) -> list[str]:
         """Load next-turn chip routing hints."""
@@ -694,7 +694,7 @@ class ChatHistoryService:
         crypto = get_crypto_service()
         self.redis.hset(_get_meta_key(session_id), "predicted_domains", crypto.encrypt(json.dumps(domains)) or "")
         self._refresh_session_ttl(session_id)
-        logger.info(f"[CHAT_HISTORY] Saved predicted_domains for session {session_id}: {domains}")
+        logger.debug(f"[CHAT_HISTORY] Saved predicted_domains for session {session_id}: {domains}")
 
     def get_predicted_domains(self, session_id: str) -> list[str]:
         """Load model-predicted next-turn hints."""

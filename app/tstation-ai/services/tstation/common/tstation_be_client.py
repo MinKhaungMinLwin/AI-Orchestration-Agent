@@ -46,7 +46,10 @@ class _InstrumentedBackendClient:
             raise
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.info(
+            log_fn = logger.debug
+            if isinstance(status_code, str) or status_code >= 400:
+                log_fn = logger.warning
+            log_fn(
                 "[TSTATION_BE] %s %s status=%s elapsed_ms=%.1f",
                 method.upper(),
                 url,

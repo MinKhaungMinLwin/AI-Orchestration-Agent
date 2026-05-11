@@ -308,7 +308,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
     Example: {"goods_no": "GXXXXXXXXXXXX", "car_no": "12가3456", "owner_nm": "홍길동"}
     """
-    logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, owner_nm=%s", goods_no, car_no, owner_nm)
+    logger.debug("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, owner_nm=%s", goods_no, car_no, owner_nm)
 
     try:
         response = check_compatibility(client=get_client(), goods_no=goods_no, car_no=car_no, owner_nm=owner_nm)
@@ -318,7 +318,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to check tire compatibility"
             )
-        # logger.info("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][check_compatibility_tool] Failed")
@@ -390,11 +390,11 @@ def search_product_tool(
     """
     normalized_keyword = _strip_brand_only_keyword(keyword)
     if normalized_keyword != keyword:
-        logger.info(
+        logger.debug(
             "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
             keyword, brand_cd,
         )
-    logger.info(
+    logger.debug(
         "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s",
         normalized_keyword, limit, size, brand_cd, sort_by,
     )
@@ -407,7 +407,7 @@ def search_product_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search products"
             )
-        # logger.info("[TOOL][search_product_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_product_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             data["items"] = _enrich_items_with_descriptions(data["items"])
@@ -438,7 +438,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
 
     Example: {"car_no": "12가3456", "owner_nm": "홍길동"}
     """
-    logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s, owner_nm=%s", car_no, owner_nm)
+    logger.debug("[TOOL][get_user_vehicles_tool] Called with: car_no=%s, owner_nm=%s", car_no, owner_nm)
 
     try:
         response = get_user_vehicles(client=get_client(), car_no=car_no, owner_nm=owner_nm)
@@ -448,7 +448,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get user vehicles"
             )
-        # logger.info("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
@@ -475,7 +475,7 @@ def get_my_cars_tool(mbr_no: str):
 
     Example: {"mbr_no": "MXXXXXXXXX"}
     """
-    logger.info("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
+    logger.debug("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
 
     try:
         response = get_member_cars(client=get_client(), mbr_no=mbr_no)
@@ -485,7 +485,7 @@ def get_my_cars_tool(mbr_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get member cars"
             )
-        # logger.info("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_my_cars_tool] Failed")
@@ -512,7 +512,7 @@ def search_car_model_tool(keyword: str, limit: int = 20):
 
     Example: {"keyword": "소나타", "limit": 20}
     """
-    logger.info("[TOOL][search_car_model_tool] Called with: keyword=%s, limit=%s", keyword, limit)
+    logger.debug("[TOOL][search_car_model_tool] Called with: keyword=%s, limit=%s", keyword, limit)
 
     try:
         response = search_car_model(client=get_client(), keyword=keyword, limit=limit)
@@ -522,7 +522,7 @@ def search_car_model_tool(keyword: str, limit: int = 20):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search car models"
             )
-        # logger.info("[TOOL][search_car_model_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_car_model_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_car_model_tool] Failed")
@@ -550,7 +550,7 @@ def search_car_model_groups_tool(keyword: str):
 
     Example: {"keyword": "K7"}
     """
-    logger.info("[TOOL][search_car_model_groups_tool] Called with: keyword=%s", keyword)
+    logger.debug("[TOOL][search_car_model_groups_tool] Called with: keyword=%s", keyword)
 
     try:
         response = search_car_model_groups(client=get_client(), keyword=keyword)
@@ -560,7 +560,7 @@ def search_car_model_groups_tool(keyword: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search car model groups"
             )
-        # logger.info("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_car_model_groups_tool] Failed")
@@ -585,7 +585,7 @@ def get_car_trims_tool(car_model_det: str):
 
     Example: {"car_model_det": "더 뉴 K7(VG)"}
     """
-    logger.info("[TOOL][get_car_trims_tool] Called with: car_model_det=%s", car_model_det)
+    logger.debug("[TOOL][get_car_trims_tool] Called with: car_model_det=%s", car_model_det)
 
     try:
         response = get_car_trims(client=get_client(), car_model_det=car_model_det)
@@ -595,7 +595,7 @@ def get_car_trims_tool(car_model_det: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get car trims"
             )
-        # logger.info("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_car_trims_tool] Failed")
@@ -613,7 +613,7 @@ def get_product_description_tool(goods_no: str):
 
     Example: {"goods_no": "GXXXXXXXXXXXX"}
     """
-    logger.info("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
+    logger.debug("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
 
     try:
         response = get_product_description(client=get_client(), goods_no=goods_no)
@@ -623,7 +623,7 @@ def get_product_description_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product description"
             )
-        # logger.info("[TOOL][get_product_description_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_product_description_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
@@ -720,7 +720,7 @@ def get_products_recommendations_tool(
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s",
         rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm,
     )
@@ -742,7 +742,7 @@ def get_products_recommendations_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product recommendations"
             )
-        # logger.info("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             data["items"] = _enrich_items_with_descriptions(data["items"])
@@ -763,7 +763,7 @@ def get_events_tool(lang_cd: str = "ko"):
 
     Example: {"lang_cd": "ko"}
     """
-    logger.info("[TOOL][get_events_tool] Called with: lang_cd=%s", lang_cd)
+    logger.debug("[TOOL][get_events_tool] Called with: lang_cd=%s", lang_cd)
 
     try:
         response = get_events(client=get_client(), lang_cd=lang_cd)
@@ -773,7 +773,7 @@ def get_events_tool(lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get events"
             )
-        # logger.info("[TOOL][get_events_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_events_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_events_tool] Failed")
@@ -793,7 +793,7 @@ def get_event_applicable_products_tool(evt_no_list: list[str]):
 
     Example: {"evt_no_list": ["E000001234", "E000005678"]}
     """
-    logger.info("[TOOL][get_event_applicable_products_tool] Called with: evt_no_list=%s", evt_no_list)
+    logger.debug("[TOOL][get_event_applicable_products_tool] Called with: evt_no_list=%s", evt_no_list)
 
     if not evt_no_list:
         return _error_response(None, "evt_no_list is empty", "evt_no_list는 최소 1개 이상 필요합니다.")
@@ -830,7 +830,7 @@ def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
 
     Example: {"goods_no": "G000000317693", "lang_cd": "ko"}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_product_applicable_events_tool] Called with: goods_no=%s, lang_cd=%s",
         goods_no, lang_cd,
     )
@@ -853,7 +853,7 @@ def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
 @tool_cache(ttl=600)
 def get_deals_tool():
     """기획전 목록 조회 — 현재 전시 중인 기획전 목록."""
-    logger.info("[TOOL][get_deals_tool] Called")
+    logger.debug("[TOOL][get_deals_tool] Called")
 
     try:
         response = get_deals(client=get_client())
@@ -863,7 +863,7 @@ def get_deals_tool():
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get deals"
             )
-        # logger.info("[TOOL][get_deals_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_deals_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_deals_tool] Failed")
@@ -883,7 +883,7 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
 
     Example: {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 4}
     """
-    logger.info("[TOOL][compare_discount_tool] Called with: goods_no_list=%s, quantity=%s", goods_no_list, quantity)
+    logger.debug("[TOOL][compare_discount_tool] Called with: goods_no_list=%s, quantity=%s", goods_no_list, quantity)
 
     try:
         response = get_discount_compare(client=get_client(), goods_no_list=goods_no_list, quantity=quantity)
@@ -893,7 +893,7 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to compare discount prices"
             )
-        # logger.info("[TOOL][compare_discount_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][compare_discount_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][compare_discount_tool] Failed")
@@ -910,7 +910,7 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
         query (str): 검색어 (e.g., '벤투스 S1 evo3 리뷰', 'iON evo').
         max_results (int): 최대 반환 영상 수. Default 3.
     """
-    logger.info("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
+    logger.debug("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
 
     try:
         from youtube_search import YoutubeSearch
@@ -947,7 +947,7 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
             if len(formatted_results) >= max_results:
                 break
                 
-        logger.info("[TOOL][search_youtube_video_tool] Found %d official videos", len(formatted_results))
+        logger.debug("[TOOL][search_youtube_video_tool] Found %d official videos", len(formatted_results))
         
         if not formatted_results:
              return {
@@ -982,12 +982,12 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
     """
-    logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
+    logger.debug("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
     try:
         response = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
         if response.parsed is None:
             return {"status": "error", "http_status": response.status_code, "reason": f"HTTP {response.status_code}", "message": "Failed to get product price"}
-        # logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_final_price_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:
@@ -1025,7 +1025,7 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
 
     Example: {"period": "month", "limit": 5}
     """
-    logger.info("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
+    logger.debug("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
 
     period_enum = _BEST_SELLER_PERIOD_MAP.get(period)
     if period_enum is None:
@@ -1050,7 +1050,7 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
                 "reason": f"HTTP {response.status_code}",
                 "message": response.content.decode(errors="ignore") or "Failed to get best-selling products",
             }
-        # logger.info("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:

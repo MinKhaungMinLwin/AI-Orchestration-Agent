@@ -48,7 +48,7 @@ def tool_cache(ttl: int = 300) -> Callable:
 
                 cached = redis_client.get(cache_key)
                 if cached is not None:
-                    logger.info("[TOOL_CACHE] HIT %s key=%s", func.__name__, cache_key[-8:])
+                    logger.debug("[TOOL_CACHE] HIT %s key=%s", func.__name__, cache_key[-8:])
                     return json.loads(cached)
             except Exception as e:
                 logger.warning(f"[TOOL_CACHE] Redis read failed for {func.__name__}, falling back to direct call: {e}")
@@ -56,12 +56,12 @@ def tool_cache(ttl: int = 300) -> Callable:
 
             result = func(*args, **kwargs)
             if not _is_cacheable_result(result):
-                logger.info("[TOOL_CACHE] SKIP %s key=%s reason=error_response", func.__name__, cache_key[-8:])
+                logger.debug("[TOOL_CACHE] SKIP %s key=%s reason=error_response", func.__name__, cache_key[-8:])
                 return result
 
             try:
                 redis_client.setex(cache_key, ttl, json.dumps(result, default=str))
-                logger.info("[TOOL_CACHE] SET %s key=%s ttl=%ss", func.__name__, cache_key[-8:], ttl)
+                logger.debug("[TOOL_CACHE] SET %s key=%s ttl=%ss", func.__name__, cache_key[-8:], ttl)
             except Exception as e:
                 logger.warning(f"[TOOL_CACHE] Redis write failed for {func.__name__}: {e}")
             return result
