@@ -1,31 +1,44 @@
 import logging
 from typing import Optional
+
 import jwt
+
+from config.env import settings
 
 logger = logging.getLogger(__name__)
 
 
 def decode_jwt(token: str, secret: Optional[str] = None) -> Optional[dict]:
-    """
-    Decode JWT token and extract payload.
-    If secret is None, decoding is done without verification (for reading payload only).
-    """
+    """Verify JWT token and extract payload."""
     if not token:
         return None
 
     try:
-        if secret:
-            payload = jwt.decode(token, secret, algorithms=["HS256"])
-        else:
-            # Decode without verification - useful for extracting claims
-            payload = jwt.decode(token, options={"verify_signature": False})
-        logger.debug(f"JWT decoded successfully, payload keys: {payload.keys()}")
+        payload = jwt.decode(
+            token,
+            secret or settings.API_SECRET_KEY,
+            algorithms=["HS256"],
+            options={"require": ["exp"]},
+        )
+        logger.debug(f"JWT verified successfully, payload keys: {payload.keys()}")
         return payload
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"Failed to decode JWT: {e}")
+    except jwt.ExpiredSignatureError:
+        logger.warning("JWT token expired")
         return None
-    except Exception as e:
-        logger.exception(f"Error decoding JWT: {e}")
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Failed to verify JWT: {e}")
+        return None
+
+
+def decode_jwt_unverified(token: str) -> Optional[dict]:
+    """Decode JWT payload without verification. Do not use for authentication."""
+    if not token:
+        return None
+
+    try:
+        return jwt.decode(token, options={"verify_signature": False})
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Failed to decode JWT payload: {e}")
         return None
 
 
