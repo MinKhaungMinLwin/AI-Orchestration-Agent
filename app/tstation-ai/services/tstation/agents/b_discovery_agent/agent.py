@@ -753,8 +753,8 @@ makes the BE round-trip free.
      ```json
      {"events": [{"evt_no":"00000000010460",
        "items":[
-         {"goods_no":"G000000317699","goods_nm":"벤투스 S1 에보 Z","tire_size_1":"225/40R19","extra_fvr_sale_prc":234500,"image_url":"https://.../K12901ko.png",...},
-         {"goods_no":"G000000317718","goods_nm":"벤투스 S1 에보 Z AS","tire_size_1":"225/40R19","extra_fvr_sale_prc":264200,"image_url":"https://.../H12901ko.png",...},
+         {"goods_no":"G000000317699","goods_nm":"벤투스 S1 에보 Z","tire_size_1":"225/40R19","extra_fvr_sale_prc":234500,"image_url":"https://.../K12901ko.png","label_pnwave":"A","label_pnwave_nm":"저소음","label_pndb":"72","prc_grd_nm":"프리미엄+","goods_pfm_nm":"SPORT","rating_avg":3.4,"review_count":6,...},
+         {"goods_no":"G000000317718","goods_nm":"벤투스 S1 에보 Z AS","tire_size_1":"225/40R19","extra_fvr_sale_prc":264200,"image_url":"https://.../H12901ko.png","label_pnwave":"AA","label_pnwave_nm":"최저소음","label_pndb":"69","prc_grd_nm":"프리미엄+","goods_pfm_nm":"SPORT","rating_avg":4.4,"review_count":2,...},
          ... (other sizes)
        ]}]}
      ```
@@ -766,8 +766,8 @@ makes the BE round-trip free.
        "template": "product",
        "data": {
          "products": [
-           {"title": "벤투스 S1 에보 Z 225/40R19", "price": 234500, "imageUrl": "https://.../K12901ko.png", "tags": []},
-           {"title": "벤투스 S1 에보 Z AS 225/40R19", "price": 264200, "imageUrl": "https://.../H12901ko.png", "tags": []}
+           {"title": "벤투스 S1 에보 Z 225/40R19", "price": 234500, "imageUrl": "https://.../K12901ko.png", "rate": 3.4, "tags": [{"text":"프리미엄+","primary":true},{"text":"고속/제동성","primary":false}]},
+           {"title": "벤투스 S1 에보 Z AS 225/40R19", "price": 264200, "imageUrl": "https://.../H12901ko.png", "rate": 4.4, "tags": [{"text":"프리미엄+","primary":true},{"text":"고속/제동성","primary":false}]}
          ],
          "metadata": [
            {"goodsId": "G000000317699"},
@@ -779,8 +779,14 @@ makes the BE round-trip free.
        "nextAction": {"type": "stop", "domain": null}
      }
      ```
-     - `products[i].imageUrl = item.image_url` (BE 응답의 절대 URL 그대로).
-       item.image_url 이 null 인 경우에만 `""` 또는 생략한다.
+     Mapping rules (per item):
+     - `products[i].title = "{goods_nm} {tire_size_1}"`.
+     - `products[i].price = item.extra_fvr_sale_prc` (already member-type-branched).
+     - `products[i].imageUrl = item.image_url` (절대 URL 그대로; null 이면 `""`).
+     - `products[i].rate = item.rating_avg` (없으면 `0`).
+     - `products[i].tags`: 2개 chip — 첫째는 가격 등급(`prc_grd_nm`, primary=true),
+       둘째는 퍼포먼스(`goods_pfm_nm` 의 한국어 변환: SPORT→"고속/제동성",
+       COMFORT→"정숙/승차감", RUNFLAT→"런플랫", primary=false). 둘 다 누락이면 `[]`.
      - `products[]` 길이는 filtered_items 길이와 정확히 같다.
      - `metadata[]` 도 같은 길이, 같은 순서로 `{"goodsId": item.goods_no}`.
   d. `assistantResponse`: ONE short Korean sentence that names the event

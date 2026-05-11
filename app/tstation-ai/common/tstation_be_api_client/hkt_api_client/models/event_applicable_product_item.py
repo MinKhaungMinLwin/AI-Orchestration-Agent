@@ -26,6 +26,14 @@ class EventApplicableProductItem:
             PR_GOODS_ENTR_DSCNT_PRC_INFO(PARTNER)에서 join
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
         image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
+        label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외
+        label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''
+        label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB)
+        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 예: '프리미엄+'/'프리미엄'/'스탠다드'/'이코노미'
+        goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 예:
+            'COMFORT'(정숙/승차감)/'SPORT'(고속/제동성)/'RUNFLAT'(런플랫)
+        rating_avg (float | None | Unset): 패턴 평균 평점 (PR_GDAS_INFO.GDAS_SCR_VAL 평균, 0.0~5.0)
+        review_count (int | None | Unset): 패턴 활성 리뷰 수
     """
 
     aply_tp_cd: str
@@ -38,6 +46,13 @@ class EventApplicableProductItem:
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
     image_url: None | str | Unset = UNSET
+    label_pnwave: None | str | Unset = UNSET
+    label_pnwave_nm: None | str | Unset = UNSET
+    label_pndb: None | str | Unset = UNSET
+    prc_grd_nm: None | str | Unset = UNSET
+    goods_pfm_nm: None | str | Unset = UNSET
+    rating_avg: float | None | Unset = UNSET
+    review_count: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,6 +108,48 @@ class EventApplicableProductItem:
         else:
             image_url = self.image_url
 
+        label_pnwave: None | str | Unset
+        if isinstance(self.label_pnwave, Unset):
+            label_pnwave = UNSET
+        else:
+            label_pnwave = self.label_pnwave
+
+        label_pnwave_nm: None | str | Unset
+        if isinstance(self.label_pnwave_nm, Unset):
+            label_pnwave_nm = UNSET
+        else:
+            label_pnwave_nm = self.label_pnwave_nm
+
+        label_pndb: None | str | Unset
+        if isinstance(self.label_pndb, Unset):
+            label_pndb = UNSET
+        else:
+            label_pndb = self.label_pndb
+
+        prc_grd_nm: None | str | Unset
+        if isinstance(self.prc_grd_nm, Unset):
+            prc_grd_nm = UNSET
+        else:
+            prc_grd_nm = self.prc_grd_nm
+
+        goods_pfm_nm: None | str | Unset
+        if isinstance(self.goods_pfm_nm, Unset):
+            goods_pfm_nm = UNSET
+        else:
+            goods_pfm_nm = self.goods_pfm_nm
+
+        rating_avg: float | None | Unset
+        if isinstance(self.rating_avg, Unset):
+            rating_avg = UNSET
+        else:
+            rating_avg = self.rating_avg
+
+        review_count: int | None | Unset
+        if isinstance(self.review_count, Unset):
+            review_count = UNSET
+        else:
+            review_count = self.review_count
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -117,6 +174,20 @@ class EventApplicableProductItem:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
         if image_url is not UNSET:
             field_dict["image_url"] = image_url
+        if label_pnwave is not UNSET:
+            field_dict["label_pnwave"] = label_pnwave
+        if label_pnwave_nm is not UNSET:
+            field_dict["label_pnwave_nm"] = label_pnwave_nm
+        if label_pndb is not UNSET:
+            field_dict["label_pndb"] = label_pndb
+        if prc_grd_nm is not UNSET:
+            field_dict["prc_grd_nm"] = prc_grd_nm
+        if goods_pfm_nm is not UNSET:
+            field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if rating_avg is not UNSET:
+            field_dict["rating_avg"] = rating_avg
+        if review_count is not UNSET:
+            field_dict["review_count"] = review_count
 
         return field_dict
 
@@ -199,6 +270,69 @@ class EventApplicableProductItem:
 
         image_url = _parse_image_url(d.pop("image_url", UNSET))
 
+        def _parse_label_pnwave(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pnwave = _parse_label_pnwave(d.pop("label_pnwave", UNSET))
+
+        def _parse_label_pnwave_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pnwave_nm = _parse_label_pnwave_nm(d.pop("label_pnwave_nm", UNSET))
+
+        def _parse_label_pndb(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        label_pndb = _parse_label_pndb(d.pop("label_pndb", UNSET))
+
+        def _parse_prc_grd_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        prc_grd_nm = _parse_prc_grd_nm(d.pop("prc_grd_nm", UNSET))
+
+        def _parse_goods_pfm_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
+
+        def _parse_rating_avg(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        rating_avg = _parse_rating_avg(d.pop("rating_avg", UNSET))
+
+        def _parse_review_count(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        review_count = _parse_review_count(d.pop("review_count", UNSET))
+
         event_applicable_product_item = cls(
             aply_tp_cd=aply_tp_cd,
             goods_no=goods_no,
@@ -210,6 +344,13 @@ class EventApplicableProductItem:
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
             image_url=image_url,
+            label_pnwave=label_pnwave,
+            label_pnwave_nm=label_pnwave_nm,
+            label_pndb=label_pndb,
+            prc_grd_nm=prc_grd_nm,
+            goods_pfm_nm=goods_pfm_nm,
+            rating_avg=rating_avg,
+            review_count=review_count,
         )
 
         event_applicable_product_item.additional_properties = d
