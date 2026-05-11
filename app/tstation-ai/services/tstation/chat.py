@@ -1174,8 +1174,14 @@ class StreamingMultiAgentCoordinator:
                                     "data": tool_output,
                                 })
 
+                # One-line story summary leads the dict so Langfuse's tree preview
+                # reads like "discovery → search_product_tool, get_product_description_tool → data".
+                _tools_label = ", ".join(agent_tools_called) if agent_tools_called else "no tools"
+                _data_label = "data" if domain_data_event_emitted else "text"
+                _agent_summary = f"{domain_key} → {_tools_label} → {_data_label}"
                 _agent_span.update(
                     output=_truncate({
+                        "summary": _agent_summary,
                         "response": full_response,
                         "tools_called": agent_tools_called,
                         "data_event_emitted": domain_data_event_emitted,
@@ -2719,8 +2725,14 @@ class TStationChatServiceV2:
             if routing_result is not None:
                 messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
             messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+            # Langfuse shows the first ~100 chars of `output` as the span preview.
+            # Lead with a one-line summary so the trace tree reads like a story
+            # without needing to expand the node.
+            _domain_label = "+".join(d.value for d in domains) if domains else "?"
+            _classify_summary = f"{_classify_path} → {_domain_label}"
             _classify_span.update(
                 output=_truncate({
+                    "summary": _classify_summary,
                     "domains": [d.value for d in domains],
                     "path": _classify_path,
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
@@ -3347,8 +3359,18 @@ class TStationChatServiceV2:
                                 )
                             else:
                                 logger.info("[QC_LAYER] QC passed")
+                            # Show verdict + corrected-field count up front so the
+                            # qc node tells the story without expanding.
+                            _qc_corr_count = len(qc_template_corrections) if qc_template_corrections else 0
+                            if _qc_passed:
+                                _qc_summary = "PASS"
+                            elif _qc_corr_count:
+                                _qc_summary = f"CORRECTED (text + {_qc_corr_count} JSON field)"
+                            else:
+                                _qc_summary = "CORRECTED (text)"
                             _qc_span.update(
                                 output=_truncate({
+                                    "summary": _qc_summary,
                                     "verdict": "PASS" if _qc_passed else "CORRECTED",
                                     "result": qc_result,
                                 }),
