@@ -154,6 +154,7 @@ def decide_next_action(
         parent_span_id=parent_span_id,
         tags=["router", "decide_next_action"],
         prompt_name="router",
+        run_name="💭 next_action",
     )
 
     try:
@@ -605,6 +606,7 @@ class StreamingMultiAgentCoordinator:
                 parent_span_id=parent_span_id,
                 tags=["router", run_name],
                 prompt_name="router",
+                run_name=f"💭 {run_name}",
             )
             raw_result = structured_model.invoke(all_messages, config=trace_config)
 
@@ -1091,6 +1093,7 @@ class StreamingMultiAgentCoordinator:
                     parent_span_id=_agent_span.id or parent_span_id,
                     tags=[domain_key, "agent"],
                     prompt_name=f"{domain_key}_agent",
+                    run_name=f"💭 {domain_key}_agent",
                 )
                 if speculative_guard:
                     speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
@@ -1174,8 +1177,14 @@ class StreamingMultiAgentCoordinator:
                                     "data": tool_output,
                                 })
 
+                # One-line story summary leads the dict so Langfuse's tree preview
+                # reads like "discovery → search_product_tool, get_product_description_tool → data".
+                _tools_label = ", ".join(agent_tools_called) if agent_tools_called else "no tools"
+                _data_label = "data" if domain_data_event_emitted else "text"
+                _agent_summary = f"{domain_key} → {_tools_label} → {_data_label}"
                 _agent_span.update(
                     output=_truncate({
+                        "summary": _agent_summary,
                         "response": full_response,
                         "tools_called": agent_tools_called,
                         "data_event_emitted": domain_data_event_emitted,
@@ -2719,8 +2728,14 @@ class TStationChatServiceV2:
             if routing_result is not None:
                 messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
             messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+            # Langfuse shows the first ~100 chars of `output` as the span preview.
+            # Lead with a one-line summary so the trace tree reads like a story
+            # without needing to expand the node.
+            _domain_label = "+".join(d.value for d in domains) if domains else "?"
+            _classify_summary = f"{_classify_path} → {_domain_label}"
             _classify_span.update(
                 output=_truncate({
+                    "summary": _classify_summary,
                     "domains": [d.value for d in domains],
                     "path": _classify_path,
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
@@ -3082,6 +3097,9 @@ class TStationChatServiceV2:
         agent_count = 0  # Track how many agents have started
         next_quick_reply_domain_values: list[str] = []
         next_predicted_domain_values: list[str] = []
+        # Hoisted so the trace summary at end-of-stream can reference QC verdict
+        # even when the draft was empty and the QC block below never ran.
+        _qc_passed = True
 
         # Detailed latency tracking state
         _lat_tool_start: dict[str, float] = {}
@@ -3323,6 +3341,7 @@ class TStationChatServiceV2:
                                 parent_span_id=_qc_span.id or parent_span_id,
                                 tags=["qc"],
                                 prompt_name="qc_agent",
+                                run_name="💭 qc_check",
                             )
                             async def _run_qc():
                                 return await ainvoke_qc(
@@ -3344,8 +3363,18 @@ class TStationChatServiceV2:
                                 )
                             else:
                                 logger.info("[QC_LAYER] QC passed")
+                            # Show verdict + corrected-field count up front so the
+                            # qc node tells the story without expanding.
+                            _qc_corr_count = len(qc_template_corrections) if qc_template_corrections else 0
+                            if _qc_passed:
+                                _qc_summary = "PASS"
+                            elif _qc_corr_count:
+                                _qc_summary = f"CORRECTED (text + {_qc_corr_count} JSON field)"
+                            else:
+                                _qc_summary = "CORRECTED (text)"
                             _qc_span.update(
                                 output=_truncate({
+                                    "summary": _qc_summary,
                                     "verdict": "PASS" if _qc_passed else "CORRECTED",
                                     "result": qc_result,
                                 }),
@@ -3416,9 +3445,21 @@ class TStationChatServiceV2:
             _last_user = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
             )
+            # Structured summary on the trace root so the Langfuse trace list shows
+            # route / tools / template / QC / latency at a glance — no need to open
+            # each trace to figure out what happened.
+            _route = "→".join(d.value for d in domains) if domains else ""
+            _summary = {
+                "route": _route,
+                "tools": sorted(called_tool_names),
+                "template": last_template,
+                "qc": "PASS" if _qc_passed else "CORRECTED",
+                "latency_ms": int((_t_qc - _t_stream_start) * 1000),
+                "answer": draft_response[:120],
+            }
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                output=_truncate(draft_response),
+                output=_truncate(_summary),
             )
             parent_span.end()
 
