@@ -181,6 +181,9 @@ class MultiAgentDomain(BaseModel):
 
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
+    execution_plan: list[str] = Field(
+        description="Short ordered plan for the selected domains, without tool names or parameters"
+    )
     user_behavior: str = Field(
         description=(
             "What the user is currently doing in this conversation turn, inferred from full history. "
@@ -231,6 +234,9 @@ class _SlimMultiAgentDomain(BaseModel):
     domains: list[MultiAgentDomain.Domain] = Field(
         description="List of domains detected in the request, ordered by priority"
     )
+    execution_plan: list[str] = Field(
+        description="Short ordered plan for the selected domains, without tool names or parameters"
+    )
 
 
 # Module-level singletons — avoid re-wrapping LLM per request.
@@ -247,11 +253,12 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 4 outputs:
+Produce 5 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
-3. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
-4. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
+4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
+5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -297,7 +304,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 2. PREV="ev" → intervening turn → USER="패밀리 SUV에 잘 맞는 사계절용 추천" → family+사계절 ≠ ev → RE-RECOMMENDATION. CORRECT: "requesting NEW recommendation...". WRONG: "filter previous EV list...".
 3. PREV="ev" → USER="이 EV 타이어 중에서 18인치로" → "이 중에서" (demonstrative) = filter/continuation. CORRECT: "filtering previous EV recommendation list...".
 
-Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
+Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
 - TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
@@ -327,8 +334,8 @@ LEADING — greeting, unclear intent:
 DECISION RULES
 ====================================================
 
-CORE RULE: Classify into EXACTLY ONE domain per turn.
-Each domain does its ONE job and stops. User drives every next step.
+CORE RULE: Prefer one domain per turn. Return multiple domains only when the current user request clearly needs a handoff in the same turn.
+Each domain does its ONE job. The coordinator may skip the extra next-action LLM call when your multi-domain plan is already clear.
 
 DISCOVERY when:
 - Product search by name/keyword (goods_no not yet known)
@@ -345,7 +352,7 @@ TRANSACTION when:
 - Order creation, cart save, order tracking
 - Pre-order confirmation flow
 
-⚠️ "buy/order/purchase" with product NAME (not goods_no) → DISCOVERY first to find goods_no, then STOP and wait for user.
+⚠️ "buy/order/purchase" with product NAME (not goods_no) → DISCOVERY first to find goods_no. If the same message also asks price/stock/order/store, return [DISCOVERY, TRANSACTION].
 ⚠️ "buy/order/purchase" with goods_no already in context → TRANSACTION directly.
 
 SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry
@@ -437,6 +444,7 @@ DOMAINS:
 RULES:
 - G+12 digits in message → TRANSACTION
 - Product name only (벤투스/Ventus/다이나프로/Dynapro/...) + price/stock/buy, no goods_no → DISCOVERY
+- Product name + explicit same-turn order/store request, no goods_no → [DISCOVERY, TRANSACTION]
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
 - 매장/근처/올마이티/All My T → TRANSACTION
@@ -451,7 +459,7 @@ EXAMPLES (tricky cases):
 - "내 주문내역 알려줘" → TRANSACTION (NOT SUPPORT)
 - "12가3456 타이어 추천" → DISCOVERY
 
-Output: domains (list with EXACTLY ONE domain) + reason (english).
+Output: domains (list with EXACTLY ONE domain), reason, and execution_plan.
 """
 
 
@@ -538,6 +546,7 @@ class StreamingMultiAgentCoordinator:
                     return MultiAgentDomain(
                         reason=f"hardcoded keyword routing matched '{kw}'",
                         domains=[domain],
+                        execution_plan=[f"Run {domain.value} for the matched current-turn topic"],
                         user_behavior=f"topic shift via keyword '{kw}'",
                         flow="hardcoded keyword routing — bypassed LLM router",
                     )
@@ -616,6 +625,7 @@ class StreamingMultiAgentCoordinator:
                 result = MultiAgentDomain(
                     reason=raw_result.reason,
                     domains=raw_result.domains,
+                    execution_plan=raw_result.execution_plan,
                     user_behavior="",
                     flow="",
                 )
@@ -623,7 +633,8 @@ class StreamingMultiAgentCoordinator:
                 result = raw_result
 
             logger.info(
-                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, flow={result.flow!r}"
+                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
+                f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, flow={result.flow!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -693,6 +704,31 @@ class StreamingMultiAgentCoordinator:
         system_msg = {"role": "system", "content": f"## CLIENT INSTRUCTIONS\n{injection}"}
         logger.info("[CLIENT_PROMPT] Injected as system message (chars=%d).", len(injection))
         return [system_msg] + list(messages)
+
+    @staticmethod
+    def _planner_decision(
+        domains: list[MultiAgentDomain.Domain],
+        routing: MultiAgentDomain | None,
+        current_domain: MultiAgentDomain.Domain,
+    ) -> AgentDecision | None:
+        if routing is None or len(domains) < 2:
+            return None
+        if not routing.execution_plan:
+            return None
+        if current_domain not in domains:
+            return None
+        next_index = domains.index(current_domain) + 1
+        if next_index >= len(domains):
+            return AgentDecision(
+                next_action=NextAction.STOP,
+                next_domain="null",
+                reason="planner_execution_plan_completed",
+            )
+        return AgentDecision(
+            next_action=NextAction.CONTINUE,
+            next_domain=domains[next_index].value,
+            reason="planner_execution_plan",
+        )
 
     def _build_context_message(
         self,
@@ -865,6 +901,7 @@ class StreamingMultiAgentCoordinator:
         slot_context_with_intent: str | None = None,
         classify_future: concurrent.futures.Future | None = None,
         speculative_guard: dict | None = None,
+        routing_result: MultiAgentDomain | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -1243,6 +1280,7 @@ class StreamingMultiAgentCoordinator:
                     parent_span_id=parent_span_id,
                     skip_decision=skip_decision,
                     slot_context_with_intent=slot_context_with_intent,
+                    routing_result=restart_routing_result,
                 )
                 return
 
@@ -1294,8 +1332,12 @@ class StreamingMultiAgentCoordinator:
                     continue
 
                 # Agent already produced a complete UI payload — decide_next_action
-                # would return STOP anyway (its prompt: "ONLY CONTINUE when agent cannot complete the task").
-                if domain_data_event_emitted and agent_declared_decision is None:
+                # would return STOP anyway. Keep multi-domain planner/nextAction paths active.
+                if (
+                    domain_data_event_emitted
+                    and agent_declared_decision is None
+                    and self._planner_decision(domains, routing_result, domain) is None
+                ):
                     logger.info("[COORDINATOR] Data event emitted — skipping decide_next_action")
                     break
 
@@ -1396,10 +1438,18 @@ class StreamingMultiAgentCoordinator:
                         skip_decision = True
                         continue
 
+                planner_decision = self._planner_decision(domains, routing_result, domain)
                 if agent_declared_decision is not None:
                     decision = agent_declared_decision
                     logger.info(
                         "[COORDINATOR] Using agent-declared nextAction: %s - %s",
+                        decision.next_action,
+                        decision.reason,
+                    )
+                elif planner_decision is not None:
+                    decision = planner_decision
+                    logger.info(
+                        "[COORDINATOR] Using planner execution_plan: %s - %s",
                         decision.next_action,
                         decision.reason,
                     )
@@ -3001,6 +3051,7 @@ class TStationChatServiceV2:
                     skip_decision=skip_decision,
                     slot_context_with_intent=slot_context_with_intent,
                     classify_future=speculative_classify_future,
+                    routing_result=routing_result,
                     parent_span=_parent_span,
                     parent_span_id=_parent_span_id,
                 ),
@@ -3028,6 +3079,7 @@ class TStationChatServiceV2:
                 skip_decision=skip_decision,
                 slot_context_with_intent=slot_context_with_intent,
                 classify_future=speculative_classify_future,
+                routing_result=routing_result,
                 parent_span=_parent_span,
                 parent_span_id=_parent_span_id,
             ):
@@ -3076,6 +3128,7 @@ class TStationChatServiceV2:
         skip_decision: bool = False,
         slot_context_with_intent: str | None = None,
         classify_future: concurrent.futures.Future | None = None,
+        routing_result: MultiAgentDomain | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -3150,6 +3203,7 @@ class TStationChatServiceV2:
             slot_context_with_intent=slot_context_with_intent,
             classify_future=classify_future,
             speculative_guard=speculative_guard,
+            routing_result=routing_result,
         ):
             _lat_now = time.perf_counter()
             event_type = event.get("type")
