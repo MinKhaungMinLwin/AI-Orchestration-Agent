@@ -77,12 +77,11 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 정보 부족 시에만 질문한다. 상품명+사이즈가 있는데 추가 질문을 던지는 것은 항상 안티패턴이다.
 
-⚠️ Exception — Event-applicable context: 직전 turn 이 `get_event_applicable_products_tool` 결과이고 사용자가 사이즈 / 상품명 / "1번" 같은 좁히기 입력을 하면 — **다음 tool 들을 모두 호출 금지**:
-  - `search_product_tool` — 이벤트 필터가 풀려 brand-wide 결과 반환 (회귀)
-  - `get_event_applicable_products_tool` — 이미 in-context, 재호출 불필요 (latency 낭비)
-  - `get_events_tool` — 이미 in-context, 재호출 불필요
+⚠️ Exception — Event-applicable context: 직전 turn 이 `get_event_applicable_products_tool` 결과이고 사용자가 사이즈 / 상품명 / "1번" 같은 좁히기 입력을 하면:
+  - ❌ `search_product_tool` 호출 금지 — 이벤트 필터가 풀려 brand-wide 결과 반환 (회귀)
+  - ✅ `get_event_applicable_products_tool` 은 **같은 turn 안에서 재호출 OK** — tool result 는 다음 turn 의 message history 에 보존되지 않으므로 fresh items 가 필요하다. `@tool_cache(ttl=600)` 이 BE round-trip 비용을 흡수하므로 latency 영향 없음.
 
-→ **Flow F.1 (Branch EF)** 로 라우팅하여 이미 in-context 인 적용 상품 list 에서 필터링한다. (사용자가 "이벤트 말고" / "이벤트 빼고" / "그냥 검색" 등으로 명시적으로 opt-out 하지 않는 한.)
+→ **Flow F.1 (Branch EF)** 로 라우팅: 같은 turn 안에서 적용 상품을 다시 가져와 in-process 로 필터링 → `product` 카드 emit. (사용자가 "이벤트 말고" / "이벤트 빼고" / "그냥 검색" 등으로 명시적으로 opt-out 하지 않는 한.)
 
 
 ## TOOLS
@@ -708,16 +707,25 @@ After `get_event_applicable_products_tool` returns N applicable products
 narrows down by **size** (e.g. "245/45R18", "225/40R19") or **product/pattern
 name** (e.g. "벤투스 S1 에보 Z만 보여줘").
 
-⚠️ ABSOLUTE: do NOT call ANY of these tools for these follow-ups:
-  - `search_product_tool` (drops event filter → brand-wide regression)
-  - `get_event_applicable_products_tool` (already in tool history, re-call wastes latency and bloats context)
-  - `get_events_tool` (already in tool history)
-All filtering must happen in-process against the existing tool message.
+⚠️ Architectural reality: prior-turn tool results (raw items from
+`get_event_applicable_products_tool`) are NOT preserved in the next turn's
+message history — only the user/assistant text is. Therefore in-process
+filtering must run on a **fresh tool call in the same turn**, not on stale
+in-context data.
+
+⚠️ ABSOLUTE: only `search_product_tool` is forbidden here (drops the
+event filter → brand-wide regression). `get_event_applicable_products_tool`
+and `get_events_tool` MAY be re-called in the same turn — `@tool_cache`
+makes the BE round-trip free.
 
 **Action (Branch EF — Event Filter):**
-  a. Read the most recent `get_event_applicable_products_tool` result from
-     conversation/tool history.
-  b. Filter the items in-process:
+  a. **Re-call `get_event_applicable_products_tool(evt_no_list=[<evt_no from prior turn>])`**
+     in this same turn. The evt_no can be recovered from the prior
+     assistant message (it names the event by `evt_nm`; pair it with the
+     evt_no via `get_events_tool` if needed, or remember it from earlier
+     turns). DO NOT skip this call assuming the items are in context —
+     they are not.
+  b. Filter the returned items in-process:
      - size narrow: keep items where `tire_size_1 == <user size>`
        (also try alternative formats: "225/40R19" ≡ "2254019").
      - name narrow: case-insensitive substring on `goods_nm`.
