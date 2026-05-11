@@ -3463,16 +3463,38 @@ class TStationChatServiceV2:
                 "latency_ms": int((_t_qc - _t_stream_start) * 1000),
             }
             _trace_output = _truncate(draft_response)
-            # Set both the parent span's own output AND the trace-level output so
-            # Langfuse UI doesn't fall back to a child chain's output (e.g. QC
-            # returning "PASS") when computing the trace preview.
+            _trace_input = _truncate(_last_user)
+            # Set both the parent span's own output AND the trace-level output.
             parent_span.update(output=_trace_output)
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                input=_truncate(_last_user),
+                input=_trace_input,
                 output=_trace_output,
                 metadata=_trace_metadata,
             )
+            # Create a final "✅ response" observation that carries the
+            # user-visible answer as its I/O. Langfuse v3 trace overview falls
+            # back to displaying the latest child chain's I/O (e.g. QC chain
+            # returning "PASS", or the agent chain dumping the message
+            # history) when no other signal wins. By making this the very last
+            # observation in the trace with input=user-message and output=
+            # assistant-response, the trace overview reads what the user
+            # actually saw — regardless of which child chains ran earlier.
+            if trace_id and _tracing_enabled:
+                try:
+                    response_span = tracer.start_span(
+                        name="✅ response",
+                        trace_context={"trace_id": trace_id, "parent_span_id": parent_span_id},
+                        input=_trace_input,
+                    )
+                    response_span.update(output=_trace_output)
+                    response_span.update_trace(
+                        input=_trace_input,
+                        output=_trace_output,
+                    )
+                    response_span.end()
+                except Exception as exc:
+                    logger.debug("[TRACE] response span failed: %s", exc)
             logger.info(
                 "[TRACE] Sealed trace output (%d chars) route=%s qc=%s recording=%s",
                 len(draft_response),
@@ -3483,8 +3505,7 @@ class TStationChatServiceV2:
             parent_span.end()
             # Force immediate OTel batch export so the trace.output update we just
             # set is visible in Langfuse UI without waiting for the next periodic
-            # flush. Without this the previous (child chain) output can linger
-            # on the trace overview until the OTel BatchSpanProcessor cycles.
+            # flush.
             try:
                 tracer.flush()
             except Exception as exc:
