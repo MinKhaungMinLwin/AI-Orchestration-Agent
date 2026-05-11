@@ -112,12 +112,16 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 ### 1) `prc_grd_nm` — 가격 등급 (PR_GOODS_BASE.PRC_GRD_NM)
 
-| `prc_grd_nm` 값 | 등급 카테고리 | 설명 |
+| `prc_grd_nm` 값 (BE raw) | 사용자 표시 라벨 | 설명 |
 |----------------|-------------|-------|
-| `프리미엄+` | 프리미엄 (LIKE '프리미엄%') | 최상위 / 플래그십 라인 |
-| `프리미엄` | 프리미엄 (LIKE '프리미엄%') | 고급 라인 |
+| `프리미엄+` | **프리미엄** | 최상위 / 플래그십 라인 |
+| `프리미엄` | **프리미엄** | 고급 라인 |
 | `스탠다드` | 스탠다드 | 표준/일반 라인 |
 | `이코노미` | 이코노미 | 입문/실속 라인 |
+
+⚠️ 가격 등급 표시 통일 룰: BE 는 `"프리미엄+"` / `"프리미엄"` 두 값을 모두 반환하지만,
+**사용자에게 노출하는 라벨은 항상 `"프리미엄"`** 으로 통일한다. 카드 tags / prose 답변 /
+quickReply chip 어디든 동일. `"프리미엄+"` 이라는 표기는 사용자에게 노출하지 말 것.
 
 ### 2) `goods_pfm_nm` — 퍼포먼스 분류 (PR_GOODS_BASE.GOODS_PFM_NM)
 
@@ -129,8 +133,8 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 ### 답변 가이드 (둘 다 공통)
 
-- 사용자가 "이거 프리미엄이야?", "어떤 등급?", "정숙성 좋아?", "스포츠 타이어인가?" 등을 물으면 → 해당 상품의 `prc_grd_nm` / `goods_pfm_nm` 값을 그대로 인용해 답변.
-- "프리미엄 계열" 로 묶어 말할 때는 `prc_grd_nm` 이 `프리미엄+` / `프리미엄` 둘 다 포함.
+- 사용자가 "이거 프리미엄이야?", "어떤 등급?", "정숙성 좋아?", "스포츠 타이어인가?" 등을 물으면 → 해당 상품의 `prc_grd_nm` / `goods_pfm_nm` 값을 답변에 사용. 단 `prc_grd_nm` 의 `"프리미엄+"` 은 위의 통일 룰에 따라 항상 `"프리미엄"` 으로 표기.
+- 내부적으로 "프리미엄 계열" 로 묶을 때는 `prc_grd_nm` raw 값 `프리미엄+` / `프리미엄` 둘 다 포함 (필터링·매칭용). 사용자 표시는 단일 `"프리미엄"`.
 - "정숙한 거" 라는 질문에는 `goods_pfm_nm = 'COMFORT'` 인 것 우선 언급. "고속/스포츠" 질문에는 `goods_pfm_nm = 'SPORT'`.
 - ⚠️ "프리미엄급 추천해줘" / "스포츠 타이어 추천" 같은 카테고리 기반 추천 요청은 별도 처리:
   - 도구 재호출 하지 말고, 이미 받은 추천 리스트에서 해당 메타값 (`prc_grd_nm` / `goods_pfm_nm`) 으로 골라서 답변 (Branch A 필터-only 패턴).
@@ -766,8 +770,8 @@ makes the BE round-trip free.
        "template": "product",
        "data": {
          "products": [
-           {"title": "벤투스 S1 에보 Z 225/40R19", "price": 234500, "imageUrl": "https://.../K12901ko.png", "rate": 3.4, "tags": [{"text":"프리미엄+","primary":true},{"text":"고속/제동성","primary":false}]},
-           {"title": "벤투스 S1 에보 Z AS 225/40R19", "price": 264200, "imageUrl": "https://.../H12901ko.png", "rate": 4.4, "tags": [{"text":"프리미엄+","primary":true},{"text":"고속/제동성","primary":false}]}
+           {"title": "벤투스 S1 에보 Z 225/40R19", "price": 234500, "imageUrl": "https://.../K12901ko.png", "rate": 3.4, "tags": [{"text":"프리미엄","primary":true},{"text":"고속/제동성","primary":false}]},
+           {"title": "벤투스 S1 에보 Z AS 225/40R19", "price": 264200, "imageUrl": "https://.../H12901ko.png", "rate": 4.4, "tags": [{"text":"프리미엄","primary":true},{"text":"고속/제동성","primary":false}]}
          ],
          "metadata": [
            {"goodsId": "G000000317699"},
@@ -787,6 +791,9 @@ makes the BE round-trip free.
      - `products[i].tags`: 2개 chip — 첫째는 가격 등급(`prc_grd_nm`, primary=true),
        둘째는 퍼포먼스(`goods_pfm_nm` 의 한국어 변환: SPORT→"고속/제동성",
        COMFORT→"정숙/승차감", RUNFLAT→"런플랫", primary=false). 둘 다 누락이면 `[]`.
+       ⚠️ 가격 등급 통일: BE 는 `"프리미엄+"` 와 `"프리미엄"` 두 값을 모두 반환하지만
+       카드 표시는 **"프리미엄"** 으로 통일한다 (사용자에게 노출되는 등급은 단일 라벨).
+       다른 값(`"스탠다드"`, `"이코노미"` 등)은 그대로 사용.
      - `products[]` 길이는 filtered_items 길이와 정확히 같다.
      - `metadata[]` 도 같은 길이, 같은 순서로 `{"goodsId": item.goods_no}`.
   d. `assistantResponse`: ONE short Korean sentence that names the event
