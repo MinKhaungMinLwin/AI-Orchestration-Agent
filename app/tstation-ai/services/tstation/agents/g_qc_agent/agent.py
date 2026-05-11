@@ -31,7 +31,7 @@ def get_qc_chain(llm):
     return prompt | llm | StrOutputParser()
 
 async def ainvoke_qc(llm, user_query: str, draft_response: str, source_data: str, config: dict | None = None) -> str:
-    logger.info("[QC_AGENT] Invoking QC check...")
+    logger.debug("[QC_AGENT] Invoking QC check...")
     chain = get_qc_chain(llm)
     return await chain.ainvoke(
         {"user_query": user_query, "draft_response": draft_response, "source_data": source_data},

@@ -201,7 +201,7 @@ _GOODS_PFM_LABELS: dict[str, str] = {
 
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # TEMP DEBUG: dump entry shape so we can see what keys actually arrive at runtime.
-    logger.info(
+    logger.debug(
         "[_map_product DEBUG] tools=%s, get_final_price_entries=%s",
         [e.get("tool") for e in tool_data_list],
         [
@@ -1170,7 +1170,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         if tool_name in called_tools:
             result = mapper(accumulated_tool_data, assistant_text)
             if result:
-                logger.info(
+                logger.debug(
                     "[TEMPLATE_MAPPER] Built '%s' template from %s (skipped UI Template Agent)",
                     result.get("template"),
                     tool_name,

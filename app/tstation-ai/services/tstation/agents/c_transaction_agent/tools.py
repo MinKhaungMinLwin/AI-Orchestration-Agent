@@ -118,7 +118,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
 
     Example: {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
     """
-    logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
+    logger.debug("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
 
     try:
         response = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
@@ -128,7 +128,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product price"
             )
-        # logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_final_price_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
@@ -147,7 +147,7 @@ def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
         mbr_no (str | None): 회원번호 (used for per-user cache key scoping).
         lang_cd (str): Language code (default: 'ko').
     """
-    logger.info("[TOOL][get_available_coupons_tool] Called with: mbr_no=%s, lang_cd=%s", mbr_no, lang_cd)
+    logger.debug("[TOOL][get_available_coupons_tool] Called with: mbr_no=%s, lang_cd=%s", mbr_no, lang_cd)
 
     try:
         response = get_available_coupons(client=get_client(), lang_cd=lang_cd)
@@ -157,7 +157,7 @@ def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get available coupons"
             )
-        # logger.info("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_available_coupons_tool] Failed")
@@ -174,7 +174,7 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
     Args:
         lang_cd (str): Language code (default: 'ko').
     """
-    logger.info("[TOOL][get_my_coupons_tool] Called with: lang_cd=%s", lang_cd)
+    logger.debug("[TOOL][get_my_coupons_tool] Called with: lang_cd=%s", lang_cd)
 
     try:
         response = get_my_coupons(client=get_client(), lang_cd=lang_cd)
@@ -184,7 +184,7 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get my coupons"
             )
-        # logger.info("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_my_coupons_tool] Failed")
@@ -211,7 +211,7 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
 
     Response code: 100=발급 성공, 900=실패(이미 보유 또는 대상 아님).
     """
-    logger.info(
+    logger.debug(
         "[TOOL][issue_coupon_tool] Called with: goods_no=%s, cpn_no=%s",
         goods_no, cpn_no,
     )
@@ -238,7 +238,7 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to issue coupon",
             )
-        # logger.info("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][issue_coupon_tool] Failed")
@@ -287,7 +287,7 @@ def get_product_promotions_tool(goods_no: str):
 
     Example: {"goods_no": "G000000314254"}
     """
-    logger.info("[TOOL][get_product_promotions_tool] Called with: goods_no=%s", goods_no)
+    logger.debug("[TOOL][get_product_promotions_tool] Called with: goods_no=%s", goods_no)
 
     if not goods_no or not goods_no.strip():
         return _error_response(None, "InvalidArguments", "goods_no는 필수 입력입니다.")
@@ -300,7 +300,7 @@ def get_product_promotions_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product promotions",
             )
-        # logger.info("[TOOL][get_product_promotions_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_product_promotions_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_product_promotions_tool] Failed")
@@ -330,7 +330,7 @@ def get_logistics_inventory_tool(goods_no: str):
     Example: {"goods_no": "GXXXXXXXXXXXX"}
     """
     body = LogisticsRequest(goods_no=goods_no)
-    logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
+    logger.debug("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
 
     try:
         response = get_logistics_inventory(client=get_client(), body=body)
@@ -340,7 +340,7 @@ def get_logistics_inventory_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get logistics inventory"
             )
-        # logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_logistics_inventory_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_logistics_inventory_tool] Failed")
@@ -363,7 +363,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
     s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
     body = StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items)
-    logger.info("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)
+    logger.debug("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)
 
     try:
         response = get_store_inventory(client=get_client(), body=body)
@@ -373,7 +373,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store inventory"
             )
-        # logger.info("[TOOL][get_store_inventory_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_inventory_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_inventory_tool] Failed")
@@ -397,7 +397,7 @@ def search_place_tool(query: str, size: int = 10):
 
     Example: {"query": "강남역"}
     """
-    logger.info("[TOOL][search_place_tool] Called with: query=%s, size=%s", query, size)
+    logger.debug("[TOOL][search_place_tool] Called with: query=%s, size=%s", query, size)
 
     try:
         response = search_place(client=get_client(), query=query, size=size)
@@ -407,7 +407,7 @@ def search_place_tool(query: str, size: int = 10):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search place"
             )
-        # logger.info("[TOOL][search_place_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_place_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_place_tool] Failed")
@@ -455,7 +455,7 @@ def get_nearby_stores_tool(
 
     Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F"}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
         "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
         user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
@@ -478,7 +478,7 @@ def get_nearby_stores_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get nearby stores"
             )
-        # logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
         # Truncate to top 10 stores so the LLM's `location` template (max_length=10
@@ -497,7 +497,7 @@ def get_nearby_stores_tool(
                 ),
             )
             data["stores"] = sorted_stores[:10]
-            logger.info(
+            logger.debug(
                 "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 10 (installable-first, distance-asc)",
                 original_count,
             )
@@ -568,7 +568,7 @@ def get_store_list_tool(
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
-    logger.info(
+    logger.debug(
         "[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
         "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
         region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
@@ -591,7 +591,7 @@ def get_store_list_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store list"
             )
-        # logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_list_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -614,7 +614,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 
     Example: {"shop_id": "BXXXXX", "cal_day": "20260401"}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s, is_logistics_delivery=%s",
         shop_id, cal_day, is_logistics_delivery,
     )
@@ -632,7 +632,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store details"
             )
-        # logger.info("[TOOL][get_store_detail_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_detail_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_detail_tool] Failed")
@@ -667,7 +667,7 @@ def get_store_schedule_tool(shop_id: str, mode: str):
         - {"shop_id": "FXXXXX", "mode": "logistics_only"}
         - {"shop_id": "BXXXXX", "mode": "general"}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, mode=%s",
         shop_id, mode,
     )
@@ -686,7 +686,7 @@ def get_store_schedule_tool(shop_id: str, mode: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store schedule"
             )
-        # logger.info("[TOOL][get_store_schedule_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_schedule_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_schedule_tool] Failed")
@@ -758,7 +758,7 @@ def get_multi_store_schedule_tool(
           "has_logistics": true
         }
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, "
         "today_shop_ids=%s, tna_shop_ids=%s, has_logistics=%s",
         shop_id_list, today_shop_ids, tna_shop_ids, has_logistics,
@@ -874,7 +874,7 @@ def transaction_store_preview_tool(
     Use when goods_no and quantity are known and the user wants nearby/regional stores,
     stock, or available reservation dates. This is a preview only; never creates an order.
     """
-    logger.info(
+    logger.debug(
         "[TOOL][transaction_store_preview_tool] Called with: goods_no=%s, ord_qty=%s, region_code=%s, "
         "store_nm=%s, user_xpos=%s, user_ypos=%s, include_price=%s",
         goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, include_price,
@@ -1002,7 +1002,7 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
     Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
-    logger.info("[TOOL][save_to_cart_tool] Called with: goods_info=%s, car_lnc_cd=%s", goods_info_arr_str, car_lnc_cd)
+    logger.debug("[TOOL][save_to_cart_tool] Called with: goods_info=%s, car_lnc_cd=%s", goods_info_arr_str, car_lnc_cd)
 
     try:
         body = SetOrderFormAIRequest(
@@ -1018,7 +1018,7 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to save to cart"
             )
-        # logger.info("[TOOL][save_to_cart_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][save_to_cart_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][save_to_cart_tool] Failed")
@@ -1049,7 +1049,7 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
     Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX"}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
-    logger.info("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s", goods_info_arr_str, shop_id, car_lnc_cd)
+    logger.debug("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s", goods_info_arr_str, shop_id, car_lnc_cd)
 
     try:
         body = SetOrderFormAIRequest(
@@ -1066,7 +1066,7 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to create quick order"
             )
-        # logger.info("[TOOL][quick_order_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][quick_order_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][quick_order_tool] Failed")
@@ -1083,7 +1083,7 @@ def get_order_status_tool(query_no: str):
 
     Example: {"query_no": "O100017122"}
     """
-    logger.info("[TOOL][get_order_status_tool] Called with: query_no=%s", query_no)
+    logger.debug("[TOOL][get_order_status_tool] Called with: query_no=%s", query_no)
 
     try:
         response = get_order_delivery(client=get_client(), query_no=query_no)
@@ -1093,7 +1093,7 @@ def get_order_status_tool(query_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to retrieve order status"
             )
-        # logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_order_status_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_order_status_tool] Failed")
@@ -1109,7 +1109,7 @@ def get_orders_of_user_tool():
     - 1 order → auto-call get_order_status_tool with that order number
     - Multiple orders → show list, ask which one they want details for
     """
-    logger.info("[TOOL][get_orders_of_user_tool] Called")
+    logger.debug("[TOOL][get_orders_of_user_tool] Called")
 
     try:
         response = get_orders(client=get_client())
@@ -1119,7 +1119,7 @@ def get_orders_of_user_tool():
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to retrieve order list"
             )
-        # logger.info("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("orders"), list):
             data["orders"] = _enrich_orders_with_detail(data["orders"])

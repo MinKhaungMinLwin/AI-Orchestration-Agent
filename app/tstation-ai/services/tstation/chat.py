@@ -600,7 +600,7 @@ class StreamingMultiAgentCoordinator:
 
         forced_result = self._force_keyword_routing(last_user_text)
         if forced_result is not None:
-            logger.info(
+            logger.debug(
                 "[MULTI-DOMAIN] Hardcoded routing: domain=%s, msg=%r",
                 forced_result.domains,
                 last_user_text[:80],
@@ -647,7 +647,7 @@ class StreamingMultiAgentCoordinator:
             else:
                 result = raw_result
 
-            logger.info(
+            logger.debug(
                 f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
                 f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, flow={result.flow!r}"
             )
@@ -717,7 +717,7 @@ class StreamingMultiAgentCoordinator:
             return messages
 
         system_msg = {"role": "system", "content": f"## CLIENT INSTRUCTIONS\n{injection}"}
-        logger.info("[CLIENT_PROMPT] Injected as system message (chars=%d).", len(injection))
+        logger.debug("[CLIENT_PROMPT] Injected as system message (chars=%d).", len(injection))
         return [system_msg] + list(messages)
 
     @staticmethod
@@ -787,7 +787,7 @@ class StreamingMultiAgentCoordinator:
         if fulfilled_intent and tool_succeeded and slots.pending_intent == fulfilled_intent:
             slots.pending_intent = None
             changed = True
-            logger.info(
+            logger.debug(
                 f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
             )
 
@@ -795,7 +795,7 @@ class StreamingMultiAgentCoordinator:
             slots.tire_size = None
             slots.goods_no = None
             changed = True
-            logger.info("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
+            logger.debug("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
 
         tool_slots = {}
         if tool_name == "get_products_recommendations_tool" and tool_input:
@@ -835,7 +835,7 @@ class StreamingMultiAgentCoordinator:
             if updated.model_dump() != slots.model_dump():
                 slots.__dict__.update(updated.__dict__)
                 changed = True
-                logger.info(f"[SLOTS] Tool-derived slots staged from {tool_name}: {tool_slots}")
+                logger.debug(f"[SLOTS] Tool-derived slots staged from {tool_name}: {tool_slots}")
 
         return changed
 
@@ -899,7 +899,7 @@ class StreamingMultiAgentCoordinator:
         if not domains:
             domains = [MultiAgentDomain.Domain.LEADING]
 
-        logger.info(f"[COORDINATOR] Streaming for domains: {[d.value for d in domains]}")
+        logger.debug(f"[COORDINATOR] Streaming for domains: {[d.value for d in domains]}")
 
         accumulated_context = {}
         accumulated_tool_data = []  # Collect tool outputs for UI Template Agent
@@ -970,7 +970,7 @@ class StreamingMultiAgentCoordinator:
                                 ),
                             }
                         )
-                        logger.info(f"[COORDINATOR] Passing context to {domain.value}")
+                        logger.debug(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
 
             # 4. Append accumulated_tool_data LAST (for UI Template Agent)
@@ -987,17 +987,17 @@ class StreamingMultiAgentCoordinator:
                         if qty_match:
                             ord_qty = int(qty_match.group(1))
                             accumulated_tool_data.append({"tool": "user_intent", "data": {"ord_qty": ord_qty}})
-                            logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
+                            logger.debug(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
 
                 llm_tool_data = StreamingMultiAgentCoordinator._compact_tool_results_for_llm(accumulated_tool_data)
                 tool_summary = json.dumps(llm_tool_data, ensure_ascii=False, separators=(",", ":"))
                 enriched_messages.append(
                     {"role": "assistant", "content": f"[Previous agent tool facts]\n{tool_summary}"}
                 )
-                logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
+                logger.debug(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
 
             domain_key = domain.value
-            # logger.info(
+            # logger.debug(
             #     f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
             # )
 
@@ -1097,7 +1097,7 @@ class StreamingMultiAgentCoordinator:
                     if classify_future is not None and classifier_done.is_set():
                         is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
                         if is_match:
-                            logger.info(
+                            logger.debug(
                                 "[COORDINATOR] speculative confirmed: %s — flushing %d events",
                                 [d.value for d in verified_domains],
                                 len(speculative_buffer),
@@ -1106,7 +1106,7 @@ class StreamingMultiAgentCoordinator:
                                 speculative_guard["confirm_event"].set()
                             yield from _flush_speculative_buffer()
                         else:
-                            logger.info(
+                            logger.debug(
                                 "[COORDINATOR] speculative mismatch during %s: predicted=%s classify=%s",
                                 domain.value,
                                 [d.value for d in domains],
@@ -1126,7 +1126,7 @@ class StreamingMultiAgentCoordinator:
                         parsed_decision = _parse_agent_declared_next_action(event.pop("nextAction", None))
                         if parsed_decision is not None:
                             agent_declared_decision = parsed_decision
-                            logger.info(
+                            logger.debug(
                                 "[COORDINATOR] Agent-declared nextAction accepted: %s -> %s",
                                 parsed_decision.next_action.value,
                                 parsed_decision.next_domain,
@@ -1139,7 +1139,7 @@ class StreamingMultiAgentCoordinator:
                         if content:
                             accumulated_context[domain_key] = content
                             full_response = content
-                            logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
+                            logger.debug(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
                     # Capture tool outputs for UI Template Agent
                     if event.get("type") == "tool":
@@ -1187,7 +1187,7 @@ class StreamingMultiAgentCoordinator:
             if restart_domains is None and speculative_guard and speculative_guard.get("mismatch_domains"):
                 restart_domains = speculative_guard.get("mismatch_domains")
                 restart_routing_result = speculative_guard.get("routing_result")
-                logger.info(
+                logger.debug(
                     "[COORDINATOR] speculative mismatch before mutating tool: predicted=%s classify=%s",
                     [d.value for d in domains],
                     [d.value for d in restart_domains],
@@ -1198,7 +1198,7 @@ class StreamingMultiAgentCoordinator:
                 if is_match:
                     if speculative_guard:
                         speculative_guard["confirm_event"].set()
-                    logger.info(
+                    logger.debug(
                         "[COORDINATOR] speculative confirmed after %s finished — flushing %d events",
                         domain.value,
                         len(speculative_buffer),
@@ -1207,7 +1207,7 @@ class StreamingMultiAgentCoordinator:
                 else:
                     restart_domains = verified_domains
                     restart_routing_result = verified_routing_result
-                    logger.info(
+                    logger.debug(
                         "[COORDINATOR] speculative mismatch after %s finished: predicted=%s classify=%s",
                         domain.value,
                         [d.value for d in domains],
@@ -1220,7 +1220,7 @@ class StreamingMultiAgentCoordinator:
                 restart_messages = StreamingMultiAgentCoordinator._inject_conversation_context(
                     original_messages, restart_routing_result
                 )
-                logger.info(
+                logger.debug(
                     "[COORDINATOR] discarding speculative %s branch; restarting with %s",
                     domain.value,
                     [d.value for d in restart_domains],
@@ -1253,7 +1253,7 @@ class StreamingMultiAgentCoordinator:
             if is_first_agent:
                 is_first_agent = False
                 if domain == MultiAgentDomain.Domain.SUPPORT:
-                    logger.info("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
+                    logger.debug("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
                     break
 
                 # Caller pre-committed the chain (e.g., P0 auto-chain code gate) —
@@ -1269,12 +1269,12 @@ class StreamingMultiAgentCoordinator:
                 if skip_decision and len(domains) >= 2:
                     goods_no_resolved = pending_slots is not None and pending_slots.goods_no is not None
                     if not goods_no_resolved:
-                        logger.info(
+                        logger.debug(
                             "[COORDINATOR] skip_decision=True but Discovery did not resolve "
                             "goods_no (0 or multiple results) — stopping chain"
                         )
                         break
-                    logger.info(
+                    logger.debug(
                         "[COORDINATOR] skip_decision=True — proceeding to next domain "
                         f"({domains[1].value}) without LLM decision"
                     )
@@ -1287,7 +1287,7 @@ class StreamingMultiAgentCoordinator:
                     and agent_declared_decision is None
                     and self._planner_decision(domains, routing_result, domain) is None
                 ):
-                    logger.info("[COORDINATOR] Data event emitted — skipping decide_next_action")
+                    logger.debug("[COORDINATOR] Data event emitted — skipping decide_next_action")
                     break
 
                 # P1-B stall recovery (LAST RESORT): when domains was [TRANSACTION]
@@ -1374,14 +1374,14 @@ class StreamingMultiAgentCoordinator:
                 planner_decision = self._planner_decision(domains, routing_result, domain)
                 if agent_declared_decision is not None:
                     decision = agent_declared_decision
-                    logger.info(
+                    logger.debug(
                         "[COORDINATOR] Using agent-declared nextAction: %s - %s",
                         decision.next_action,
                         decision.reason,
                     )
                 elif planner_decision is not None:
                     decision = planner_decision
-                    logger.info(
+                    logger.debug(
                         "[COORDINATOR] Using planner execution_plan: %s - %s",
                         decision.next_action,
                         decision.reason,
@@ -1396,10 +1396,10 @@ class StreamingMultiAgentCoordinator:
                         trace_id=trace_id,
                         parent_span_id=parent_span_id,
                     )
-                    logger.info(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
+                    logger.debug(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
 
                 if decision.next_action == NextAction.STOP or not decision.next_domain:
-                    logger.info("[COORDINATOR] Stopping multi-agent chain")
+                    logger.debug("[COORDINATOR] Stopping multi-agent chain")
                     break
 
                 # Map next_domain string to enum
@@ -1426,7 +1426,7 @@ class StreamingMultiAgentCoordinator:
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
         assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
         if domain_data_event_emitted:
-            logger.info("[COORDINATOR] Domain agent emitted data event — skipping UI Template Agent")
+            logger.debug("[COORDINATOR] Domain agent emitted data event — skipping UI Template Agent")
         elif _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
             trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
             logger.warning(
@@ -1640,7 +1640,7 @@ def _goal_based_classify(
         return None
 
     if last_user_text and _GOAL_SWITCH_RE.search(last_user_text):
-        logger.info("[GOAL_ROUTER] goal-switch keyword in text — falling through")
+        logger.debug("[GOAL_ROUTER] goal-switch keyword in text — falling through")
         return None
 
     next_step_id = merged_slots.next_goal_step_id()
@@ -1648,13 +1648,13 @@ def _goal_based_classify(
     if next_step_id is None:
         domain = _GOAL_COMPLETE_DOMAIN.get(goal_type)
         if domain is not None:
-            logger.info(f"[GOAL_ROUTER] goal={goal_type} all steps done → {domain.value}")
+            logger.debug(f"[GOAL_ROUTER] goal={goal_type} all steps done → {domain.value}")
             return [domain]
         return None
 
     domain = _GOAL_NEXT_STEP_DOMAIN.get((goal_type, next_step_id))
     if domain is not None:
-        logger.info(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
+        logger.debug(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
         return [domain]
     return None
 
@@ -1675,7 +1675,7 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
     if not text:
         return None
     if _SUPPORT_FAST_RE.search(text):
-        logger.info(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
+        logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
     return None
 
@@ -1706,22 +1706,22 @@ def _rule_based_classify(
 
     # Case 1: Pure greeting (short, no additional intent)
     if _GREETING_ONLY_RE.match(text):
-        logger.info("[RULE_ROUTER] Greeting fast-path → LEADING")
+        logger.debug("[RULE_ROUTER] Greeting fast-path → LEADING")
         return [MultiAgentDomain.Domain.LEADING]
 
     # Case 2: Clear support / escalation keywords
     if _SUPPORT_FAST_RE.search(text):
-        logger.info(f"[RULE_ROUTER] Support keyword fast-path → SUPPORT: {text[:60]!r}")
+        logger.debug(f"[RULE_ROUTER] Support keyword fast-path → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
 
     # Case 3: goods_no already in slots + transactional keyword in current turn
     if merged_slots.goods_no and _TRANSACTION_FAST_RE.search(text):
-        logger.info(f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION")
+        logger.debug(f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION")
         return [MultiAgentDomain.Domain.TRANSACTION]
 
     # Case 4: goods_no pattern directly written in user text + transactional keyword
     if re.search(r"G\d{9,}", text) and _TRANSACTION_FAST_RE.search(text):
-        logger.info("[RULE_ROUTER] goods_no literal in text + transactional keyword → TRANSACTION")
+        logger.debug("[RULE_ROUTER] goods_no literal in text + transactional keyword → TRANSACTION")
         return [MultiAgentDomain.Domain.TRANSACTION]
 
     return None
@@ -2434,7 +2434,7 @@ class TStationChatServiceV2:
         if len(messages) > _MAX_HISTORY_MESSAGES:
             dropped = len(messages) - _MAX_HISTORY_MESSAGES
             messages = messages[-_MAX_HISTORY_MESSAGES:]
-            logger.info(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
+            logger.debug(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
         # Wrapped in try/except so slot failures never block the main chat flow
@@ -2472,7 +2472,7 @@ class TStationChatServiceV2:
             
             latest_location_tmpl = None
             _t_slots = time.perf_counter()
-            logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+            logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
             # 1a) Enrich messages with template_data from prefetched history and rebuild.
             # Overrides the plain fallback built above — no extra Redis round-trip.
@@ -2501,7 +2501,7 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
-            logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
+            logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
             # 3.5) If the user explicitly asked for a recommendation in THIS turn
             # AND did not also include a fresh transactional keyword, clear any
@@ -2513,7 +2513,7 @@ class TStationChatServiceV2:
             user_asked_for_recommend = ConversationSlots.has_recommend_intent(last_user_text)
             turn_has_new_transactional = regex_slots.pending_intent is not None
             if merged_slots.pending_intent is not None and user_asked_for_recommend and not turn_has_new_transactional:
-                logger.info(
+                logger.debug(
                     f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
                     f"— user switched back to recommendation"
                 )
@@ -2552,7 +2552,7 @@ class TStationChatServiceV2:
                         most_recent_listing_tool = tool
                         break
                 if most_recent_listing_tool == "get_products_recommendations_tool":
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
                         f"— most recent list source is get_products_recommendations_tool "
                         f"(user is in recommendation flow, not transactional)"
@@ -2572,7 +2572,7 @@ class TStationChatServiceV2:
                 if resolved_goods_no:
                     merged_slots.goods_no = resolved_goods_no
                     goods_no_resolved_this_turn = True
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
                         f"list-selection against prior search_product_tool result"
                     )
@@ -2595,7 +2595,7 @@ class TStationChatServiceV2:
                     )
                     if resolved_tire_size:
                         merged_slots.tire_size = resolved_tire_size
-                        logger.info(
+                        logger.debug(
                             f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
                             f"vehicle-selection against last `listCar` template metadata"
                         )
@@ -2614,7 +2614,7 @@ class TStationChatServiceV2:
                 resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(last_user_text, prev_tool_data)
                 if resolved_shop_id:
                     merged_slots.shop_id = resolved_shop_id
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                         f"list-selection against prior store-list tool result"
                     )
@@ -2625,7 +2625,7 @@ class TStationChatServiceV2:
                         for e in prev_tool_data
                         if e.get("tool") in ("get_nearby_stores_tool", "get_store_list_tool")
                     ]
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] shop_id resolver (tool path) no-match: "
                         f"user_text={last_user_text[:60]!r}, "
                         f"store_tool_entries={store_tool_entries}"
@@ -2650,7 +2650,7 @@ class TStationChatServiceV2:
                     )
                     if resolved_shop_id:
                         merged_slots.shop_id = resolved_shop_id
-                        logger.info(
+                        logger.debug(
                             f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                             f"list-selection against last `location` template metadata"
                         )
@@ -2680,7 +2680,7 @@ class TStationChatServiceV2:
                 # Cap tool context to avoid consuming too much of the context window
                 if len(tool_context) > 8000:
                     tool_context = tool_context[:8000] + "\n... (일부 생략)"
-                logger.info(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results ({len(tool_context)} chars)")
+                logger.debug(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results ({len(tool_context)} chars)")
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
@@ -2737,7 +2737,7 @@ class TStationChatServiceV2:
                 if predicted_domains is not None and (_chip_domain or _is_speculative_safe(predicted_domains)):
                     domains = predicted_domains
                     speculative_classify_future = classify_future
-                    logger.info("[CLASSIFIER] %s domains=%s — background verify", _classify_path, [d.value for d in domains])
+                    logger.debug("[CLASSIFIER] %s domains=%s — background verify", _classify_path, [d.value for d in domains])
                 else:
                     domains, routing_result = await asyncio.to_thread(classify_future.result)
                     _classify_path = "llm"
@@ -2783,7 +2783,7 @@ class TStationChatServiceV2:
             and goods_no_resolved_this_turn
             and merged_slots.pending_intent is not None
         ):
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] Post-classification redirect: goods_no={merged_slots.goods_no!r} "
                 f"resolved from list-selection + pending_intent={merged_slots.pending_intent!r} "
                 f"→ [DISCOVERY] → [TRANSACTION]"
@@ -2828,7 +2828,7 @@ class TStationChatServiceV2:
             and merged_slots.goods_no is not None
             and regex_slots.pending_intent is not None
         ):
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
                 f"goods_no={merged_slots.goods_no!r} (carried), "
                 f"fresh_intent={regex_slots.pending_intent!r}, "
@@ -2895,7 +2895,7 @@ class TStationChatServiceV2:
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
             skip_decision = True
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] P0 auto-chain gate triggered: "
                 f"pending_intent={merged_slots.pending_intent!r} "
                 f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
@@ -2956,7 +2956,7 @@ class TStationChatServiceV2:
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
             skip_decision = True
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] P0b TX→DISC+TX redirect: classifier=[TRANSACTION], "
                 f"goods_no=None, tire_size={merged_slots.tire_size!r}, "
                 f"tire_model={merged_slots.tire_model!r}, "
@@ -2988,7 +2988,7 @@ class TStationChatServiceV2:
         current_goal_type.set(merged_slots.goal_type)
 
         _t_prestream = time.perf_counter()
-        logger.info(
+        logger.debug(
             f"[LATENCY] pre-stream — slots={(_t_slots - _t0)*1000:.0f}ms "
             f"classify={(_t_classify - _t_slots)*1000:.0f}ms "
             f"other={(_t_prestream - _t_classify)*1000:.0f}ms "
@@ -3100,7 +3100,7 @@ class TStationChatServiceV2:
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
-        logger.info(
+        logger.debug(
             "[REQUEST_CONFIG] "
             f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
             f"leading={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_LEADING_AGENT} | "
@@ -3191,7 +3191,7 @@ class TStationChatServiceV2:
                         _lat_first_token_seen = True
                         _lat_first_token_time = _lat_now
                         if _lat_think_start is not None:
-                            logger.info(f"[LATENCY]   llm_think={(_lat_now - _lat_think_start)*1000:.0f}ms")
+                            logger.debug(f"[LATENCY]   llm_think={(_lat_now - _lat_think_start)*1000:.0f}ms")
                 continue
 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
@@ -3205,7 +3205,7 @@ class TStationChatServiceV2:
                 tool_name = event.get("tool", "Unknown")
                 called_tool_names.add(tool_name)
                 if tool_name in _lat_tool_start:
-                    logger.info(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
+                    logger.debug(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
                 # Suppress tokens when a "list display" tool is called (card will replace text).
                 # Exclude car lookup tools — agent may need to show selection text first.
                 _SUPPRESS_ON_TOOLS = {
@@ -3266,7 +3266,7 @@ class TStationChatServiceV2:
                             "agent": f"[{source_domain} AGENT]",
                         }
                         original_message_events.append(assistant_msg_event)
-                        logger.info(
+                        logger.debug(
                             f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
                         )
                     # For Path B templates only — LLM wrote the JSON so QC must verify it.
@@ -3288,7 +3288,7 @@ class TStationChatServiceV2:
                 _sub_agent = event.get("agent", "?")
                 if _sub_status == "start":
                     if _lat_prev_agent_done is not None:
-                        logger.info(f"[LATENCY] decide_next_action={(_lat_now - _lat_prev_agent_done)*1000:.0f}ms")
+                        logger.debug(f"[LATENCY] decide_next_action={(_lat_now - _lat_prev_agent_done)*1000:.0f}ms")
                     _lat_agent_start = _lat_now
                     _lat_agent_name = _sub_agent
                     _lat_think_start = None
@@ -3297,7 +3297,7 @@ class TStationChatServiceV2:
                     _lat_first_token_time = None
                     agent_count += 1
                     if agent_count > 1 and draft_response.strip():
-                        logger.info(
+                        logger.debug(
                             f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response"
                         )
                         draft_response = ""
@@ -3306,7 +3306,7 @@ class TStationChatServiceV2:
                         buffered_data_events = []
                 elif _sub_status == "done" and _lat_agent_start is not None:
                     _llm_gen = (_lat_now - _lat_first_token_time) * 1000 if _lat_first_token_time else 0
-                    logger.info(
+                    logger.debug(
                         f"[LATENCY] agent={_lat_agent_name} total={(_lat_now - _lat_agent_start)*1000:.0f}ms "
                         f"llm_gen={_llm_gen:.0f}ms"
                     )
@@ -3317,7 +3317,7 @@ class TStationChatServiceV2:
                 _status_val = event.get("status", "")
                 if _status_val == "tool_start":
                     if _lat_pre_tool_think_start is not None:
-                        logger.info(f"[LATENCY]   llm_pre_tool_think={(_lat_now - _lat_pre_tool_think_start)*1000:.0f}ms")
+                        logger.debug(f"[LATENCY]   llm_pre_tool_think={(_lat_now - _lat_pre_tool_think_start)*1000:.0f}ms")
                         _lat_pre_tool_think_start = None
                     _lat_tool_start[event.get("tool", "?")] = _lat_now
                 elif _status_val == "생각 중...":
@@ -3383,17 +3383,17 @@ class TStationChatServiceV2:
                             _qc_passed = not qc_result or qc_result.upper() == "PASS"
                             logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
                             logger.debug(f"[QC_LAYER] Source: {source_data[:500]}")
-                            logger.info(f"[QC_LAYER] QC result: {qc_result[:500]}")
+                            logger.debug(f"[QC_LAYER] QC result: {qc_result[:500]}")
                             if not _qc_passed:
                                 corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
                                 draft_response = corrected_text or draft_response
                                 _can_apply_json = qc_template_corrections and last_template in _LLM_WRITTEN_TEMPLATES
-                                logger.info(
+                                logger.debug(
                                     f"[QC_LAYER] QC corrected the response"
                                     + (f" (+ {len(qc_template_corrections)} JSON field(s) applied)" if _can_apply_json else " (text only)")
                                 )
                             else:
-                                logger.info("[QC_LAYER] QC passed")
+                                logger.debug("[QC_LAYER] QC passed")
                             # Show verdict + corrected-field count up front so the
                             # qc node tells the story without expanding.
                             _qc_corr_count = len(qc_template_corrections) if qc_template_corrections else 0
@@ -3421,7 +3421,7 @@ class TStationChatServiceV2:
                         correction_evt["template"] = last_template
                         correction_evt["corrections"] = qc_template_corrections
                     yield f"data: {json.dumps(correction_evt, ensure_ascii=False)}\n\n"
-                    logger.info("[QC_LAYER] Parallel mode: emitted qc_correction patch")
+                    logger.debug("[QC_LAYER] Parallel mode: emitted qc_correction patch")
             else:
                 # SEQUENTIAL (default): yield buffered DATA events with corrections applied
                 for buffered_evt in buffered_data_events:
@@ -3473,7 +3473,7 @@ class TStationChatServiceV2:
                 logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")
 
         _t_qc = time.perf_counter()
-        logger.info(
+        logger.debug(
             f"[LATENCY] stream — agents={(_t_agents - _t_stream_start)*1000:.0f}ms "
             f"qc={(_t_qc - _t_agents)*1000:.0f}ms "
             f"total={(_t_qc - _t_stream_start)*1000:.0f}ms"
@@ -3541,7 +3541,7 @@ class TStationChatServiceV2:
                     response_span.end()
                 except Exception as exc:
                     logger.debug("[TRACE] response span failed: %s", exc)
-            logger.info(
+            logger.debug(
                 "[TRACE] Sealed trace output (%d chars) route=%s qc=%s recording=%s",
                 len(draft_response),
                 _route or "?",

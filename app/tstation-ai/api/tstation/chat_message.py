@@ -191,15 +191,15 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
                 elif event_data.get("assistantResponse"):
                     assistant_response_ui = event_data["assistantResponse"]
                 if assistant_response_ui:
-                    logger.info(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
+                    logger.debug(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
                 # template_data = full event (KISS)
                 template_data = event
-                logger.info(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
+                logger.debug(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
 
             # QC parallel mode: override assistantResponse with the verified correction
             if event.get("type") == "qc_correction" and event.get("assistantResponse"):
                 assistant_response_ui = event["assistantResponse"]
-                logger.info(f"[CHAT_MESSAGE] QC correction applied: {assistant_response_ui[:50]}...")
+                logger.debug(f"[CHAT_MESSAGE] QC correction applied: {assistant_response_ui[:50]}...")
 
             # When we receive a message event with assistant content, accumulate it
             if event.get("type") == "message" and event.get("content"):
@@ -214,7 +214,7 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
     if message_to_save:
         service.save_message(session_id, "assistant", message_to_save, template_data=template_data)
-        logger.info(f"[CHAT_MESSAGE] Saved assistant message" +
+        logger.debug(f"[CHAT_MESSAGE] Saved assistant message" +
                   (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
 
         # Fire-and-forget: update the rolling summary when enough new history accumulates.
