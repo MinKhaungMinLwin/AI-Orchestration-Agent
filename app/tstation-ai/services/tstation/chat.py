@@ -761,131 +761,68 @@ class StreamingMultiAgentCoordinator:
     }
 
     @staticmethod
-    def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict, tool_input: dict | None = None):
-        """Persist goods_no, shop_id, and tire_size from successful tool results/inputs to slots.
-
-        Also clears `pending_intent` when the tool that ran fulfills that intent
-        (see `_TOOL_TO_FULFILL`).
-        """
+    def _apply_tool_derived_slots(slots: Any, tool_name: str, parsed_data: dict, tool_input: dict | None = None) -> bool:
+        """Apply tool-derived slot changes in memory; caller persists once after streaming."""
         from schemas.tstation.slots import ConversationSlots
-        from services.tstation.chat_history_service import get_chat_history_service
 
-        # Fulfillment: if this tool satisfies a pending intent AND succeeded, clear it.
-        # Tools return {"status": "success"|"error", ...}; only "success" counts as fulfillment
-        # so a failed price/stock/order lookup still leaves the intent for retry.
-        # Done BEFORE other slot updates so the cleared state is the one we save.
+        changed = False
+
         fulfilled_intent = StreamingMultiAgentCoordinator._TOOL_TO_FULFILL.get(tool_name)
         tool_succeeded = isinstance(parsed_data, dict) and parsed_data.get("status") == "success"
-        if fulfilled_intent and tool_succeeded:
-            try:
-                svc = get_chat_history_service()
-                current_slots = svc.get_slots(session_id)
-                if current_slots.pending_intent == fulfilled_intent:
-                    new_slots = current_slots.model_copy()
-                    new_slots.pending_intent = None
-                    svc.save_slots(session_id, new_slots)
-                    logger.info(
-                        f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
-                    )
-            except Exception as e:
-                logger.warning(f"[SLOTS] Failed to clear pending_intent: {e}")
+        if fulfilled_intent and tool_succeeded and slots.pending_intent == fulfilled_intent:
+            slots.pending_intent = None
+            changed = True
+            logger.info(
+                f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
+            )
 
-        # Map tool names to the slot fields they can provide (from output)
+        if tool_name == "search_car_model_tool" and (slots.tire_size is not None or slots.goods_no is not None):
+            slots.tire_size = None
+            slots.goods_no = None
+            changed = True
+            logger.info("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
+
+        tool_slots = {}
+        if tool_name == "get_products_recommendations_tool" and tool_input:
+            input_tire_size = tool_input.get("tire_size")
+            if input_tire_size:
+                tool_slots["tire_size"] = input_tire_size
+
+        if tool_name == "get_product_description_tool" and tool_input:
+            input_goods_no = tool_input.get("goods_no")
+            if input_goods_no:
+                tool_slots["goods_no"] = input_goods_no
+
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
             "get_store_list_tool": ["shop_id"],
             "get_nearby_stores_tool": ["shop_id"],
             "get_store_inventory_tool": ["shop_id"],
         }
-
-        # When user searches for a different car model, reset tire_size and goods_no
-        # so the previous vehicle's tire_size doesn't persist
-        if tool_name == "search_car_model_tool":
-            try:
-                svc = get_chat_history_service()
-                current_slots = svc.get_slots(session_id)
-                if current_slots.tire_size is not None or current_slots.goods_no is not None:
-                    new_slots = current_slots.model_copy()
-                    new_slots.tire_size = None
-                    new_slots.goods_no = None
-                    svc.save_slots(session_id, new_slots)
-                    logger.info("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
-            except Exception as e:
-                logger.warning(f"[SLOTS] Failed to reset slots on car model search: {e}")
-
-        # Extract tire_size from tool INPUT when recommendation tool is called
-        # This captures the confirmed tire_size that the LLM used for recommendations
-        if tool_name == "get_products_recommendations_tool" and tool_input:
-            input_tire_size = tool_input.get("tire_size")
-            if input_tire_size:
-                try:
-                    svc = get_chat_history_service()
-                    current_slots = svc.get_slots(session_id)
-                    new_slots = ConversationSlots(tire_size=input_tire_size)
-                    updated = current_slots.merge(new_slots)
-                    svc.save_slots(session_id, updated)
-                    logger.info(f"[SLOTS] tire_size saved from {tool_name} input: {input_tire_size}")
-                except Exception as e:
-                    logger.warning(f"[SLOTS] Failed to save tire_size from tool input: {e}")
-
-        # Extract goods_no from tool INPUT when product description tool is called.
-        # Without this, picking a product from the recommend list (Branch S — "1번",
-        # "벤투스 S2 AS") routes through get_product_description_tool but leaves
-        # goods_no=None. The goal-router then treats `model` as missing on the next
-        # "구매할게" turn and routes to Discovery instead of Transaction, breaking
-        # the order auto-chain.
-        if tool_name == "get_product_description_tool" and tool_input:
-            input_goods_no = tool_input.get("goods_no")
-            if input_goods_no:
-                try:
-                    svc = get_chat_history_service()
-                    current_slots = svc.get_slots(session_id)
-                    new_slots = ConversationSlots(goods_no=input_goods_no)
-                    updated = current_slots.merge(new_slots)
-                    svc.save_slots(session_id, updated)
-                    logger.info(f"[SLOTS] goods_no saved from {tool_name} input: {input_goods_no}")
-                except Exception as e:
-                    logger.warning(f"[SLOTS] Failed to save goods_no from tool input: {e}")
-
         fields = tool_slot_extractors.get(tool_name)
-        if not fields:
-            return
+        if fields:
+            data = parsed_data.get("data", parsed_data)
+            if isinstance(data, dict) and "items" in data:
+                items = data["items"]
+                data = items[0] if isinstance(items, list) and len(items) == 1 else None
+            elif isinstance(data, dict) and "stores" in data:
+                stores = data["stores"]
+                data = stores[0] if isinstance(stores, list) and len(stores) == 1 else None
 
-        # Extract values from tool result data
-        tool_slots = {}
-        data = parsed_data.get("data", parsed_data)
+            if isinstance(data, dict):
+                for field in fields:
+                    val = data.get(field)
+                    if val:
+                        tool_slots[field] = val
 
-        # Handle list results (e.g., search results) — only auto-fill if exactly 1 item
-        if isinstance(data, dict) and "items" in data:
-            items = data["items"]
-            if isinstance(items, list) and len(items) == 1:
-                data = items[0]
-            else:
-                return  # Multiple or no results — don't auto-fill
-        elif isinstance(data, dict) and "stores" in data:
-            stores = data["stores"]
-            if isinstance(stores, list) and len(stores) == 1:
-                data = stores[0]
-            else:
-                return
+        if tool_slots:
+            updated = slots.merge(ConversationSlots(**tool_slots))
+            if updated.model_dump() != slots.model_dump():
+                slots.__dict__.update(updated.__dict__)
+                changed = True
+                logger.info(f"[SLOTS] Tool-derived slots staged from {tool_name}: {tool_slots}")
 
-        for field in fields:
-            val = data.get(field) if isinstance(data, dict) else None
-            if val:
-                tool_slots[field] = val
-
-        if not tool_slots:
-            return
-
-        try:
-            svc = get_chat_history_service()
-            current_slots = svc.get_slots(session_id)
-            new_slots = ConversationSlots(**tool_slots)
-            updated = current_slots.merge(new_slots)
-            svc.save_slots(session_id, updated)
-            logger.info(f"[SLOTS] Tool-derived slots saved from {tool_name}: {tool_slots}")
-        except Exception as e:
-            logger.warning(f"[SLOTS] Failed to save tool-derived slots: {e}")
+        return changed
 
     def stream(
         self,
@@ -902,6 +839,7 @@ class StreamingMultiAgentCoordinator:
         classify_future: concurrent.futures.Future | None = None,
         speculative_guard: dict | None = None,
         routing_result: MultiAgentDomain | None = None,
+        initial_slots: Any | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -951,6 +889,8 @@ class StreamingMultiAgentCoordinator:
         accumulated_context = {}
         accumulated_tool_data = []  # Collect tool outputs for UI Template Agent
         domain_data_event_emitted = False  # Domain agent emitted a `data` event itself
+        pending_slots = initial_slots.model_copy() if initial_slots is not None else None
+        pending_slots_dirty = False
 
         is_first_agent = True
 
@@ -1201,11 +1141,11 @@ class StreamingMultiAgentCoordinator:
                                     "data": parsed,
                                 })
 
-                                # Persist tool-derived goods_no, shop_id, and tire_size to slots
-                                if session_id and isinstance(parsed, dict):
-                                    self._save_tool_derived_slots(
-                                        session_id, tool_name, parsed, event.get("input", {})
-                                    )
+                                # Stage tool-derived slot changes in memory; persist once after streaming.
+                                if pending_slots is not None and isinstance(parsed, dict):
+                                    pending_slots_dirty = self._apply_tool_derived_slots(
+                                        pending_slots, tool_name, parsed, event.get("input", {})
+                                    ) or pending_slots_dirty
 
                             except (json.JSONDecodeError, TypeError):
                                 accumulated_tool_data.append({
@@ -1281,6 +1221,7 @@ class StreamingMultiAgentCoordinator:
                     skip_decision=skip_decision,
                     slot_context_with_intent=slot_context_with_intent,
                     routing_result=restart_routing_result,
+                    initial_slots=pending_slots,
                 )
                 return
 
@@ -1304,21 +1245,13 @@ class StreamingMultiAgentCoordinator:
                 # directly to the next domain in `domains`.
                 #
                 # BUT: only proceed if Discovery actually resolved a single goods_no.
-                # `_save_tool_derived_slots` (search_product_tool extractor) only
-                # writes goods_no to slots when the tool returns exactly 1 item;
+                # `_apply_tool_derived_slots` (search_product_tool extractor) only
+                # stages goods_no when the tool returns exactly 1 item;
                 # 0/multiple-result cases leave goods_no=None and Discovery is
                 # already in clarification/selection mode. Chaining Transaction on
                 # top would produce a contradictory "상품 검색이 필요합니다" fallback.
                 if skip_decision and len(domains) >= 2:
-                    goods_no_resolved = False
-                    if session_id:
-                        try:
-                            from services.tstation.chat_history_service import get_chat_history_service
-
-                            post_slots = get_chat_history_service().get_slots(session_id)
-                            goods_no_resolved = post_slots.goods_no is not None
-                        except Exception as e:
-                            logger.warning(f"[COORDINATOR] Failed to verify goods_no post-Discovery: {e}")
+                    goods_no_resolved = pending_slots is not None and pending_slots.goods_no is not None
                     if not goods_no_resolved:
                         logger.info(
                             "[COORDINATOR] skip_decision=True but Discovery did not resolve "
@@ -1368,15 +1301,7 @@ class StreamingMultiAgentCoordinator:
                     and not last_agent_called_tools
                     and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요", full_response or "")
                 ):
-                    goods_no_still_none = True
-                    if session_id:
-                        try:
-                            from services.tstation.chat_history_service import get_chat_history_service
-
-                            post_slots = get_chat_history_service().get_slots(session_id)
-                            goods_no_still_none = post_slots.goods_no is None
-                        except Exception as e:
-                            logger.warning(f"[COORDINATOR] P1-B slot check failed: {e}")
+                    goods_no_still_none = pending_slots is None or pending_slots.goods_no is None
                     if goods_no_still_none:
                         logger.warning(
                             "[COORDINATOR] P1-B stall recovery: TX-only emitted "
@@ -1419,15 +1344,7 @@ class StreamingMultiAgentCoordinator:
                         full_response or "",
                     )
                 ):
-                    goods_no_set = False
-                    if session_id:
-                        try:
-                            from services.tstation.chat_history_service import get_chat_history_service
-
-                            post_slots = get_chat_history_service().get_slots(session_id)
-                            goods_no_set = post_slots.goods_no is not None
-                        except Exception as e:
-                            logger.warning(f"[COORDINATOR] P1-D slot check failed: {e}")
+                    goods_no_set = pending_slots is not None and pending_slots.goods_no is not None
                     if goods_no_set:
                         logger.warning(
                             "[COORDINATOR] P1-D stall recovery: DISCOVERY-only emitted "
@@ -1509,6 +1426,9 @@ class StreamingMultiAgentCoordinator:
                 },
                 "source_domain": domain_key if "domain_key" in locals() else "ui_template",
             }
+
+        if pending_slots_dirty and pending_slots is not None:
+            yield {"type": "internal_slots", "slots": pending_slots}
 
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
@@ -2255,7 +2175,7 @@ class TStationChatServiceV2:
         shop_id of the matched store.
 
         Mirrors _resolve_goods_no_from_selection for stores. When a store list
-        had more than 1 store, `_save_tool_derived_slots` skips shop_id
+        had more than 1 store, `_apply_tool_derived_slots` skips shop_id
         auto-save (can't guess which one). This resolver fills that gap by
         matching the user's selection reply to the prior list.
 
@@ -2639,7 +2559,7 @@ class TStationChatServiceV2:
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
             # the most recent get_nearby_stores_tool / get_store_list_tool result.
-            # `_save_tool_derived_slots` only auto-saves shop_id when the tool returned
+            # `_apply_tool_derived_slots` only auto-saves shop_id when the tool returned
             # exactly 1 store — multi-result lists (nearby stores within radius, region
             # searches) leave shop_id=None. When the user then picks a store from that
             # list, STEP 5A Step 4 needs shop_id to call get_store_schedule_tool; without
@@ -3052,6 +2972,7 @@ class TStationChatServiceV2:
                     slot_context_with_intent=slot_context_with_intent,
                     classify_future=speculative_classify_future,
                     routing_result=routing_result,
+                    initial_slots=merged_slots,
                     parent_span=_parent_span,
                     parent_span_id=_parent_span_id,
                 ),
@@ -3080,6 +3001,7 @@ class TStationChatServiceV2:
                 slot_context_with_intent=slot_context_with_intent,
                 classify_future=speculative_classify_future,
                 routing_result=routing_result,
+                initial_slots=merged_slots,
                 parent_span=_parent_span,
                 parent_span_id=_parent_span_id,
             ):
@@ -3129,6 +3051,7 @@ class TStationChatServiceV2:
         slot_context_with_intent: str | None = None,
         classify_future: concurrent.futures.Future | None = None,
         routing_result: MultiAgentDomain | None = None,
+        initial_slots: Any | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -3155,6 +3078,7 @@ class TStationChatServiceV2:
         agent_count = 0  # Track how many agents have started
         next_quick_reply_domain_values: list[str] = []
         next_predicted_domain_values: list[str] = []
+        pending_slots = None
         # Hoisted so the trace summary at end-of-stream can reference QC verdict
         # even when the draft was empty and the QC block below never ran.
         _qc_passed = True
@@ -3204,6 +3128,7 @@ class TStationChatServiceV2:
             classify_future=classify_future,
             speculative_guard=speculative_guard,
             routing_result=routing_result,
+            initial_slots=initial_slots,
         ):
             _lat_now = time.perf_counter()
             event_type = event.get("type")
@@ -3265,6 +3190,10 @@ class TStationChatServiceV2:
                     if ctx_item:
                         tool_context_items.append(ctx_item)
 
+                continue
+
+            if event_type == "internal_slots":
+                pending_slots = event.get("slots")
                 continue
 
             # --- INTERCEPT EARLY DONE EVENT ---
@@ -3477,7 +3406,12 @@ class TStationChatServiceV2:
                     yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
 
         # 4. PERSIST NEXT-TURN CONTEXT
-        if session_id and (tool_context_items or next_quick_reply_domain_values or next_predicted_domain_values):
+        if session_id and (
+            tool_context_items
+            or next_quick_reply_domain_values
+            or next_predicted_domain_values
+            or pending_slots is not None
+        ):
             try:
                 from services.tstation.chat_history_service import get_chat_history_service
 
@@ -3491,6 +3425,8 @@ class TStationChatServiceV2:
                         predicted_domains=next_predicted_domain_values,
                         user_id=user_id,
                     )
+                    if pending_slots is not None:
+                        await history_svc.save_slots_async(session_id, pending_slots, user_id=user_id)
 
                 _anyio_ft.run(_save_stream_context)
             except Exception as e:
