@@ -814,6 +814,175 @@ def get_multi_store_schedule_tool(
     })
 
 
+def _extract_stores(data: Any) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    stores = data.get("stores") or data.get("items") or []
+    return stores if isinstance(stores, list) else []
+
+
+def _shop_id(store: dict) -> str | None:
+    value = store.get("shop_id") or store.get("shopId") or store.get("shop_seq") or store.get("shopSeq")
+    return str(value) if value else None
+
+
+def _extract_logistics_qty(data: Any) -> int:
+    if not isinstance(data, dict):
+        return 0
+    value = data.get("logistics_qty") or data.get("logisticsQty") or data.get("qty") or 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_inventory_shop_ids(data: Any, key: str) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    values = data.get(key) or data.get(key[0].lower() + key[1:]) or []
+    if not isinstance(values, list):
+        return []
+    shop_ids: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            sid = item.get("shop_id") or item.get("shopId") or item.get("shop_seq") or item.get("shopSeq")
+        else:
+            sid = item
+        if sid:
+            shop_ids.append(str(sid))
+    return shop_ids
+
+
+@tool
+@tool_cache(ttl=120)
+def transaction_store_preview_tool(
+    goods_no: str,
+    ord_qty: int,
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    user_xpos: float | None = None,
+    user_ypos: float | None = None,
+    include_price: bool = True,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+):
+    """
+    Composite preview for purchase/store flow: store candidates + price + stock + earliest schedule.
+
+    Use when goods_no and quantity are known and the user wants nearby/regional stores,
+    stock, or available reservation dates. This is a preview only; never creates an order.
+    """
+    logger.info(
+        "[TOOL][transaction_store_preview_tool] Called with: goods_no=%s, ord_qty=%s, region_code=%s, "
+        "store_nm=%s, user_xpos=%s, user_ypos=%s, include_price=%s",
+        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, include_price,
+    )
+
+    if not goods_no or ord_qty < 1:
+        return _error_response(None, "invalid_input", "goods_no and ord_qty are required")
+
+    if store_nm:
+        store_nm = normalize_brand_name(store_nm)
+
+    if user_xpos is not None and user_ypos is not None:
+        store_response = get_store_list(
+            client=get_client(),
+            xpos=user_xpos,
+            ypos=user_ypos,
+            radius_km=10.0,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
+    else:
+        store_response = get_store_list(
+            client=get_client(),
+            region_code=region_code,
+            store_nm=store_nm,
+            limit=10,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
+
+    if store_response.parsed is None:
+        return _error_response(
+            store_response.status_code,
+            f"HTTP {store_response.status_code}",
+            store_response.content.decode(errors="ignore") or "Failed to get store candidates",
+        )
+
+    store_data = _to_dict(store_response.parsed)
+    stores = _extract_stores(store_data)
+    candidates = sorted(
+        stores,
+        key=lambda s: (
+            not bool(s.get("is_installable", False)),
+            s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
+        ),
+    )[:3]
+    shop_ids = [sid for store in candidates if (sid := _shop_id(store))]
+    if not shop_ids:
+        return _success_response(store_response.status_code, {
+            "stores": [],
+            "message": "No store candidates found",
+            "price": None,
+            "logistics": None,
+            "inventory": None,
+            "schedule": None,
+        })
+
+    goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
+    shop_id_list = [{"shopId": sid} for sid in shop_ids]
+
+    def _fetch_logistics():
+        body = LogisticsRequest(goods_no=goods_no)
+        return get_logistics_inventory(client=get_client(), body=body)
+
+    def _fetch_store_inventory():
+        g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
+        s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
+        return get_store_inventory(client=get_client(), body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
+
+    def _fetch_price():
+        return get_price(client=get_client(), goods_no=goods_no, member_type=None)
+
+    tasks = {"logistics": _fetch_logistics, "store_inventory": _fetch_store_inventory}
+    if include_price:
+        tasks["price"] = _fetch_price
+
+    results: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        futures = {executor.submit(fn): name for name, fn in tasks.items()}
+        for future in as_completed(futures):
+            name = futures[future]
+            response = future.result()
+            results[name] = _to_dict(response.parsed) if response.parsed is not None else None
+
+    logistics_qty = _extract_logistics_qty(results.get("logistics"))
+    today_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "todayShopArray")
+    tna_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "tnaShopArray")
+    schedule = get_multi_store_schedule_tool.func(
+        shop_id_list=shop_ids,
+        today_shop_ids=today_shop_ids,
+        tna_shop_ids=tna_shop_ids,
+        has_logistics=logistics_qty > 0,
+    )
+
+    return _success_response(200, {
+        "price": results.get("price"),
+        "logistics": results.get("logistics"),
+        "inventory": results.get("store_inventory"),
+        "schedule": schedule.get("data") if isinstance(schedule, dict) else schedule,
+        "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
+        "candidate_shop_ids": shop_ids,
+    })
+
+
 # =====================================================
 # ORDER TOOLS
 # =====================================================
