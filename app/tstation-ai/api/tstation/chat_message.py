@@ -59,6 +59,12 @@ def _valid_tracing_id(value: str | None) -> str | None:
     return None
 
 
+def _ensure_session_owner(service, session_id: str, user_id: str) -> None:
+    """Hide missing and cross-user sessions behind the same 404."""
+    if not service.session_exists(session_id, user_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
 @router.post("/chat", dependencies=[Depends(get_api_key)])
 async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     """
@@ -273,12 +279,9 @@ async def get_history(
     user_id = user.get("user_id")
 
     service = get_chat_history_service()
+    _ensure_session_owner(service, session_id, user_id)
 
-    # Try to get history - will return empty if session doesn't exist yet
-    try:
-        messages = service.get_history(session_id)
-    except Exception:
-        messages = []
+    messages = service.get_history(session_id)
 
     return ChatHistoryResponse(
         session_id=session_id,
@@ -317,9 +320,7 @@ async def append_message(
 
     service = get_chat_history_service()
 
-    # Verify session exists for this user
-    if not service.session_exists(request.session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(service, request.session_id, user_id)
 
     # Validate role
     if request.role not in ("user", "assistant"):
@@ -367,9 +368,7 @@ async def delete_session(
 
     service = get_chat_history_service()
 
-    # Verify session belongs to user
-    if not service.session_exists(session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    _ensure_session_owner(service, session_id, user_id)
 
     messages_deleted = service.delete_session(session_id)
 
