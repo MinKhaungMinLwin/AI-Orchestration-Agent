@@ -3445,21 +3445,22 @@ class TStationChatServiceV2:
             _last_user = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
             )
-            # Structured summary on the trace root so the Langfuse trace list shows
-            # route / tools / template / QC / latency at a glance — no need to open
-            # each trace to figure out what happened.
+            # Trace `output` carries the actual assistant response so the Langfuse
+            # trace list shows what the user saw. Routing / tool / template / QC
+            # metadata moves to `metadata` (and the `qc` child span already holds
+            # the verdict + result for drill-down).
             _route = "→".join(d.value for d in domains) if domains else ""
-            _summary = {
+            _trace_metadata = {
                 "route": _route,
                 "tools": sorted(called_tool_names),
                 "template": last_template,
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "latency_ms": int((_t_qc - _t_stream_start) * 1000),
-                "answer": draft_response[:120],
             }
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                output=_truncate(_summary),
+                output=_truncate(draft_response),
+                metadata=_trace_metadata,
             )
             parent_span.end()
 
