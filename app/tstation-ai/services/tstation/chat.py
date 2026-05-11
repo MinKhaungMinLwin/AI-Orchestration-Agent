@@ -154,6 +154,7 @@ def decide_next_action(
         parent_span_id=parent_span_id,
         tags=["router", "decide_next_action"],
         prompt_name="router",
+        run_name="💭 next_action",
     )
 
     try:
@@ -605,6 +606,7 @@ class StreamingMultiAgentCoordinator:
                 parent_span_id=parent_span_id,
                 tags=["router", run_name],
                 prompt_name="router",
+                run_name=f"💭 {run_name}",
             )
             raw_result = structured_model.invoke(all_messages, config=trace_config)
 
@@ -1091,6 +1093,7 @@ class StreamingMultiAgentCoordinator:
                     parent_span_id=_agent_span.id or parent_span_id,
                     tags=[domain_key, "agent"],
                     prompt_name=f"{domain_key}_agent",
+                    run_name=f"💭 {domain_key}_agent",
                 )
                 if speculative_guard:
                     speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
@@ -3338,6 +3341,7 @@ class TStationChatServiceV2:
                                 parent_span_id=_qc_span.id or parent_span_id,
                                 tags=["qc"],
                                 prompt_name="qc_agent",
+                                run_name="💭 qc_check",
                             )
                             async def _run_qc():
                                 return await ainvoke_qc(
