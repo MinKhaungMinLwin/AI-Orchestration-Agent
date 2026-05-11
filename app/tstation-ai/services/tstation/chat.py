@@ -3482,13 +3482,19 @@ class TStationChatServiceV2:
             # actually saw — regardless of which child chains ran earlier.
             if trace_id and _tracing_enabled:
                 try:
+                    # Name the final span with the user's question — Langfuse v3
+                    # also derives trace.name from the latest observation, so a
+                    # generic "response" name would override the user-message
+                    # trace name we set on the parent span.
+                    _response_span_name = (_last_user[:60] if _last_user else "response")
                     response_span = tracer.start_span(
-                        name="✅ response",
+                        name=_response_span_name,
                         trace_context={"trace_id": trace_id, "parent_span_id": parent_span_id},
                         input=_trace_input,
                     )
                     response_span.update(output=_trace_output)
                     response_span.update_trace(
+                        name=_response_span_name,
                         input=_trace_input,
                         output=_trace_output,
                     )
