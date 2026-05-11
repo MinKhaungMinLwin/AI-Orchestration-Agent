@@ -39,7 +39,6 @@ from config.tracing import (
     tracer,
     set_trace_name as _set_trace_name,
 )
-import anyio.from_thread as _anyio_ft
 
 logger = logging.getLogger(__name__)
 
@@ -3035,7 +3034,7 @@ class TStationChatServiceV2:
             final_content = ""
             last_message_content = ""
 
-            for event_str in TStationChatServiceV2._stream_response_multi(
+            async for event_str in TStationChatServiceV2._stream_response_multi(
                 messages,
                 domains,
                 slot_context,
@@ -3083,7 +3082,7 @@ class TStationChatServiceV2:
         yield "data: [DONE]\n\n"
 
     @staticmethod
-    def _stream_response_multi(
+    async def _stream_response_multi(
         messages: list[dict],
         domains: list[MultiAgentDomain.Domain] | None = None,
         slot_context: str | None = None,
@@ -3377,11 +3376,9 @@ class TStationChatServiceV2:
                                 prompt_name="qc_agent",
                                 run_name="💭 qc_check",
                             )
-                            async def _run_qc():
-                                return await ainvoke_qc(
-                                    QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
-                                )
-                            qc_result = _anyio_ft.run(_run_qc)
+                            qc_result = await ainvoke_qc(
+                                QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
+                            )
                             qc_result = qc_result.strip()
                             _qc_passed = not qc_result or qc_result.upper() == "PASS"
                             logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
@@ -3463,18 +3460,15 @@ class TStationChatServiceV2:
 
                 history_svc = get_chat_history_service()
 
-                async def _save_stream_context():
-                    await history_svc.finalize_chat_context_async(
-                        session_id=session_id,
-                        tool_data=tool_context_items,
-                        quick_reply_domains=next_quick_reply_domain_values,
-                        predicted_domains=next_predicted_domain_values,
-                        user_id=user_id,
-                    )
-                    if pending_slots is not None:
-                        await history_svc.save_slots_async(session_id, pending_slots, user_id=user_id)
-
-                _anyio_ft.run(_save_stream_context)
+                await history_svc.finalize_chat_context_async(
+                    session_id=session_id,
+                    tool_data=tool_context_items,
+                    quick_reply_domains=next_quick_reply_domain_values,
+                    predicted_domains=next_predicted_domain_values,
+                    user_id=user_id,
+                )
+                if pending_slots is not None:
+                    await history_svc.save_slots_async(session_id, pending_slots, user_id=user_id)
             except Exception as e:
                 logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")
 

@@ -2,6 +2,7 @@
 T-Station BE API Client with shared connection pooling and backend latency tracing.
 """
 
+import contextvars
 import logging
 import threading
 import time
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 _BE_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 _BE_HTTP_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0)
+
+
+_tstation_be_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("tstation_be_token", default=None)
 
 
 class _InstrumentedBackendClient:
@@ -80,20 +84,21 @@ class TstationBeClient:
         )
 
     def set_token(self, token: str | None) -> None:
-        """Set access token for current thread."""
+        """Set access token for the current request context."""
         self._token_state.token = token
+        _tstation_be_token.set(token)
 
     def get_client(self, token: str | None = None) -> AuthenticatedClient:
         """
         Get authenticated client with access token.
 
         Args:
-            token: Explicit token. If None, uses token stored for current thread.
+            token: Explicit token. If None, uses token stored for current request.
 
         Returns:
             AuthenticatedClient using the shared backend HTTP connection pool.
         """
-        use_token = token if token is not None else getattr(self._token_state, "token", None)
+        use_token = token if token is not None else _tstation_be_token.get() or getattr(self._token_state, "token", None)
         client = AuthenticatedClient(
             base_url=settings.TSTATION_BE_API,
             token=use_token or "",
