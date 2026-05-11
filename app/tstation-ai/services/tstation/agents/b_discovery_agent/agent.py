@@ -9,6 +9,8 @@ from services.tstation.agents.b_discovery_agent.tools import (
     search_youtube_video_tool,
     get_events_tool,
     get_deals_tool,
+    get_event_applicable_products_tool,
+    get_product_applicable_events_tool,
     search_car_model_groups_tool,
     get_car_trims_tool,
 )
@@ -94,6 +96,8 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | search_youtube_video_tool | User asks for video reviews — call immediately, no clarification |
 | get_events_tool | User asks about 이벤트 |
 | get_deals_tool | User asks about 기획전 |
+| get_event_applicable_products_tool | User asks "이벤트 적용 가능한 상품 / 이벤트 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
+| get_product_applicable_events_tool | User asks "이 상품에 적용 가능한 이벤트 / 이 타이어 사면 어떤 행사 / 이 상품에 어떤 이벤트가 적용돼?" — pass goods_no |
 
 
 ## PRODUCT METADATA REFERENCE (등급/퍼포먼스 답변용)
@@ -575,6 +579,8 @@ Trigger: User wants to ORDER by product name + size (goods_no unknown)
 - 이벤트 / 이벤트 목록 / 진행 중인 이벤트 / 행사 → call `get_events_tool(lang_cd="ko")` IMMEDIATELY (no clarifying question)
 - 기획전 / 기획전 목록 / 기획전 보여 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
+- 이벤트 적용 가능 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" → call `get_event_applicable_products_tool(evt_no_list=[...])` with the evt_no(s) from prior conversation. evt_no 가 없으면 먼저 `get_events_tool` 로 목록을 보여주고 사용자 선택을 받는다.
+- "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 먼저 상품 검색/추천을 통해 확보한 뒤 호출.
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
 
 ⚠️ ABSOLUTE: even if conversation context is order/cart/store-heavy (`[목표: 주문 진행]`, `[확인된 고객 정보]` populated), the keyword-matched intents above OVERRIDE the slot context. The router has already reclassified to DISCOVERY — Discovery's job is to fulfill the events/deals/video request, NOT to redirect back to ordering.
@@ -840,6 +846,8 @@ class DiscoverySubAgent(BaseAgent):
         # Event/Deal
         "get_events_tool": "Price",
         "get_deals_tool": "Price",
+        "get_event_applicable_products_tool": "Price",
+        "get_product_applicable_events_tool": "Price",
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
         "get_final_price_tool": "Price",
@@ -862,6 +870,8 @@ class DiscoverySubAgent(BaseAgent):
                 search_youtube_video_tool,
                 get_events_tool,
                 get_deals_tool,
+                get_event_applicable_products_tool,
+                get_product_applicable_events_tool,
                 compare_discount_tool,
                 get_final_price_tool,
             ],

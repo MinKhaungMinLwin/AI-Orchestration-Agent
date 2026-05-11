@@ -30,6 +30,8 @@ from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 # Event/Deal
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_events_api_events_get import sync_detailed as get_events
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_event_applicable_products_multi_api_events_applicable_products_get import sync_detailed as get_event_applicable_products
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_product_applicable_events_api_events_applicable_events_get import sync_detailed as get_product_applicable_events
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
@@ -62,6 +64,8 @@ DOMAIN_TOOL_MAP = {
         # Event/Deal
         "get_events",
         "get_deals",
+        "get_event_applicable_products",
+        "get_product_applicable_events",
     },
     "transaction": {
         # Price
@@ -773,6 +777,75 @@ def get_events_tool(lang_cd: str = "ko"):
     except Exception as e:
         logger.exception("[TOOL][get_events_tool] Failed")
         return _error_response(None, str(e), "Failed to get events")
+
+
+@tool
+@tool_cache(ttl=600)
+def get_event_applicable_products_tool(evt_no_list: list[str]):
+    """이벤트 적용 가능 상품 조회 — 여러 이벤트에 적용 가능한 상품 목록을 이벤트별 그룹핑하여 반환.
+
+    Use when user asks "이 이벤트에 어떤 상품이 적용돼?", "이벤트 대상 상품 보여줘",
+    "이벤트 적용 가능한 상품 알려줘" 등. 단일 이벤트도 1개 list 로 전달.
+
+    Args:
+        evt_no_list (list[str]): 이벤트 번호 목록 (1~10개). 예: ["E000001234", "E000005678"].
+
+    Example: {"evt_no_list": ["E000001234", "E000005678"]}
+    """
+    logger.info("[TOOL][get_event_applicable_products_tool] Called with: evt_no_list=%s", evt_no_list)
+
+    if not evt_no_list:
+        return _error_response(None, "evt_no_list is empty", "evt_no_list는 최소 1개 이상 필요합니다.")
+
+    # BE 는 [E1, E2] 또는 E1,E2 형식의 단일 쿼리 문자열을 받음
+    evt_no_param = f"[{','.join(str(e).strip() for e in evt_no_list)}]"
+
+    try:
+        response = get_event_applicable_products(client=get_client(), evt_no=evt_no_param)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get applicable products"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_event_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to get applicable products")
+
+
+@tool
+@tool_cache(ttl=600)
+def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
+    """상품 적용 가능 이벤트 조회 — 특정 상품에 적용 가능한 진행 중 이벤트 목록.
+
+    Use when user asks "이 상품에 어떤 이벤트가 적용돼?", "이 상품에 적용 가능한 이벤트 알려줘",
+    "지금 이 타이어 사면 어떤 행사 받을 수 있어?" 등. 진행 중(EVT_PRGS_STAT_CD='10')
+    이벤트만 반환되며 50(상품 매핑) / 80(패턴 매핑) 양쪽 모두 포함.
+
+    Args:
+        goods_no (str): 상품 번호 (예: 'G000000317693').
+        lang_cd (str): 이벤트명 언어 코드. Default 'ko'.
+
+    Example: {"goods_no": "G000000317693", "lang_cd": "ko"}
+    """
+    logger.info(
+        "[TOOL][get_product_applicable_events_tool] Called with: goods_no=%s, lang_cd=%s",
+        goods_no, lang_cd,
+    )
+
+    try:
+        response = get_product_applicable_events(client=get_client(), goods_no=goods_no, lang_cd=lang_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get applicable events"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_product_applicable_events_tool] Failed")
+        return _error_response(None, str(e), "Failed to get applicable events")
 
 
 @tool

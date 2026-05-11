@@ -25,6 +25,8 @@ from .discount_price_item import DiscountPriceItem
 from .discount_price_response import DiscountPriceResponse
 from .escalation_request import EscalationRequest
 from .escalation_response import EscalationResponse
+from .event_applicable_product_item import EventApplicableProductItem
+from .event_applicable_products_group import EventApplicableProductsGroup
 from .event_item import EventItem
 from .event_list_response import EventListResponse
 from .faq_item import FaqItem
@@ -38,6 +40,7 @@ from .member_car_info import MemberCarInfo
 from .member_car_list_response import MemberCarListResponse
 from .message_create import MessageCreate
 from .message_response import MessageResponse
+from .multi_event_applicable_products_response import MultiEventApplicableProductsResponse
 from .my_coupon_item import MyCouponItem
 from .my_coupon_response import MyCouponResponse
 from .order_delivery_response import OrderDeliveryResponse
@@ -46,6 +49,8 @@ from .order_list_response import OrderListResponse
 from .place_search_item import PlaceSearchItem
 from .place_search_response import PlaceSearchResponse
 from .price_response import PriceResponse
+from .product_applicable_event_item import ProductApplicableEventItem
+from .product_applicable_events_response import ProductApplicableEventsResponse
 from .product_deals_response import ProductDealsResponse
 from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
@@ -100,6 +105,8 @@ __all__ = (
     "DiscountPriceResponse",
     "EscalationRequest",
     "EscalationResponse",
+    "EventApplicableProductItem",
+    "EventApplicableProductsGroup",
     "EventItem",
     "EventListResponse",
     "FaqItem",
@@ -113,6 +120,7 @@ __all__ = (
     "MemberCarListResponse",
     "MessageCreate",
     "MessageResponse",
+    "MultiEventApplicableProductsResponse",
     "MyCouponItem",
     "MyCouponResponse",
     "OrderDeliveryResponse",
@@ -121,6 +129,8 @@ __all__ = (
     "PlaceSearchItem",
     "PlaceSearchResponse",
     "PriceResponse",
+    "ProductApplicableEventItem",
+    "ProductApplicableEventsResponse",
     "ProductDealsResponse",
     "ProductDescResponse",
     "ProductImage",
