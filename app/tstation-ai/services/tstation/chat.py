@@ -3082,6 +3082,9 @@ class TStationChatServiceV2:
         agent_count = 0  # Track how many agents have started
         next_quick_reply_domain_values: list[str] = []
         next_predicted_domain_values: list[str] = []
+        # Hoisted so the trace summary at end-of-stream can reference QC verdict
+        # even when the draft was empty and the QC block below never ran.
+        _qc_passed = True
 
         # Detailed latency tracking state
         _lat_tool_start: dict[str, float] = {}
@@ -3416,9 +3419,21 @@ class TStationChatServiceV2:
             _last_user = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
             )
+            # Structured summary on the trace root so the Langfuse trace list shows
+            # route / tools / template / QC / latency at a glance — no need to open
+            # each trace to figure out what happened.
+            _route = "→".join(d.value for d in domains) if domains else ""
+            _summary = {
+                "route": _route,
+                "tools": sorted(called_tool_names),
+                "template": last_template,
+                "qc": "PASS" if _qc_passed else "CORRECTED",
+                "latency_ms": int((_t_qc - _t_stream_start) * 1000),
+                "answer": draft_response[:120],
+            }
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                output=_truncate(draft_response),
+                output=_truncate(_summary),
             )
             parent_span.end()
 
