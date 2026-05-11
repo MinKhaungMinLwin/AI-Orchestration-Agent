@@ -1,6 +1,9 @@
 set dotenv-load
 export PROJECT_NAME := env("PROJECT_NAME", "tstation-ai")
+export PROJECT_PREFIX := env("PROJECT_PREFIX", "tstation-agent")
 export ENV := env("ENV", "local")
+export COMPOSE_PROJECT_NAME := env("COMPOSE_PROJECT_NAME", PROJECT_PREFIX + "-" + ENV)
+export REMOTE_COMPOSE_FILE := env("COMPOSE_FILE", "docker/docker-compose.yml")
 
 # Default is helper
 default:
@@ -49,7 +52,7 @@ fmt:
 
 # Deploy Local
 start-local:
-    @echo "Starting PROJECT '{{PROJECT_NAME}}' with ENVIRONMENT: {{ENV}}"
+    @echo "Starting PROJECT '{{PROJECT_NAME}}-{{ENV}}' with ENVIRONMENT: {{ENV}}"
     docker compose --env-file .env \
         -p {{PROJECT_NAME}}-{{ENV}} \
         -f docker_local/docker-compose-llm.yml \
@@ -82,7 +85,7 @@ clean-orphans:
     fi
     echo "Sweeping orphan compose projects..."
     for proj in {{KNOWN_ORPHAN_PROJECTS}}; do
-        if [ "$proj" = "{{PROJECT_NAME}}-{{ENV}}" ]; then
+        if [ "$proj" = "{{COMPOSE_PROJECT_NAME}}" ]; then
             echo "  '$proj' matches current deployment — skipping"
             continue
         fi
@@ -96,39 +99,83 @@ clean-orphans:
     echo "Orphan cleanup done."
 
 precreate-remote:
-    @echo "Building Docker images without cache for ENVIRONMENT: {{ENV}}"
+    @echo "Building Docker images without cache for PROJECT '{{COMPOSE_PROJECT_NAME}}'"
     docker compose --env-file .env \
-        -p {{PROJECT_NAME}}-{{ENV}} \
-        -f docker/docker-compose.yml \
+        -p {{COMPOSE_PROJECT_NAME}} \
+        -f {{REMOTE_COMPOSE_FILE}} \
         up --build --force-recreate --no-start
 
 stop-remote:
     docker compose --env-file .env \
-        -p {{PROJECT_NAME}}-{{ENV}} \
-        -f docker/docker-compose.yml \
+        -p {{COMPOSE_PROJECT_NAME}} \
+        -f {{REMOTE_COMPOSE_FILE}} \
         down
 
 
 start-remote: clean-orphans precreate-remote stop-remote
-    @echo "Starting PROJECT '{{PROJECT_NAME}}' with ENVIRONMENT: {{ENV}}"
+    @echo "Starting PROJECT '{{COMPOSE_PROJECT_NAME}}' with ENVIRONMENT: {{ENV}}"
     docker compose --env-file .env \
-        -p {{PROJECT_NAME}}-{{ENV}} \
-        -f docker/docker-compose.yml \
+        -p {{COMPOSE_PROJECT_NAME}} \
+        -f {{REMOTE_COMPOSE_FILE}} \
         up --build -d
 
-stop:
+up service="tstation-ai":
+    @if [ "{{ENV}}" = "local" ]; then \
+        docker compose --env-file .env \
+            -p {{PROJECT_NAME}}-{{ENV}} \
+            -f docker_local/docker-compose-llm.yml \
+            -f docker_local/docker-compose-app.yml \
+            up --build -d {{service}}; \
+    else \
+        docker compose --env-file .env \
+            -p {{COMPOSE_PROJECT_NAME}} \
+            -f {{REMOTE_COMPOSE_FILE}} \
+            up -d --build {{service}}; \
+    fi
+
+down:
     @if [ "{{ENV}}" = "local" ]; then \
         just stop-local; \
     else \
-        just stop-remote; \
+        docker compose --env-file .env \
+            -p {{COMPOSE_PROJECT_NAME}} \
+            -f {{REMOTE_COMPOSE_FILE}} \
+            down; \
     fi
 
-start:
+logs service="tstation-ai":
     @if [ "{{ENV}}" = "local" ]; then \
-        just start-local; \
+        docker compose --env-file .env \
+            -p {{PROJECT_NAME}}-{{ENV}} \
+            -f docker_local/docker-compose-llm.yml \
+            -f docker_local/docker-compose-app.yml \
+            logs -f {{service}}; \
     else \
-        just start-remote; \
+        docker compose --env-file .env \
+            -p {{COMPOSE_PROJECT_NAME}} \
+            -f {{REMOTE_COMPOSE_FILE}} \
+            logs -f {{service}}; \
     fi
+
+ps:
+    @if [ "{{ENV}}" = "local" ]; then \
+        docker compose --env-file .env \
+            -p {{PROJECT_NAME}}-{{ENV}} \
+            -f docker_local/docker-compose-llm.yml \
+            -f docker_local/docker-compose-app.yml \
+            ps; \
+    else \
+        docker compose --env-file .env \
+            -p {{COMPOSE_PROJECT_NAME}} \
+            -f {{REMOTE_COMPOSE_FILE}} \
+            ps; \
+    fi
+
+stop:
+    @just down
+
+start:
+    @just up
 
 ## Update OpenAPI
 update-openapi:
@@ -146,10 +193,10 @@ scan-images:
     ./bin/trivy image --severity HIGH,CRITICAL --format table ghcr.io/berriai/litellm:v1.83.4-nightly || true
     @echo ""
     @echo "--- Scanning tstation-ai ---"
-    ./bin/trivy image --severity HIGH,CRITICAL --format table {{PROJECT_NAME}}-{{ENV}}-tstation-ai:latest || true
+    ./bin/trivy image --severity HIGH,CRITICAL --format table {{COMPOSE_PROJECT_NAME}}-tstation-ai:latest || true
     @echo ""
     @echo "--- Scanning tstation-ui-demo ---"
-    ./bin/trivy image --severity HIGH,CRITICAL --format table {{PROJECT_NAME}}-{{ENV}}-tstation-ui-demo:latest || true
+    ./bin/trivy image --severity HIGH,CRITICAL --format table {{COMPOSE_PROJECT_NAME}}-tstation-ui-demo:latest || true
     @echo ""
     @echo "--- Scanning nginx ---"
     ./bin/trivy image --severity HIGH,CRITICAL --format table nginx:alpine || true
@@ -165,7 +212,10 @@ scan-images:
 help:
     @echo "### For Deployment (dev, stag, prod)"
     @echo "just environment     Setup .env file"
-    @echo "just build-no-cache  Build Docker images without cache"
+    @echo "just up              Build + start tstation-ai service"
+    @echo "just logs            Follow tstation-ai logs"
+    @echo "just down            Stop compose project"
+    @echo "just ps              Show compose services"
     @echo "just start-remote    Build (no cache) + Start servers"
     @echo "just stop-remote     Stop servers"
     @echo "just scan-images     Scan Docker images for vulnerabilities"
