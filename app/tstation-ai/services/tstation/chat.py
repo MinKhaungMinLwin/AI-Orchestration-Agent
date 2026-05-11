@@ -2388,10 +2388,15 @@ class TStationChatServiceV2:
                 trace_context={"trace_id": request.tracing_id},
                 input=_truncate(last_user_msg),
             )
+            # Lock trace.input to the user's message right at the start so the
+            # Langfuse UI doesn't fall back to whichever child chain (e.g. QC)
+            # last touched the trace. trace.output is set in _stream_response_multi
+            # at the end of the stream.
             _parent_span.update_trace(
                 name=(last_user_msg[:60] if last_user_msg else "chat"),
                 session_id=request.session_id,
                 user_id=request.user_id,
+                input=_truncate(last_user_msg),
             )
             _parent_span_id = _parent_span.id
 
@@ -3457,10 +3462,22 @@ class TStationChatServiceV2:
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "latency_ms": int((_t_qc - _t_stream_start) * 1000),
             }
+            _trace_output = _truncate(draft_response)
+            # Set both the parent span's own output AND the trace-level output so
+            # Langfuse UI doesn't fall back to a child chain's output (e.g. QC
+            # returning "PASS") when computing the trace preview.
+            parent_span.update(output=_trace_output)
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                output=_truncate(draft_response),
+                input=_truncate(_last_user),
+                output=_trace_output,
                 metadata=_trace_metadata,
+            )
+            logger.info(
+                "[TRACE] Sealed trace output (%d chars) route=%s qc=%s",
+                len(draft_response),
+                _route or "?",
+                "PASS" if _qc_passed else "CORRECTED",
             )
             parent_span.end()
 
