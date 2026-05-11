@@ -25,6 +25,7 @@ class EventApplicableProductItem:
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가. 회원 유형에 따라 PR_GOODS_DSCNT_PRC_INFO(일반) 또는
             PR_GOODS_ENTR_DSCNT_PRC_INFO(PARTNER)에서 join
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
+        image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
     """
 
     aply_tp_cd: str
@@ -36,6 +37,7 @@ class EventApplicableProductItem:
     sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
+    image_url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -85,6 +87,12 @@ class EventApplicableProductItem:
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
 
+        image_url: None | str | Unset
+        if isinstance(self.image_url, Unset):
+            image_url = UNSET
+        else:
+            image_url = self.image_url
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -107,6 +115,8 @@ class EventApplicableProductItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
+        if image_url is not UNSET:
+            field_dict["image_url"] = image_url
 
         return field_dict
 
@@ -180,6 +190,15 @@ class EventApplicableProductItem:
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
 
+        def _parse_image_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        image_url = _parse_image_url(d.pop("image_url", UNSET))
+
         event_applicable_product_item = cls(
             aply_tp_cd=aply_tp_cd,
             goods_no=goods_no,
@@ -190,6 +209,7 @@ class EventApplicableProductItem:
             sale_prc=sale_prc,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
+            image_url=image_url,
         )
 
         event_applicable_product_item.additional_properties = d

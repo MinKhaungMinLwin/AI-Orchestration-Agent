@@ -748,12 +748,13 @@ makes the BE round-trip free.
        directly — DO NOT call `get_final_price_tool` per item.
 
      **Worked example — follow this literally:**
-     in-context tool result (most recent `get_event_applicable_products_tool`):
+     tool result (from the fresh same-turn re-call of
+     `get_event_applicable_products_tool`):
      ```json
      {"events": [{"evt_no":"00000000010460",
        "items":[
-         {"goods_no":"G000000317699","goods_nm":"벤투스 S1 에보 Z","tire_size_1":"225/40R19","extra_fvr_sale_prc":234500,...},
-         {"goods_no":"G000000317718","goods_nm":"벤투스 S1 에보 Z AS","tire_size_1":"225/40R19","extra_fvr_sale_prc":264200,...},
+         {"goods_no":"G000000317699","goods_nm":"벤투스 S1 에보 Z","tire_size_1":"225/40R19","extra_fvr_sale_prc":234500,"image_url":"https://.../K12901ko.png",...},
+         {"goods_no":"G000000317718","goods_nm":"벤투스 S1 에보 Z AS","tire_size_1":"225/40R19","extra_fvr_sale_prc":264200,"image_url":"https://.../H12901ko.png",...},
          ... (other sizes)
        ]}]}
      ```
@@ -765,8 +766,8 @@ makes the BE round-trip free.
        "template": "product",
        "data": {
          "products": [
-           {"title": "벤투스 S1 에보 Z 225/40R19", "price": 234500, "imageUrl": "<from item if present else null>", "tags": []},
-           {"title": "벤투스 S1 에보 Z AS 225/40R19", "price": 264200, "imageUrl": null, "tags": []}
+           {"title": "벤투스 S1 에보 Z 225/40R19", "price": 234500, "imageUrl": "https://.../K12901ko.png", "tags": []},
+           {"title": "벤투스 S1 에보 Z AS 225/40R19", "price": 264200, "imageUrl": "https://.../H12901ko.png", "tags": []}
          ],
          "metadata": [
            {"goodsId": "G000000317699"},
@@ -778,6 +779,8 @@ makes the BE round-trip free.
        "nextAction": {"type": "stop", "domain": null}
      }
      ```
+     - `products[i].imageUrl = item.image_url` (BE 응답의 절대 URL 그대로).
+       item.image_url 이 null 인 경우에만 `""` 또는 생략한다.
      - `products[]` 길이는 filtered_items 길이와 정확히 같다.
      - `metadata[]` 도 같은 길이, 같은 순서로 `{"goodsId": item.goods_no}`.
   d. `assistantResponse`: ONE short Korean sentence that names the event
