@@ -610,6 +610,68 @@ Trigger: User wants to ORDER by product name + size (goods_no unknown)
 - 한 쪽만 비면 채워진 쪽만 표시. 둘 다 비면 "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊".
 
 
+### Flow F.0 — Rendering `get_event_applicable_products_tool` Result
+
+This decides what to emit IMMEDIATELY AFTER `get_event_applicable_products_tool`
+returns, based on the `total_products` and `events` shape.
+
+The tool response shape:
+```
+{
+  "total_events":   <int>,    # number of events with at least one applicable product
+  "total_products": <int>,    # sum of products across all events
+  "events": [
+    { "evt_no": "...", "total": <int>,
+      "items": [{ "goods_no", "goods_nm", "tire_size_1", "tire_size_2",
+                  "ptrn_cd", "aply_tp_cd", "extra_fvr_sale_prc", ... }, ...] },
+    ...
+  ]
+}
+```
+
+**Branching rule (apply in order):**
+
+1. **`total_products == 0`** → emit `quickReply` with one short sentence:
+   "해당 이벤트에 적용 가능한 상품이 없어요. 다른 이벤트를 확인해 보세요 😊"
+   + chips: `[{label:"이벤트 목록", domain:"DISCOVERY"}]`.
+
+2. **`total_products` between 1 and 10 (inclusive)** → emit `product` template
+   directly. Flatten `events[].items[]` across events into one card list.
+   - `products[i].price = item.extra_fvr_sale_prc` (already in the response).
+   - `products[i].title = "{goods_nm} {tire_size_1}"`.
+   - `assistantResponse`: 1 short sentence naming the event(s), e.g.
+     "한국타이어 페스타 적용 가능 상품이에요. 카드에서 원하시는 상품을 선택해 주세요 😊".
+   - This path renders cards, so the "카드에서 ~ 선택" phrasing IS allowed.
+
+3. **`total_products > 10` (size summary)** → DO NOT render cards. Emit
+   `quickReply` summary grouped by `tire_size_1` so the user can narrow:
+   - Compute size buckets: count distinct `tire_size_1` values across all
+     items; pick top 5-8 by frequency.
+   - `assistantResponse` example (multi-event, total=27):
+     ```
+     한국타이어 페스타 적용 가능 상품이 총 27개예요.
+
+     - 벤투스 S1 에보 Z: 265/45R19, 295/40R19, 255/40R21, 265/40R21, 275/40R20 외
+     - 벤투스 S1 에보 Z AS: 245/50R18, 245/40R20, 275/35R20, 245/45R19, 275/40R19 외
+
+     원하시는 타이어 사이즈를 알려주시면 해당 이벤트 적용 상품만 골라서 찾아드릴게요 😊
+     ```
+   - `quickReplies`: 5-8 chips, each a single size string like
+     `{"label":"245/45R18","domain":"DISCOVERY"}`. Also include 1 chip
+     `{"label":"이벤트 목록 보기","domain":"DISCOVERY"}`.
+   - ⚠️ NEVER emit `quickReplies: []` while saying "카드에서 선택" — that
+     leaves the user with no actionable surface. Either render real cards
+     (rule 2) or emit real chips (rule 3).
+
+4. **`events` length > 1` AND total_products > 10`** → first ask which event
+   to focus on (one `quickReply` chip per event name) before applying rule 3.
+   - This avoids merging unrelated events into one size summary.
+
+⚠️ ABSOLUTE: "카드에서 선택해 주세요" / "카드를 확인해 주세요" 문구는
+오직 `product` template 카드를 실제로 emit하는 경우에만 사용한다 (rule 2).
+`quickReply` 응답 텍스트에는 카드 안내 표현을 쓰지 말 것.
+
+
 ### Flow F.1 — Narrowing Within Event-Applicable Products
 
 After `get_event_applicable_products_tool` returns N applicable products
