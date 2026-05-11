@@ -466,6 +466,22 @@ Output: domains (list with EXACTLY ONE domain), reason, and execution_plan.
 class StreamingMultiAgentCoordinator:
     """Orchestrates multiple agents with streaming support."""
 
+    @staticmethod
+    def _compact_tool_results_for_llm(tool_data: list[dict]) -> list[dict]:
+        """Build a smaller tool-result view for agent handoff prompts only."""
+        compact_items: list[dict] = []
+        for item in tool_data:
+            tool_name = item.get("tool", "")
+            data = item.get("data")
+            input_data = item.get("input", item.get("args", {}))
+            raw_output = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            compact = filter_for_context(tool_name, raw_output, input_data)
+            if compact is not None:
+                compact_items.append(compact)
+            else:
+                compact_items.append({"tool": tool_name, "input": input_data, "data": data})
+        return compact_items
+
     # ---------------------------------------------------------------------
     # Hardcoded keyword routing (runs BEFORE the LLM router)
     # ---------------------------------------------------------------------
@@ -974,9 +990,10 @@ class StreamingMultiAgentCoordinator:
                             accumulated_tool_data.append({"tool": "user_intent", "data": {"ord_qty": ord_qty}})
                             logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
 
-                tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
+                llm_tool_data = StreamingMultiAgentCoordinator._compact_tool_results_for_llm(accumulated_tool_data)
+                tool_summary = json.dumps(llm_tool_data, ensure_ascii=False, separators=(",", ":"))
                 enriched_messages.append(
-                    {"role": "assistant", "content": f"[Previous agent tool results]\n{tool_summary}"}
+                    {"role": "assistant", "content": f"[Previous agent tool facts]\n{tool_summary}"}
                 )
                 logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
 
@@ -2474,7 +2491,7 @@ class TStationChatServiceV2:
             messages = TStationChatServiceV2._build_messages_with_user_info(_request_enriched)
             if len(messages) > _MAX_HISTORY_MESSAGES:
                 messages = messages[-_MAX_HISTORY_MESSAGES:]
-            logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
+            logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             # 2) Extract regex-based slots from the LATEST user message only
             for msg in reversed(request.messages):
