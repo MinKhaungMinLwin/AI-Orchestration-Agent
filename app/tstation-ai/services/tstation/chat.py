@@ -2388,10 +2388,15 @@ class TStationChatServiceV2:
                 trace_context={"trace_id": request.tracing_id},
                 input=_truncate(last_user_msg),
             )
+            # Lock trace.input to the user's message right at the start so the
+            # Langfuse UI doesn't fall back to whichever child chain (e.g. QC)
+            # last touched the trace. trace.output is set in _stream_response_multi
+            # at the end of the stream.
             _parent_span.update_trace(
                 name=(last_user_msg[:60] if last_user_msg else "chat"),
                 session_id=request.session_id,
                 user_id=request.user_id,
+                input=_truncate(last_user_msg),
             )
             _parent_span_id = _parent_span.id
 
@@ -3447,9 +3452,14 @@ class TStationChatServiceV2:
         # spans ("agent:*", "qc") — no need to submit redundant scores.
 
         if parent_span is not None:
-            _last_user = next(
+            # The augmented user message has a CONVERSATION CONTEXT prefix and
+            # a [current_time: ...] suffix injected upstream. Strip them so the
+            # trace name reflects what the user actually typed (e.g.
+            # "벤투스 S2 AS 225/55R17") instead of the augmentation header.
+            _last_user_raw = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
             )
+            _last_user = StreamingMultiAgentCoordinator._extract_current_user_input(_last_user_raw) or _last_user_raw
             # Trace `output` carries the actual assistant response so the Langfuse
             # trace list shows what the user saw. Routing / tool / template / QC
             # metadata moves to `metadata` (and the `qc` child span already holds
@@ -3462,12 +3472,60 @@ class TStationChatServiceV2:
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "latency_ms": int((_t_qc - _t_stream_start) * 1000),
             }
+            _trace_output = _truncate(draft_response)
+            _trace_input = _truncate(_last_user)
+            # Set both the parent span's own output AND the trace-level output.
+            parent_span.update(output=_trace_output)
             parent_span.update_trace(
                 name=(_last_user[:60] if _last_user else "chat"),
-                output=_truncate(draft_response),
+                input=_trace_input,
+                output=_trace_output,
                 metadata=_trace_metadata,
             )
+            # Create a final "✅ response" observation that carries the
+            # user-visible answer as its I/O. Langfuse v3 trace overview falls
+            # back to displaying the latest child chain's I/O (e.g. QC chain
+            # returning "PASS", or the agent chain dumping the message
+            # history) when no other signal wins. By making this the very last
+            # observation in the trace with input=user-message and output=
+            # assistant-response, the trace overview reads what the user
+            # actually saw — regardless of which child chains ran earlier.
+            if trace_id and _tracing_enabled:
+                try:
+                    # Name the final span with the user's question — Langfuse v3
+                    # also derives trace.name from the latest observation, so a
+                    # generic "response" name would override the user-message
+                    # trace name we set on the parent span.
+                    _response_span_name = (_last_user[:60] if _last_user else "response")
+                    response_span = tracer.start_span(
+                        name=_response_span_name,
+                        trace_context={"trace_id": trace_id, "parent_span_id": parent_span_id},
+                        input=_trace_input,
+                    )
+                    response_span.update(output=_trace_output)
+                    response_span.update_trace(
+                        name=_response_span_name,
+                        input=_trace_input,
+                        output=_trace_output,
+                    )
+                    response_span.end()
+                except Exception as exc:
+                    logger.debug("[TRACE] response span failed: %s", exc)
+            logger.info(
+                "[TRACE] Sealed trace output (%d chars) route=%s qc=%s recording=%s",
+                len(draft_response),
+                _route or "?",
+                "PASS" if _qc_passed else "CORRECTED",
+                getattr(getattr(parent_span, "_otel_span", None), "is_recording", lambda: "?")(),
+            )
             parent_span.end()
+            # Force immediate OTel batch export so the trace.output update we just
+            # set is visible in Langfuse UI without waiting for the next periodic
+            # flush.
+            try:
+                tracer.flush()
+            except Exception as exc:
+                logger.debug("[TRACE] flush failed: %s", exc)
 
         # 5. FINALIZE THE STREAM
         if coordinator_done_event:
