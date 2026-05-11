@@ -3474,12 +3474,21 @@ class TStationChatServiceV2:
                 metadata=_trace_metadata,
             )
             logger.info(
-                "[TRACE] Sealed trace output (%d chars) route=%s qc=%s",
+                "[TRACE] Sealed trace output (%d chars) route=%s qc=%s recording=%s",
                 len(draft_response),
                 _route or "?",
                 "PASS" if _qc_passed else "CORRECTED",
+                getattr(getattr(parent_span, "_otel_span", None), "is_recording", lambda: "?")(),
             )
             parent_span.end()
+            # Force immediate OTel batch export so the trace.output update we just
+            # set is visible in Langfuse UI without waiting for the next periodic
+            # flush. Without this the previous (child chain) output can linger
+            # on the trace overview until the OTel BatchSpanProcessor cycles.
+            try:
+                tracer.flush()
+            except Exception as exc:
+                logger.debug("[TRACE] flush failed: %s", exc)
 
         # 5. FINALIZE THE STREAM
         if coordinator_done_event:
