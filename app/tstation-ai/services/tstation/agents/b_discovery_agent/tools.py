@@ -228,7 +228,7 @@ def _strip_brand_only_keyword(keyword: str | None) -> str | None:
     return keyword
 
 
-def _fetch_description(goods_no: str) -> dict:
+def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
     """Fetch product description and return flat fields the LLM whitelist keeps.
 
     The description endpoint returns nested `images: [{img_path_nm, thnl_path_nm}, ...]`
@@ -239,7 +239,7 @@ def _fetch_description(goods_no: str) -> dict:
       - `review_count` ← rating.review_count (used for sort_by="review_desc")
     """
     try:
-        response = get_product_description(client=get_client(), goods_no=goods_no)
+        response = get_product_description(client=client, goods_no=goods_no)
         if response.parsed is None:
             return {}
         desc = _to_dict(response.parsed)
@@ -275,8 +275,9 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
         return [_slim_product_item(item) for item in items]
 
     desc_map: dict[str, dict] = {}
+    client = get_client()
     with ThreadPoolExecutor(max_workers=min(len(goods_nos), 5)) as executor:
-        futures = {executor.submit(_fetch_description, gno): gno for gno in goods_nos}
+        futures = {executor.submit(_fetch_description, gno, client): gno for gno in goods_nos}
         for future in as_completed(futures):
             gno = futures[future]
             desc_map[gno] = future.result()
