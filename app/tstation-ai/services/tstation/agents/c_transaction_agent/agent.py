@@ -9,6 +9,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_product_promotions_tool,
     get_logistics_inventory_tool,
     get_store_inventory_tool,
+    transaction_store_preview_tool,
     search_place_tool,
     get_nearby_stores_tool,
     get_store_list_tool,
@@ -150,6 +151,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | issue_coupon_tool | User wants to download/receive a coupon — goods_no for 최저가 혜택 쿠폰 묶음, cpn_no for specific coupon |
 | get_logistics_inventory_tool | Check warehouse stock |
 | get_store_inventory_tool | Check stock at specific store(s) |
+| transaction_store_preview_tool | Preferred for purchase/store preview when goods_no + qty are known: finds top stores, checks inventory/logistics, and returns earliest schedule in one tool call |
 | search_place_tool | User mentions address or landmark near stores |
 | get_nearby_stores_tool | After search_place_tool returns coordinates |
 | get_store_list_tool | Search stores by region name or store name |
@@ -163,6 +165,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 
 
 ## STORE SEARCH — CALL TOOL IMMEDIATELY (no clarification needed)
+- If goods_no + qty are known and the user wants purchase/store/stock/schedule preview → prefer transaction_store_preview_tool.
 - Region name (강남, 부산, 해운대 등) → get_store_list_tool(region_code=...)
 - Store name (티스테이션 역삼점 등) → get_store_list_tool(store_nm=...)
 - Address / landmark / "XXX 근처" → search_place_tool(query) → get_nearby_stores_tool(x, y)
@@ -1213,6 +1216,7 @@ class TransactionSubAgent(BaseAgent):
         # Inventory
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
+        "transaction_store_preview_tool": "Store Preview",
         # Store
         "search_place_tool": "Store",
         "get_nearby_stores_tool": "Store",
@@ -1239,6 +1243,7 @@ class TransactionSubAgent(BaseAgent):
                 get_product_promotions_tool,
                 get_logistics_inventory_tool,
                 get_store_inventory_tool,
+                transaction_store_preview_tool,
                 search_place_tool,
                 get_nearby_stores_tool,
                 get_store_list_tool,
