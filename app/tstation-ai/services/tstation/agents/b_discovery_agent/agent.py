@@ -646,7 +646,7 @@ The tool response shape:
 3. **`total_products > 10` (size summary)** → DO NOT render cards. Emit
    `quickReply` summary grouped by `tire_size_1` so the user can narrow:
    - Compute size buckets: count distinct `tire_size_1` values across all
-     items; pick top 5-8 by frequency.
+     items; pick the **top 3** by frequency.
    - `assistantResponse` example (multi-event, total=27):
      ```
      한국타이어 페스타 적용 가능 상품이 총 27개예요.
@@ -656,9 +656,29 @@ The tool response shape:
 
      원하시는 타이어 사이즈를 알려주시면 해당 이벤트 적용 상품만 골라서 찾아드릴게요 😊
      ```
-   - `quickReplies`: 5-8 chips, each a single size string like
-     `{"label":"245/45R18","domain":"DISCOVERY"}`. Also include 1 chip
-     `{"label":"이벤트 목록 보기","domain":"DISCOVERY"}`.
+   - `quickReplies`: **정확히 4개** chip (schema enforces `max_length=4`):
+     top-3 size chips + 1 "이벤트 목록 보기" chip. 절대 5개 이상 보내지 말 것
+     — validation 실패해서 fallback chip(다시 시도/상담사 연결/처음으로)이
+     사용자에게 노출된다.
+   - **Worked example (정확한 JSON shape, follow literally):**
+     ```json
+     {
+       "template": "quickReply",
+       "data": {
+         "assistantResponse": "한국타이어 페스타 적용 가능 상품이 총 27개예요. ...",
+         "quickReplies": [
+           {"label": "245/40R20", "domain": "DISCOVERY"},
+           {"label": "275/35R19", "domain": "DISCOVERY"},
+           {"label": "255/35R19", "domain": "DISCOVERY"},
+           {"label": "이벤트 목록 보기", "domain": "DISCOVERY"}
+         ],
+         "predictedDomains": ["DISCOVERY"]
+       },
+       "nextAction": {"type": "stop", "domain": null}
+     }
+     ```
+   - 각 chip 은 `label` (필수, non-empty) + `domain` (선택, DISCOVERY/
+     TRANSACTION/SUPPORT/LEADING 중 하나) 만 갖는다. 다른 필드는 forbid.
    - ⚠️ NEVER emit `quickReplies: []` while saying "카드에서 선택" — that
      leaves the user with no actionable surface. Either render real cards
      (rule 2) or emit real chips (rule 3).
