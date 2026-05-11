@@ -119,7 +119,21 @@ start-remote: clean-orphans precreate-remote stop-remote
         -f {{REMOTE_COMPOSE_FILE}} \
         up --build -d
 
-up service="tstation-ai":
+up:
+    @if [ "{{ENV}}" = "local" ]; then \
+        docker compose --env-file .env \
+            -p {{PROJECT_NAME}}-{{ENV}} \
+            -f docker_local/docker-compose-llm.yml \
+            -f docker_local/docker-compose-app.yml \
+            up --build -d; \
+    else \
+        docker compose --env-file .env \
+            -p {{COMPOSE_PROJECT_NAME}} \
+            -f {{REMOTE_COMPOSE_FILE}} \
+            up -d --build; \
+    fi
+
+up-service service="tstation-ai":
     @if [ "{{ENV}}" = "local" ]; then \
         docker compose --env-file .env \
             -p {{PROJECT_NAME}}-{{ENV}} \
@@ -212,7 +226,8 @@ scan-images:
 help:
     @echo "### For Deployment (dev, stag, prod)"
     @echo "just environment     Setup .env file"
-    @echo "just up              Build + start tstation-ai service"
+    @echo "just up              Build + start full compose stack"
+    @echo "just up-service      Build + start one service, default: tstation-ai"
     @echo "just logs            Follow tstation-ai logs"
     @echo "just down            Stop compose project"
     @echo "just ps              Show compose services"
