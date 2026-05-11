@@ -3447,9 +3447,14 @@ class TStationChatServiceV2:
         # spans ("agent:*", "qc") — no need to submit redundant scores.
 
         if parent_span is not None:
-            _last_user = next(
+            # The augmented user message has a CONVERSATION CONTEXT prefix and
+            # a [current_time: ...] suffix injected upstream. Strip them so the
+            # trace name reflects what the user actually typed (e.g.
+            # "벤투스 S2 AS 225/55R17") instead of the augmentation header.
+            _last_user_raw = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
             )
+            _last_user = StreamingMultiAgentCoordinator._extract_current_user_input(_last_user_raw) or _last_user_raw
             # Trace `output` carries the actual assistant response so the Langfuse
             # trace list shows what the user saw. Routing / tool / template / QC
             # metadata moves to `metadata` (and the `qc` child span already holds
