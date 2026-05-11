@@ -9,8 +9,48 @@ from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+from services.tstation.tool_summaries import summarize_tool
+
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_tool_summary_span(
+    config: dict | None,
+    *,
+    tool_name: str,
+    tool_input: dict,
+    tool_result: Any,
+    tool_status: str,
+) -> None:
+    """Open a short-lived child span carrying a one-line summary of a tool call.
+
+    The span is named ``🔧 <tool>: <summary>`` so the Langfuse trace tree shows
+    the result inline (e.g. ``🔧 search_product_tool: 3 hits → G123``) without
+    needing to expand the raw JSON output captured by the LangChain auto-span.
+
+    Silently no-ops when tracing is disabled or when the trace context is
+    missing — never raises into the agent stream.
+    """
+    cfgable = (config or {}).get("configurable", {}) if isinstance(config, dict) else {}
+    trace_id = cfgable.get("tstation_trace_id")
+    parent_span_id = cfgable.get("tstation_parent_span_id")
+    if not trace_id:
+        return
+    try:
+        summary = summarize_tool(tool_name, tool_result)
+    except Exception as exc:  # never let summary formatting break the agent loop
+        logger.debug("[TRACE] tool summary failed for %s: %s", tool_name, exc)
+        summary = f"status={tool_status}"
+    span_name = f"🔧 {tool_name}: {summary}"
+    with _trace_span(
+        span_name,
+        trace_id=trace_id,
+        parent_span_id=parent_span_id,
+        input=tool_input,
+    ) as _ts:
+        _ts.update(output=_truncate({"summary": summary, "status": tool_status}))
 
 T = TypeVar("T")
 
@@ -317,6 +357,17 @@ class BaseAgent(ABC):
                                 "data": tool_result,
                                 "args": tool_input.get("args", {}),
                             })
+                        # Manual Langfuse span with a one-line summary so the
+                        # trace tree shows what the tool returned at a glance.
+                        # Raw output is still captured by LangChain's auto-span;
+                        # this layer is purely for analyst readability.
+                        _emit_tool_summary_span(
+                            config,
+                            tool_name=message.name,
+                            tool_input=tool_input.get("args", {}),
+                            tool_result=tool_result,
+                            tool_status=tool_status,
+                        )
                         yield {"type": "agent_flow", "agent": f"[{af} AF]", "agent_class": self.name, "status": tool_status}
                         yield {
                             "type": "tool",

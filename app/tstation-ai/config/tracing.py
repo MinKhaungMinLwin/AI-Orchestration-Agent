@@ -164,6 +164,13 @@ def build_trace_config(
             )]
         elif langfuse_handler is not None:
             config["callbacks"] = [langfuse_handler]
+    # Stash trace_id and parent_span_id under `configurable` so downstream
+    # code (e.g. BaseAgent.stream) can open manual child spans without
+    # threading the ids through every signature.
+    if trace_id:
+        config.setdefault("configurable", {})["tstation_trace_id"] = trace_id
+        if parent_span_id:
+            config["configurable"]["tstation_parent_span_id"] = parent_span_id
     if run_name:
         config["run_name"] = run_name
     return config
