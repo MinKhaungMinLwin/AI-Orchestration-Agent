@@ -1722,7 +1722,38 @@ def _sanitize_response(text: str) -> str:
 
 
 
-_QC_SKIP_TOOLS = frozenset({"get_my_cars_tool", "transfer_to_qna_tool"})
+_QC_REQUIRED_TOOLS = frozenset({
+    # Price, discount, promotion, coupon
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "get_available_coupons_tool",
+    "get_my_coupons_tool",
+    "issue_coupon_tool",
+    "get_product_promotions_tool",
+    "get_product_applicable_events_tool",
+    "get_event_applicable_products_tool",
+    "get_deals_tool",
+    # Stock, store detail, schedule, purchase preview
+    "get_logistics_inventory_tool",
+    "get_store_inventory_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "transaction_store_preview_tool",
+    "get_store_detail_tool",
+    # Cart, order, order status
+    "save_to_cart_tool",
+    "quick_order_tool",
+    "get_order_status_tool",
+    "get_orders_of_user_tool",
+    # Product facts, fitment, policy/support answers
+    "check_compatibility_tool",
+    "search_product_tool",
+    "get_products_recommendations_tool",
+    "get_product_description_tool",
+    "get_best_selling_products_tool",
+    "get_faq_tool",
+    "search_faq_rag_tool",
+})
 _QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
 # Path B: LLM writes the JSON → QC may correct field values
 _LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
@@ -1733,9 +1764,7 @@ _VALID_CHIP_DOMAINS = frozenset({"DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING
 def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
     if last_template in _QC_SKIP_TEMPLATES:
         return True
-    if called_tool_names and called_tool_names.issubset(_QC_SKIP_TOOLS):
-        return True
-    return False
+    return not bool(called_tool_names & _QC_REQUIRED_TOOLS)
 
 
 def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
