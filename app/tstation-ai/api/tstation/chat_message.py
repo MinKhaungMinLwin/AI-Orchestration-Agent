@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import urllib.request
 from datetime import datetime
 from typing import Optional
 
@@ -39,6 +40,52 @@ from services.tstation.chat import TStationChatServiceV2
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_LITELLM_REG_KEY = "litellm:registered:{user_id}"
+_LITELLM_REG_TTL = 90 * 24 * 60 * 60  # 90 days
+
+
+def _register_litellm_user(user_id: str) -> None:
+    """Register user in LiteLLM budget system on first request.
+
+    Cached in Redis for 90 days so the LiteLLM API is only called once per user.
+    Failures are logged and ignored — chat continues normally regardless.
+    """
+    from config.env import settings
+    from services.tstation.chat_history_service import get_redis_client
+
+    redis = get_redis_client()
+    cache_key = _LITELLM_REG_KEY.format(user_id=user_id)
+    if redis.exists(cache_key):
+        return
+
+    base = settings.AI_GATEWAY_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+
+    payload = json.dumps({
+        "user_id": user_id,
+        "max_budget": settings.LITELLM_USER_MAX_BUDGET,
+        "budget_duration": settings.LITELLM_USER_BUDGET_DURATION,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{base}/user/new",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {settings.AI_GATEWAY_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.getcode() in (200, 409):
+                redis.setex(cache_key, _LITELLM_REG_TTL, "1")
+                logger.info("[LITELLM] Registered user budget: %s ($%.2f/%s)",
+                            user_id, settings.LITELLM_USER_MAX_BUDGET, settings.LITELLM_USER_BUDGET_DURATION)
+    except Exception as exc:
+        logger.warning("[LITELLM] Failed to register user %s: %s", user_id, exc)
 
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -89,6 +136,10 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     """
     # user is already the decoded JWT payload
     user_id = user.get("user_id")
+
+    # Register user in LiteLLM budget system on first request (fire-and-forget)
+    if user_id:
+        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id))
 
     service = get_chat_history_service()
 

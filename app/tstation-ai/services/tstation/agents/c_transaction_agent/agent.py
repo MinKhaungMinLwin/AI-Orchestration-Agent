@@ -735,6 +735,10 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
   7. User selects date+time → Show PRE-ORDER PREVIEW (STEP 5.5) with bookingDateTime filled → wait for explicit confirmation → THEN quick_order_tool
      ⚠️ Datepick selection trigger: FE sends date+time as a message in format like "Thursday, April 23, 2026\n11:00" or "2026년 4월 23일 (목)\n11:00".
      When you receive a message that matches this pattern (date + newline + time), treat it as user's date/time selection from datepick UI — proceed immediately to STEP 5.5.
+     ⚠️ quick_order_tool 호출 시 datepick에서 확정된 날짜/시간을 `rsv_date`(YYYYMMDD), `rsv_hour`(HH 두 자리) 인자로 반드시 함께 전달.
+       - 예) "2026년 4월 23일 (목)\n11:00" → rsv_date="20260423", rsv_hour="11"
+       - 예) "Thursday, April 23, 2026\n09:00" → rsv_date="20260423", rsv_hour="09"
+       - 시(hour)는 두 자리 zero-padding 유지. 분(minute) 정보는 버린다.
 
 STEP 5B — 장바구니 (user chose option 2):
   Show PRE-ORDER PREVIEW (STEP 5.5) → wait for explicit confirmation → THEN save_to_cart_tool
