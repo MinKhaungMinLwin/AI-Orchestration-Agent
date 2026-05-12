@@ -138,7 +138,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count", "comfort",
+    "rating_avg", "rate", "review_count",
 })
 
 
@@ -276,7 +276,7 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
 
     desc_map: dict[str, dict] = {}
     client = get_client()
-    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 5)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 20)) as executor:
         futures = {executor.submit(_fetch_description, gno, client): gno for gno in goods_nos}
         for future in as_completed(futures):
             gno = futures[future]

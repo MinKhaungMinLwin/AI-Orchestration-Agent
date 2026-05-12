@@ -444,6 +444,7 @@ class BaseAgent(ABC):
                             "assistantResponse": response_streamer.streamed_text,
                             "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
                         },
+                        "nextAction": {"type": "stop", "domain": None},
                     }
                 else:
                     # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
@@ -467,6 +468,7 @@ class BaseAgent(ABC):
                                 "assistantResponse": prose_only,
                                 "quickReplies": [],
                             },
+                            "nextAction": {"type": "stop", "domain": None},
                         }
                     else:
                         yield from self._yield_validation_fallback()
@@ -493,6 +495,7 @@ class BaseAgent(ABC):
                 "assistantResponse": message,
                 "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
             },
+            "nextAction": {"type": "stop", "domain": None},
         }
 
     def _build_data_event(self, structured_response: BaseModel | dict | None) -> dict | None:
