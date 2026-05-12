@@ -1847,16 +1847,53 @@ _QC_REQUIRED_TOOLS = frozenset({
     "search_faq_rag_tool",
 })
 _QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
+_QC_SKIP_CODE_MAPPED_TEMPLATES = frozenset({
+    "product",
+    "voucher",
+    "cheapestProduct",
+    "previewYoutube",
+    "location",
+    "datepick",
+    "listCar",
+    "qnaComplete",
+})
 # Path B: LLM writes the JSON → QC may correct field values
 _LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
 # Valid domains a quick reply chip may declare for classifier skip
 _VALID_CHIP_DOMAINS = frozenset({"DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING"})
 
 
-def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
+def _qc_skip_reason(
+    called_tool_names: set[str],
+    last_template: str | None,
+    template_source: str | None = None,
+    assistant_response_source: str | None = None,
+) -> str | None:
+    if (
+        template_source == "code_mapper"
+        and assistant_response_source == "default"
+        and last_template in _QC_SKIP_CODE_MAPPED_TEMPLATES
+    ):
+        return f"code_mapped_{last_template}"
     if last_template in _QC_SKIP_TEMPLATES:
-        return True
-    return not bool(called_tool_names & _QC_REQUIRED_TOOLS)
+        return f"template_{last_template}"
+    if not bool(called_tool_names & _QC_REQUIRED_TOOLS):
+        return "no_qc_required_tools"
+    return None
+
+
+def _should_skip_qc(
+    called_tool_names: set[str],
+    last_template: str | None,
+    template_source: str | None = None,
+    assistant_response_source: str | None = None,
+) -> bool:
+    return _qc_skip_reason(
+        called_tool_names,
+        last_template,
+        template_source,
+        assistant_response_source,
+    ) is not None
 
 
 def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
@@ -3201,6 +3238,8 @@ class TStationChatServiceV2:
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
         last_template: str | None = None
+        last_template_source: str | None = None
+        last_assistant_response_source: str | None = None
         coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
         next_quick_reply_domain_values: list[str] = []
@@ -3330,6 +3369,12 @@ class TStationChatServiceV2:
             # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
             if event_type == "data":
                 last_template = event.get("template") or last_template
+                event_template_source = event.pop("template_source", None)
+                if isinstance(event_template_source, str):
+                    last_template_source = event_template_source
+                event_response_source = event.pop("assistant_response_source", None)
+                if isinstance(event_response_source, str):
+                    last_assistant_response_source = event_response_source
                 for value in _quick_reply_domain_values_from_event(event):
                     if value not in next_quick_reply_domain_values:
                         next_quick_reply_domain_values.append(value)
@@ -3388,6 +3433,8 @@ class TStationChatServiceV2:
                         draft_for_qc = ""
                         original_message_events = []
                         buffered_data_events = []
+                        last_template_source = None
+                        last_assistant_response_source = None
                 elif _sub_status == "done" and _lat_agent_start is not None:
                     _llm_gen = (_lat_now - _lat_first_token_time) * 1000 if _lat_first_token_time else 0
                     logger.debug(
@@ -3435,11 +3482,14 @@ class TStationChatServiceV2:
 
             if _s.AI_QC_ENABLED:
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
+                qc_skip_reason = _qc_skip_reason(
+                    called_tool_names,
+                    last_template,
+                    last_template_source,
+                    last_assistant_response_source,
+                )
 
-                if (
-                    called_tool_names
-                    and not _should_skip_qc(called_tool_names, last_template)
-                ):
+                if called_tool_names and qc_skip_reason is None:
                     try:
                         with _trace_span(
                             "qc",
@@ -3496,6 +3546,15 @@ class TStationChatServiceV2:
                             )
                     except Exception as e:
                         logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+                elif called_tool_names:
+                    logger.debug(
+                        "[QC_LAYER] Skipped QC: reason=%s template=%s source=%s response_source=%s tools=%s",
+                        qc_skip_reason,
+                        last_template,
+                        last_template_source,
+                        last_assistant_response_source,
+                        sorted(called_tool_names),
+                    )
 
             if _parallel_qc:
                 # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
