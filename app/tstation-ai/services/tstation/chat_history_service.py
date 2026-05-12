@@ -348,14 +348,19 @@ class ChatHistoryService:
     def list_sessions(self, user_id: str) -> List[dict]:
         """List all sessions for a user (decrypts last_message preview)."""
         session_set_key = _get_session_set_key(user_id)
-        session_ids = self.redis.smembers(session_set_key)
+        session_ids = list(self.redis.smembers(session_set_key))
+        if not session_ids:
+            return []
+
         crypto = get_crypto_service()
+        pipe = self.redis.pipeline()
+        for sid in session_ids:
+            pipe.hgetall(_get_meta_key(sid))
+        meta_results = pipe.execute()
 
         sessions = []
-        for session_id in session_ids:
-            meta_key = _get_meta_key(session_id)
-            meta = self.redis.hgetall(meta_key)
-
+        orphaned = []
+        for session_id, meta in zip(session_ids, meta_results):
             if meta:
                 sessions.append({
                     "session_id": session_id,
@@ -363,10 +368,14 @@ class ChatHistoryService:
                     "updated_at": meta.get("updated_at", ""),
                 })
             else:
-                # Orphaned session, remove from set
-                self.redis.srem(session_set_key, session_id)
+                orphaned.append(session_id)
 
-        # Sort by updated_at descending
+        if orphaned:
+            pipe = self.redis.pipeline()
+            for sid in orphaned:
+                pipe.srem(session_set_key, sid)
+            pipe.execute()
+
         sessions.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
         return sessions
 
@@ -732,7 +741,7 @@ class ChatHistoryService:
 
     async def get_chat_context_pipeline_async(
         self, session_id: str, limit: int
-    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None, list[str], list[str]]:
+    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None, dict | None, list[str], list[str]]:
         """Fetch hot-path chat context in one Redis pipeline."""
         tmpl_key = _get_template_messages_key(session_id)
         meta_key = _get_meta_key(session_id)
@@ -751,6 +760,7 @@ class ChatHistoryService:
         crypto = get_crypto_service()
         recent_template_msgs = []
         latest_listcar_tmpl = None
+        latest_location_tmpl = None
 
         # Parse template messages
         for raw in raw_items:
@@ -766,10 +776,14 @@ class ChatHistoryService:
 
             td_decoded = _decode_template_data(td_raw, crypto)
 
-            if latest_listcar_tmpl is None and td_decoded and td_decoded.get("template") == "listCar":
+            if td_decoded:
                 inner = td_decoded.get("data")
                 if isinstance(inner, dict):
-                    latest_listcar_tmpl = inner
+                    tmpl_name = td_decoded.get("template")
+                    if latest_listcar_tmpl is None and tmpl_name == "listCar":
+                        latest_listcar_tmpl = inner
+                    if latest_location_tmpl is None and tmpl_name == "location":
+                        latest_location_tmpl = inner
 
             if len(recent_template_msgs) < limit:
                 recent_template_msgs.append({
@@ -816,7 +830,7 @@ class ChatHistoryService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl, quick_reply_domains, predicted_domains
+        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl, latest_location_tmpl, quick_reply_domains, predicted_domains
 
 
 # Singleton instance

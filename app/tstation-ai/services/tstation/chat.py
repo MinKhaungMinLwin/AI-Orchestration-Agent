@@ -2483,13 +2483,12 @@ class TStationChatServiceV2:
                 existing_slots,
                 prev_tool_data,
                 latest_listcar_tmpl,
+                latest_location_tmpl,
                 quick_reply_domain_values,
                 predicted_domain_values,
             ) = await chat_history_svc.get_chat_context_pipeline_async(
                 request.session_id, _TEMPLATE_ENRICH_MAX_TURNS
             )
-            
-            latest_location_tmpl = None
             _t_slots = time.perf_counter()
             logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
@@ -2660,10 +2659,6 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    if latest_location_tmpl is None:
-                        latest_location_tmpl = chat_history_svc.get_latest_template_data(
-                            request.session_id, "location"
-                        )
                     resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
                         last_user_text, latest_location_tmpl
                     )
