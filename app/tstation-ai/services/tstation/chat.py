@@ -1847,18 +1847,27 @@ _QC_REQUIRED_TOOLS = frozenset({
     "search_faq_rag_tool",
 })
 _QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
-_QC_SKIP_CODE_MAPPED_TEMPLATES = frozenset({
-    "product",
-    "voucher",
-    "cheapestProduct",
-    "previewYoutube",
-    "location",
-    "datepick",
-    "listCar",
-    "qnaComplete",
-})
-# Path B: LLM writes the JSON → QC may correct field values
-_LLM_WRITTEN_TEMPLATES = frozenset({"preOrder", "orderComplete"})
+_TEMPLATE_QC_POLICY = {
+    "product": {"source": "code_mapper", "qc": "skip_default_response"},
+    "voucher": {"source": "code_mapper", "qc": "skip_default_response"},
+    "cheapestProduct": {"source": "code_mapper", "qc": "skip_default_response"},
+    "previewYoutube": {"source": "code_mapper", "qc": "skip_default_response"},
+    "location": {"source": "code_mapper", "qc": "skip_default_response"},
+    "datepick": {"source": "code_mapper", "qc": "skip_default_response"},
+    "listCar": {"source": "code_mapper", "qc": "skip_default_response"},
+    "qnaComplete": {"source": "code_mapper", "qc": "skip_default_response"},
+    # Path B: LLM writes the JSON; QC may correct field values.
+    "preOrder": {"source": "llm_json", "qc": "required"},
+    "orderComplete": {"source": "llm_json", "qc": "required"},
+}
+_QC_SKIP_CODE_MAPPED_TEMPLATES = frozenset(
+    template for template, policy in _TEMPLATE_QC_POLICY.items()
+    if policy["source"] == "code_mapper" and policy["qc"] == "skip_default_response"
+)
+_LLM_WRITTEN_TEMPLATES = frozenset(
+    template for template, policy in _TEMPLATE_QC_POLICY.items()
+    if policy["source"] == "llm_json"
+)
 # Valid domains a quick reply chip may declare for classifier skip
 _VALID_CHIP_DOMAINS = frozenset({"DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING"})
 
@@ -3114,10 +3123,19 @@ class TStationChatServiceV2:
             f"total={(_t_prestream - _t0)*1000:.0f}ms"
         )
         if request.tracing_id and _tracing_enabled:
-            # slots has no manual span — keep as score. classify/agents/qc
-            # are now covered by business spans in Langfuse.
+            # Keep numeric scores beside spans so latency dashboards can compare
+            # classify/agent/QC paths without expanding each trace.
             try:
-                tracer.create_score(trace_id=request.tracing_id, name="latency.slots_ms", value=round((_t_slots - _t0) * 1000))
+                tracer.create_score(
+                    trace_id=request.tracing_id,
+                    name="latency.slots_ms",
+                    value=round((_t_slots - _t0) * 1000),
+                )
+                tracer.create_score(
+                    trace_id=request.tracing_id,
+                    name="latency.classify_ms",
+                    value=round((_t_classify - _t_slots) * 1000),
+                )
             except Exception as exc:
                 logger.debug("[TRACE] Failed to create score: %s", exc)
 
@@ -3139,6 +3157,7 @@ class TStationChatServiceV2:
                     initial_slots=merged_slots,
                     parent_span=_parent_span,
                     parent_span_id=_parent_span_id,
+                    request_started_at=_t0,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -3168,6 +3187,7 @@ class TStationChatServiceV2:
                 initial_slots=merged_slots,
                 parent_span=_parent_span,
                 parent_span_id=_parent_span_id,
+                request_started_at=_t0,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -3216,6 +3236,7 @@ class TStationChatServiceV2:
         classify_future: concurrent.futures.Future | None = None,
         routing_result: MultiAgentDomain | None = None,
         initial_slots: Any | None = None,
+        request_started_at: float | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -3230,6 +3251,7 @@ class TStationChatServiceV2:
         )
 
         _t_stream_start = time.perf_counter()
+        _t_request_start = request_started_at or _t_stream_start
         draft_response = ""       # text only — used for history/message sync
         draft_for_qc = ""         # text + template payload — passed to QC only
         source_data_chunks = []
@@ -3258,6 +3280,22 @@ class TStationChatServiceV2:
         _lat_first_token_seen: bool = False
         _lat_first_token_time: float | None = None
         _lat_prev_agent_done: float | None = None
+        _lat_waiting_post_tool_output_since: float | None = None
+        _lat_agent_pre_tool_think_ms = 0.0
+        _lat_agent_post_tool_output_ms = 0.0
+        _lat_agent_llm_generation_ms = 0.0
+        _lat_tool_ms = 0.0
+        _lat_decide_next_action_ms = 0.0
+        _lat_qc_ms = 0.0
+        _lat_first_visible_ms: float | None = None
+        qc_skip_reason: str | None = None
+        qc_executed = False
+
+        def _mark_first_visible(now: float | None = None) -> None:
+            nonlocal _lat_first_visible_ms
+            if _lat_first_visible_ms is None:
+                _lat_first_visible_ms = ((now or time.perf_counter()) - _t_request_start) * 1000
+                logger.debug(f"[LATENCY] first_visible={_lat_first_visible_ms:.0f}ms")
 
         user_query = ""
         for msg in reversed(messages):
@@ -3312,6 +3350,11 @@ class TStationChatServiceV2:
             # the local QC / sanitize step still has the full text). ---
             if event_type == "token":
                 if event.get("content"):
+                    if _lat_waiting_post_tool_output_since is not None:
+                        _post_tool_ms = (_lat_now - _lat_waiting_post_tool_output_since) * 1000
+                        _lat_agent_post_tool_output_ms += _post_tool_ms
+                        logger.debug(f"[LATENCY]   llm_post_tool_output={_post_tool_ms:.0f}ms")
+                        _lat_waiting_post_tool_output_since = None
                     if not _suppress_tokens:
                         draft_response += event["content"]
                         draft_for_qc += event["content"]
@@ -3333,7 +3376,10 @@ class TStationChatServiceV2:
                 tool_name = event.get("tool", "Unknown")
                 called_tool_names.add(tool_name)
                 if tool_name in _lat_tool_start:
-                    logger.debug(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
+                    _tool_ms = (_lat_now - _lat_tool_start.pop(tool_name)) * 1000
+                    _lat_tool_ms += _tool_ms
+                    logger.debug(f"[LATENCY]   tool={tool_name} {_tool_ms:.0f}ms")
+                _lat_waiting_post_tool_output_since = _lat_now
                 # Suppress tokens when a "list display" tool is called (card will replace text).
                 # Exclude car lookup tools — agent may need to show selection text first.
                 if tool_name in _SUPPRESS_ON_TOOLS:
@@ -3368,6 +3414,11 @@ class TStationChatServiceV2:
 
             # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
             if event_type == "data":
+                if _lat_waiting_post_tool_output_since is not None:
+                    _post_tool_ms = (_lat_now - _lat_waiting_post_tool_output_since) * 1000
+                    _lat_agent_post_tool_output_ms += _post_tool_ms
+                    logger.debug(f"[LATENCY]   post_tool_data_event={_post_tool_ms:.0f}ms")
+                    _lat_waiting_post_tool_output_since = None
                 last_template = event.get("template") or last_template
                 event_template_source = event.pop("template_source", None)
                 if isinstance(event_template_source, str):
@@ -3417,13 +3468,16 @@ class TStationChatServiceV2:
                 _sub_agent = event.get("agent", "?")
                 if _sub_status == "start":
                     if _lat_prev_agent_done is not None:
-                        logger.debug(f"[LATENCY] decide_next_action={(_lat_now - _lat_prev_agent_done)*1000:.0f}ms")
+                        _decision_ms = (_lat_now - _lat_prev_agent_done) * 1000
+                        _lat_decide_next_action_ms += _decision_ms
+                        logger.debug(f"[LATENCY] decide_next_action={_decision_ms:.0f}ms")
                     _lat_agent_start = _lat_now
                     _lat_agent_name = _sub_agent
                     _lat_think_start = None
                     _lat_pre_tool_think_start = None
                     _lat_first_token_seen = False
                     _lat_first_token_time = None
+                    _lat_waiting_post_tool_output_since = None
                     agent_count += 1
                     if agent_count > 1 and draft_response.strip():
                         logger.debug(
@@ -3437,6 +3491,12 @@ class TStationChatServiceV2:
                         last_assistant_response_source = None
                 elif _sub_status == "done" and _lat_agent_start is not None:
                     _llm_gen = (_lat_now - _lat_first_token_time) * 1000 if _lat_first_token_time else 0
+                    _lat_agent_llm_generation_ms += _llm_gen
+                    if _lat_waiting_post_tool_output_since is not None:
+                        _post_tool_ms = (_lat_now - _lat_waiting_post_tool_output_since) * 1000
+                        _lat_agent_post_tool_output_ms += _post_tool_ms
+                        logger.debug(f"[LATENCY]   post_tool_done={_post_tool_ms:.0f}ms")
+                        _lat_waiting_post_tool_output_since = None
                     logger.debug(
                         f"[LATENCY] agent={_lat_agent_name} total={(_lat_now - _lat_agent_start)*1000:.0f}ms "
                         f"llm_gen={_llm_gen:.0f}ms"
@@ -3448,7 +3508,9 @@ class TStationChatServiceV2:
                 _status_val = event.get("status", "")
                 if _status_val == "tool_start":
                     if _lat_pre_tool_think_start is not None:
-                        logger.debug(f"[LATENCY]   llm_pre_tool_think={(_lat_now - _lat_pre_tool_think_start)*1000:.0f}ms")
+                        _pre_tool_ms = (_lat_now - _lat_pre_tool_think_start) * 1000
+                        _lat_agent_pre_tool_think_ms += _pre_tool_ms
+                        logger.debug(f"[LATENCY]   llm_pre_tool_think={_pre_tool_ms:.0f}ms")
                         _lat_pre_tool_think_start = None
                     _lat_tool_start[event.get("tool", "?")] = _lat_now
                 elif _status_val == "생각 중...":
@@ -3478,9 +3540,11 @@ class TStationChatServiceV2:
             # PARALLEL MODE: yield data events immediately so FE can render before QC completes
             if _parallel_qc:
                 for buffered_evt in buffered_data_events:
+                    _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if _s.AI_QC_ENABLED:
+                _qc_started_at = time.perf_counter()
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
                 qc_skip_reason = _qc_skip_reason(
                     called_tool_names,
@@ -3490,6 +3554,7 @@ class TStationChatServiceV2:
                 )
 
                 if called_tool_names and qc_skip_reason is None:
+                    qc_executed = True
                     try:
                         with _trace_span(
                             "qc",
@@ -3555,6 +3620,7 @@ class TStationChatServiceV2:
                         last_assistant_response_source,
                         sorted(called_tool_names),
                     )
+                _lat_qc_ms = (time.perf_counter() - _qc_started_at) * 1000
 
             if _parallel_qc:
                 # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
@@ -3577,11 +3643,13 @@ class TStationChatServiceV2:
                                 for k, v in qc_template_corrections.items():
                                     if k != "assistantResponse" and k in evt_data:
                                         evt_data[k] = v
+                    _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if original_message_events:
                 final_msg_event = original_message_events[-1]
                 final_msg_event["content"] = draft_response
+                _mark_first_visible()
                 yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
         else:
             # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
@@ -3589,6 +3657,7 @@ class TStationChatServiceV2:
             # messages to Redis, as it pollutes the LLM's future context window.
             for msg_event in original_message_events:
                 if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
+                    _mark_first_visible()
                     yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
 
         # 4. PERSIST NEXT-TURN CONTEXT
@@ -3616,13 +3685,63 @@ class TStationChatServiceV2:
                 logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")
 
         _t_qc = time.perf_counter()
+        _lat_stream_total_ms = (_t_qc - _t_request_start) * 1000
         logger.debug(
             f"[LATENCY] stream — agents={(_t_agents - _t_stream_start)*1000:.0f}ms "
-            f"qc={(_t_qc - _t_agents)*1000:.0f}ms "
-            f"total={(_t_qc - _t_stream_start)*1000:.0f}ms"
+            f"first_visible={_lat_first_visible_ms or 0:.0f}ms "
+            f"pre_tool_think={_lat_agent_pre_tool_think_ms:.0f}ms "
+            f"post_tool_output={_lat_agent_post_tool_output_ms:.0f}ms "
+            f"llm_gen={_lat_agent_llm_generation_ms:.0f}ms "
+            f"tools={_lat_tool_ms:.0f}ms "
+            f"decision={_lat_decide_next_action_ms:.0f}ms "
+            f"qc={_lat_qc_ms:.0f}ms "
+            f"stream_total={_lat_stream_total_ms:.0f}ms"
         )
-        # agents / qc / stream_total latency is now tracked via manual Langfuse
-        # spans ("agent:*", "qc") — no need to submit redundant scores.
+        if trace_id and _tracing_enabled:
+            try:
+                if _lat_first_visible_ms is not None:
+                    tracer.create_score(
+                        trace_id=trace_id,
+                        name="latency.first_visible_ms",
+                        value=round(_lat_first_visible_ms),
+                    )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.stream_total_ms",
+                    value=round(_lat_stream_total_ms),
+                )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.agents_ms",
+                    value=round((_t_agents - _t_stream_start) * 1000),
+                )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.agent_pre_tool_think_ms",
+                    value=round(_lat_agent_pre_tool_think_ms),
+                )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.agent_post_tool_output_ms",
+                    value=round(_lat_agent_post_tool_output_ms),
+                )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.agent_llm_generation_ms",
+                    value=round(_lat_agent_llm_generation_ms),
+                )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.tools_ms",
+                    value=round(_lat_tool_ms),
+                )
+                tracer.create_score(
+                    trace_id=trace_id,
+                    name="latency.qc_ms",
+                    value=round(_lat_qc_ms),
+                )
+            except Exception as exc:
+                logger.debug("[TRACE] Failed to create stream latency scores: %s", exc)
 
         if parent_span is not None:
             # The augmented user message has a CONVERSATION CONTEXT prefix and
@@ -3642,8 +3761,21 @@ class TStationChatServiceV2:
                 "route": _route,
                 "tools": sorted(called_tool_names),
                 "template": last_template,
+                "template_source": last_template_source,
+                "template_qc_policy": _TEMPLATE_QC_POLICY.get(last_template or ""),
+                "assistant_response_source": last_assistant_response_source,
                 "qc": "PASS" if _qc_passed else "CORRECTED",
-                "latency_ms": int((_t_qc - _t_stream_start) * 1000),
+                "qc_executed": qc_executed,
+                "qc_skip_reason": qc_skip_reason,
+                "latency_ms": int(_lat_stream_total_ms),
+                "latency_first_visible_ms": (
+                    round(_lat_first_visible_ms) if _lat_first_visible_ms is not None else None
+                ),
+                "latency_stream_total_ms": round(_lat_stream_total_ms),
+                "latency_agent_pre_tool_think_ms": round(_lat_agent_pre_tool_think_ms),
+                "latency_agent_post_tool_output_ms": round(_lat_agent_post_tool_output_ms),
+                "latency_agent_llm_generation_ms": round(_lat_agent_llm_generation_ms),
+                "latency_qc_ms": round(_lat_qc_ms),
             }
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)
