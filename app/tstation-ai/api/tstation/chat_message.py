@@ -59,6 +59,12 @@ def _valid_tracing_id(value: str | None) -> str | None:
     return None
 
 
+def _ensure_session_owner(service, session_id: str, user_id: str) -> None:
+    """Hide missing and cross-user sessions behind the same 404."""
+    if not service.session_exists(session_id, user_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
 @router.post("/chat", dependencies=[Depends(get_api_key)])
 async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     """
@@ -86,14 +92,10 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     service = get_chat_history_service()
 
-    # Get or create session
-    session_id = service.get_or_create_session_id(request.session_id, user_id)
-
-    # Save user message
-    msg_id = service.save_message(session_id, "user", request.content)
-
-    # Build messages list from history (compressed when a rolling summary exists)
-    history = service.get_history_for_llm(session_id)
+    # Redis client is sync; run hot-path calls in worker threads so FastAPI's event loop stays free.
+    session_id = await asyncio.to_thread(service.get_or_create_session_id, request.session_id, user_id)
+    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", request.content)
+    history = await asyncio.to_thread(service.get_history_for_llm, session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Add current user message only if not duplicate of last history
@@ -134,8 +136,8 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     response = await TStationChatServiceV2.chat(chat_request)
 
     if isinstance(response, TStationChatResponse):
-        # Save assistant response to history
-        service.save_message(session_id, "assistant", response.content)
+        # Save assistant response to history without blocking the event loop.
+        await asyncio.to_thread(service.save_message, session_id, "assistant", response.content)
 
         return ChatMessageResponse(
             session_id=session_id,
@@ -213,7 +215,13 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     # Priority: Use assistantResponse from UI Template Agent if available
     message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
     if message_to_save:
-        service.save_message(session_id, "assistant", message_to_save, template_data=template_data)
+        await asyncio.to_thread(
+            service.save_message,
+            session_id,
+            "assistant",
+            message_to_save,
+            template_data=template_data,
+        )
         logger.debug(f"[CHAT_MESSAGE] Saved assistant message" +
                   (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
 
@@ -241,7 +249,7 @@ async def list_sessions(user: dict = Security(get_api_key)):
     user_id = user.get("user_id")
 
     service = get_chat_history_service()
-    sessions = service.list_sessions(user_id)
+    sessions = await asyncio.to_thread(service.list_sessions, user_id)
 
     return SessionListResponse(
         sessions=[SessionInfo(**s) for s in sessions],
@@ -273,12 +281,9 @@ async def get_history(
     user_id = user.get("user_id")
 
     service = get_chat_history_service()
+    await asyncio.to_thread(_ensure_session_owner, service, session_id, user_id)
 
-    # Try to get history - will return empty if session doesn't exist yet
-    try:
-        messages = service.get_history(session_id)
-    except Exception:
-        messages = []
+    messages = await asyncio.to_thread(service.get_history, session_id)
 
     return ChatHistoryResponse(
         session_id=session_id,
@@ -317,16 +322,15 @@ async def append_message(
 
     service = get_chat_history_service()
 
-    # Verify session exists for this user
-    if not service.session_exists(request.session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    await asyncio.to_thread(_ensure_session_owner, service, request.session_id, user_id)
 
     # Validate role
     if request.role not in ("user", "assistant"):
         raise HTTPException(status_code=400, detail="Role must be 'user' or 'assistant'")
 
     # Append message (saved at end due to timestamp score)
-    msg_id = service.save_message(
+    msg_id = await asyncio.to_thread(
+        service.save_message,
         session_id=request.session_id,
         role=request.role,
         content=request.content,
@@ -367,17 +371,9 @@ async def delete_session(
 
     service = get_chat_history_service()
 
-    # Verify session belongs to user
-    if not service.session_exists(session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    await asyncio.to_thread(_ensure_session_owner, service, session_id, user_id)
 
-    messages_deleted = service.delete_session(session_id)
-
-    return DeleteSessionResponse(
-        success=True,
-        session_id=session_id,
-        messages_deleted=messages_deleted,
-    )
+    messages_deleted = await asyncio.to_thread(service.delete_session, session_id)
 
     return DeleteSessionResponse(
         success=True,

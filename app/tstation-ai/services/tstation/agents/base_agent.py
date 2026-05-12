@@ -1,6 +1,7 @@
 from abc import ABC
 from collections.abc import Callable
 from typing import Any, TypeVar
+import ast
 import json
 import logging
 import re
@@ -56,6 +57,7 @@ T = TypeVar("T")
 
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_UNQUOTED_JSON_KEY_RE = re.compile(r"(?<=[{,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
 
 
 # Validation 실패 시 사용자에게 빈 화면(silent dead-end) 대신 보여줄 안내.
@@ -541,10 +543,9 @@ class BaseAgent(ABC):
                 self.name,
             )
             return None
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error("[%s] Invalid JSON in agent response: %s", self.name, exc)
+        parsed = self._parse_agent_json(raw)
+        if parsed is None:
+            logger.error("[%s] Invalid JSON in agent response", self.name)
             return None
         try:
             validated = TypeAdapter(template_cls).validate_python(parsed)
@@ -557,6 +558,24 @@ class BaseAgent(ABC):
             )
             return None
         return self._build_data_event(validated)
+
+    @staticmethod
+    def _parse_agent_json(raw: str) -> Any | None:
+        """Parse LLM JSON, accepting common JSON-like slips without hiding real failures."""
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as strict_exc:
+            # Models sometimes emit JS/Python-ish dicts: {type: 'data'}.
+            normalized = _UNQUOTED_JSON_KEY_RE.sub(r' "\1":', raw)
+            try:
+                return json.loads(normalized)
+            except json.JSONDecodeError:
+                try:
+                    parsed = ast.literal_eval(normalized)
+                except (SyntaxError, ValueError) as loose_exc:
+                    logger.debug("Agent JSON parse failed: strict=%s loose=%s", strict_exc, loose_exc)
+                    return None
+                return parsed
 
     @staticmethod
     def _extract_fenced_json(text: str) -> str | None:

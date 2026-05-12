@@ -1,10 +1,11 @@
+import asyncio
 import concurrent.futures
 import json
 import threading
 import logging
 import re
 import time
-from typing import Any, ClassVar, Iterator
+from typing import Any, AsyncIterator, ClassVar, Iterator
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -57,6 +58,24 @@ class AgentDecision(BaseModel):
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 _speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_SYNC_ITER_SENTINEL = object()
+
+
+def _next_or_sentinel(iterator: Iterator[dict]) -> dict | object:
+    """Advance a sync generator in a worker thread without leaking StopIteration."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _SYNC_ITER_SENTINEL
+
+
+async def _async_from_sync_iter(iterator: Iterator[dict]) -> AsyncIterator[dict]:
+    """Bridge blocking sync agent streams into async SSE without blocking the event loop."""
+    while True:
+        item = await asyncio.to_thread(_next_or_sentinel, iterator)
+        if item is _SYNC_ITER_SENTINEL:
+            break
+        yield item
 
 
 def _parse_agent_declared_next_action(payload: object) -> AgentDecision | None:
@@ -3159,7 +3178,7 @@ class TStationChatServiceV2:
                 "mutating_tools": _SPECULATIVE_MUTATING_TOOLS,
             }
 
-        for event in _coordinator.stream(
+        coordinator_iter = _coordinator.stream(
             messages,
             domains=domains,
             slot_context=slot_context,
@@ -3174,7 +3193,8 @@ class TStationChatServiceV2:
             speculative_guard=speculative_guard,
             routing_result=routing_result,
             initial_slots=initial_slots,
-        ):
+        )
+        async for event in _async_from_sync_iter(coordinator_iter):
             _lat_now = time.perf_counter()
             event_type = event.get("type")
 
