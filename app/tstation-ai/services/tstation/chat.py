@@ -1538,7 +1538,6 @@ _INTERNAL_JARGON_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
 # ---------------------------------------------------------------------------
 # Rule-Based Routing — fast-path classifier (no LLM call)
 # ---------------------------------------------------------------------------
@@ -3163,6 +3162,7 @@ class TStationChatServiceV2:
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
+
     @staticmethod
     async def _stream_response_multi(
         messages: list[dict],
@@ -3359,6 +3359,19 @@ class TStationChatServiceV2:
                         template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
                         if template_payload:
                             draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                # Inject quickReplies into orderComplete (LLM-written path; mapper path injects via _map_order_complete).
+                if last_template == "orderComplete" and isinstance(event_data, dict) and "quickReplies" not in event_data:
+                    if event_data.get("isSuccess"):
+                        event_data["quickReplies"] = [
+                            {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+                            {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
+                    else:
+                        event_data["quickReplies"] = [
+                            {"label": "다시 시도", "domain": "TRANSACTION"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
