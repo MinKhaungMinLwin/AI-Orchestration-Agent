@@ -8,11 +8,21 @@ Provides interface for:
 """
 
 import logging
+import time
 import uuid
 from typing import Any, Optional
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import (
+    ChangeAliasesOperation,
+    CreateAlias,
+    CreateAliasOperation,
+    DeleteAlias,
+    DeleteAliasOperation,
+    Distance,
+    PointStruct,
+    VectorParams,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +282,74 @@ class QdrantService:
         except Exception as e:
             logger.exception(f"Failed to create multi-vector collection {collection_name}")
             raise
+
+    def create_versioned_collection_name(self, alias_name: str) -> str:
+        """Build a physical collection name for blue/green FAQ indexing."""
+        safe_alias = alias_name.replace("-", "_").replace(".", "_")
+        return f"{safe_alias}__{int(time.time())}__{uuid.uuid4().hex[:8]}"
+
+    def create_collection_multi_vector_if_absent(
+        self,
+        collection_name: str,
+        vector_size: int = 1536,
+        distance: Distance = Distance.COSINE,
+    ) -> bool:
+        """Create a multi-vector collection without deleting any existing collection."""
+        existing = {c.name for c in self.client.get_collections().collections}
+        if collection_name in existing:
+            logger.info("Collection %s already exists; keeping it", collection_name)
+            return False
+
+        self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config={
+                "question": VectorParams(size=vector_size, distance=distance),
+                "answer": VectorParams(size=vector_size, distance=distance),
+            },
+        )
+        logger.info("Created multi-vector collection: %s (size=%d)", collection_name, vector_size)
+        return True
+
+    def get_alias_target(self, alias_name: str) -> str | None:
+        """Return physical collection currently attached to alias, if any."""
+        aliases = self.client.get_aliases().aliases
+        for alias in aliases:
+            if alias.alias_name == alias_name:
+                return alias.collection_name
+        return None
+
+    def swap_alias(self, alias_name: str, new_collection_name: str) -> str | None:
+        """Move alias to a new collection. Returns previous collection name."""
+        old_collection = self.get_alias_target(alias_name)
+        existing_collections = {c.name for c in self.client.get_collections().collections}
+
+        # First migration: the configured name may still be a real collection.
+        # Qdrant cannot create an alias with the same name as an existing collection,
+        # so delete the legacy collection only after the green collection is ready.
+        if old_collection is None and alias_name in existing_collections:
+            old_collection = alias_name
+            self.client.delete_collection(collection_name=alias_name)
+            logger.warning(
+                "Deleted legacy collection %s before creating alias with the same name",
+                alias_name,
+            )
+
+        operations: list[ChangeAliasesOperation] = []
+        if old_collection and old_collection != alias_name:
+            operations.append(
+                DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=alias_name))
+            )
+        operations.append(
+            CreateAliasOperation(
+                create_alias=CreateAlias(
+                    collection_name=new_collection_name,
+                    alias_name=alias_name,
+                )
+            )
+        )
+        self.client.update_collection_aliases(change_aliases_operations=operations)
+        logger.info("Swapped Qdrant alias %s: %s -> %s", alias_name, old_collection, new_collection_name)
+        return old_collection
 
     def upsert_multi_vector(
         self,

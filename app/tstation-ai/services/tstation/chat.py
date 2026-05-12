@@ -1,10 +1,11 @@
+import asyncio
 import concurrent.futures
 import json
 import threading
 import logging
 import re
 import time
-from typing import Any, ClassVar, Iterator
+from typing import Any, AsyncIterator, ClassVar, Iterator
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -57,6 +58,25 @@ class AgentDecision(BaseModel):
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 _speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_decision_verify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_SYNC_ITER_SENTINEL = object()
+
+
+def _next_or_sentinel(iterator: Iterator[dict]) -> dict | object:
+    """Advance a sync generator in a worker thread without leaking StopIteration."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _SYNC_ITER_SENTINEL
+
+
+async def _async_from_sync_iter(iterator: Iterator[dict]) -> AsyncIterator[dict]:
+    """Bridge blocking sync agent streams into async SSE without blocking the event loop."""
+    while True:
+        item = await asyncio.to_thread(_next_or_sentinel, iterator)
+        if item is _SYNC_ITER_SENTINEL:
+            break
+        yield item
 
 
 def _parse_agent_declared_next_action(payload: object) -> AgentDecision | None:
@@ -908,6 +928,8 @@ class StreamingMultiAgentCoordinator:
         pending_slots_dirty = False
 
         is_first_agent = True
+        decision_verify_future: concurrent.futures.Future | None = None
+        decision_guard: dict | None = None
 
         for domain in domains:
             agent = self.agent_map.get(domain)
@@ -1002,6 +1024,7 @@ class StreamingMultiAgentCoordinator:
             # )
 
             speculative_buffer: list[dict] = []
+            active_speculative_guard = speculative_guard or decision_guard
             classifier_done = threading.Event()
             classifier_result: tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None] | None = None
             restart_routing_result: MultiAgentDomain | None = None
@@ -1088,11 +1111,12 @@ class StreamingMultiAgentCoordinator:
                     prompt_name=f"{domain_key}_agent",
                     run_name=f"💭 {domain_key}_agent",
                 )
-                if speculative_guard:
-                    speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
-                    agent_trace_config.setdefault("configurable", {})["speculative_tool_guard"] = speculative_guard
+                if active_speculative_guard:
+                    if active_speculative_guard is speculative_guard:
+                        active_speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
+                    agent_trace_config.setdefault("configurable", {})["speculative_tool_guard"] = active_speculative_guard
                 for event in agent.stream(enriched_messages, config=agent_trace_config):
-                    if speculative_buffer and speculative_guard and speculative_guard["confirm_event"].is_set():
+                    if speculative_buffer and active_speculative_guard and active_speculative_guard["confirm_event"].is_set():
                         yield from _flush_speculative_buffer()
                     if classify_future is not None and classifier_done.is_set():
                         is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
@@ -1248,6 +1272,24 @@ class StreamingMultiAgentCoordinator:
                 "status": "done",
             }
 
+            if decision_verify_future is not None and decision_verify_future.done():
+                verified_decision = decision_verify_future.result()
+                mismatch_decision = decision_guard.get("mismatch_decision") if decision_guard else None
+                if mismatch_decision is None:
+                    logger.debug(
+                        "[COORDINATOR] planner verifier confirmed in background: %s -> %s",
+                        verified_decision.next_action,
+                        verified_decision.next_domain,
+                    )
+                else:
+                    logger.warning(
+                        "[COORDINATOR] planner verifier mismatch after speculative continuation: %s -> %s",
+                        mismatch_decision.next_action,
+                        mismatch_decision.next_domain,
+                    )
+                decision_verify_future = None
+                decision_guard = None
+
             # LLM Decision: After first agent, use LLM to decide next action
             # Support domain rarely chains to other agents — skip LLM decision to save ~300ms
             if is_first_agent:
@@ -1386,6 +1428,40 @@ class StreamingMultiAgentCoordinator:
                         decision.next_action,
                         decision.reason,
                     )
+                    if decision.next_action == NextAction.CONTINUE and decision.next_domain:
+                        decision_guard = {
+                            "confirm_event": threading.Event(),
+                            "mutating_tools": _SPECULATIVE_MUTATING_TOOLS,
+                        }
+
+                        def _verify_planner_decision() -> AgentDecision:
+                            llm_decision = decide_next_action(
+                                original_messages=messages,
+                                previous_agent_response=full_response,
+                                previous_domain=domain_key,
+                                session_id=session_id,
+                                user_id=user_id,
+                                trace_id=trace_id,
+                                parent_span_id=parent_span_id,
+                            )
+                            planned_domain = decision.next_domain.lower()
+                            verified_domain = (llm_decision.next_domain or "").lower()
+                            verified = (
+                                llm_decision.next_action == decision.next_action
+                                and verified_domain == planned_domain
+                            )
+                            if verified:
+                                decision_guard["confirm_event"].set()
+                            else:
+                                decision_guard["mismatch_decision"] = llm_decision
+                            return llm_decision
+
+                        def _wait_for_decision_verifier() -> bool:
+                            decision_verify_future.result()
+                            return decision_guard["confirm_event"].is_set()
+
+                        decision_guard["wait_for_confirmation"] = _wait_for_decision_verifier
+                        decision_verify_future = _decision_verify_executor.submit(_verify_planner_decision)
                 else:
                     decision = decide_next_action(
                         original_messages=messages,
@@ -1461,7 +1537,6 @@ _INTERNAL_JARGON_PATTERN = re.compile(
     r"No tool data retrieved|tool data|source data",
     re.IGNORECASE,
 )
-
 
 # ---------------------------------------------------------------------------
 # Rule-Based Routing — fast-path classifier (no LLM call)
@@ -1545,7 +1620,7 @@ _GOAL_SWITCH_RE = re.compile(r"다른|새로|이번엔|바꿔|이전\s*추천\s*
 _GOAL_FAST_PATH_ENABLED = True
 
 
-_SPECULATIVE_UNSAFE_DOMAINS = {MultiAgentDomain.Domain.TRANSACTION}
+_SPECULATIVE_UNSAFE_DOMAINS = set()
 _SPECULATIVE_MUTATING_TOOLS = {
     "quick_order_tool",
     "save_to_cart_tool",
@@ -1999,7 +2074,7 @@ class TStationChatServiceV2:
             "",
         ]
 
-        for idx, item in enumerate(tool_data):
+        for idx, item in enumerate(tool_data[:3]):
             tool_name = item.get("tool", "")
             label = tool_labels.get(tool_name, tool_name)
             tool_input = item.get("input", {})
@@ -2014,18 +2089,18 @@ class TStationChatServiceV2:
             lines.append(header)
 
             if isinstance(data, list):
-                for i, row in enumerate(data, 1):
+                for i, row in enumerate(data[:5], 1):
                     if isinstance(row, dict):
                         if row.get("_truncated"):
                             lines.append(f"  ... {row['_truncated']}")
                         else:
                             row_str = " | ".join(f"{k}: {v}" for k, v in row.items())
-                            lines.append(f"  {i}. {row_str}")
+                            lines.append(f"  {i}. {row_str[:1000]}")
                     else:
                         lines.append(f"  {i}. {row}")
             elif isinstance(data, dict):
                 row_str = " | ".join(f"{k}: {v}" for k, v in data.items())
-                lines.append(f"  {row_str}")
+                lines.append(f"  {row_str[:1500]}")
 
             lines.append("")
 
@@ -2445,6 +2520,9 @@ class TStationChatServiceV2:
         slot_context = None
         slot_context_with_intent = None
         tool_context = None
+        routing_result = None
+        speculative_classify_future: concurrent.futures.Future | None = None
+        classify_future: concurrent.futures.Future | None = None
 
         # Defaults hoisted above the try block so the P0 auto-chain gate below
         # can safely inspect them even if slot processing raises.
@@ -2464,13 +2542,12 @@ class TStationChatServiceV2:
                 existing_slots,
                 prev_tool_data,
                 latest_listcar_tmpl,
+                latest_location_tmpl,
                 quick_reply_domain_values,
                 predicted_domain_values,
             ) = await chat_history_svc.get_chat_context_pipeline_async(
                 request.session_id, _TEMPLATE_ENRICH_MAX_TURNS
             )
-            
-            latest_location_tmpl = None
             _t_slots = time.perf_counter()
             logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
@@ -2491,6 +2568,15 @@ class TStationChatServiceV2:
             if len(messages) > _MAX_HISTORY_MESSAGES:
                 messages = messages[-_MAX_HISTORY_MESSAGES:]
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
+
+            classify_future = _speculative_classify_executor.submit(
+                _coordinator.classify_multi_intent,
+                messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+                parent_span_id=_parent_span_id,
+            )
 
             # 2) Extract regex-based slots from the LATEST user message only
             for msg in reversed(request.messages):
@@ -2641,10 +2727,6 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    if latest_location_tmpl is None:
-                        latest_location_tmpl = chat_history_svc.get_latest_template_data(
-                            request.session_id, "location"
-                        )
                     resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
                         last_user_text, latest_location_tmpl
                     )
@@ -2678,8 +2760,8 @@ class TStationChatServiceV2:
             if prev_tool_data:
                 tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
                 # Cap tool context to avoid consuming too much of the context window
-                if len(tool_context) > 8000:
-                    tool_context = tool_context[:8000] + "\n... (일부 생략)"
+                if len(tool_context) > 4000:
+                    tool_context = tool_context[:4000] + "\n... (일부 생략)"
                 logger.debug(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results ({len(tool_context)} chars)")
 
         except Exception as e:
@@ -2700,8 +2782,6 @@ class TStationChatServiceV2:
             if _d in _VALID_CHIP_DOMAINS:
                 _chip_domain = _d
 
-        routing_result = None
-        speculative_classify_future: concurrent.futures.Future | None = None
         with _trace_span(
             "classify",
             trace_id=request.tracing_id,
@@ -2710,14 +2790,15 @@ class TStationChatServiceV2:
         ) as _classify_span:
             import asyncio
 
-            classify_future = _speculative_classify_executor.submit(
-                _coordinator.classify_multi_intent,
-                messages,
-                session_id=request.session_id,
-                user_id=request.user_id,
-                trace_id=request.tracing_id,
-                parent_span_id=_classify_span.id or _parent_span_id,
-            )
+            if classify_future is None:
+                classify_future = _speculative_classify_executor.submit(
+                    _coordinator.classify_multi_intent,
+                    messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_classify_span.id or _parent_span_id,
+                )
 
             if settings.AI_SPECULATIVE_CLASSIFY_ENABLED:
                 predicted_domains = None
@@ -3081,6 +3162,7 @@ class TStationChatServiceV2:
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
+
     @staticmethod
     async def _stream_response_multi(
         messages: list[dict],
@@ -3159,7 +3241,7 @@ class TStationChatServiceV2:
                 "mutating_tools": _SPECULATIVE_MUTATING_TOOLS,
             }
 
-        for event in _coordinator.stream(
+        coordinator_iter = _coordinator.stream(
             messages,
             domains=domains,
             slot_context=slot_context,
@@ -3174,7 +3256,8 @@ class TStationChatServiceV2:
             speculative_guard=speculative_guard,
             routing_result=routing_result,
             initial_slots=initial_slots,
-        ):
+        )
+        async for event in _async_from_sync_iter(coordinator_iter):
             _lat_now = time.perf_counter()
             event_type = event.get("type")
 
@@ -3276,6 +3359,19 @@ class TStationChatServiceV2:
                         template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
                         if template_payload:
                             draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                # Inject quickReplies into orderComplete (LLM-written path; mapper path injects via _map_order_complete).
+                if last_template == "orderComplete" and isinstance(event_data, dict) and "quickReplies" not in event_data:
+                    if event_data.get("isSuccess"):
+                        event_data["quickReplies"] = [
+                            {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+                            {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
+                    else:
+                        event_data["quickReplies"] = [
+                            {"label": "다시 시도", "domain": "TRANSACTION"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue

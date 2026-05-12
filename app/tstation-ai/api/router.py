@@ -47,6 +47,9 @@ elif settings.ENV == Environment.PROD:
     # Healthcheck & Metrics
     router.include_router(monitoring.router, tags=["Healthcheck & Metrics"], prefix="", include_in_schema=False)
 
+    # T-Station Chat
+    router.include_router(tstation_chat_message.router, tags=["Chat Message"], prefix="/tstation/messages", include_in_schema=False)
+
     # FAQ Sync
     router.include_router(tstation_faq_sync.router, tags=["FAQ Sync"], prefix="/tstation/faq", include_in_schema=False)
 

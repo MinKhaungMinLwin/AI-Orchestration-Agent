@@ -22,7 +22,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 # just to compute a dynamic fetch_k.
 # ─────────────────────────────────────────────
 _collection_size_cache: dict[str, tuple[int, float]] = {}
-_COLLECTION_CACHE_TTL: float = 300.0
+_COLLECTION_CACHE_TTL: float = 3600.0
 
 logger = logging.getLogger(__name__)
 
