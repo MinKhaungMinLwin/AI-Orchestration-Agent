@@ -508,10 +508,10 @@ class ChatHistoryService:
             return None
 
     def get_history_for_llm(self, session_id: str) -> list[dict]:
-        """Return [summary_msg] + last N messages when summary exists, else full history."""
+        """Return [summary_msg] + last N messages when summary exists, else last 20 messages."""
         summary = self.get_summary(session_id)
         if summary is None:
-            return self.get_history(session_id)
+            return self.get_history_range(session_id, -20, -1)
 
         crypto = get_crypto_service()
         tmpl_key = _get_template_messages_key(session_id)
