@@ -1481,6 +1481,22 @@ _INTERNAL_JARGON_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Post-completion feedback fast-path (chip labels from orderComplete quickReplies)
+# ---------------------------------------------------------------------------
+
+_FEEDBACK_QUICK_REPLIES: list[dict] = [{"label": "처음으로", "domain": "LEADING"}]
+
+_FEEDBACK_RESPONSES: dict[str, str] = {
+    "It is helpful": "도움이 되었다니 다행이에요! 😊 더 궁금한 점이 있으시면 언제든지 문의해 주세요.",
+    "Not helpful": "불편을 드려 죄송합니다. 😔 더 나은 도움을 드리기 위해 노력하겠습니다. 추가로 도움이 필요하신 것이 있으신가요?",
+}
+
+
+def _check_feedback(text: str) -> str | None:
+    """Return a canned response text when the message is a satisfaction chip, else None."""
+    return _FEEDBACK_RESPONSES.get(text.strip())
+
 
 # ---------------------------------------------------------------------------
 # Rule-Based Routing — fast-path classifier (no LLM call)
@@ -2411,6 +2427,22 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
+        # Feedback fast-path: satisfaction chips ("It is helpful" / "Not helpful")
+        feedback_text = _check_feedback(last_user_msg)
+        if feedback_text:
+            logger.debug("[CHAT_V2] Feedback fast-path: %r", last_user_msg.strip())
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_feedback_response(feedback_text),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=feedback_text)
+
         # Create parent "chat" span before classify so ALL sub-calls (classify,
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
@@ -3096,6 +3128,23 @@ class TStationChatServiceV2:
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
         yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_feedback_response(response_text: str):
+        """Stream a satisfaction-chip feedback response without invoking any agent."""
+        yield f"data: {json.dumps({'type': 'token', 'content': response_text}, ensure_ascii=False)}\n\n"
+        data_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": response_text,
+                "quickReplies": _FEEDBACK_QUICK_REPLIES,
+            },
+        }
+        yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"

@@ -1027,6 +1027,18 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
     text = (assistant_text or "").strip()
     assistant_response = text if text and len(text) <= 120 else default_msg
 
+    if is_success:
+        quick_replies = [
+            {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+            {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ]
+    else:
+        quick_replies = [
+            {"label": "다시 시도", "domain": "TRANSACTION"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ]
+
     return {
         "type": "data",
         "template": "orderComplete",
@@ -1049,6 +1061,7 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                 "goodsId": goods_no,
                 "shopId": shop_id or None,
             },
+            "quickReplies": quick_replies,
         },
     }
 
