@@ -215,7 +215,14 @@ class ChatHistoryService:
         logger.warning(f"[CHAT_HISTORY] Session {session_id} not found for user {user_id}")
         return self.create_session_id(user_id)
 
-    def save_message(self, session_id: str, role: str, content: str, template_data: Optional[dict] = None) -> str:
+    def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        template_data: Optional[dict] = None,
+        user_id: Optional[str] = None,
+    ) -> str:
         """Save message to Redis as JSON in sorted set.
 
         Args:
@@ -223,6 +230,8 @@ class ChatHistoryService:
             role: "user" or "assistant"
             content: Message content
             template_data: Optional UI template data (default None)
+            user_id: Optional user ID — when provided, TTL refresh on the user
+                session set is included in the same pipeline (saves 1 round-trip).
         """
         msg_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
@@ -239,21 +248,27 @@ class ChatHistoryService:
             "template_data": encrypted_template,
             "created_at": now,
         })
-        # Score = timestamp for ordering
         score = datetime.now().timestamp()
-        self.redis.zadd(_get_template_messages_key(session_id), {msg_json: score})
-
-        # Update metadata (last_message preview is also encrypted)
+        tmpl_key = _get_template_messages_key(session_id)
         meta_key = _get_meta_key(session_id)
-        self.redis.hset(meta_key, mapping={
+
+        # Batch all writes + TTL refreshes into a single round-trip.
+        pipe = self.redis.pipeline()
+        pipe.zadd(tmpl_key, {msg_json: score})
+        pipe.hset(meta_key, mapping={
             "updated_at": now,
             "last_message": crypto.encrypt(content[:100]) or "",
         })
+        pipe.expire(tmpl_key, CHAT_HISTORY_TTL_SECONDS)
+        pipe.expire(meta_key, CHAT_HISTORY_TTL_SECONDS)
+        if user_id:
+            pipe.expire(_get_session_set_key(user_id), CHAT_HISTORY_TTL_SECONDS)
+        pipe.execute()
 
-        self._refresh_session_ttl(session_id)
-
-        logger.debug(f"[CHAT_HISTORY] Saved {role} message to session {session_id}" +
-                  (f" with template_data" if template_data is not None else ""))
+        logger.debug(
+            "[CHAT_HISTORY] Saved %s message to session %s%s",
+            role, session_id, " with template_data" if template_data is not None else "",
+        )
         return msg_id
 
     def get_history(self, session_id: str) -> List[dict]:
@@ -333,14 +348,19 @@ class ChatHistoryService:
     def list_sessions(self, user_id: str) -> List[dict]:
         """List all sessions for a user (decrypts last_message preview)."""
         session_set_key = _get_session_set_key(user_id)
-        session_ids = self.redis.smembers(session_set_key)
+        session_ids = list(self.redis.smembers(session_set_key))
+        if not session_ids:
+            return []
+
         crypto = get_crypto_service()
+        pipe = self.redis.pipeline()
+        for sid in session_ids:
+            pipe.hgetall(_get_meta_key(sid))
+        meta_results = pipe.execute()
 
         sessions = []
-        for session_id in session_ids:
-            meta_key = _get_meta_key(session_id)
-            meta = self.redis.hgetall(meta_key)
-
+        orphaned = []
+        for session_id, meta in zip(session_ids, meta_results):
             if meta:
                 sessions.append({
                     "session_id": session_id,
@@ -348,10 +368,14 @@ class ChatHistoryService:
                     "updated_at": meta.get("updated_at", ""),
                 })
             else:
-                # Orphaned session, remove from set
-                self.redis.srem(session_set_key, session_id)
+                orphaned.append(session_id)
 
-        # Sort by updated_at descending
+        if orphaned:
+            pipe = self.redis.pipeline()
+            for sid in orphaned:
+                pipe.srem(session_set_key, sid)
+            pipe.execute()
+
         sessions.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
         return sessions
 
@@ -493,10 +517,10 @@ class ChatHistoryService:
             return None
 
     def get_history_for_llm(self, session_id: str) -> list[dict]:
-        """Return [summary_msg] + last N messages when summary exists, else full history."""
+        """Return [summary_msg] + last N messages when summary exists, else last 20 messages."""
         summary = self.get_summary(session_id)
         if summary is None:
-            return self.get_history(session_id)
+            return self.get_history_range(session_id, -20, -1)
 
         crypto = get_crypto_service()
         tmpl_key = _get_template_messages_key(session_id)
@@ -717,7 +741,7 @@ class ChatHistoryService:
 
     async def get_chat_context_pipeline_async(
         self, session_id: str, limit: int
-    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None, list[str], list[str]]:
+    ) -> tuple[list[dict], ConversationSlots, list[dict], dict | None, dict | None, list[str], list[str]]:
         """Fetch hot-path chat context in one Redis pipeline."""
         tmpl_key = _get_template_messages_key(session_id)
         meta_key = _get_meta_key(session_id)
@@ -736,6 +760,7 @@ class ChatHistoryService:
         crypto = get_crypto_service()
         recent_template_msgs = []
         latest_listcar_tmpl = None
+        latest_location_tmpl = None
 
         # Parse template messages
         for raw in raw_items:
@@ -751,10 +776,14 @@ class ChatHistoryService:
 
             td_decoded = _decode_template_data(td_raw, crypto)
 
-            if latest_listcar_tmpl is None and td_decoded and td_decoded.get("template") == "listCar":
+            if td_decoded:
                 inner = td_decoded.get("data")
                 if isinstance(inner, dict):
-                    latest_listcar_tmpl = inner
+                    tmpl_name = td_decoded.get("template")
+                    if latest_listcar_tmpl is None and tmpl_name == "listCar":
+                        latest_listcar_tmpl = inner
+                    if latest_location_tmpl is None and tmpl_name == "location":
+                        latest_location_tmpl = inner
 
             if len(recent_template_msgs) < limit:
                 recent_template_msgs.append({
@@ -801,7 +830,7 @@ class ChatHistoryService:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl, quick_reply_domains, predicted_domains
+        return recent_template_msgs, slots, tool_ctx, latest_listcar_tmpl, latest_location_tmpl, quick_reply_domains, predicted_domains
 
 
 # Singleton instance
