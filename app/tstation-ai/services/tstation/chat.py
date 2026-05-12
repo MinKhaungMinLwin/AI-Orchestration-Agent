@@ -3232,6 +3232,11 @@ class TStationChatServiceV2:
         # to avoid the "long text flashes then gets replaced by card" UX issue.
         from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP
 
+        _SUPPRESS_ON_TOOLS = frozenset(
+            tool
+            for tool, template in _TOOL_TEMPLATE_MAP.items()
+            if template in {"product", "voucher", "cheapestProduct", "previewYoutube", "location", "datepick"}
+        )
         _suppress_tokens = False
 
         speculative_guard = None
@@ -3268,8 +3273,9 @@ class TStationChatServiceV2:
             # the local QC / sanitize step still has the full text). ---
             if event_type == "token":
                 if event.get("content"):
-                    draft_response += event["content"]
-                    draft_for_qc += event["content"]
+                    if not _suppress_tokens:
+                        draft_response += event["content"]
+                        draft_for_qc += event["content"]
                     if not _lat_first_token_seen:
                         _lat_first_token_seen = True
                         _lat_first_token_time = _lat_now
@@ -3291,14 +3297,6 @@ class TStationChatServiceV2:
                     logger.debug(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
                 # Suppress tokens when a "list display" tool is called (card will replace text).
                 # Exclude car lookup tools — agent may need to show selection text first.
-                _SUPPRESS_ON_TOOLS = {
-                    "search_product_tool",
-                    "get_products_recommendations_tool",
-                    "get_available_coupons_tool",
-                    "get_my_coupons_tool",
-                    "compare_discount_tool",
-                    "search_youtube_video_tool",
-                }
                 if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
                 input_data = event.get("input", {})
@@ -3342,6 +3340,9 @@ class TStationChatServiceV2:
                 if isinstance(event_data, dict):
                     if event_data.get("assistantResponse"):
                         assistant_response = event_data["assistantResponse"]
+                        if _suppress_tokens:
+                            draft_response = assistant_response
+                            draft_for_qc = assistant_response
                         source_domain = str(event.get("source_domain", "ui_template")).upper()
                         assistant_msg_event = {
                             "type": "message",
