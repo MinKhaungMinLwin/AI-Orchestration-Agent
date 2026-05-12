@@ -2521,6 +2521,9 @@ class TStationChatServiceV2:
         slot_context = None
         slot_context_with_intent = None
         tool_context = None
+        routing_result = None
+        speculative_classify_future: concurrent.futures.Future | None = None
+        classify_future: concurrent.futures.Future | None = None
 
         # Defaults hoisted above the try block so the P0 auto-chain gate below
         # can safely inspect them even if slot processing raises.
@@ -2566,6 +2569,15 @@ class TStationChatServiceV2:
             if len(messages) > _MAX_HISTORY_MESSAGES:
                 messages = messages[-_MAX_HISTORY_MESSAGES:]
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
+
+            classify_future = _speculative_classify_executor.submit(
+                _coordinator.classify_multi_intent,
+                messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+                parent_span_id=_parent_span_id,
+            )
 
             # 2) Extract regex-based slots from the LATEST user message only
             for msg in reversed(request.messages):
@@ -2771,8 +2783,6 @@ class TStationChatServiceV2:
             if _d in _VALID_CHIP_DOMAINS:
                 _chip_domain = _d
 
-        routing_result = None
-        speculative_classify_future: concurrent.futures.Future | None = None
         with _trace_span(
             "classify",
             trace_id=request.tracing_id,
@@ -2781,14 +2791,15 @@ class TStationChatServiceV2:
         ) as _classify_span:
             import asyncio
 
-            classify_future = _speculative_classify_executor.submit(
-                _coordinator.classify_multi_intent,
-                messages,
-                session_id=request.session_id,
-                user_id=request.user_id,
-                trace_id=request.tracing_id,
-                parent_span_id=_classify_span.id or _parent_span_id,
-            )
+            if classify_future is None:
+                classify_future = _speculative_classify_executor.submit(
+                    _coordinator.classify_multi_intent,
+                    messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_classify_span.id or _parent_span_id,
+                )
 
             if settings.AI_SPECULATIVE_CLASSIFY_ENABLED:
                 predicted_domains = None
