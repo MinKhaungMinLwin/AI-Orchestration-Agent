@@ -94,7 +94,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     # Redis client is sync; run hot-path calls in worker threads so FastAPI's event loop stays free.
     session_id = await asyncio.to_thread(service.get_or_create_session_id, request.session_id, user_id)
-    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", request.content)
+    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", request.content, user_id=user_id)
     history = await asyncio.to_thread(service.get_history_for_llm, session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
@@ -137,7 +137,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     if isinstance(response, TStationChatResponse):
         # Save assistant response to history without blocking the event loop.
-        await asyncio.to_thread(service.save_message, session_id, "assistant", response.content)
+        await asyncio.to_thread(service.save_message, session_id, "assistant", response.content, user_id=user_id)
 
         return ChatMessageResponse(
             session_id=session_id,
@@ -221,6 +221,7 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
             "assistant",
             message_to_save,
             template_data=template_data,
+            user_id=chat_request.user_id,
         )
         logger.debug(f"[CHAT_MESSAGE] Saved assistant message" +
                   (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
@@ -335,6 +336,7 @@ async def append_message(
         role=request.role,
         content=request.content,
         template_data=request.template_data,
+        user_id=user_id,
     )
 
     return AppendMessageResponse(

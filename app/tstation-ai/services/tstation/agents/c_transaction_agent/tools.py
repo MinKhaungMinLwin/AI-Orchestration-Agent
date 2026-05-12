@@ -93,7 +93,7 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
         return orders
 
     detail_map: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(ord_nos), 5)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(ord_nos), 20)) as executor:
         futures = {executor.submit(_fetch_order_detail, ono): ono for ono in ord_nos}
         for future in as_completed(futures):
             ono = futures[future]

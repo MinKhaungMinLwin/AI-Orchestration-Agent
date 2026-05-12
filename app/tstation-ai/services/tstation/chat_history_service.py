@@ -215,7 +215,14 @@ class ChatHistoryService:
         logger.warning(f"[CHAT_HISTORY] Session {session_id} not found for user {user_id}")
         return self.create_session_id(user_id)
 
-    def save_message(self, session_id: str, role: str, content: str, template_data: Optional[dict] = None) -> str:
+    def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        template_data: Optional[dict] = None,
+        user_id: Optional[str] = None,
+    ) -> str:
         """Save message to Redis as JSON in sorted set.
 
         Args:
@@ -223,6 +230,8 @@ class ChatHistoryService:
             role: "user" or "assistant"
             content: Message content
             template_data: Optional UI template data (default None)
+            user_id: Optional user ID — when provided, TTL refresh on the user
+                session set is included in the same pipeline (saves 1 round-trip).
         """
         msg_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
@@ -239,21 +248,27 @@ class ChatHistoryService:
             "template_data": encrypted_template,
             "created_at": now,
         })
-        # Score = timestamp for ordering
         score = datetime.now().timestamp()
-        self.redis.zadd(_get_template_messages_key(session_id), {msg_json: score})
-
-        # Update metadata (last_message preview is also encrypted)
+        tmpl_key = _get_template_messages_key(session_id)
         meta_key = _get_meta_key(session_id)
-        self.redis.hset(meta_key, mapping={
+
+        # Batch all writes + TTL refreshes into a single round-trip.
+        pipe = self.redis.pipeline()
+        pipe.zadd(tmpl_key, {msg_json: score})
+        pipe.hset(meta_key, mapping={
             "updated_at": now,
             "last_message": crypto.encrypt(content[:100]) or "",
         })
+        pipe.expire(tmpl_key, CHAT_HISTORY_TTL_SECONDS)
+        pipe.expire(meta_key, CHAT_HISTORY_TTL_SECONDS)
+        if user_id:
+            pipe.expire(_get_session_set_key(user_id), CHAT_HISTORY_TTL_SECONDS)
+        pipe.execute()
 
-        self._refresh_session_ttl(session_id)
-
-        logger.debug(f"[CHAT_HISTORY] Saved {role} message to session {session_id}" +
-                  (f" with template_data" if template_data is not None else ""))
+        logger.debug(
+            "[CHAT_HISTORY] Saved %s message to session %s%s",
+            role, session_id, " with template_data" if template_data is not None else "",
+        )
         return msg_id
 
     def get_history(self, session_id: str) -> List[dict]:
