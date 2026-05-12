@@ -150,6 +150,7 @@ def search_faq_rag_tool(
                 query_vector=query_embedding,
                 top_k=fetch_k,
                 score_threshold=None,
+                using="question",
             )
 
         # 4. Adaptive threshold: detect natural score gap instead of using fixed 0.6.
