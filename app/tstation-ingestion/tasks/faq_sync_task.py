@@ -135,11 +135,12 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
     q_vecs = embeddings[: len(documents)]
     a_vecs = embeddings[len(documents) :]
 
-    # Drop and recreate the collection so the sync is a full replacement.
-    # Any points from the previous dataset that are absent in the new one
-    # are removed — the collection point count always matches len(documents).
-    qdrant_svc.create_collection_multi_vector(
-        collection_name=collection_name,
+    # Blue/green indexing: build a fresh physical collection first, then swap
+    # the stable alias only after the new collection is fully populated.
+    alias_name = collection_name
+    target_collection = qdrant_svc.create_versioned_collection_name(alias_name)
+    qdrant_svc.create_collection_multi_vector_if_absent(
+        collection_name=target_collection,
         vector_size=embedding_svc.get_embedding_dimension(),
     )
 
@@ -162,12 +163,30 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
         point_ids.append(_faq_point_id(doc.get("id")))
 
     result = qdrant_svc.upsert_multi_vector(
-        collection_name=collection_name,
+        collection_name=target_collection,
         documents=slim_docs,
         question_vectors=q_vecs,
         answer_vectors=a_vecs,
         point_ids=point_ids,
         batch_size=50,
+    )
+
+    stats = qdrant_svc.get_collection_stats(target_collection)
+    indexed_count = stats.get("points_count") or 0
+    if indexed_count != len(slim_docs):
+        qdrant_svc.delete_collection(target_collection)
+        raise RuntimeError(
+            f"Indexed count mismatch for {target_collection}: "
+            f"expected={len(slim_docs)} actual={indexed_count}"
+        )
+
+    old_collection = qdrant_svc.swap_alias(alias_name, target_collection)
+    result.update(
+        {
+            "alias_name": alias_name,
+            "collection_name": target_collection,
+            "previous_collection_name": old_collection,
+        }
     )
     return result
 
