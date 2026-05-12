@@ -1026,7 +1026,14 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
 
 
 @tool
-def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str | None = None):
+def quick_order_tool(
+    goods_no: str,
+    ord_qty: int,
+    shop_id: str,
+    car_lnc_cd: str | None = None,
+    rsv_date: str | None = None,
+    rsv_hour: str | None = None,
+):
     """
     퀵쇼핑 주문 실행 (매장 선택 포함).
 
@@ -1045,11 +1052,16 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
         ord_qty (int): Quantity (min 1).
         shop_id (str): Store ID from store tool results (e.g., "CXXXXX").
         car_lnc_cd (str | None): Vehicle launch code (optional).
+        rsv_date (str | None): 방문 예약일자 YYYYMMDD (e.g., "20260423"). datepick 선택값을 변환해서 전달.
+        rsv_hour (str | None): 방문 예약시간 HH 00~23 두 자리 (e.g., "11"). datepick 선택값의 시(hour)만 두 자리로 전달.
 
-    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX"}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX", "rsv_date": "20260423", "rsv_hour": "11"}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
-    logger.debug("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s", goods_info_arr_str, shop_id, car_lnc_cd)
+    logger.debug(
+        "[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s, rsv_date=%s, rsv_hour=%s",
+        goods_info_arr_str, shop_id, car_lnc_cd, rsv_date, rsv_hour,
+    )
 
     try:
         body = SetOrderFormAIRequest(
@@ -1058,6 +1070,8 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
             drt_pur_yn="Y",
             shop_seq=shop_id,
             car_lnc_cd=car_lnc_cd,
+            rsv_date=rsv_date,
+            rsv_hour=rsv_hour,
         )
         response = set_order_form_ai(client=get_client(), body=body)
         if response.parsed is None:
