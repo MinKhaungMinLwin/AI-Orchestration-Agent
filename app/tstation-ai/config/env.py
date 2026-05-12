@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     AI_DEFAULT_PROVIDER: str
     AI_GATEWAY_BASE_URL: str
     AI_GATEWAY_API_KEY: str
+    LITELLM_USER_MAX_BUDGET: float = 20.0       # USD per user per budget period
+    LITELLM_USER_BUDGET_DURATION: str = "1mo"   # 1d | 7d | 1mo
     # Model tiers (reference values — declare what's available)
     AI_MODEL: str
     AI_MODEL_REASONING: str
