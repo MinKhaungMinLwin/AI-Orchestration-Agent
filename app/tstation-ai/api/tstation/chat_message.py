@@ -215,19 +215,19 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     # Priority: Use assistantResponse from UI Template Agent if available
     message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
     if message_to_save:
-        await asyncio.to_thread(
+        logger.debug(f"[CHAT_MESSAGE] Saving assistant message" +
+                  (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
+
+        # Fire-and-forget: don't block [DONE] on Redis write (~20-50ms).
+        from services.tstation.history_summarizer import refresh_summary
+        asyncio.create_task(asyncio.to_thread(
             service.save_message,
             session_id,
             "assistant",
             message_to_save,
             template_data=template_data,
             user_id=chat_request.user_id,
-        )
-        logger.debug(f"[CHAT_MESSAGE] Saved assistant message" +
-                  (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
-
-        # Fire-and-forget: update the rolling summary when enough new history accumulates.
-        from services.tstation.history_summarizer import refresh_summary
+        ))
         asyncio.create_task(refresh_summary(session_id))
 
     yield "data: [DONE]\n\n"
