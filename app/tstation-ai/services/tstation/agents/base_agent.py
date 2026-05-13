@@ -611,12 +611,24 @@ class BaseAgent(ABC):
         always use the deterministic mapper even if the LLM emitted fenced JSON.
         The mapper enriches info with car_maker prefix and keeps info/description
         consistent; LLM-authored JSON drifts in format between turns.
+
+        Store-detail exception: when get_store_detail_tool ran, the LLM's
+        quickReply often slips into PROSE-MODE ("매장 상세정보를 확인했어요.")
+        and the rich detail fields never reach the user — only QC catches it.
+        _map_store_detail_info's own guards defer back to the LLM for Flow 5.1
+        (date-specific datepick / no-slot apology).
         """
         if not accumulated_tool_data:
             return None
-        _LIST_CAR_TOOLS = ("get_my_cars_tool", "get_user_vehicles_tool")
-        has_list_car_tool = any(e.get("tool") in _LIST_CAR_TOOLS for e in accumulated_tool_data)
-        if not has_list_car_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
+        _FORCE_CODE_MAPPER_TOOLS = (
+            "get_my_cars_tool",
+            "get_user_vehicles_tool",
+            "get_store_detail_tool",
+        )
+        has_force_code_mapper_tool = any(
+            e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
+        )
+        if not has_force_code_mapper_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
         if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
