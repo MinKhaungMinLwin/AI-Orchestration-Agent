@@ -61,6 +61,7 @@ class AgentPromptProfile(str, Enum):
     TRANSACTION_ORDER = "transaction_order"
     TRANSACTION_STORE = "transaction_store"
     TRANSACTION_PRICE_STOCK = "transaction_price_stock"
+    DISCOVERY_SEARCH = "discovery_search"
 
 
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
@@ -239,10 +240,11 @@ class MultiAgentDomain(BaseModel):
 
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
-            "Prompt profile for the selected domain agent. For clear transaction flows, use "
-            "'transaction_coupon' for coupon/promotion, 'transaction_order' for order history/status/cart/order, "
-            "'transaction_store' for store search/schedule/store inventory, and 'transaction_price_stock' for "
-            "price/final-price/logistics stock. Use 'full' for all other cases or if uncertain."
+            "Prompt profile for the selected domain agent. "
+            "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status), "
+            "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
+            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock with product name only, best-sellers — goods_no NOT yet known). "
+            "Use 'full' for tire recommendation, vehicle lookup, events/deals/YouTube, or any mixed/uncertain case."
         )
     )
 
@@ -275,8 +277,9 @@ class _SlimMultiAgentDomain(BaseModel):
     )
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
-            "Prompt profile for the selected domain agent. Use a transaction_* profile only for clear matching "
-            "transaction flows; otherwise use 'full'."
+            "Prompt profile for the selected domain agent. "
+            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size "
+            "or best-sellers (no goods_no in context); 'full' for recommendation, vehicle lookup, events, or uncertain cases."
         )
     )
 
@@ -302,12 +305,13 @@ Produce 6 outputs:
 4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
 5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 
-6. agent_prompt_profile - use a narrow profile only for clear transaction flows:
+6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
-   - "full": mixed, ambiguous, product discovery, support, leading, or uncertain cases
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock query with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "full": tire recommendation ("추천"), vehicle lookup, events/deals/YouTube, mixed, ambiguous, or uncertain cases
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -356,8 +360,8 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
-- SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation (주문 취소 / 취소하고 싶어 / 취소해줘), reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
 
@@ -376,7 +380,7 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "내 주문/주문 조회"
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어"
 
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
@@ -487,7 +491,7 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
 - SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
@@ -506,23 +510,30 @@ RULES:
 - Greeting only (안녕/hi/hello) → LEADING
 
 EXAMPLES (tricky cases):
-- "벤투스 S2 가격 얼마야?" → DISCOVERY (product name, no goods_no)
+- "벤투스 S2 가격 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (product name, no goods_no)
 - "G012345678901 가격" → TRANSACTION, agent_prompt_profile=transaction_price_stock
 - "G012345678901 재고 있어?" → TRANSACTION, agent_prompt_profile=transaction_price_stock
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
+- "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
-- "12가3456 타이어 추천" → DISCOVERY
-- "30만원 이하 타이어 추천해줘" → DISCOVERY (price range, no goods_no)
-- "20만원에서 30만원 사이 한국타이어" → DISCOVERY (price range search)
-- "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY (product name + 예약, no size, no goods_no — need to show size list first)
-- "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION] (product name + size → narrows to 1 result)
+- "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=full
+- "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=full (price range recommendation)
+- "20만원에서 30만원 사이 한국타이어" → DISCOVERY, agent_prompt_profile=discovery_search (product search by price range)
+- "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
+- "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
+- "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
+- "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
+- "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
 
 Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
-agent_prompt_profile: use a transaction_* profile only for clear matching transaction flows:
-coupon/promotion -> transaction_coupon; order/cart/status -> transaction_order;
-store/search/schedule/store inventory -> transaction_store; goods_no + price/final price/logistics stock -> transaction_price_stock.
-Use "full" for ambiguous, mixed, non-transaction, or uncertain cases.
+agent_prompt_profile:
+- transaction_coupon: coupon/promotion -> transaction_coupon
+- transaction_order: order/cart/status -> transaction_order
+- transaction_store: store/search/schedule/store inventory -> transaction_store
+- transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
+- full: tire recommendation ("추천"), vehicle lookup ("내 차에 맞는"), events/deals/YouTube, mixed, ambiguous, or uncertain
 """
 
 
@@ -594,7 +605,9 @@ class StreamingMultiAgentCoordinator:
         if agent is None:
             return None
         profile = getattr(routing, "agent_prompt_profile", AgentPromptProfile.FULL)
-        if domain == MultiAgentDomain.Domain.TRANSACTION and hasattr(agent, "for_prompt_profile"):
+        if domain in (MultiAgentDomain.Domain.TRANSACTION, MultiAgentDomain.Domain.DISCOVERY) and hasattr(
+            agent, "for_prompt_profile"
+        ):
             profile_value = profile.value if isinstance(profile, AgentPromptProfile) else str(profile)
             selected_agent = agent.for_prompt_profile(profile_value)
             logger.info(
