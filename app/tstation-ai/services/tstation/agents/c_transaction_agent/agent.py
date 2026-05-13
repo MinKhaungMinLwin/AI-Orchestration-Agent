@@ -876,8 +876,22 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 1. get_orders_of_user_tool
    → 1 order: auto call get_order_status_tool
    → multiple: show table, ask which order → then get_order_status_tool
-2. Show: order ID | progress | delivery status | tracking number (+ tracking link if available)
+2. Show order detail as a markdown table — EXACTLY this format:
+
+   | 항목 | 내용 |
+   |------|------|
+   | 주문번호 | O202604080019311 |
+   | 상품명 | Ventus S2 AS |
+   | 수량 | 2개 |
+   | 주문일시 | 2026-04-08 10:19:44 |
+   | 주문상태 | 출고완료 |
+   | 배송상태 | 배송중 |
+   | 송장번호 | 999999 |
+   | 배송예정일시 | 2026-04-18 15:00:00 |
+
+⚠️ NEVER use bullet points (•) for order details — always use the 2-column table above.
 ⚠️ NEVER show 배송번호 (delivery number, e.g. D202604080099605) in the response — this is an internal system ID, not useful to users.
+⚠️ Omit a row entirely if the field value is null/empty (do not show empty rows).
    Only show: 주문번호, 상품명, 수량, 주문일시, 주문상태, 배송상태, 송장번호, 배송예정일시
 
 
