@@ -242,6 +242,7 @@ class BaseAgent(ABC):
 
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
+        self._system_prompt_chars = len(prompt or "")
         return create_agent(
             model=self._model,
             tools=self._tools,
@@ -251,6 +252,10 @@ class BaseAgent(ABC):
             system_prompt=prompt,
             name=self.name,
         )
+
+    @property
+    def system_prompt_chars(self) -> int:
+        return getattr(self, "_system_prompt_chars", 0)
 
     def invoke(self, messages: list[dict], config: dict | None = None) -> str:
         agent = self._agent
