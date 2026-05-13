@@ -2154,6 +2154,139 @@ class TStationChatServiceV2:
         return "\n".join(lines)
 
     @staticmethod
+    def _active_context_values(slots: Any) -> set[str]:
+        """Return stable confirmed identifiers used to prune prompt context.
+
+        This is data-based compaction, not intent/routing logic: it only keeps
+        facts that match already-confirmed IDs or sizes.
+        """
+        values = set()
+        for field in ("goods_no", "shop_id", "tire_size"):
+            value = getattr(slots, field, None)
+            if value is not None:
+                values.add(str(value))
+        return values
+
+    @staticmethod
+    def _value_contains_active_context(value: Any, active_values: set[str]) -> bool:
+        if not active_values:
+            return False
+        if isinstance(value, dict):
+            return any(
+                TStationChatServiceV2._value_contains_active_context(v, active_values)
+                for v in value.values()
+            )
+        if isinstance(value, list):
+            return any(TStationChatServiceV2._value_contains_active_context(v, active_values) for v in value)
+        text = str(value)
+        return any(active in text for active in active_values)
+
+    @staticmethod
+    def _compact_context_item(item: dict, active_values: set[str]) -> dict:
+        """Narrow list rows to confirmed IDs/sizes when possible."""
+        if not active_values:
+            return item
+        data = item.get("data")
+        if not isinstance(data, list):
+            return item
+
+        matched_rows = [
+            row
+            for row in data
+            if isinstance(row, dict)
+            and TStationChatServiceV2._value_contains_active_context(row, active_values)
+        ]
+        if not matched_rows:
+            return item
+
+        compacted = dict(item)
+        compacted["data"] = matched_rows
+        if len(matched_rows) < len(data):
+            compacted["data"].append(
+                {"_truncated": f"{len(data) - len(matched_rows)} non-active row(s) omitted"}
+            )
+        return compacted
+
+    @staticmethod
+    def _select_tool_context_for_prompt(
+        tool_data: list[dict],
+        slots: Any,
+        max_items: int = 3,
+    ) -> list[dict]:
+        """Select prompt context by confirmed data and recency.
+
+        Redis keeps the full tool context for deterministic resolvers. This
+        function only reduces what the LLM has to read in the current prompt.
+        """
+        if not tool_data:
+            return []
+
+        active_values = TStationChatServiceV2._active_context_values(slots)
+        selected: list[dict] = []
+        selected_ids: set[int] = set()
+
+        if active_values:
+            for item in tool_data:
+                if TStationChatServiceV2._value_contains_active_context(item, active_values):
+                    selected.append(TStationChatServiceV2._compact_context_item(item, active_values))
+                    selected_ids.add(id(item))
+                    if len(selected) >= max_items:
+                        break
+
+        for item in tool_data:
+            if len(selected) >= max_items:
+                break
+            if id(item) in selected_ids:
+                continue
+            selected.append(item)
+
+        return selected
+
+    @staticmethod
+    def _messages_chars(messages: list[dict]) -> int:
+        """Count text chars in message contents for prompt-size observability."""
+        total = 0
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                total += len(content)
+            else:
+                total += len(str(content))
+        return total
+
+    @staticmethod
+    def _is_user_context_message(message: dict) -> bool:
+        """Identify injected user profile context that does not help domain classification."""
+        content = message.get("content", "")
+        return isinstance(content, str) and content.startswith("## USER CONTEXT INFORMATION")
+
+    @staticmethod
+    def _compact_messages_for_classifier(
+        messages: list[dict],
+        max_messages: int = 6,
+        max_chars: int = 6000,
+    ) -> list[dict]:
+        """Build a smaller message view for the router LLM only.
+
+        Domain classification needs recent conversation shape and the current
+        user request. The full agent prompt still receives the unmodified
+        messages, but the classifier should not pay for user-profile blocks or
+        stale long history.
+        """
+        candidates = [
+            dict(message)
+            for message in messages
+            if not TStationChatServiceV2._is_user_context_message(message)
+        ]
+        if not candidates:
+            return [dict(message) for message in messages[-1:]]
+
+        selected = candidates[-max_messages:]
+        while len(selected) > 1 and TStationChatServiceV2._messages_chars(selected) > max_chars:
+            selected = selected[1:]
+        return selected
+
+    @staticmethod
     def _resolve_goods_no_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
         """Match a user's list-selection reply against the prior search_product_tool
         result and return the goods_no of the matched item.
@@ -2557,6 +2690,7 @@ class TStationChatServiceV2:
             dropped = len(messages) - _MAX_HISTORY_MESSAGES
             messages = messages[-_MAX_HISTORY_MESSAGES:]
             logger.debug(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
+        classifier_messages = TStationChatServiceV2._compact_messages_for_classifier(messages)
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
         # Wrapped in try/except so slot failures never block the main chat flow
@@ -2614,11 +2748,46 @@ class TStationChatServiceV2:
             messages = TStationChatServiceV2._build_messages_with_user_info(_request_enriched)
             if len(messages) > _MAX_HISTORY_MESSAGES:
                 messages = messages[-_MAX_HISTORY_MESSAGES:]
+            messages_chars = TStationChatServiceV2._messages_chars(messages)
+            classifier_messages = TStationChatServiceV2._compact_messages_for_classifier(messages)
+            classifier_messages_chars = TStationChatServiceV2._messages_chars(classifier_messages)
+            logger.debug("[CONTEXT] messages_count=%d messages_chars=%d", len(messages), messages_chars)
+            logger.debug(
+                "[CLASSIFIER_CTX] messages_count=%d messages_chars=%d original_messages=%d original_chars=%d",
+                len(classifier_messages),
+                classifier_messages_chars,
+                len(messages),
+                messages_chars,
+            )
+            if request.tracing_id and _tracing_enabled:
+                try:
+                    tracer.create_score(
+                        trace_id=request.tracing_id,
+                        name="context.messages_count",
+                        value=len(messages),
+                    )
+                    tracer.create_score(
+                        trace_id=request.tracing_id,
+                        name="context.messages_chars",
+                        value=messages_chars,
+                    )
+                    tracer.create_score(
+                        trace_id=request.tracing_id,
+                        name="classifier.messages_count",
+                        value=len(classifier_messages),
+                    )
+                    tracer.create_score(
+                        trace_id=request.tracing_id,
+                        name="classifier.messages_chars",
+                        value=classifier_messages_chars,
+                    )
+                except Exception as exc:
+                    logger.debug("[TRACE] Failed to create message context scores: %s", exc)
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             classify_future = _speculative_classify_executor.submit(
                 _coordinator.classify_multi_intent,
-                messages,
+                classifier_messages,
                 session_id=request.session_id,
                 user_id=request.user_id,
                 trace_id=request.tracing_id,
@@ -2805,11 +2974,36 @@ class TStationChatServiceV2:
 
             # 6) Format tool context for prompt injection
             if prev_tool_data:
-                tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
+                prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(prev_tool_data, merged_slots)
+                tool_context = TStationChatServiceV2._format_tool_context(prompt_tool_data)
                 # Cap tool context to avoid consuming too much of the context window
                 if len(tool_context) > 4000:
                     tool_context = tool_context[:4000] + "\n... (일부 생략)"
-                logger.debug(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results ({len(tool_context)} chars)")
+                logger.debug(
+                    "[TOOL_CTX] Loaded %d tool results, injected %d (%d chars)",
+                    len(prev_tool_data),
+                    len(prompt_tool_data),
+                    len(tool_context),
+                )
+                if request.tracing_id and _tracing_enabled:
+                    try:
+                        tracer.create_score(
+                            trace_id=request.tracing_id,
+                            name="context.prev_tool_items_total",
+                            value=len(prev_tool_data),
+                        )
+                        tracer.create_score(
+                            trace_id=request.tracing_id,
+                            name="context.injected_tool_items",
+                            value=len(prompt_tool_data),
+                        )
+                        tracer.create_score(
+                            trace_id=request.tracing_id,
+                            name="context.tool_context_chars",
+                            value=len(tool_context),
+                        )
+                    except Exception as exc:
+                        logger.debug("[TRACE] Failed to create context scores: %s", exc)
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
@@ -2840,7 +3034,7 @@ class TStationChatServiceV2:
             if classify_future is None:
                 classify_future = _speculative_classify_executor.submit(
                     _coordinator.classify_multi_intent,
-                    messages,
+                    classifier_messages,
                     session_id=request.session_id,
                     user_id=request.user_id,
                     trace_id=request.tracing_id,

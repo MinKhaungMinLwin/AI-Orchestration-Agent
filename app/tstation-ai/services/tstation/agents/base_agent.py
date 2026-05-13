@@ -576,7 +576,7 @@ class BaseAgent(ABC):
             except json.JSONDecodeError:
                 try:
                     parsed = ast.literal_eval(normalized)
-                except (SyntaxError, ValueError) as loose_exc:
+                except (SyntaxError, ValueError, TypeError) as loose_exc:
                     logger.debug("Agent JSON parse failed: strict=%s loose=%s", strict_exc, loose_exc)
                     return None
                 return parsed
