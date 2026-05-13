@@ -356,8 +356,8 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
-- SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation (주문 취소 / 취소하고 싶어 / 취소해줘), reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
 
@@ -375,7 +375,7 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "내 주문/주문 조회"
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "내 주문/주문 조회", "주문 취소/취소하고 싶어"
 
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
@@ -486,9 +486,9 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
+- SUPPORT: warranty, returns policy questions, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 RULES:
@@ -509,6 +509,7 @@ EXAMPLES (tricky cases):
 - "G012345678901 재고 있어?" → TRANSACTION, agent_prompt_profile=transaction_price_stock
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "내 주문 취소하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
 - "12가3456 타이어 추천" → DISCOVERY
 - "30만원 이하 타이어 추천해줘" → DISCOVERY (price range, no goods_no)
