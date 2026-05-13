@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import urllib.request
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -91,6 +92,16 @@ def _register_litellm_user(user_id: str) -> None:
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
+def _update_quota_score(user_id: str, tokens: int, trace_id: str, limit: int) -> None:
+    from services.tstation.quota_service import add_monthly_tokens, post_langfuse_score
+    new_total = add_monthly_tokens(user_id, tokens)
+    logger.info("[QUOTA] %s: %d / %d tokens this month", user_id, new_total, limit)
+    post_langfuse_score(
+        trace_id, "monthly_tokens_used", float(new_total),
+        f"{new_total:,} / {limit:,} tokens this month",
+    )
+
+
 def get_current_time() -> str:
     """Get current timestamp in ISO format."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -141,6 +152,25 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     if user_id:
         asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id))
 
+    # Always generate a trace ID so Langfuse scores are linkable
+    tracing_id = _valid_tracing_id(request.tracing_id) or uuid.uuid4().hex
+
+    # ── Monthly token quota check ──────────────────────────────────────────────
+    if user_id:
+        from config.env import settings
+        from services.tstation.quota_service import is_quota_exceeded, get_monthly_tokens, post_langfuse_score
+        if is_quota_exceeded(user_id, settings.MONTHLY_TOKEN_LIMIT):
+            current = get_monthly_tokens(user_id)
+            post_langfuse_score(
+                tracing_id, "quota_blocked", 1.0,
+                f"Blocked: {current:,} / {settings.MONTHLY_TOKEN_LIMIT:,} tokens this month"
+            )
+            logger.warning("[QUOTA] %s blocked — %d / %d tokens", user_id, current, settings.MONTHLY_TOKEN_LIMIT)
+            raise HTTPException(
+                status_code=429,
+                detail="이번 달 토큰 한도를 초과했어요. 다음 달 1일에 초기화됩니다. 🙏",
+            )
+
     service = get_chat_history_service()
 
     # Redis client is sync; run hot-path calls in worker threads so FastAPI's event loop stays free.
@@ -157,7 +187,6 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     from schemas.tstation.chat import TStationChatRequest
     from schemas.tstation.chat import TStationChatResponse
 
-    tracing_id = _valid_tracing_id(request.tracing_id)
     chat_request = TStationChatRequest(
         messages=messages,
         stream=request.stream,
@@ -168,6 +197,17 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         chip_context=request.chip_context.model_dump() if request.chip_context else None,
         **({"tracing_id": tracing_id} if tracing_id else {}),
     )
+
+    # ── Token quota increment (fire-and-forget) ───────────────────────────────
+    if user_id:
+        from services.tstation.quota_service import estimate_tokens
+        from config.env import settings
+        input_tokens = estimate_tokens(request.content)
+        output_estimate = 400  # conservative avg response size in tokens
+        asyncio.create_task(asyncio.to_thread(
+            _update_quota_score, user_id, input_tokens + output_estimate,
+            tracing_id, settings.MONTHLY_TOKEN_LIMIT,
+        ))
 
     # Call chat service
     if request.stream:
