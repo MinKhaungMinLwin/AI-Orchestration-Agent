@@ -89,7 +89,7 @@ class ConversationSlots(BaseModel):
     _INTENT_PATTERNS: ClassVar[list[tuple[re.Pattern, "PendingIntent"]]] = [
         (re.compile(r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가"), "price"),
         (re.compile(r"재고|입고|장착\s*가능"), "stock"),
-        (re.compile(r"주문|구매|사고\s*싶|사려고|살래|예약"), "order"),
+        (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
     ]
 
     # Recommend patterns — when the user asks for a fresh recommendation,

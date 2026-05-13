@@ -619,6 +619,19 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if "get_store_schedule_tool" in called_tools:
         return None
 
+    # Flow 5 General — info-only store attribute query (운영시간/주소/전화/휴무일/
+    # 서비스 가능 여부/올마이T·T바로배송·수입차 가능 등). When no booking signal
+    # ran this turn AND the active goal isn't booking-followup AND isn't list
+    # browsing (`store_finder`), the user is asking ABOUT a specific store, not
+    # picking one. The agent's text answer carries the response; rendering a
+    # single-item clickable card implies a selection action that doesn't exist
+    # and risks showing default-False fields (tnaDelivery/todayInstall) as if
+    # they were authoritative when the list endpoint simply omits them.
+    has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+    is_list_browsing = current_goal_type.get() == "store_finder"
+    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing:
+        return None
+
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
     # `get_store_detail_tool` carries the rich fields the list endpoint omits
     # (tel_no, holiday, is_tna_delivery), so when the agent calls both in the

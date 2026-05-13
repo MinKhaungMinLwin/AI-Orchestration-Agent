@@ -372,6 +372,7 @@ DOMAIN ROUTING EXAMPLES
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "이벤트", "리뷰 영상", "추천 가격 비교해줘"
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
+- 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
 - "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰"
@@ -406,7 +407,7 @@ TRANSACTION when:
 - Order creation, cart save, order tracking
 - Pre-order confirmation flow
 
-⚠️ "buy/order/purchase" with product NAME (not goods_no) → DISCOVERY first to find goods_no. If the same message also asks price/stock/order/store, return [DISCOVERY, TRANSACTION].
+⚠️ "buy/order/purchase/reserve/예약" with product NAME (not goods_no) → DISCOVERY first to find goods_no. If the same message ALSO has a size that narrows to 1 result, return [DISCOVERY, TRANSACTION]. If NO size → DISCOVERY only (list shown, user selects size next turn).
 ⚠️ "buy/order/purchase" with goods_no already in context → TRANSACTION directly.
 
 SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry
@@ -498,7 +499,8 @@ DOMAINS:
 RULES:
 - G+12 digits in message → TRANSACTION
 - Product name only (벤투스/Ventus/다이나프로/Dynapro/...) + price/stock/buy, no goods_no → DISCOVERY
-- Product name + explicit same-turn order/store request, no goods_no → [DISCOVERY, TRANSACTION]
+- Product name + explicit same-turn order/store request + size, no goods_no → [DISCOVERY, TRANSACTION]
+- Product name + 예약/주문 + NO size, no goods_no → DISCOVERY only (must show list so user picks size)
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
@@ -521,6 +523,8 @@ EXAMPLES (tricky cases):
 - "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
+- "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
+- "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
 
 Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
 agent_prompt_profile:
