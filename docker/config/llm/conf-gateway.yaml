@@ -341,7 +341,7 @@ litellm_settings:
   num_retries: 3
   retry_after: 2
   request_timeout: 180
-  callbacks: ["otel", "langfuse"]
+  callbacks: ["otel"]
   max_internal_user_budget: 20.0        # $20/month default cap for every user
   default_max_internal_user_budget: 20.0
   budget_duration: "1mo"                # resets monthly
