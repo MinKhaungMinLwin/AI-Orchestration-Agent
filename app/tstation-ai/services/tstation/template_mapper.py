@@ -386,7 +386,9 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            car_info = _get_str(row, "car_model_det", "car_nm")
+            car_nm = _get_str(row, "car_model_det", "car_nm")
+            car_maker = _get_str(row, "car_maker")
+            car_info = f"{car_maker} {car_nm}" if car_maker and car_nm else (car_nm or car_maker)
             items.append({
                 "licensePlate": _get_str(row, "car_no"),
                 "info": car_info,
