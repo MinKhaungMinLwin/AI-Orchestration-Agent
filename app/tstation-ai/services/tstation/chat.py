@@ -337,6 +337,7 @@ DOMAIN ROUTING EXAMPLES
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "이벤트", "리뷰 영상", "추천 가격 비교해줘"
+- 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
 - "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰"
@@ -466,6 +467,7 @@ RULES:
 - Product name + explicit same-turn order/store request, no goods_no → [DISCOVERY, TRANSACTION]
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
+- 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 매장/근처/올마이티/All My T → TRANSACTION
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
@@ -477,6 +479,8 @@ EXAMPLES (tricky cases):
 - "내 쿠폰 보여줘" → TRANSACTION (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION (NOT SUPPORT)
 - "12가3456 타이어 추천" → DISCOVERY
+- "30만원 이하 타이어 추천해줘" → DISCOVERY (price range, no goods_no)
+- "20만원에서 30만원 사이 한국타이어" → DISCOVERY (price range search)
 
 Output: domains (list with EXACTLY ONE domain), reason, and execution_plan.
 """

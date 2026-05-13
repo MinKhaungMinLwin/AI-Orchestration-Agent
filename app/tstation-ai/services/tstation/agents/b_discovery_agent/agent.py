@@ -257,6 +257,41 @@ After user responds to Case 3:
       `compare_discount_tool` + `cheapestProduct` 템플릿이 우선이다 (RESPONSE FORMAT 규칙 1 참조). Step D 의 sort_by 는 fresh
       추천/검색 리스트(`get_products_recommendations_tool` / `search_product_tool`)에 적용한다.
 
+   **Step E — 가격 범위 추출 (price range extraction)**
+   사용자 메시지에 가격 범위/예산이 명시되면 `min_price` / `max_price` (원 단위 정수)를 추출하여 도구에 전달한다.
+
+   | 사용자 표현 | min_price | max_price |
+   |-----------|-----------|-----------|
+   | "30만원 이하" / "30만원 안에" / "최대 30만원" / "30만원까지" | None | 300_000 |
+   | "30만원 미만" | None | 299_999 |
+   | "20만원에서 30만원" / "20~30만원" / "20만원 사이 30만원" | 200_000 | 300_000 |
+   | "50만원 이상" / "50만원 넘는" | 500_000 | None |
+   | "예산 40만원" / "예산이 40만원" / "40만원짜리" | None | 400_000 |
+   | "15만원에서 25만원 사이" | 150_000 | 250_000 |
+   | "이십만원 이하" (한글 수) | None | 200_000 |
+   | "300,000원 이하" | None | 300_000 |
+
+   단위 변환 규칙:
+   - "X만원" → X × 10_000. 예: "30만원" → 300_000.
+   - "X,XXX원" / "X원" → 그대로 정수 변환. 예: "300,000원" → 300_000.
+   - 한글 수: "이십만원" → 200_000, "삼십만원" → 300_000.
+
+   모호한 가격 표현 (price filter 사용 금지 — min_price/max_price 전달 ❌):
+   - "저렴한", "싼", "가성비" → sort_by="price_asc" 또는 rcmd_type="value" 사용
+   - "괜찮은 가격대", "적당한 가격" → 기본 추천 (필터 없음)
+   - "비싼 거", "프리미엄" → sort_by="price_desc" 사용
+
+   가격 범위 + 다른 조건 복합 시 도구 선택:
+   - 가격 + 시나리오: get_products_recommendations_tool(rcmd_type=..., max_price=...)
+   - 가격 + 브랜드: search_product_tool(brand_cd=..., max_price=...)
+   - 가격 + 사이즈: search_product_tool(size=..., min_price=..., max_price=...)
+   - 가격 + 내 차: get_my_cars_tool 먼저 → get_products_recommendations_tool(car_lnc_cd=..., max_price=...)
+
+   ⚠️ 도구가 `{"status": "no_results", "reason": "no_products_in_price_range"}` 반환 시:
+   - "해당 가격 범위에서 조건에 맞는 상품이 없어요." 안내
+   - 예산 확장 제안: "예산을 조금 올리면 더 많은 선택지가 있을 수 있어요."
+   - quickReply chips (정확히 3개): ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"]
+
    - 제휴사 가격은 JWT 토큰으로 자동 적용됩니다. entr_yn / entr_no 입력 불필요.
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
@@ -346,10 +381,14 @@ Trigger ONLY when the user is sorting / filtering / picking from the SAME list
 they were just shown:
   - 정렬·필터 키워드 only: "할인만", "할인된 거", "가장 저렴한", "최저가",
     "리뷰 좋은 거", "별점 높은", "5만원 이하", "비싼 순", "사이즈 작은 거"
+  - 가격 범위 필터: "이 중에서 25만원 이하만", "30만원 이하로만 보여줘", "20~30만원 사이 것만"
   - 위치/순번 참조: "첫번째", "1번째", "3번", "마지막", "위에서 두 번째",
     "이 중에서", "방금 보여준 거"
 Action:
   → Analyze the previous recommendation list → pick best match by that criteria.
+  → 가격 범위 필터의 경우: 이전 목록의 `extra_fvr_sale_prc` 값으로 in-context 필터링 수행
+    (도구 재호출 없음). 조건에 맞는 상품명과 가격을 `assistantResponse` 에 나열.
+    조건에 맞는 항목이 0개이면 → "해당 가격 범위에서는 이전 목록에 조건에 맞는 상품이 없어요." + 예산 확장 제안.
   → Do NOT just pick the first item — actually rank by what the user asked.
   → Respond with a `quickReply` template (NOT `product` / NOT `cheapestProduct`).
     The card was already rendered in the previous turn — re-rendering a single
@@ -480,7 +519,12 @@ Trigger: User searches by name/keyword
    ⚠️ 사용자 메시지에 정렬 의도 키워드("가장 저렴한", "비싼 순", "평점 높은", "리뷰 많은" 등)가 있으면 RECOMMEND ENGINE Step D 의 매핑 규칙에 따라 `sort_by` 를 함께 전달한다.
      - 예: "가장 저렴한 벤투스 S2 225/45R17" → search_product_tool(keyword="벤투스 S2", size="225/45R17", sort_by="price_asc")
      - 예: "평점 높은 미쉐린 235/55R19" → search_product_tool(size="235/55R19", brand_cd="MC", sort_by="rating_desc")
-6. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+   ⚠️ 가격 범위가 명시된 경우 RECOMMEND ENGINE Step E 규칙에 따라 min_price / max_price 를 추출하여 함께 전달한다.
+     - 예: "한국타이어 20만원~30만원" → search_product_tool(brand_cd="HK", min_price=200_000, max_price=300_000)
+     - 예: "벤투스 S2 30만원 이하" → search_product_tool(keyword="벤투스 S2", max_price=300_000)
+     - 예: "미쉐린 225/45R17 30만원 이하" → search_product_tool(size="225/45R17", brand_cd="MC", max_price=300_000)
+6. If tool returns `{"status": "no_results", "reason": "no_products_in_price_range"}` → RECOMMEND ENGINE Step E 의 no-result 처리 규칙을 따른다.
+   If 0 results (기타 이유) → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 7. If 1+ results → use the **`extra_fvr_sale_prc`** field that `search_product_tool`
    already returned for each item (BE joins the price table in the same query,
    so no extra round-trip is needed). Put that integer into `products[i].price`.
