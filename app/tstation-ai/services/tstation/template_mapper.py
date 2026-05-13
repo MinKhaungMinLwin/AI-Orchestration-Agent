@@ -558,13 +558,13 @@ def _map_preview_youtube(tool_data_list: list[dict], assistant_text: str) -> dic
     if not items:
         return None
     items = items[:5]
-    short = _summarize(assistant_text, "previewYoutube", len(items))
+    short, response_source = _summarize_with_source(assistant_text, "previewYoutube", len(items))
     # previewYoutube: FE reads data.text (not assistantResponse) for intro text
     return {"type": "data", "template": "previewYoutube", "data": {
         "items": items,
         "text": short,
         "assistantResponse": short,
-    }}
+    }, "assistant_response_source": response_source}
 
 
 # ── 8. location ─────────────────────────────────────────────────────────────────
@@ -749,10 +749,11 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup()
     )
 
-    short = _summarize(assistant_text, "location", len(items))
+    short, response_source = _summarize_with_source(assistant_text, "location", len(items))
     return {
         "type": "data",
         "template": "location",
+        "assistant_response_source": response_source,
         "data": {
             "stores": items,
             "metadata": metadata,
@@ -851,10 +852,11 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if selected_idx is None:
         return None
 
-    short = _summarize(assistant_text, "datepick", len(dates))
+    short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
     return {
         "type": "data",
         "template": "datepick",
+        "assistant_response_source": response_source,
         "data": {
             "dates": dates,
             "selectedDate": selected_idx,
@@ -1070,9 +1072,14 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
 
 def _build_event(template: str, data: dict, assistant_text: str, item_count: int) -> dict:
     """Build a type:data event with a concise assistantResponse."""
-    short = _summarize(assistant_text, template, item_count)
+    short, response_source = _summarize_with_source(assistant_text, template, item_count)
     data["assistantResponse"] = short
-    return {"type": "data", "template": template, "data": data}
+    return {
+        "type": "data",
+        "template": template,
+        "data": data,
+        "assistant_response_source": response_source,
+    }
 
 
 _TEMPLATE_DEFAULTS: dict[str, str] = {
@@ -1090,6 +1097,10 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
 
 
 def _summarize(full_text: str, template: str, item_count: int) -> str:
+    return _summarize_with_source(full_text, template, item_count)[0]
+
+
+def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:
     """Domain Agent 텍스트에서 첫 문장만 추출하거나, 기본 안내를 반환한다.
 
     PROSE MODE 도입 후 LLM이 1–2문장의 짧은 prose("...찾았어요. ...선택해 주세요 😊")를
@@ -1098,18 +1109,18 @@ def _summarize(full_text: str, template: str, item_count: int) -> str:
     """
     text = (full_text or "").strip()
     if not text:
-        return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count)
+        return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count), "default"
 
     if len(text) <= 120:
-        return text
+        return text, "llm_prose"
 
     # 길면 첫 문장으로 컷 (줄바꿈 또는 문장 부호 기준)
     for sep in ["\n", ".\n", "!\n", "?\n", ". ", "! ", "? "]:
         idx = text.find(sep)
         if 0 < idx <= 120:
-            return text[: idx + 1].strip()
+            return text[: idx + 1].strip(), "llm_prose"
 
-    return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count)
+    return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count), "default"
 
 
 # ── Mapper registry ─────────────────────────────────────────────────────────────

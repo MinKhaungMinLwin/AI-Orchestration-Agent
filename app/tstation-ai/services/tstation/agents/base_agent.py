@@ -387,6 +387,7 @@ class BaseAgent(ABC):
         # full FE JSON payload (the dominant 2nd-call output token cost).
         code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
         if code_event is not None:
+            code_event["template_source"] = "code_mapper"
             assistant_response = self._get_assistant_response(code_event)
             already_streamed = response_streamer is not None and response_streamer.streamed_any
             if assistant_response:
@@ -575,7 +576,7 @@ class BaseAgent(ABC):
             except json.JSONDecodeError:
                 try:
                     parsed = ast.literal_eval(normalized)
-                except (SyntaxError, ValueError) as loose_exc:
+                except (SyntaxError, ValueError, TypeError) as loose_exc:
                     logger.debug("Agent JSON parse failed: strict=%s loose=%s", strict_exc, loose_exc)
                     return None
                 return parsed
