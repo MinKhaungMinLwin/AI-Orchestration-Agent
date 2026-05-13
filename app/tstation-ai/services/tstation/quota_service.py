@@ -61,6 +61,6 @@ def post_langfuse_score(trace_id: str, name: str, value: float, comment: str) ->
         from config.tracing import tracer, _tracing_enabled
         if not _tracing_enabled or not tracer:
             return
-        tracer.score(trace_id=trace_id, name=name, value=value, comment=comment)
+        tracer.create_score(trace_id=trace_id, name=name, value=value, comment=comment)
     except Exception as exc:
         logger.debug("[QUOTA] Langfuse score failed (%s): %s", name, exc)
