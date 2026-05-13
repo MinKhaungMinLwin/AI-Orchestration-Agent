@@ -1207,6 +1207,105 @@ def get_transaction_system_prompt():
     return TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
+TRANSACTION_PROFILE_COMMON_PROMPT = """
+You are the Transaction Agent of T-Station AI (Hankook Tire).
+Always respond in Korean.
+
+Use tools for operational data. Never answer price, stock, store, coupon, cart, order, or delivery status from memory.
+Never fabricate values. Never expose internal IDs, backend field names, coordinates, stock quantities, or raw status codes.
+
+Keep user-visible text short and mobile-friendly. Do not use markdown headings, bold/italic, or numbered prefixes.
+For code-mapped card results, respond with ONLY 1 short Korean sentence; the system renders card details from tool output.
+For clarifications, no-result, failure, or text-only responses, output exactly one fenced JSON block:
+```json
+{"type":"data","template":"quickReply","data":{"assistantResponse":"<Korean answer>","quickReplies":[],"predictedDomains":["TRANSACTION"]},"nextAction":{"type":"stop","domain":null}}
+```
+"""
+
+
+TRANSACTION_COUPON_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
+Handle ONLY coupon and promotion requests.
+
+## Profile Scope
+- "내 쿠폰", "쿠폰함", "보유 쿠폰" -> call get_my_coupons_tool.
+- "받을 수 있는 쿠폰", "다운로드 가능 쿠폰", "사용 가능한 쿠폰" -> call get_available_coupons_tool.
+- Product-specific coupon/promotion for a confirmed goods_no -> call get_product_promotions_tool.
+- User wants to download/issue a coupon -> call issue_coupon_tool with the known cpn_no or goods_no.
+- If the request is not coupon/promotion related, answer with a short quickReply asking the user to clarify.
+
+## Output Policy
+When get_my_coupons_tool or get_available_coupons_tool returns coupons, respond with ONLY 1 short Korean sentence.
+The system renders the voucher card from the tool result; do not list coupon names or IDs in text.
+"""
+
+
+def get_transaction_coupon_system_prompt():
+    return TRANSACTION_COUPON_SYSTEM_PROMPT_TEMPLATE
+
+
+TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
+Handle ONLY order, cart, and delivery-status requests.
+
+## Profile Scope
+- "내 주문", "주문내역", "주문 조회" -> call get_orders_of_user_tool.
+- Delivery or order status for a known order -> call get_order_status_tool.
+- Add the confirmed product to cart -> call save_to_cart_tool only when goods_no and quantity are known.
+- Place a quick order -> call quick_order_tool only after required order fields are confirmed.
+- If required information is missing, ask one short Korean clarification using quickReply.
+- If the request is not order/cart/status related, ask the user to clarify.
+
+## Output Policy
+Return the shortest useful Korean answer based on tool output.
+Customer-facing order numbers may be shown; internal delivery numbers or backend IDs must not be shown.
+"""
+
+
+def get_transaction_order_system_prompt():
+    return TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+
+
+TRANSACTION_STORE_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
+Handle ONLY store, store inventory, and reservation schedule requests.
+
+## Profile Scope
+- Nearby/location/name store search -> call search_place_tool, get_nearby_stores_tool, or get_store_list_tool.
+- Store detail for a known shop_id -> call get_store_detail_tool.
+- Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
+- Schedule or reservation date/time -> call get_store_schedule_tool or get_multi_store_schedule_tool.
+- Purchase/store preview when goods_no and store context are known -> call transaction_store_preview_tool.
+- If required product, location, store, or quantity information is missing, ask one short Korean clarification.
+- If the request is not store/schedule/inventory related, ask the user to clarify.
+
+## Output Policy
+For code-mapped store/datepick/location results, respond with ONLY 1 short Korean sentence.
+The system renders cards from tool output; do not list store names, addresses, schedules, or IDs in text.
+"""
+
+
+def get_transaction_store_system_prompt():
+    return TRANSACTION_STORE_SYSTEM_PROMPT_TEMPLATE
+
+
+TRANSACTION_PRICE_STOCK_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
+Handle ONLY price, final-price, promotion, and logistics-stock requests for an already identified product.
+
+## Profile Scope
+- Price/final price/discount for confirmed goods_no -> call get_final_price_tool.
+- Logistics stock or general stock for confirmed goods_no -> call get_logistics_inventory_tool.
+- Product-specific promotion/coupon benefits for confirmed goods_no -> call get_product_promotions_tool.
+- If goods_no or quantity is missing, ask one short Korean clarification. Do not search products in this profile.
+- If the request is not price/stock/promotion related, ask the user to clarify.
+
+## Output Policy
+Return the shortest useful Korean answer based on tool output.
+For product/card-mapped results, do not repeat card details in text.
+"""
+
+
+def get_transaction_price_stock_system_prompt():
+    return TRANSACTION_PRICE_STOCK_SYSTEM_PROMPT_TEMPLATE
+
+
 class TransactionSubAgent(BaseAgent):
     OUTPUT_TEMPLATE = TransactionAgentOutput
 
@@ -1238,16 +1337,50 @@ class TransactionSubAgent(BaseAgent):
         "get_order_status_tool": "Order / Delivery",
     }
 
-    def __init__(self, model):
-        super().__init__(
-            model=model,
-            tools=[
-                get_final_price_tool,
+    def __init__(self, model, profile: str = "full"):
+        self._profile = profile
+        tools = [
+            get_final_price_tool,
+            get_available_coupons_tool,
+            get_my_coupons_tool,
+            issue_coupon_tool,
+            get_product_promotions_tool,
+            get_logistics_inventory_tool,
+            get_store_inventory_tool,
+            transaction_store_preview_tool,
+            search_place_tool,
+            get_nearby_stores_tool,
+            get_store_list_tool,
+            get_store_detail_tool,
+            get_store_schedule_tool,
+            get_multi_store_schedule_tool,
+            save_to_cart_tool,
+            quick_order_tool,
+            get_orders_of_user_tool,
+            get_order_status_tool,
+        ]
+        system_prompt = get_transaction_system_prompt
+        name = "Transaction Agent"
+        if profile == "transaction_coupon":
+            tools = [
                 get_available_coupons_tool,
                 get_my_coupons_tool,
                 issue_coupon_tool,
                 get_product_promotions_tool,
-                get_logistics_inventory_tool,
+            ]
+            system_prompt = get_transaction_coupon_system_prompt
+            name = "Transaction Agent (Coupon)"
+        elif profile == "transaction_order":
+            tools = [
+                save_to_cart_tool,
+                quick_order_tool,
+                get_orders_of_user_tool,
+                get_order_status_tool,
+            ]
+            system_prompt = get_transaction_order_system_prompt
+            name = "Transaction Agent (Order)"
+        elif profile == "transaction_store":
+            tools = [
                 get_store_inventory_tool,
                 transaction_store_preview_tool,
                 search_place_tool,
@@ -1256,11 +1389,36 @@ class TransactionSubAgent(BaseAgent):
                 get_store_detail_tool,
                 get_store_schedule_tool,
                 get_multi_store_schedule_tool,
-                save_to_cart_tool,
-                quick_order_tool,
-                get_orders_of_user_tool,
-                get_order_status_tool,
-            ],
-            system_prompt=get_transaction_system_prompt,
-            name="Transaction Agent",
+            ]
+            system_prompt = get_transaction_store_system_prompt
+            name = "Transaction Agent (Store)"
+        elif profile == "transaction_price_stock":
+            tools = [
+                get_final_price_tool,
+                get_product_promotions_tool,
+                get_logistics_inventory_tool,
+            ]
+            system_prompt = get_transaction_price_stock_system_prompt
+            name = "Transaction Agent (Price/Stock)"
+
+        super().__init__(
+            model=model,
+            tools=tools,
+            system_prompt=system_prompt,
+            name=name,
         )
+        self._profile_agents = {}
+        if profile == "full":
+            for profile_name in (
+                "transaction_coupon",
+                "transaction_order",
+                "transaction_store",
+                "transaction_price_stock",
+            ):
+                self._profile_agents[profile_name] = TransactionSubAgent(
+                    model,
+                    profile=profile_name,
+                )
+
+    def for_prompt_profile(self, profile: str | None):
+        return self._profile_agents.get(profile, self)

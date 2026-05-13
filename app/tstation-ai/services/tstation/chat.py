@@ -55,6 +55,14 @@ class AgentDecision(BaseModel):
     reason: str = Field(description="Reason for decision, using english")
 
 
+class AgentPromptProfile(str, Enum):
+    FULL = "full"
+    TRANSACTION_COUPON = "transaction_coupon"
+    TRANSACTION_ORDER = "transaction_order"
+    TRANSACTION_STORE = "transaction_store"
+    TRANSACTION_PRICE_STOCK = "transaction_price_stock"
+
+
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 _speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -229,6 +237,15 @@ class MultiAgentDomain(BaseModel):
         ),
     )
 
+    agent_prompt_profile: AgentPromptProfile = Field(
+        description=(
+            "Prompt profile for the selected domain agent. For clear transaction flows, use "
+            "'transaction_coupon' for coupon/promotion, 'transaction_order' for order history/status/cart/order, "
+            "'transaction_store' for store search/schedule/store inventory, and 'transaction_price_stock' for "
+            "price/final-price/logistics stock. Use 'full' for all other cases or if uncertain."
+        )
+    )
+
     def get_agents(self):
         """Return list of agents based on detected domains."""
         agent_map = {
@@ -256,6 +273,12 @@ class _SlimMultiAgentDomain(BaseModel):
     execution_plan: list[str] = Field(
         description="Short ordered plan for the selected domains, without tool names or parameters"
     )
+    agent_prompt_profile: AgentPromptProfile = Field(
+        description=(
+            "Prompt profile for the selected domain agent. Use a transaction_* profile only for clear matching "
+            "transaction flows; otherwise use 'full'."
+        )
+    )
 
 
 # Module-level singletons — avoid re-wrapping LLM per request.
@@ -272,12 +295,19 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 5 outputs:
+Produce 6 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
 4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
 5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+
+6. agent_prompt_profile - use a narrow profile only for clear transaction flows:
+   - "transaction_coupon": coupon/promotion/coupon issue
+   - "transaction_order": order history, order status, cart, quick order
+   - "transaction_store": store search, nearby store, store detail, schedule, store inventory
+   - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
+   - "full": mixed, ambiguous, product discovery, support, leading, or uncertain cases
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -473,12 +503,18 @@ RULES:
 
 EXAMPLES (tricky cases):
 - "벤투스 S2 가격 얼마야?" → DISCOVERY (product name, no goods_no)
-- "G012345678901 가격" → TRANSACTION (goods_no present)
-- "내 쿠폰 보여줘" → TRANSACTION (NOT SUPPORT)
-- "내 주문내역 알려줘" → TRANSACTION (NOT SUPPORT)
+- "G012345678901 가격" → TRANSACTION, agent_prompt_profile=transaction_price_stock
+- "G012345678901 재고 있어?" → TRANSACTION, agent_prompt_profile=transaction_price_stock
+- "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
+- "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
 - "12가3456 타이어 추천" → DISCOVERY
 
-Output: domains (list with EXACTLY ONE domain), reason, and execution_plan.
+Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
+agent_prompt_profile: use a transaction_* profile only for clear matching transaction flows:
+coupon/promotion -> transaction_coupon; order/cart/status -> transaction_order;
+store/search/schedule/store inventory -> transaction_store; goods_no + price/final price/logistics stock -> transaction_price_stock.
+Use "full" for ambiguous, mixed, non-transaction, or uncertain cases.
 """
 
 
@@ -522,11 +558,6 @@ class StreamingMultiAgentCoordinator:
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
             MultiAgentDomain.Domain.SUPPORT,
         ),
-        # TRANSACTION — coupon
-        (
-            ["내 쿠폰", "받을 수 있는 쿠폰", "쿠폰함", "쿠폰 조회", "다운로드 가능 쿠폰"],
-            MultiAgentDomain.Domain.TRANSACTION,
-        ),
         # DISCOVERY — vehicle lookup / video / event
         (
             [
@@ -545,6 +576,51 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT: support_subagent,
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
+
+    def _select_agent(self, domain: MultiAgentDomain.Domain, routing: MultiAgentDomain | None):
+        agent = self.agent_map.get(domain)
+        if agent is None:
+            return None
+        profile = getattr(routing, "agent_prompt_profile", AgentPromptProfile.FULL)
+        if domain == MultiAgentDomain.Domain.TRANSACTION and hasattr(agent, "for_prompt_profile"):
+            profile_value = profile.value if isinstance(profile, AgentPromptProfile) else str(profile)
+            selected_agent = agent.for_prompt_profile(profile_value)
+            logger.info(
+                "[AGENT_PROFILE] domain=%s profile=%s agent=%s",
+                domain.value,
+                profile_value,
+                getattr(selected_agent, "name", selected_agent.__class__.__name__),
+            )
+            return selected_agent
+        return agent
+
+    @staticmethod
+    def _resolve_routing_for_agent_profile(
+        classify_future: concurrent.futures.Future | None,
+        domains: list[MultiAgentDomain.Domain],
+    ) -> MultiAgentDomain | None:
+        if classify_future is None:
+            return None
+
+        if MultiAgentDomain.Domain.TRANSACTION in domains:
+            timeout: float | None = None
+        elif classify_future.done():
+            timeout = 0
+        else:
+            return None
+
+        try:
+            verified_domains, routing_result = classify_future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout * 1000)
+            return None
+        except Exception as exc:
+            logger.debug("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
+            return None
+
+        if routing_result is None or not _domains_equal(verified_domains, domains):
+            return None
+        return routing_result
 
     @staticmethod
     def _extract_current_user_input(message_content: str) -> str:
@@ -583,6 +659,7 @@ class StreamingMultiAgentCoordinator:
                         domains=[domain],
                         execution_plan=[f"Run {domain.value} for the matched current-turn topic"],
                         user_behavior=f"topic shift via keyword '{kw}'",
+                        agent_prompt_profile=AgentPromptProfile.FULL,
                         flow="hardcoded keyword routing — bypassed LLM router",
                     )
         return None
@@ -662,6 +739,7 @@ class StreamingMultiAgentCoordinator:
                     domains=raw_result.domains,
                     execution_plan=raw_result.execution_plan,
                     user_behavior="",
+                    agent_prompt_profile=raw_result.agent_prompt_profile,
                     flow="",
                 )
             else:
@@ -669,7 +747,8 @@ class StreamingMultiAgentCoordinator:
 
             logger.debug(
                 f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
-                f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, flow={result.flow!r}"
+                f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, "
+                f"flow={result.flow!r}, profile={result.agent_prompt_profile!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -930,9 +1009,12 @@ class StreamingMultiAgentCoordinator:
         is_first_agent = True
         decision_verify_future: concurrent.futures.Future | None = None
         decision_guard: dict | None = None
+        active_routing_result = routing_result
+        if active_routing_result is None:
+            active_routing_result = self._resolve_routing_for_agent_profile(classify_future, domains)
 
         for domain in domains:
-            agent = self.agent_map.get(domain)
+            agent = self._select_agent(domain, active_routing_result)
             if not agent:
                 logger.warning(f"[COORDINATOR] No agent found for domain: {domain}")
                 continue
@@ -1092,6 +1174,14 @@ class StreamingMultiAgentCoordinator:
                 (m.get("content", "") for m in reversed(enriched_messages) if m.get("role") == "user"),
                 "",
             )
+            _agent_prompt_chars = getattr(agent, "system_prompt_chars", 0)
+            _agent_input_chars = sum(len(str(m.get("content", ""))) for m in enriched_messages)
+            _agent_message_count = len(enriched_messages)
+            _agent_started_at = time.perf_counter()
+            _agent_first_tool_ms: float | None = None
+            _agent_first_visible_ms: float | None = None
+            _agent_first_token_ms: float | None = None
+            _agent_first_data_ms: float | None = None
 
             with _trace_span(
                 f"agent:{domain_key}",
@@ -1116,6 +1206,7 @@ class StreamingMultiAgentCoordinator:
                         active_speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
                     agent_trace_config.setdefault("configurable", {})["speculative_tool_guard"] = active_speculative_guard
                 for event in agent.stream(enriched_messages, config=agent_trace_config):
+                    _elapsed_ms = (time.perf_counter() - _agent_started_at) * 1000
                     if speculative_buffer and active_speculative_guard and active_speculative_guard["confirm_event"].is_set():
                         yield from _flush_speculative_buffer()
                     if classify_future is not None and classifier_done.is_set():
@@ -1142,10 +1233,23 @@ class StreamingMultiAgentCoordinator:
 
                     # Tag with source domain for UI
                     event["source_domain"] = domain_key
+                    event_type = event.get("type")
+                    if (
+                        _agent_first_visible_ms is None
+                        and (
+                            event_type == "data"
+                            or (event_type in {"token", "message"} and bool(event.get("content")))
+                        )
+                    ):
+                        _agent_first_visible_ms = _elapsed_ms
+                    if _agent_first_token_ms is None and event_type == "token" and event.get("content"):
+                        _agent_first_token_ms = _elapsed_ms
+                    if _agent_first_data_ms is None and event_type == "data":
+                        _agent_first_data_ms = _elapsed_ms
 
                     # Track direct data events emitted by the domain agent (JSON output).
                     # When present, skip the UI Template stage below.
-                    if event.get("type") == "data":
+                    if event_type == "data":
                         domain_data_event_emitted = True
                         parsed_decision = _parse_agent_declared_next_action(event.pop("nextAction", None))
                         if parsed_decision is not None:
@@ -1158,7 +1262,7 @@ class StreamingMultiAgentCoordinator:
                     yield from _buffer_or_emit(event)
 
                     # Capture message content for context passing
-                    if event.get("type") == "message":
+                    if event_type == "message":
                         content = event.get("content", "")
                         if content:
                             accumulated_context[domain_key] = content
@@ -1166,7 +1270,9 @@ class StreamingMultiAgentCoordinator:
                             logger.debug(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
                     # Capture tool outputs for UI Template Agent
-                    if event.get("type") == "tool":
+                    if event_type == "tool":
+                        if _agent_first_tool_ms is None:
+                            _agent_first_tool_ms = _elapsed_ms
                         last_agent_called_tools = True
                         tool_name = event.get("tool", "")
                         if tool_name:
@@ -1199,12 +1305,72 @@ class StreamingMultiAgentCoordinator:
                 _tools_label = ", ".join(agent_tools_called) if agent_tools_called else "no tools"
                 _data_label = "data" if domain_data_event_emitted else "text"
                 _agent_summary = f"{domain_key} → {_tools_label} → {_data_label}"
+                _agent_total_ms = (time.perf_counter() - _agent_started_at) * 1000
+                logger.debug(
+                    "[AGENT_METRICS] domain=%s total_ms=%.0f first_visible_ms=%s first_tool_ms=%s "
+                    "first_token_ms=%s first_data_ms=%s prompt_chars=%d input_chars=%d messages=%d tools=%d",
+                    domain_key,
+                    _agent_total_ms,
+                    f"{_agent_first_visible_ms:.0f}" if _agent_first_visible_ms is not None else "n/a",
+                    f"{_agent_first_tool_ms:.0f}" if _agent_first_tool_ms is not None else "n/a",
+                    f"{_agent_first_token_ms:.0f}" if _agent_first_token_ms is not None else "n/a",
+                    f"{_agent_first_data_ms:.0f}" if _agent_first_data_ms is not None else "n/a",
+                    _agent_prompt_chars,
+                    _agent_input_chars,
+                    _agent_message_count,
+                    len(agent_tools_called),
+                )
+                if trace_id and _tracing_enabled:
+                    try:
+                        tracer.create_score(
+                            trace_id=trace_id,
+                            name=f"latency.agent.{domain_key}.total_ms",
+                            value=_agent_total_ms,
+                        )
+                        if _agent_first_visible_ms is not None:
+                            tracer.create_score(
+                                trace_id=trace_id,
+                                name=f"latency.agent.{domain_key}.first_visible_ms",
+                                value=_agent_first_visible_ms,
+                            )
+                        if _agent_first_tool_ms is not None:
+                            tracer.create_score(
+                                trace_id=trace_id,
+                                name=f"latency.agent.{domain_key}.first_tool_ms",
+                                value=_agent_first_tool_ms,
+                            )
+                        tracer.create_score(
+                            trace_id=trace_id,
+                            name=f"context.agent.{domain_key}.system_prompt_chars",
+                            value=_agent_prompt_chars,
+                        )
+                        tracer.create_score(
+                            trace_id=trace_id,
+                            name=f"context.agent.{domain_key}.input_chars",
+                            value=_agent_input_chars,
+                        )
+                    except Exception as exc:
+                        logger.debug("[TRACE] Failed to create agent metrics scores: %s", exc)
                 _agent_span.update(
                     output=_truncate({
                         "summary": _agent_summary,
                         "response": full_response,
                         "tools_called": agent_tools_called,
                         "data_event_emitted": domain_data_event_emitted,
+                        "metrics": {
+                            "total_ms": round(_agent_total_ms, 1),
+                            "first_visible_ms": round(_agent_first_visible_ms, 1)
+                            if _agent_first_visible_ms is not None else None,
+                            "first_tool_ms": round(_agent_first_tool_ms, 1)
+                            if _agent_first_tool_ms is not None else None,
+                            "first_token_ms": round(_agent_first_token_ms, 1)
+                            if _agent_first_token_ms is not None else None,
+                            "first_data_ms": round(_agent_first_data_ms, 1)
+                            if _agent_first_data_ms is not None else None,
+                            "system_prompt_chars": _agent_prompt_chars,
+                            "input_chars": _agent_input_chars,
+                            "message_count": _agent_message_count,
+                        },
                     }),
                 )
 
@@ -3056,13 +3222,21 @@ class TStationChatServiceV2:
                     )
                     _classify_path = "speculative"
 
-                if predicted_domains is not None and (_chip_domain or _is_speculative_safe(predicted_domains)):
+                transaction_predicted = (
+                    predicted_domains is not None
+                    and MultiAgentDomain.Domain.TRANSACTION in predicted_domains
+                )
+                if (
+                    predicted_domains is not None
+                    and not transaction_predicted
+                    and (_chip_domain or _is_speculative_safe(predicted_domains))
+                ):
                     domains = predicted_domains
                     speculative_classify_future = classify_future
                     logger.debug("[CLASSIFIER] %s domains=%s — background verify", _classify_path, [d.value for d in domains])
                 else:
                     domains, routing_result = await asyncio.to_thread(classify_future.result)
-                    _classify_path = "llm"
+                    _classify_path = "llm_profile" if transaction_predicted else "llm"
             else:
                 domains, routing_result = await asyncio.to_thread(classify_future.result)
                 _classify_path = "llm"
@@ -3075,6 +3249,16 @@ class TStationChatServiceV2:
             # without needing to expand the node.
             _domain_label = "+".join(d.value for d in domains) if domains else "?"
             _classify_summary = f"{_classify_path} → {_domain_label}"
+            logger.info(
+                "[CLASSIFIER_RESULT] path=%s domains=%s profile=%s",
+                _classify_path,
+                [d.value for d in domains],
+                (
+                    routing_result.agent_prompt_profile.value
+                    if routing_result and isinstance(routing_result.agent_prompt_profile, AgentPromptProfile)
+                    else None
+                ),
+            )
             _classify_span.update(
                 output=_truncate({
                     "summary": _classify_summary,
@@ -3082,6 +3266,11 @@ class TStationChatServiceV2:
                     "path": _classify_path,
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
+                    "agent_prompt_profile": (
+                        routing_result.agent_prompt_profile.value
+                        if routing_result and isinstance(routing_result.agent_prompt_profile, AgentPromptProfile)
+                        else None
+                    ),
                 }),
             )
         _t_classify = time.perf_counter()
