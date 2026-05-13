@@ -606,10 +606,17 @@ class BaseAgent(ABC):
         If the LLM emitted an explicit fenced JSON block, defer to it — the
         agent has chosen its own template (e.g. comparison intent → quickReply
         instead of the default cheapestProduct mapper).
+
+        listCar exception: when get_my_cars_tool / get_user_vehicles_tool ran,
+        always use the deterministic mapper even if the LLM emitted fenced JSON.
+        The mapper enriches info with car_maker prefix and keeps info/description
+        consistent; LLM-authored JSON drifts in format between turns.
         """
         if not accumulated_tool_data:
             return None
-        if BaseAgent._extract_fenced_json(accumulated_text) is not None:
+        _LIST_CAR_TOOLS = ("get_my_cars_tool", "get_user_vehicles_tool")
+        has_list_car_tool = any(e.get("tool") in _LIST_CAR_TOOLS for e in accumulated_tool_data)
+        if not has_list_car_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
         if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
