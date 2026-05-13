@@ -211,8 +211,11 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     # Call chat service
     if request.stream:
-        # For stream mode, we need to save assistant message as it comes
-        # The streaming response will be handled by chat_2 service
+        from services.tstation.chat_history_service import get_async_redis_client
+        _redis = get_async_redis_client()
+        _streaming_key = f"chat:streaming:{session_id}"
+        if await _redis.exists(_streaming_key):
+            raise HTTPException(status_code=409, detail="session_busy")
         return StreamingResponse(
             stream_chat_response(chat_request, session_id, msg_id, service),
             media_type="text/event-stream",
@@ -241,87 +244,102 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     raise HTTPException(status_code=500, detail="Unexpected response type")
 
 
+_STREAMING_KEY = "chat:streaming:{}"
+_ABORT_KEY = "chat:abort:{}"
+_STREAMING_TTL = 120  # seconds
+
+
 async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, service):
     """Stream chat response and save assistant messages as they arrive."""
     from services.tstation.chat import TStationChatServiceV2
+    from services.tstation.chat_history_service import get_async_redis_client
+
+    _redis = get_async_redis_client()
+    _streaming_key = _STREAMING_KEY.format(session_id)
+    _abort_key = _ABORT_KEY.format(session_id)
+
+    await _redis.set(_streaming_key, "1", ex=_STREAMING_TTL)
 
     full_assistant_content = ""
-    assistant_response_ui = None  # Priority: assistantResponse from UI Template Agent
-    template_data = None  # Captured from UI Template Agent data events
+    assistant_response_ui = None
+    template_data = None
 
-    # Stream from chat service
-    stream_response = await TStationChatServiceV2.chat(chat_request)
+    try:
+        stream_response = await TStationChatServiceV2.chat(chat_request)
 
-    # Send initial response with session_id
-    initial_response = {
-        "session_id": session_id,
-        "message_id": user_msg_id,
-        "role": "user",
-        "content": chat_request.messages[-1]["content"],
-        "created_at": get_current_time(),
-        "stream_started": True,
-    }
-    yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
+        initial_response = {
+            "session_id": session_id,
+            "message_id": user_msg_id,
+            "role": "user",
+            "content": chat_request.messages[-1]["content"],
+            "created_at": get_current_time(),
+            "stream_started": True,
+        }
+        yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
 
-    async for chunk in stream_response.body_iterator:
-        # Parse the SSE data
-        if chunk.strip().startswith("data: "):
-            data_str = chunk.strip()[6:]  # Remove "data: " prefix
-            if data_str == "[DONE]":
-                break
+        chunk_count = 0
+        async for chunk in stream_response.body_iterator:
+            chunk_count += 1
+            if chunk_count % 5 == 0 and await _redis.exists(_abort_key):
+                await _redis.delete(_abort_key)
+                logger.info("[CHAT_MESSAGE] Stream aborted by client: %s", session_id)
+                yield f"data: {json.dumps({'type': 'aborted'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
-            try:
-                event = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
+            if chunk.strip().startswith("data: "):
+                data_str = chunk.strip()[6:]
+                if data_str == "[DONE]":
+                    break
 
-            # Priority: Capture assistantResponse from UI Template Agent (JSON data event)
-            if event.get("type") == "data":
-                event_data = event.get("data", {})
-                # assistantResponse may be inside data object or at top level
-                if event.get("assistantResponse"):
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    yield chunk
+                    continue
+
+                if event.get("type") == "data":
+                    event_data = event.get("data", {})
+                    if event.get("assistantResponse"):
+                        assistant_response_ui = event["assistantResponse"]
+                    elif event_data.get("assistantResponse"):
+                        assistant_response_ui = event_data["assistantResponse"]
+                    if assistant_response_ui:
+                        logger.debug(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
+                    template_data = event
+                    logger.debug(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
+
+                if event.get("type") == "qc_correction" and event.get("assistantResponse"):
                     assistant_response_ui = event["assistantResponse"]
-                elif event_data.get("assistantResponse"):
-                    assistant_response_ui = event_data["assistantResponse"]
-                if assistant_response_ui:
-                    logger.debug(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
-                # template_data = full event (KISS)
-                template_data = event
-                logger.debug(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
+                    logger.debug(f"[CHAT_MESSAGE] QC correction applied: {assistant_response_ui[:50]}...")
 
-            # QC parallel mode: override assistantResponse with the verified correction
-            if event.get("type") == "qc_correction" and event.get("assistantResponse"):
-                assistant_response_ui = event["assistantResponse"]
-                logger.debug(f"[CHAT_MESSAGE] QC correction applied: {assistant_response_ui[:50]}...")
-
-            # When we receive a message event with assistant content, accumulate it
-            if event.get("type") == "message" and event.get("content"):
-                content = event.get("content", "")
-                if content:
-                    full_assistant_content += content
+                if event.get("type") == "message" and event.get("content"):
+                    content = event.get("content", "")
+                    if content:
+                        full_assistant_content += content
 
             yield chunk
 
-    # Save assistant message after stream completes
-    # Priority: Use assistantResponse from UI Template Agent if available
-    message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
-    if message_to_save:
-        logger.debug(f"[CHAT_MESSAGE] Saving assistant message" +
-                  (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
+        message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
+        if message_to_save:
+            logger.debug(f"[CHAT_MESSAGE] Saving assistant message" +
+                      (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
 
-        # Fire-and-forget: don't block [DONE] on Redis write (~20-50ms).
-        from services.tstation.history_summarizer import refresh_summary
-        asyncio.create_task(asyncio.to_thread(
-            service.save_message,
-            session_id,
-            "assistant",
-            message_to_save,
-            template_data=template_data,
-            user_id=chat_request.user_id,
-        ))
-        asyncio.create_task(refresh_summary(session_id))
+            from services.tstation.history_summarizer import refresh_summary
+            asyncio.create_task(asyncio.to_thread(
+                service.save_message,
+                session_id,
+                "assistant",
+                message_to_save,
+                template_data=template_data,
+                user_id=chat_request.user_id,
+            ))
+            asyncio.create_task(refresh_summary(session_id))
 
-    yield "data: [DONE]\n\n"
+        yield "data: [DONE]\n\n"
+
+    finally:
+        await _redis.delete(_streaming_key)
 
 
 @router.get("/sessions", dependencies=[Depends(get_api_key)], response_model=SessionListResponse)
@@ -437,6 +455,29 @@ async def append_message(
         role=request.role,
         created_at=get_current_time(),
     )
+
+
+@router.post("/{session_id}/abort", dependencies=[Depends(get_api_key)])
+async def abort_stream(session_id: str, user: dict = Security(get_api_key)):
+    """
+    Abort an active streaming response for a session.
+
+    Returns {"aborted": true} if a stream was cancelled, {"aborted": false} if no active stream.
+    """
+    user_id = user.get("user_id")
+    service = get_chat_history_service()
+    await asyncio.to_thread(_ensure_session_owner, service, session_id, user_id)
+
+    from services.tstation.chat_history_service import get_async_redis_client
+    _redis = get_async_redis_client()
+    _streaming_key = _STREAMING_KEY.format(session_id)
+    _abort_key = _ABORT_KEY.format(session_id)
+
+    if not await _redis.exists(_streaming_key):
+        return {"aborted": False, "session_id": session_id}
+
+    await _redis.set(_abort_key, "1", ex=30)
+    return {"aborted": True, "session_id": session_id}
 
 
 @router.delete("/{session_id}", dependencies=[Depends(get_api_key)], response_model=DeleteSessionResponse)
