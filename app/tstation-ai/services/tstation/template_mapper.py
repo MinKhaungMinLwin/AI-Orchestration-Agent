@@ -660,6 +660,49 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if "get_store_schedule_tool" in called_tools:
         return None
 
+    # `transaction_store_preview_tool` with no available schedule. The preview
+    # tool runs in purchase flow ("이 상품 N개 [매장/근처] 오늘 가능?"); when its
+    # `schedule.tier == "none"` (or `schedule.stores` is empty), today install
+    # is unavailable across all candidates. Rendering a location card here is
+    # a dead end — clicking any store (isBookingFlow=true) routes back through
+    # the same flow that just returned no slot. Emit a quickReply with chips
+    # guiding the user to broaden the search or shift the date instead.
+    if "transaction_store_preview_tool" in called_tools:
+        for entry in _find_entries(tool_data_list, "transaction_store_preview_tool"):
+            raw = _unwrap(entry)
+            if not isinstance(raw, dict):
+                continue
+            schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+            schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+            schedule_empty = (
+                _get_str(schedule, "tier").lower() == "none"
+                or (isinstance(schedule_stores, list) and not schedule_stores)
+            )
+            if not schedule_empty:
+                continue
+            args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+            store_nm = _get_str(args, "store_nm") if isinstance(args, dict) else ""
+            short = (assistant_text or "").strip()
+            if not short or len(short) > 120:
+                short = (
+                    f"{store_nm} 기준으로 오늘 장착 가능 일정이 확인되지 않았어요."
+                    if store_nm
+                    else "근처 매장에서 오늘 장착 가능 일정이 확인되지 않았어요."
+                )
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper",
+                "data": {
+                    "assistantResponse": short,
+                    "quickReplies": [
+                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
+
     # Flow 5 General — info-only store attribute query (운영시간/주소/전화/휴무일/
     # 서비스 가능 여부/올마이T·T바로배송·수입차 가능 등). When no booking signal
     # ran this turn AND the active goal isn't booking-followup AND isn't list
