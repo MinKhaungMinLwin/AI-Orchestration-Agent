@@ -903,32 +903,33 @@ def _parse_tm_to_hour(tm: str) -> int | None:
 
 
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
-    """Map `get_store_schedule_tool` output to a `datepick` event.
+    """Map slot-emitting tools to a `datepick` event.
 
-    BE response shape (per StoreScheduleResponse in tstation-be-openapi.json):
-        {
-          "shop_id": "...", "shop_nm": "...", "mode": "...",
-          "is_installable": bool, "is_tna_delivery": bool,
-          "slots": [{"cal_day": "YYYYMMDD", "tm": "HHMM"}, ...]
-        }
+    Two sources supported:
 
-    Slots are flat (one entry per available time), not grouped by day. Group by
-    `cal_day` and dedupe to integer hours for the FE `availableTimes` contract.
-    `get_store_detail_tool` is intentionally skipped — its response does not
-    include cal_day, and reconstructing it from input args is not currently
-    supported by BaseAgent's tool-result accumulator.
+    1. ``get_store_schedule_tool`` (StoreScheduleResponse):
+       ``{shop_id, shop_nm, mode, is_installable, is_tna_delivery,
+       slots: [{cal_day, tm}, ...]}`` — flat list grouped by day.
+
+    2. ``get_store_detail_tool`` (Flow 5.1 / 5.5 single-day lookup):
+       response has ``available_slots`` (hour strings, e.g. ``["09","10"]``)
+       and the ``cal_day`` is taken from the tool's input args. Without this
+       path the agent's intended datepick gets overridden by the location
+       mapper when a sibling ``transaction_store_preview_tool`` ran.
+
+    Schedule-tool path wins when both are present (richer multi-day shape).
     """
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
     if not entries:
-        return None
+        return _map_datepick_from_detail(tool_data_list, assistant_text)
     raw = _unwrap(entries[-1])
     if not isinstance(raw, dict):
-        return None
+        return _map_datepick_from_detail(tool_data_list, assistant_text)
 
     shop_id = _get_str(raw, "shop_id")
     slots = raw.get("slots")
     if not shop_id or not isinstance(slots, list):
-        return None
+        return _map_datepick_from_detail(tool_data_list, assistant_text)
 
     # Response-level installable flag: when False, treat as no available times
     # (BE may still echo cal_day rows in some modes; FE expects empty list).
@@ -982,6 +983,56 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             "assistantResponse": short,
         },
     }
+
+
+def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Build a single-day `datepick` from `get_store_detail_tool` slots.
+
+    Detail-tool response carries ``available_slots`` (hour strings) for one
+    cal_day; cal_day itself isn't in the response, so we read it from the
+    tool's input args. Falls back to None when args.cal_day is missing or
+    slots are empty/unparseable.
+    """
+    for entry in _find_entries(tool_data_list, "get_store_detail_tool"):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        if not isinstance(args, dict):
+            continue
+        cal_day = _get_str(args, "cal_day")
+        shop_id = _get_str(args, "shop_id")
+        if not cal_day or not shop_id:
+            continue
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+        slot_strs = raw.get("available_slots")
+        if not isinstance(slot_strs, list) or not slot_strs:
+            continue
+        hours: list[int] = []
+        for s in slot_strs:
+            h = _parse_tm_to_hour(str(s))
+            if h is not None:
+                hours.append(h)
+        hours = sorted(set(hours))
+        if not hours:
+            continue
+        short, response_source = _summarize_with_source(assistant_text, "datepick", 1)
+        return {
+            "type": "data",
+            "template": "datepick",
+            "assistant_response_source": response_source,
+            "data": {
+                "dates": [{
+                    "date": _yyyymmdd_to_korean_date(cal_day),
+                    "available": True,
+                    "availableTimes": hours,
+                    "index": 0,
+                }],
+                "selectedDate": 0,
+                "metadata": {"shopId": shop_id},
+                "assistantResponse": short,
+            },
+        }
+    return None
 
 
 # ── 10. orderComplete ───────────────────────────────────────────────────────────
@@ -1399,6 +1450,12 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("save_to_cart_tool", _map_order_complete),
         ("quick_order_tool", _map_order_complete),
         ("get_store_schedule_tool", _map_datepick),
+        # Date-specific detail lookup (Flow 5.1 / 5.5) — `get_store_detail_tool`
+        # with args.cal_day + non-empty available_slots is a datepick signal.
+        # Must outrank the location mappers below; otherwise a sibling
+        # `transaction_store_preview_tool(tier=none)` causes `_map_location` to
+        # render a store card instead of the intended time-slot picker.
+        ("get_store_detail_tool", _map_datepick),
         ("search_product_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
         ("get_best_selling_products_tool", _map_product),
