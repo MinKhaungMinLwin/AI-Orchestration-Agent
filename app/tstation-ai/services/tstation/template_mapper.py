@@ -74,6 +74,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # location
     "get_store_list_tool": "location",
     "get_nearby_stores_tool": "location",
+    "transaction_store_preview_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
     # orderComplete (cart-save / quick-order — terminal step in transaction flow)
@@ -95,6 +96,7 @@ _BOOKING_SIGNAL_TOOLS = frozenset({
     "get_final_price_tool",
     "save_to_cart_tool",
     "quick_order_tool",
+    "transaction_store_preview_tool",
 })
 
 # Korean short weekday labels used for datepick `date` strings.
@@ -683,7 +685,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             detail_by_shop_id[shop_id] = raw
 
     items, metadata = [], []
-    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool"):
+    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -1294,6 +1296,7 @@ _MAPPERS: dict[str, Any] = {
     "search_youtube_video_tool": _map_preview_youtube,
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
+    "transaction_store_preview_tool": _map_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
     "save_to_cart_tool": _map_order_complete,
@@ -1342,6 +1345,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
+        ("transaction_store_preview_tool", _map_location),
         # Lowest priority — only fires when neither the location card path
         # (info-only `_map_location` returns None) nor any higher-priority
         # template applies. Owns the Flow 5 General single-store info answer.
