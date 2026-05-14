@@ -2,6 +2,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import litellm
 from api.router import router
 from config.env import settings
 from config.log import setup_logging
@@ -15,6 +16,7 @@ setup_logging(
     service_name=settings.PROJECT_NAME,
     ignored_paths=["/metrics", "/health"]
 )
+litellm.suppress_debug_info = True
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
