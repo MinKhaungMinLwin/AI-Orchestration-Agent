@@ -180,6 +180,35 @@ def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
     return sorted(items, key=key_func)
 
 
+def _filter_by_price(
+    items: list[dict],
+    min_price: int | None,
+    max_price: int | None,
+) -> list[dict]:
+    """Filter items by effective price (sale price preferred over original).
+
+    Items with no price information are excluded when a price filter is active —
+    we cannot verify they are within budget.
+
+    Applied BEFORE _enrich_items_with_descriptions to avoid fetching descriptions
+    for items that will be discarded. extra_fvr_sale_prc comes from the main
+    search/recommendation BE response so it is available on raw items.
+    """
+    if not min_price and not max_price:
+        return items
+    result = []
+    for item in items:
+        effective_price = item.get("extra_fvr_sale_prc") or item.get("price") or 0
+        if not effective_price:
+            continue
+        if min_price and effective_price < min_price:
+            continue
+        if max_price and effective_price > max_price:
+            continue
+        result.append(item)
+    return result
+
+
 def _slim_product_item(item: dict) -> dict:
     """Strip noise fields from a product item before returning to the LLM.
 
@@ -333,6 +362,8 @@ def search_product_tool(
     size: str | None = None,
     brand_cd: str = "HK",
     sort_by: str | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
 ):
     """
     상품 검색.
@@ -375,6 +406,15 @@ def search_product_tool(
             - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 BE 기본 순서 유지.
+        min_price (int | None): 최소 가격 필터 (원 단위). Optional.
+            예: 200_000 ("20만원 이상")
+        max_price (int | None): 최대 가격 필터 (원 단위). Optional.
+            예: 300_000 ("30만원 이하")
+
+    Notes:
+        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
+        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
+        - 가격 정보 없는 상품은 필터 적용 시 제외됨.
 
     Examples:
         - {"keyword": "벤투스 S2", "limit": 5, "size": "225/45R17"}
@@ -384,9 +424,13 @@ def search_product_tool(
         - {"size": "235/55R19", "brand_cd": "BS"}  # 브리지스톤 사이즈만으로 검색
         - {"size": "225/45R17", "sort_by": "price_asc"}  # 가장 저렴한 순으로 정렬
         - {"keyword": "벤투스", "size": "225/45R17", "sort_by": "rating_desc"}  # 평점 높은 순
+        - {"brand_cd": "HK", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 한국타이어
+        - {"keyword": "벤투스 S2", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...}
+              or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
+              or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     normalized_keyword = _strip_brand_only_keyword(keyword)
     if normalized_keyword != keyword:
@@ -394,13 +438,15 @@ def search_product_tool(
             "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
             keyword, brand_cd,
         )
+    has_price_filter = bool(min_price or max_price)
+    fetch_limit = limit * 4 if has_price_filter else limit
     logger.debug(
-        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s",
-        normalized_keyword, limit, size, brand_cd, sort_by,
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
+        normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
     )
 
     try:
-        response = search_product(client=get_client(), keyword=normalized_keyword, limit=limit, size=size, brand_cd=brand_cd)
+        response = search_product(client=get_client(), keyword=normalized_keyword, limit=fetch_limit, size=size, brand_cd=brand_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -410,8 +456,14 @@ def search_product_tool(
         # logger.debug("[TOOL][search_product_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
+            if has_price_filter:
+                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                if not data["items"]:
+                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
+            if has_price_filter:
+                data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
@@ -641,6 +693,8 @@ def get_products_recommendations_tool(
     sort_by: str | None = None,
     season_nm: str | None = None,
     pfm_nm: str | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
 ):
     """
     Product Recommendation — top N products by rcmd_type.
@@ -701,11 +755,21 @@ def get_products_recommendations_tool(
             - "RUNFLAT": 런플랫
             ⚠️ 신규(동적) rcmd_type 에만 적용됨.
             "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
+        min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
+            예: 200_000 ("20만원 이상")
+        max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
+            예: 300_000 ("30만원 이하")
 
     Combined-intent guidance (직교 필터):
         - "퍼포먼스 좋은 여름용" → rcmd_type="performance", season_nm="여름"
         - "조용한 사계절" → rcmd_type="low_vibration", season_nm="사계절"
         - "런플랫 중에 빗길 강한" → rcmd_type="wet", pfm_nm="RUNFLAT"
+        - "30만원 이하 사계절 타이어" → rcmd_type="all_weather", max_price=300_000
+        - "20만원~30만원 가성비 타이어" → rcmd_type="value", min_price=200_000, max_price=300_000
+
+    Notes:
+        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
+        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
 
     Examples:
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
@@ -716,20 +780,26 @@ def get_products_recommendations_tool(
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
         - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
         - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
+        - {"rcmd_type": "value", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 가성비
+        - {"rcmd_type": "tstation", "tire_size": "225/45R17", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...}
+              or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
+              or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
+    has_price_filter = bool(min_price or max_price)
+    fetch_limit = limit * 4 if has_price_filter else limit
     logger.debug(
-        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm,
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
+        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
     )
 
     try:
         response = get_products_recommendations(
             client=get_client(),
             rcmd_type=rcmd_type,
-            limit=limit,
+            limit=fetch_limit,
             brand_cd=brand_cd,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
@@ -745,8 +815,14 @@ def get_products_recommendations_tool(
         # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
+            if has_price_filter:
+                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                if not data["items"]:
+                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
+            if has_price_filter:
+                data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")

@@ -182,6 +182,29 @@ def _normalize_time(s: str) -> str:
     return s
 
 
+def _format_phone(s: str) -> str:
+    """Format a Korean landline/mobile phone number for display.
+
+    BE returns ``tel_no`` as raw digits (e.g. ``"0313810285"``); the FE bubble
+    looks much nicer with hyphenated form. Returns the original string when
+    the digit count doesn't match a known pattern so we never garble already-
+    formatted input or international numbers we don't recognise.
+    """
+    digits = "".join(c for c in (s or "") if c.isdigit())
+    if not digits:
+        return ""
+    if digits.startswith("02"):
+        if len(digits) == 10:
+            return f"02-{digits[2:6]}-{digits[6:]}"
+        if len(digits) == 9:
+            return f"02-{digits[2:5]}-{digits[5:]}"
+    if len(digits) == 11:
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    if len(digits) == 10:
+        return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+    return s
+
+
 # ── 1. product ──────────────────────────────────────────────────────────────────
 
 # Tag chip 매핑 (BE → FE)
@@ -386,7 +409,9 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            car_info = _get_str(row, "car_model_det", "car_nm")
+            car_nm = _get_str(row, "car_model_det", "car_nm")
+            car_maker = _get_str(row, "car_maker")
+            car_info = f"{car_maker} {car_nm}" if car_maker and car_nm else (car_nm or car_maker)
             items.append({
                 "licensePlate": _get_str(row, "car_no"),
                 "info": car_info,
@@ -558,13 +583,13 @@ def _map_preview_youtube(tool_data_list: list[dict], assistant_text: str) -> dic
     if not items:
         return None
     items = items[:5]
-    short = _summarize(assistant_text, "previewYoutube", len(items))
+    short, response_source = _summarize_with_source(assistant_text, "previewYoutube", len(items))
     # previewYoutube: FE reads data.text (not assistantResponse) for intro text
     return {"type": "data", "template": "previewYoutube", "data": {
         "items": items,
         "text": short,
         "assistantResponse": short,
-    }}
+    }, "assistant_response_source": response_source}
 
 
 # ── 8. location ─────────────────────────────────────────────────────────────────
@@ -615,6 +640,19 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # slots, the agent emits its own datepick JSON (mapper has no cal_day in
     # response). Don't second-guess by also producing a location card.
     if "get_store_schedule_tool" in called_tools:
+        return None
+
+    # Flow 5 General — info-only store attribute query (운영시간/주소/전화/휴무일/
+    # 서비스 가능 여부/올마이T·T바로배송·수입차 가능 등). When no booking signal
+    # ran this turn AND the active goal isn't booking-followup AND isn't list
+    # browsing (`store_finder`), the user is asking ABOUT a specific store, not
+    # picking one. The agent's text answer carries the response; rendering a
+    # single-item clickable card implies a selection action that doesn't exist
+    # and risks showing default-False fields (tnaDelivery/todayInstall) as if
+    # they were authoritative when the list endpoint simply omits them.
+    has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+    is_list_browsing = current_goal_type.get() == "store_finder"
+    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing:
         return None
 
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
@@ -749,10 +787,11 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup()
     )
 
-    short = _summarize(assistant_text, "location", len(items))
+    short, response_source = _summarize_with_source(assistant_text, "location", len(items))
     return {
         "type": "data",
         "template": "location",
+        "assistant_response_source": response_source,
         "data": {
             "stores": items,
             "metadata": metadata,
@@ -851,10 +890,11 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if selected_idx is None:
         return None
 
-    short = _summarize(assistant_text, "datepick", len(dates))
+    short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
     return {
         "type": "data",
         "template": "datepick",
+        "assistant_response_source": response_source,
         "data": {
             "dates": dates,
             "selectedDate": selected_idx,
@@ -1066,13 +1106,124 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
     }
 
 
+# ── 11. quickReply (store detail info-only) ────────────────────────────────────
+
+def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Deterministic ``quickReply`` for Flow 5 General single-store info lookup.
+
+    The transaction agent's prompt expects a full text answer in
+    ``assistantResponse`` (line 1066-1072 of c_transaction_agent/agent.py) when
+    ``get_store_detail_tool`` runs without slot results, but in practice the
+    LLM often slips into PROSE-MODE ("매장 상세정보를 확인했어요.") and the
+    actual fields never reach the user — only QC catches it. Build the answer
+    in code so the response is correct on the first emission and QC has
+    nothing to rewrite.
+
+    Skip rules:
+    - Schedule tools own their own templates (datepick / multi-store).
+    - Booking-signal tools (price, stock, cart, order) own theirs.
+    - ``cal_day`` other than today implies Flow 5.1 (date-specific) — defer to
+      the LLM so it can emit datepick or the "no slots, try another date"
+      apology message for that specific date.
+    - Non-empty ``available_slots`` is Flow 5.1 with availability → datepick.
+    """
+    called_tools = {e.get("tool", "") for e in tool_data_list}
+    if "get_store_schedule_tool" in called_tools or "get_multi_store_schedule_tool" in called_tools:
+        return None
+    if called_tools & _BOOKING_SIGNAL_TOOLS:
+        return None
+
+    entries = _find_entries(tool_data_list, "get_store_detail_tool")
+    if not entries:
+        return None
+    entry = entries[-1]
+    raw = _unwrap(entry)
+    if not isinstance(raw, dict):
+        return None
+
+    args = entry.get("args") or {}
+    cal_day = _get_str(args, "cal_day") if isinstance(args, dict) else ""
+    kst = datetime.timezone(datetime.timedelta(hours=9))
+    today = datetime.datetime.now(kst).strftime("%Y%m%d")
+    if cal_day and cal_day != today:
+        return None
+
+    slots = raw.get("available_slots")
+    if isinstance(slots, list) and slots:
+        return None
+
+    shop_nm = _get_str(raw, "shop_nm")
+    if not shop_nm:
+        return None
+
+    tel_no = _format_phone(_get_str(raw, "tel_no"))
+    holiday = _get_str(raw, "holiday")
+    biz_wday_start = _get_str(raw, "shop_biz_strt_wday")
+    biz_wday_end = _get_str(raw, "shop_biz_end_wday")
+    biz_start = _normalize_time(_get_str(raw, "shop_biz_strt_time"))
+    biz_end = _normalize_time(_get_str(raw, "shop_biz_end_time"))
+    sat_start = _normalize_time(_get_str(raw, "shop_sat_strt_time"))
+    sat_end = _normalize_time(_get_str(raw, "shop_sat_end_time"))
+
+    biz_hours = f"{biz_start}~{biz_end}" if biz_start and biz_end else ""
+    sat_hours = f"{sat_start}~{sat_end}" if sat_start and sat_end else ""
+    # When Saturday has its own line, the weekday line implicitly means Mon-Fri.
+    # Otherwise fall back to BE's reported range (e.g. 월요일~일요일 for shops
+    # without a separate Saturday schedule).
+    if sat_hours:
+        biz_wday_label = "평일"
+    elif biz_wday_start and biz_wday_end:
+        biz_wday_label = f"{biz_wday_start}~{biz_wday_end}"
+    else:
+        biz_wday_label = "평일"
+
+    lines: list[str] = [f"고객님, {shop_nm} 매장 정보를 안내드릴게요. 😊", ""]
+    lines.append(f"• 매장명: {shop_nm}")
+    if tel_no:
+        lines.append(f"• 전화번호: {tel_no}")
+    if biz_hours:
+        lines.append(f"• {biz_wday_label} 영업시간: {biz_hours}")
+    if sat_hours:
+        lines.append(f"• 토요일 영업시간: {sat_hours}")
+    if holiday:
+        lines.append(f"• 휴무일: {holiday}")
+    if "is_all_my_t" in raw:
+        lines.append("• 올마이T: 이용 가능" if raw.get("is_all_my_t") else "• 올마이T: 이용 불가")
+    if "is_installable" in raw:
+        lines.append("• 온라인 장착: 가능" if raw.get("is_installable") else "• 온라인 장착: 불가")
+    if "is_tna_delivery" in raw:
+        lines.append("• T바로배송: 가능" if raw.get("is_tna_delivery") else "• T바로배송: 불가")
+    if "is_imported_car" in raw:
+        lines.append("• 수입차 장착: 가능" if raw.get("is_imported_car") else "• 수입차 장착: 불가")
+
+    svc_labels = _svc_code_label_list(raw.get("svc_codes"))
+    if svc_labels:
+        lines.append(f"• 제공 서비스: {' | '.join(svc_labels)}")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_mapper",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 # ── Common builder ──────────────────────────────────────────────────────────────
 
 def _build_event(template: str, data: dict, assistant_text: str, item_count: int) -> dict:
     """Build a type:data event with a concise assistantResponse."""
-    short = _summarize(assistant_text, template, item_count)
+    short, response_source = _summarize_with_source(assistant_text, template, item_count)
     data["assistantResponse"] = short
-    return {"type": "data", "template": template, "data": data}
+    return {
+        "type": "data",
+        "template": template,
+        "data": data,
+        "assistant_response_source": response_source,
+    }
 
 
 _TEMPLATE_DEFAULTS: dict[str, str] = {
@@ -1090,6 +1241,10 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
 
 
 def _summarize(full_text: str, template: str, item_count: int) -> str:
+    return _summarize_with_source(full_text, template, item_count)[0]
+
+
+def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:
     """Domain Agent 텍스트에서 첫 문장만 추출하거나, 기본 안내를 반환한다.
 
     PROSE MODE 도입 후 LLM이 1–2문장의 짧은 prose("...찾았어요. ...선택해 주세요 😊")를
@@ -1098,18 +1253,18 @@ def _summarize(full_text: str, template: str, item_count: int) -> str:
     """
     text = (full_text or "").strip()
     if not text:
-        return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count)
+        return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count), "default"
 
     if len(text) <= 120:
-        return text
+        return text, "llm_prose"
 
     # 길면 첫 문장으로 컷 (줄바꿈 또는 문장 부호 기준)
     for sep in ["\n", ".\n", "!\n", "?\n", ". ", "! ", "? "]:
         idx = text.find(sep)
         if 0 < idx <= 120:
-            return text[: idx + 1].strip()
+            return text[: idx + 1].strip(), "llm_prose"
 
-    return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count)
+    return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count), "default"
 
 
 # ── Mapper registry ─────────────────────────────────────────────────────────────
@@ -1129,6 +1284,7 @@ _MAPPERS: dict[str, Any] = {
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "get_store_schedule_tool": _map_datepick,
+    "get_store_detail_tool": _map_store_detail_info,
     "save_to_cart_tool": _map_order_complete,
     "quick_order_tool": _map_order_complete,
 }
@@ -1175,6 +1331,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
+        # Lowest priority — only fires when neither the location card path
+        # (info-only `_map_location` returns None) nor any higher-priority
+        # template applies. Owns the Flow 5 General single-store info answer.
+        ("get_store_detail_tool", _map_store_detail_info),
     ]
 
     called_tools = {e.get("tool", "") for e in accumulated_tool_data}

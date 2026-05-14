@@ -242,6 +242,7 @@ class BaseAgent(ABC):
 
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
+        self._system_prompt_chars = len(prompt or "")
         return create_agent(
             model=self._model,
             tools=self._tools,
@@ -251,6 +252,10 @@ class BaseAgent(ABC):
             system_prompt=prompt,
             name=self.name,
         )
+
+    @property
+    def system_prompt_chars(self) -> int:
+        return getattr(self, "_system_prompt_chars", 0)
 
     def invoke(self, messages: list[dict], config: dict | None = None) -> str:
         agent = self._agent
@@ -387,6 +392,7 @@ class BaseAgent(ABC):
         # full FE JSON payload (the dominant 2nd-call output token cost).
         code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
         if code_event is not None:
+            code_event["template_source"] = "code_mapper"
             assistant_response = self._get_assistant_response(code_event)
             already_streamed = response_streamer is not None and response_streamer.streamed_any
             if assistant_response:
@@ -575,7 +581,7 @@ class BaseAgent(ABC):
             except json.JSONDecodeError:
                 try:
                     parsed = ast.literal_eval(normalized)
-                except (SyntaxError, ValueError) as loose_exc:
+                except (SyntaxError, ValueError, TypeError) as loose_exc:
                     logger.debug("Agent JSON parse failed: strict=%s loose=%s", strict_exc, loose_exc)
                     return None
                 return parsed
@@ -600,10 +606,29 @@ class BaseAgent(ABC):
         If the LLM emitted an explicit fenced JSON block, defer to it — the
         agent has chosen its own template (e.g. comparison intent → quickReply
         instead of the default cheapestProduct mapper).
+
+        listCar exception: when get_my_cars_tool / get_user_vehicles_tool ran,
+        always use the deterministic mapper even if the LLM emitted fenced JSON.
+        The mapper enriches info with car_maker prefix and keeps info/description
+        consistent; LLM-authored JSON drifts in format between turns.
+
+        Store-detail exception: when get_store_detail_tool ran, the LLM's
+        quickReply often slips into PROSE-MODE ("매장 상세정보를 확인했어요.")
+        and the rich detail fields never reach the user — only QC catches it.
+        _map_store_detail_info's own guards defer back to the LLM for Flow 5.1
+        (date-specific datepick / no-slot apology).
         """
         if not accumulated_tool_data:
             return None
-        if BaseAgent._extract_fenced_json(accumulated_text) is not None:
+        _FORCE_CODE_MAPPER_TOOLS = (
+            "get_my_cars_tool",
+            "get_user_vehicles_tool",
+            "get_store_detail_tool",
+        )
+        has_force_code_mapper_tool = any(
+            e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
+        )
+        if not has_force_code_mapper_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
         if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):
