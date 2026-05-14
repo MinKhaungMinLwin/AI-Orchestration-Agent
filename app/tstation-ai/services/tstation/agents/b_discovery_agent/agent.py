@@ -1593,6 +1593,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_deals_tool,
                 get_event_applicable_products_tool,
                 get_product_applicable_events_tool,
+                search_product_tool,
             ]
             system_prompt = get_discovery_event_content_system_prompt
             name = "Discovery Agent (Event/Content)"

@@ -1466,6 +1466,7 @@ class TransactionSubAgent(BaseAgent):
                 get_final_price_tool,
                 get_product_promotions_tool,
                 get_logistics_inventory_tool,
+                get_available_coupons_tool,
             ]
             system_prompt = get_transaction_price_stock_system_prompt
             name = "Transaction Agent (Price/Stock)"
