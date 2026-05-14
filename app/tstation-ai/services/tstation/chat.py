@@ -1345,37 +1345,6 @@ class StreamingMultiAgentCoordinator:
                     _agent_message_count,
                     len(agent_tools_called),
                 )
-                if trace_id and _tracing_enabled:
-                    try:
-                        tracer.create_score(
-                            trace_id=trace_id,
-                            name=f"latency.agent.{domain_key}.total_ms",
-                            value=_agent_total_ms,
-                        )
-                        if _agent_first_visible_ms is not None:
-                            tracer.create_score(
-                                trace_id=trace_id,
-                                name=f"latency.agent.{domain_key}.first_visible_ms",
-                                value=_agent_first_visible_ms,
-                            )
-                        if _agent_first_tool_ms is not None:
-                            tracer.create_score(
-                                trace_id=trace_id,
-                                name=f"latency.agent.{domain_key}.first_tool_ms",
-                                value=_agent_first_tool_ms,
-                            )
-                        tracer.create_score(
-                            trace_id=trace_id,
-                            name=f"context.agent.{domain_key}.system_prompt_chars",
-                            value=_agent_prompt_chars,
-                        )
-                        tracer.create_score(
-                            trace_id=trace_id,
-                            name=f"context.agent.{domain_key}.input_chars",
-                            value=_agent_input_chars,
-                        )
-                    except Exception as exc:
-                        logger.debug("[TRACE] Failed to create agent metrics scores: %s", exc)
                 _agent_span.update(
                     output=_truncate({
                         "summary": _agent_summary,
@@ -2949,30 +2918,6 @@ class TStationChatServiceV2:
                 len(messages),
                 messages_chars,
             )
-            if request.tracing_id and _tracing_enabled:
-                try:
-                    tracer.create_score(
-                        trace_id=request.tracing_id,
-                        name="context.messages_count",
-                        value=len(messages),
-                    )
-                    tracer.create_score(
-                        trace_id=request.tracing_id,
-                        name="context.messages_chars",
-                        value=messages_chars,
-                    )
-                    tracer.create_score(
-                        trace_id=request.tracing_id,
-                        name="classifier.messages_count",
-                        value=len(classifier_messages),
-                    )
-                    tracer.create_score(
-                        trace_id=request.tracing_id,
-                        name="classifier.messages_chars",
-                        value=classifier_messages_chars,
-                    )
-                except Exception as exc:
-                    logger.debug("[TRACE] Failed to create message context scores: %s", exc)
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             classify_future = _speculative_classify_executor.submit(
@@ -3175,25 +3120,6 @@ class TStationChatServiceV2:
                     len(prompt_tool_data),
                     len(tool_context),
                 )
-                if request.tracing_id and _tracing_enabled:
-                    try:
-                        tracer.create_score(
-                            trace_id=request.tracing_id,
-                            name="context.prev_tool_items_total",
-                            value=len(prev_tool_data),
-                        )
-                        tracer.create_score(
-                            trace_id=request.tracing_id,
-                            name="context.injected_tool_items",
-                            value=len(prompt_tool_data),
-                        )
-                        tracer.create_score(
-                            trace_id=request.tracing_id,
-                            name="context.tool_context_chars",
-                            value=len(tool_context),
-                        )
-                    except Exception as exc:
-                        logger.debug("[TRACE] Failed to create context scores: %s", exc)
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
@@ -3519,8 +3445,9 @@ class TStationChatServiceV2:
         # through every signature in the agent → mapper chain.
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
-        from services.tstation.template_mapper import current_goal_type
+        from services.tstation.template_mapper import current_goal_type, current_pending_intent
         current_goal_type.set(merged_slots.goal_type)
+        current_pending_intent.set(merged_slots.pending_intent)
 
         _t_prestream = time.perf_counter()
         logger.debug(
@@ -3529,22 +3456,6 @@ class TStationChatServiceV2:
             f"other={(_t_prestream - _t_classify)*1000:.0f}ms "
             f"total={(_t_prestream - _t0)*1000:.0f}ms"
         )
-        if request.tracing_id and _tracing_enabled:
-            # Keep numeric scores beside spans so latency dashboards can compare
-            # classify/agent/QC paths without expanding each trace.
-            try:
-                tracer.create_score(
-                    trace_id=request.tracing_id,
-                    name="latency.slots_ms",
-                    value=round((_t_slots - _t0) * 1000),
-                )
-                tracer.create_score(
-                    trace_id=request.tracing_id,
-                    name="latency.classify_ms",
-                    value=round((_t_classify - _t_slots) * 1000),
-                )
-            except Exception as exc:
-                logger.debug("[TRACE] Failed to create score: %s", exc)
 
         # STREAM MODE
         if request.stream:
@@ -4118,51 +4029,6 @@ class TStationChatServiceV2:
             f"qc={_lat_qc_ms:.0f}ms "
             f"stream_total={_lat_stream_total_ms:.0f}ms"
         )
-        if trace_id and _tracing_enabled:
-            try:
-                if _lat_first_visible_ms is not None:
-                    tracer.create_score(
-                        trace_id=trace_id,
-                        name="latency.first_visible_ms",
-                        value=round(_lat_first_visible_ms),
-                    )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.stream_total_ms",
-                    value=round(_lat_stream_total_ms),
-                )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.agents_ms",
-                    value=round((_t_agents - _t_stream_start) * 1000),
-                )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.agent_pre_tool_think_ms",
-                    value=round(_lat_agent_pre_tool_think_ms),
-                )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.agent_post_tool_output_ms",
-                    value=round(_lat_agent_post_tool_output_ms),
-                )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.agent_llm_generation_ms",
-                    value=round(_lat_agent_llm_generation_ms),
-                )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.tools_ms",
-                    value=round(_lat_tool_ms),
-                )
-                tracer.create_score(
-                    trace_id=trace_id,
-                    name="latency.qc_ms",
-                    value=round(_lat_qc_ms),
-                )
-            except Exception as exc:
-                logger.debug("[TRACE] Failed to create stream latency scores: %s", exc)
 
         if parent_span is not None:
             # The augmented user message has a CONVERSATION CONTEXT prefix and
