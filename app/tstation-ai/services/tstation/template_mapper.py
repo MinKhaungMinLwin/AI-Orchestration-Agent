@@ -283,6 +283,13 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             # Price priority: matched get_final_price_tool result > inline row field.
             price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            original_price = int(_get_num(row, "sale_prc", default=0)) or None
+            discount_rate = float(_get_num(row, "extra_fvr_sale_per", default=0.0)) or None
+            discount_amount = (
+                original_price - price
+                if original_price and price and original_price > price
+                else None
+            )
             # Tag chips:
             # - primary: prc_grd_nm 화이트리스트 (한글 그대로). 그 외 값은 skip.
             # - secondary: goods_pfm_nm 영문 코드 → 한글 라벨 매핑. 매핑 외 코드는 skip.
@@ -302,6 +309,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "tires": "",
                 "comfort": "",
                 "price": price,
+                "originalPrice": original_price,
+                "discountRate": discount_rate,
+                "discountAmount": discount_amount,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
                 "tags": tags,

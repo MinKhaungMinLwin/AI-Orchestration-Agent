@@ -452,6 +452,9 @@ class ProductItem(BaseModel):
     title: str = Field(..., min_length=1)
     tires: str
     price: Optional[int] = Field(None, ge=0)
+    originalPrice: Optional[int] = Field(None, ge=0)
+    discountRate: Optional[float] = Field(None, ge=0)
+    discountAmount: Optional[int] = Field(None, ge=0)
     rate: float = Field(..., ge=0.0, le=5.0)
     totalQuantity: int = Field(..., ge=0)
     tags: list[ProductTag] = Field(default_factory=list)
