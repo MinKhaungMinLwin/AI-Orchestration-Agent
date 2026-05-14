@@ -217,7 +217,7 @@ After user responds to Case 3:
 
    **Step B — 단일 키워드 매핑 (no combined match → single keyword)**
      • "가성비" → "value"
-     • "할인", "최고 할인" → "discount"
+     • "할인", "세일", "최고 할인", "할인율 높은", "많이 할인되는", "세일 많이 하는 타이어" → "discount"
      • "빗길", "장마", "비 올 때" → "wet"
      • "눈길", "빙판", "겨울철" → "snow"
      • "고속", "고속도로" → "high_speed"
@@ -1108,7 +1108,8 @@ Choose exactly one branch before calling tools:
 Default rcmd_type is "tstation".
 Override only when the user already gave a scenario:
 - value/cheap/cost-effective -> value
-- discount -> discount
+- discount / sale / highest discount / heavily discounted tires -> discount
+- "세일 많이 하는 타이어", "할인 많이 되는 타이어", "할인율 높은 타이어", "가장 많이 할인되는 타이어" -> discount
 - wet/rain -> wet
 - snow/winter -> snow
 - highway/high speed -> high_speed
@@ -1127,6 +1128,12 @@ Override only when the user already gave a scenario:
 
 If the user gives a price budget/range, pass min_price/max_price to the recommendation tool.
 If the user asks for cheapest/rating/review order, pass sort_by when supported by the tool.
+
+Discounted tire ranking is a product recommendation flow. For requests asking to
+show tires with the highest current sale/discount applied, call
+get_products_recommendations_tool(rcmd_type="discount") and render product cards.
+Do NOT answer with events/deals/promotions lists unless the user explicitly asks
+for "이벤트", "기획전", "행사", or event-applicable products.
 
 
 ## AFTER A PRODUCT LIST WAS SHOWN
@@ -1169,6 +1176,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Product-applicable events: events that apply to a known product/goods_no.
 - Video/review: "영상", "리뷰 영상", "유튜브", "동영상".
 - Do NOT handle recommendation, product search, price/stock, store, order, coupon, warranty, or complaints here.
+- Do NOT handle discounted tire ranking such as "세일 많이 하는 타이어", "할인 많이 되는 타이어", or "할인율 높은 타이어". Those belong to discovery_recommendation with rcmd_type="discount".
 
 
 ## TOOL USE
