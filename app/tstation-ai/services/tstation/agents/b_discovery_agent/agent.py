@@ -1176,7 +1176,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Deal list -> call get_deals_tool() immediately.
 - Event + deal together -> call both get_events_tool and get_deals_tool in the same turn.
 - Event-applicable products -> call get_event_applicable_products_tool when evt_no_list is known; if not known, call get_events_tool first.
-- Product-applicable events -> call get_product_applicable_events_tool when goods_no is known; if not known, ask one short clarification or tell the user to select/search a product first.
+- Product-applicable events -> call get_product_applicable_events_tool when goods_no is known; if not known but the user mentioned a product name, call search_product_tool first to resolve goods_no, then call get_product_applicable_events_tool; if no product name is provided, ask one short clarification.
 - YouTube/video/review -> call search_youtube_video_tool(query) immediately.
 
 
