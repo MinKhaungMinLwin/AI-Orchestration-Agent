@@ -61,7 +61,6 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_my_cars_tool": "listCar",
     "get_user_vehicles_tool": "listCar",
     # voucher
-    "get_available_coupons_tool": "voucher",
     "get_my_coupons_tool": "voucher",
     # qnaComplete
     "transfer_to_qna_tool": "qnaComplete",
@@ -283,6 +282,13 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             # Price priority: matched get_final_price_tool result > inline row field.
             price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            original_price = int(_get_num(row, "sale_prc", default=0)) or None
+            discount_rate = float(_get_num(row, "extra_fvr_sale_per", default=0.0)) or None
+            discount_amount = (
+                original_price - price
+                if original_price and price and original_price > price
+                else None
+            )
             # Tag chips:
             # - primary: prc_grd_nm 화이트리스트 (한글 그대로). 그 외 값은 skip.
             # - secondary: goods_pfm_nm 영문 코드 → 한글 라벨 매핑. 매핑 외 코드는 skip.
@@ -302,6 +308,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "tires": "",
                 "comfort": "",
                 "price": price,
+                "originalPrice": original_price,
+                "discountRate": discount_rate,
+                "discountAmount": discount_amount,
                 "rate": float(_get_num(row, "rate", "rating_avg", default=0.0)),
                 "totalQuantity": int(_get_num(row, "totalQuantity", "total_qty", default=0)),
                 "tags": tags,
@@ -448,7 +457,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
 def _map_voucher(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     vouchers, metadata = [], []
-    for entry in _find_entries(tool_data_list, "get_available_coupons_tool", "get_my_coupons_tool"):
+    for entry in _find_entries(tool_data_list, "get_my_coupons_tool"):
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else ((raw.get("coupons") or raw.get("items") or []) if isinstance(raw, dict) else [])
         if not isinstance(rows, list):
@@ -1303,7 +1312,6 @@ _MAPPERS: dict[str, Any] = {
     "get_best_selling_products_tool": _map_product,
     "get_my_cars_tool": _map_list_car,
     "get_user_vehicles_tool": _map_list_car,
-    "get_available_coupons_tool": _map_voucher,
     "get_my_coupons_tool": _map_voucher,
     "transfer_to_qna_tool": _map_qna_complete,
     "compare_discount_tool": _map_cheapest_product,
@@ -1353,7 +1361,6 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_best_selling_products_tool", _map_product),
         ("get_my_cars_tool", _map_list_car),
         ("get_user_vehicles_tool", _map_list_car),
-        ("get_available_coupons_tool", _map_voucher),
         ("get_my_coupons_tool", _map_voucher),
         ("compare_discount_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),

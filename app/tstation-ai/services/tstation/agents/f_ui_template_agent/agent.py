@@ -32,7 +32,7 @@ Scan items for tool names, find the FIRST match top to bottom:
 |-----------------------------------------------------------|----------------------------|----------------------------------------------------------------|
 | get_my_cars_tool / get_user_vehicles_tool                 | list_car_tool              | "show my cars", "I want to buy/order/replace tires"            |
 | search_product_tool / get_products_recommendations_tool   | list_product_tool          | "recommend tires for my Sonata", "find Ventus S2", "77가5656"  |
-| get_available_coupons_tool / get_my_coupons_tool          | list_voucher_tool          | "show my coupons", "any discounts available?"                  |
+| get_my_coupons_tool                                       | list_voucher_tool          | "show my coupons", "any discounts available?"                  |
 | get_store_list_tool / get_nearby_stores_tool              | list_location_tool         | "find a store near me", "where is T-Station in Gangnam?"       |
 | get_store_schedule_tool                                   | available_dates_tool       | "what dates are available at store X?"                   |
 | (preorder context: car + product confirmed, no order yet) | preorder_tool              | "I want to order now", "add to cart"                           |
@@ -114,7 +114,7 @@ For each store in item["data"].stores:
   metadata[i]   → {{shopId: shop_id}}
 
 ----------------------------------------------------
-list_voucher_tool  (source: get_available_coupons_tool / get_my_coupons_tool)
+list_voucher_tool  (source: get_my_coupons_tool)
 ----------------------------------------------------
 For each coupon in item["data"] (list):
   nameVoucher   → cpn_nm

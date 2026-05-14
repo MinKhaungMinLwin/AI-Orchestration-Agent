@@ -3,7 +3,6 @@ from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
-    get_available_coupons_tool,
     get_my_coupons_tool,
     issue_coupon_tool,
     get_product_promotions_tool,
@@ -34,6 +33,9 @@ For clarifications, no-result, failure, or text-only responses, output exactly o
 ```json
 {"type":"data","template":"quickReply","data":{"assistantResponse":"<Korean answer>","quickReplies":[],"predictedDomains":["TRANSACTION"]},"nextAction":{"type":"stop","domain":null}}
 ```
+For `quickReply`, `quickReplies` MUST be a list of objects, never strings:
+- CORRECT: `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
+- WRONG: `["내 쿠폰 조회"]`
 """
 
 _TRANSACTION_FULL_BODY = """
@@ -149,7 +151,6 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | Tool | Use when |
 |------|---------|
 | get_final_price_tool | User asks for price (goods_no required) |
-| get_available_coupons_tool | User asks "받을 수 있는 쿠폰", "available coupons" |
 | get_my_coupons_tool | User asks "내 쿠폰", "my coupons" |
 | get_product_promotions_tool | goods_no 확보된 상태에서 사용자가 "이 상품에 적용 가능한 쿠폰/기획전/프로모션/혜택 알려줘" — 상품에 매핑된 진행 중 기획전+쿠폰 묶음 조회 |
 | issue_coupon_tool | User wants to download/receive a coupon — goods_no for 최저가 혜택 쿠폰 묶음, cpn_no for specific coupon |
@@ -939,9 +940,7 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 ### Flow 8 — Coupons
 
 조회:
-- "받을 수 있는 쿠폰" → get_available_coupons_tool
 - "내 쿠폰" → get_my_coupons_tool
-- Ambiguous → call both
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
 
@@ -949,7 +948,7 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 - "이 상품에 적용 가능한 쿠폰 알려줘" / "이 상품 기획전 알려줘"
   / "이 상품에 진행 중인 프로모션/혜택/행사 있어?"
   → get_product_promotions_tool(goods_no=...)
-- 일반 "쿠폰 알려줘"(상품 지시어 없음) → get_available_coupons_tool 사용
+- 일반 "쿠폰 알려줘"(상품 지시어 없음) → get_my_coupons_tool 사용
 - get_product_promotions_tool 결과:
   - items 비어있으면 → "현재 이 상품에 적용 가능한 기획전/쿠폰이 없어요 😊"
   - items 존재 시 → 기획전명, 진행 기간(disp_strt~end_dtime), 매핑된 쿠폰 개수를 자연어로 요약
@@ -992,7 +991,7 @@ Choose the output template based on the tool called:
 
 | Tool(s) | Template |
 |---------|----------|
-| get_available_coupons_tool, get_my_coupons_tool | `voucher` |
+| get_my_coupons_tool | `voucher` |
 | get_product_promotions_tool | `quickReply` (기획전명/기간/쿠폰 수를 자연어로 요약) |
 | issue_coupon_tool | `quickReply` |
 | get_store_list_tool, get_nearby_stores_tool | `location` |
@@ -1138,7 +1137,6 @@ MANDATORY OUTPUT FORMAT
 
 **PROSE MODE** — When your FINAL tool call was one of:
 - `get_my_cars_tool` / `get_user_vehicles_tool` — **when the tool returned 1+ cars** (selection list). 1대만 반환되어도 PROSE MODE로 listCar 카드를 노출하고 자동 선택 금지. 0대인 경우만 JSON MODE.
-- `get_available_coupons_tool` (≥1 coupon returned)
 - `get_my_coupons_tool` (≥1 coupon returned)
 - `get_store_list_tool` / `get_nearby_stores_tool` — **ONLY when the tool returned ≥1 store** (store-list card).
   Skip PROSE MODE (use JSON `quickReply`) when the result is empty so you can actually deliver the
@@ -1289,15 +1287,18 @@ TRANSACTION_COUPON_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + 
 Handle ONLY coupon and promotion requests.
 
 ## Profile Scope
-- "내 쿠폰", "쿠폰함", "보유 쿠폰" -> call get_my_coupons_tool.
-- "받을 수 있는 쿠폰", "다운로드 가능 쿠폰", "사용 가능한 쿠폰" -> call get_available_coupons_tool.
+- "내 쿠폰", "쿠폰함", "보유 쿠폰", "사용 가능한 쿠폰" -> call get_my_coupons_tool.
 - Product-specific coupon/promotion for a confirmed goods_no -> call get_product_promotions_tool.
 - User wants to download/issue a coupon -> call issue_coupon_tool with the known cpn_no or goods_no.
 - If the request is not coupon/promotion related, answer with a short quickReply asking the user to clarify.
 
 ## Output Policy
-When get_my_coupons_tool or get_available_coupons_tool returns coupons, respond with ONLY 1 short Korean sentence.
+When get_my_coupons_tool returns coupons, respond with ONLY 1 short Korean sentence.
 The system renders the voucher card from the tool result; do not list coupon names or IDs in text.
+When a coupon tool returns no coupons, or when asking a clarification, emit exactly one `quickReply` JSON block.
+In that JSON, `quickReplies` MUST be objects with `label` and `domain`, for example:
+`[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"받을 수 있는 쿠폰 조회","domain":"TRANSACTION"}]`.
+Never emit `quickReplies` as a plain string array.
 """
 
 
@@ -1338,6 +1339,18 @@ Handle ONLY store, store inventory, and reservation schedule requests.
 - If required product, location, store, or quantity information is missing, ask one short Korean clarification.
 - If the request is not store/schedule/inventory related, ask the user to clarify.
 
+## STORE LIST 응답 문구 — 검색 경로별 안내 표현 구분
+
+- (A) **좌표 기반 검색** — `search_place_tool(query="<명칭>")` 으로 좌표를 얻은 뒤 `get_nearby_stores_tool(x, y)` 를 호출한 경우 (landmark/지명 → 좌표. 예: "강남역", "센텀시티", "코엑스")
+  → "고객님, [명칭] 주변 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊"
+  → [명칭]은 사용자가 입력한 원본 검색어를 그대로 사용.
+
+- (B) **주소 키워드 검색** — 좌표를 거치지 않고 `get_store_list_tool(region_code="<키워드>")` 만 호출한 경우 (BE에서 ADDR_BASE/ADDR_DTL/ROAD_ADDR_BASE/ROAD_ADDR_DTL 4개 컬럼에 `LIKE %키워드%` 적용. "강남"으로 검색하면 강남로(거창)·강남구(서울)·강남로(안동) 같은 다른 지역도 함께 잡힘)
+  → "고객님, 주소에 '[키워드]'가 포함된 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊"
+  → 키워드가 받침으로 끝나면 "이", 받침이 없으면 "가" 조사. (예: '강남'이, '부산'이, '역삼'이, '해운대'가)
+
+브라우저 위치 권한으로 받은 user_xpos/user_ypos 만으로 `get_nearby_stores_tool` 을 호출한 케이스(사용자가 명칭을 안 주고 "근처/내 위치"로 요청)는 "가까운 매장을 확인했어요" 문구 유지.
+
 ## Output Policy
 For code-mapped store/datepick/location results, respond with ONLY 1 short Korean sentence.
 The system renders cards from tool output; do not list store names, addresses, schedules, or IDs in text.
@@ -1374,7 +1387,6 @@ class TransactionSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         # Price
         "get_final_price_tool": "Price",
-        "get_available_coupons_tool": "Price",
         "get_my_coupons_tool": "Price",
         # Promotion (deals + coupons by product)
         "get_product_promotions_tool": "Promotion",
@@ -1403,7 +1415,6 @@ class TransactionSubAgent(BaseAgent):
         self._profile = profile
         tools = [
             get_final_price_tool,
-            get_available_coupons_tool,
             get_my_coupons_tool,
             issue_coupon_tool,
             get_product_promotions_tool,
@@ -1425,7 +1436,6 @@ class TransactionSubAgent(BaseAgent):
         name = "Transaction Agent"
         if profile == "transaction_coupon":
             tools = [
-                get_available_coupons_tool,
                 get_my_coupons_tool,
                 issue_coupon_tool,
                 get_product_promotions_tool,
