@@ -25,6 +25,13 @@ current_goal_type: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_goal_type", default=None
 )
 
+# Per-request pending_intent, set by the chat service before agent.stream() runs.
+# Used by _map_location to detect order/stock flows that arrive via casual conversation
+# rather than the formal goal checklist (where goal_type would already be set).
+current_pending_intent: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_pending_intent", default=None
+)
+
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
 # routes to /chat (advancing the flow) instead of /append (which only shows
@@ -652,7 +659,11 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # they were authoritative when the list endpoint simply omits them.
     has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
     is_list_browsing = current_goal_type.get() == "store_finder"
-    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing:
+    # Order/stock flow arrived via casual conversation ("구매한다고", "재고 확인해줘")
+    # rather than the formal goal checklist — goal_type stays None but pending_intent
+    # is set. Treat these as booking context so the location card is rendered.
+    has_order_intent = current_pending_intent.get() in ("주문 진행", "재고 확인")
+    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_order_intent:
         return None
 
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.

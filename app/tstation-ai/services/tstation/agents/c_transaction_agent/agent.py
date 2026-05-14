@@ -61,7 +61,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 ## CART-SAVE READY GUARD (emit `preOrder` with isReadyToAddToCart=true)
 
-⚠️ This guard fires ONLY for **cart-save intent** — i.e., the user's most recent action message clearly says "장바구니" / "장바구니에 담아줘" / "카트". For order-placement intent ("주문" / "주문할게" / "구매" / "결제"), do NOT use this guard — follow Flow 6 (Order Creation) below, which requires store selection AND date selection first.
+⚠️ This guard fires ONLY for **cart-save intent** — i.e., the user's most recent action message clearly says "장바구니" / "장바구니에 담아줘" / "카트". For order-placement intent ("주문" / "주문할게" / "구매" / "결제" / "살래" / "살게" / "사고 싶어" / "사려고"), do NOT use this guard — follow Flow 6 (Order Creation) below, which requires store selection AND date selection first.
 
 When the user explicitly requested **cart save** AND `[확인된 고객 정보]` already contains BOTH `상품번호` (goods_no) AND `수량` (ord_qty):
 
@@ -77,7 +77,7 @@ When the user explicitly requested **cart save** AND `[확인된 고객 정보]`
 
 ## ORDER-PLACEMENT REQUIRED INPUTS (Flow 6 prerequisite)
 
-⚠️ When the user's intent is **order placement** ("주문" / "주문할게" / "구매" / "결제" / "결제할게"), do NOT shortcut to `preOrder` after just receiving quantity. Order placement REQUIRES the following four inputs in addition to goods_no + ord_qty:
+⚠️ When the user's intent is **order placement** ("주문" / "주문할게" / "구매" / "결제" / "결제할게" / "살래" / "살게" / "사고 싶어" / "사려고"), do NOT shortcut to `preOrder` after just receiving quantity. Order placement REQUIRES the following four inputs in addition to goods_no + ord_qty:
 
   1. `logistics_qty` — call `get_logistics_inventory_tool(goods_no)` to verify stock exists at the warehouse level. If 0, surface alternatives (different store / pre-order / different size) instead of pushing the user into a dead-end.
   2. `shop_id` (장착매장) — REQUIRED. If missing, ask the user to pick a store. Use Flow 4 (Nearby Stores) or Flow 5 (Store hours) flows to gather this.
