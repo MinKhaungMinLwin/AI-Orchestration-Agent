@@ -246,8 +246,8 @@ class MultiAgentDomain(BaseModel):
             "Prompt profile for the selected domain agent. "
             "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status), "
             "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
-            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock with product name only, best-sellers — goods_no NOT yet known). "
-            "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, discount ranking, or continuation from recommendation cards). "
+            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock/discount-price with specific product name, best-sellers — goods_no NOT yet known). "
+            "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT specific product name, or continuation from recommendation cards). "
             "'discovery_event_content' (events, deals, event-applicable products, product events, YouTube/video). "
             "Use 'full' for compatibility-only or any mixed/uncertain case."
         )
@@ -283,10 +283,11 @@ class _SlimMultiAgentDomain(BaseModel):
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
-            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size "
-            "or best-sellers (no goods_no in context); 'discovery_recommendation' for tire recommendation by vehicle, "
-            "tire size, scenario, discount ranking, or continuation from recommendation cards; 'discovery_event_content' for events/deals/video; "
-            "'full' for compatibility-only or uncertain cases."
+            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size, "
+            "price/stock/discount-price with specific product name, or best-sellers (no goods_no in context); "
+            "'discovery_recommendation' for tire recommendation by vehicle, tire size, scenario, "
+            "discount ranking WITHOUT a specific product name, or continuation from recommendation cards; "
+            "'discovery_event_content' for events/deals/video; 'full' for compatibility-only or uncertain cases."
         )
     )
 
@@ -317,8 +318,8 @@ Produce 6 outputs:
    - "transaction_order": order history, order status, cart, quick order
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
-   - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
-   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock query with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases
 
@@ -532,6 +533,8 @@ EXAMPLES (tricky cases):
 - "할인율 높은 타이어 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (highest discount applied)
 - "20만원에서 30만원 사이 한국타이어" → DISCOVERY, agent_prompt_profile=discovery_search (product search by price range)
 - "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
+- "다이나프로 HPX 할인된 가격이 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product + discount price = search, NOT recommendation)
+- "벤투스 S2 할인가 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product name → search for it, not discount ranking)
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
 - "진행 중인 이벤트 보여줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
@@ -545,8 +548,8 @@ agent_prompt_profile:
 - transaction_order: order/cart/status -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
-- discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
+- discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
 - discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain
 """
