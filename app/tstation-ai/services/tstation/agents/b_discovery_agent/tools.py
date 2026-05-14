@@ -125,7 +125,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
     "tire_size_1", "tire_size_2",
     # Visual / pricing
-    "image_url", "price", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    "image_url", "price", "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching
     "tot_scr",
     "t_comfort", "t_silence", "t_life_span", "t_fuel_eff_convert",
