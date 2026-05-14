@@ -26,7 +26,7 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "list_key": "items",
         "keep": {
             "goods_no", "goods_nm", "tire_size_1",
-            "extra_fvr_sale_prc", "extra_fvr_sale_per",
+            "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
             # 신규 케이스용 점수/속성 (QC 사실 검증용)
             "wet", "t_snow", "t_ice", "t_highspd", "t_highspd_cd",
             "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
@@ -91,7 +91,7 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
         "list_key": "items",
         "keep": {
             "goods_no", "goods_nm", "tire_size_1",
-            "extra_fvr_sale_prc", "extra_fvr_sale_per",
+            "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
             "tot_scr", "t_comfort", "t_silence", "t_life_span",
             # 신규 케이스용 점수/속성 (대화 컨텍스트 보존)
             "wet", "t_snow", "t_ice", "t_highspd",
