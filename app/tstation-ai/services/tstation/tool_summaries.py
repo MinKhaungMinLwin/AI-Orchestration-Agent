@@ -89,7 +89,7 @@ def summarize_tool(name: str, result: Any) -> str:
         items = _items(result)
         return f"{len(items)} vehicles"
 
-    if name in ("get_available_coupons_tool", "get_my_coupons_tool"):
+    if name == "get_my_coupons_tool":
         items = _items(result)
         return f"{len(items)} coupons"
 

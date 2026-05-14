@@ -61,7 +61,6 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_my_cars_tool": "listCar",
     "get_user_vehicles_tool": "listCar",
     # voucher
-    "get_available_coupons_tool": "voucher",
     "get_my_coupons_tool": "voucher",
     # qnaComplete
     "transfer_to_qna_tool": "qnaComplete",
@@ -448,7 +447,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
 def _map_voucher(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     vouchers, metadata = [], []
-    for entry in _find_entries(tool_data_list, "get_available_coupons_tool", "get_my_coupons_tool"):
+    for entry in _find_entries(tool_data_list, "get_my_coupons_tool"):
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else ((raw.get("coupons") or raw.get("items") or []) if isinstance(raw, dict) else [])
         if not isinstance(rows, list):
@@ -1303,7 +1302,6 @@ _MAPPERS: dict[str, Any] = {
     "get_best_selling_products_tool": _map_product,
     "get_my_cars_tool": _map_list_car,
     "get_user_vehicles_tool": _map_list_car,
-    "get_available_coupons_tool": _map_voucher,
     "get_my_coupons_tool": _map_voucher,
     "transfer_to_qna_tool": _map_qna_complete,
     "compare_discount_tool": _map_cheapest_product,
@@ -1353,7 +1351,6 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_best_selling_products_tool", _map_product),
         ("get_my_cars_tool", _map_list_car),
         ("get_user_vehicles_tool", _map_list_car),
-        ("get_available_coupons_tool", _map_voucher),
         ("get_my_coupons_tool", _map_voucher),
         ("compare_discount_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),

@@ -193,7 +193,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "search_youtube_video_tool": "유튜브 영상 검색 중...",
     # Transaction
     "get_final_price_tool": "가격 정보 조회 중...",
-    "get_available_coupons_tool": "사용 가능 쿠폰 조회 중...",
     "get_my_coupons_tool": "내 쿠폰 조회 중...",
     "get_logistics_inventory_tool": "재고 확인 중...",
     "get_store_inventory_tool": "매장 재고 확인 중...",

@@ -19,7 +19,6 @@ from common.tstation_be_api_client.hkt_api_client.models import ScheduleMode
 
 # PRICE AF
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
-from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_available_coupons_api_prices_coupons_available_get import sync_detailed as get_available_coupons
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_my_coupons_api_prices_coupons_mine_get import sync_detailed as get_my_coupons
 
 # EVENT / DEAL AF — 상품번호 기준 진행 중 기획전+쿠폰 조회
@@ -136,35 +135,6 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
 
 
 @tool
-@tool_cache(ttl=600)
-def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
-    """
-    다운로드 가능 쿠폰 조회.
-
-    Use when user asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons".
-
-    Args:
-        mbr_no (str | None): 회원번호 (used for per-user cache key scoping).
-        lang_cd (str): Language code (default: 'ko').
-    """
-    logger.debug("[TOOL][get_available_coupons_tool] Called with: mbr_no=%s, lang_cd=%s", mbr_no, lang_cd)
-
-    try:
-        response = get_available_coupons(client=get_client(), lang_cd=lang_cd)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get available coupons"
-            )
-        # logger.debug("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][get_available_coupons_tool] Failed")
-        return _error_response(None, str(e), "Failed to get available coupons")
-
-
-@tool
 def get_my_coupons_tool(lang_cd: str = "ko"):
     """
     내 쿠폰 목록 조회.
@@ -259,8 +229,7 @@ def get_product_promotions_tool(goods_no: str):
     - 상품이 특정된(goods_no 확보) 상태에서 사용자가 다음과 같이 물을 때:
       "이 상품에 적용 가능한 쿠폰 알려줘", "이 상품 기획전 알려줘",
       "이 상품에 진행 중인 프로모션 / 혜택 / 행사 / 이벤트 있어?".
-    - 일반 다운로드 가능 쿠폰 조회(get_available_coupons_tool)와 다름:
-      이 도구는 "특정 상품에 매핑된 진행 중 기획전쿠폰"만 반환.
+    - 이 도구는 "특정 상품에 매핑된 진행 중 기획전쿠폰"만 반환.
 
     Pre-condition:
     - goods_no must be confirmed (slot 또는 직전 도구 결과). 없으면 사용 금지.

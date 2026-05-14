@@ -128,7 +128,7 @@ class AgentDomain(BaseModel):
         - Book store visit/reservation with specific date/time
         - Select quantity for order (e.g., "4개 주문", "2개")
         - Select store for order
-        - Coupon inquiry ("쿠폰 조회", "내 쿠폰", "받을 수 있는 쿠폰")
+        - Coupon inquiry ("쿠폰 조회", "내 쿠폰", "쿠폰함")
         Examples:
         - "{{goods_no}} 가격 얼마야?" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
         - "Is {{goods_no}} in stock?" (e.g., "G012345678901")
@@ -142,7 +142,6 @@ class AgentDomain(BaseModel):
         - "장바구니에 담아줘"
         - "쿠폰 조회해줘"
         - "내 쿠폰 보여줘"
-        - "받을 수 있는 쿠폰 뭐가 있어?"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
