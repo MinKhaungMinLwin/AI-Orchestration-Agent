@@ -1,6 +1,7 @@
 from abc import ABC
 from collections.abc import Callable
 from typing import Any, TypeVar
+import ast
 import json
 import logging
 import re
@@ -9,13 +10,54 @@ from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+from services.tstation.tool_summaries import summarize_tool
+
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_tool_summary_span(
+    config: dict | None,
+    *,
+    tool_name: str,
+    tool_input: dict,
+    tool_result: Any,
+    tool_status: str,
+) -> None:
+    """Open a short-lived child span carrying a one-line summary of a tool call.
+
+    The span is named ``🔧 <tool>: <summary>`` so the Langfuse trace tree shows
+    the result inline (e.g. ``🔧 search_product_tool: 3 hits → G123``) without
+    needing to expand the raw JSON output captured by the LangChain auto-span.
+
+    Silently no-ops when tracing is disabled or when the trace context is
+    missing — never raises into the agent stream.
+    """
+    cfgable = (config or {}).get("configurable", {}) if isinstance(config, dict) else {}
+    trace_id = cfgable.get("tstation_trace_id")
+    parent_span_id = cfgable.get("tstation_parent_span_id")
+    if not trace_id:
+        return
+    try:
+        summary = summarize_tool(tool_name, tool_result)
+    except Exception as exc:  # never let summary formatting break the agent loop
+        logger.debug("[TRACE] tool summary failed for %s: %s", tool_name, exc)
+        summary = f"status={tool_status}"
+    span_name = f"🔧 {tool_name}: {summary}"
+    with _trace_span(
+        span_name,
+        trace_id=trace_id,
+        parent_span_id=parent_span_id,
+        input=tool_input,
+    ) as _ts:
+        _ts.update(output=_truncate({"summary": summary, "status": tool_status}))
 
 T = TypeVar("T")
 
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_UNQUOTED_JSON_KEY_RE = re.compile(r"(?<=[{,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
 
 
 # Validation 실패 시 사용자에게 빈 화면(silent dead-end) 대신 보여줄 안내.
@@ -26,7 +68,11 @@ _VALIDATION_FALLBACK_MESSAGE = (
     "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
     "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
 )
-_VALIDATION_FALLBACK_QUICK_REPLIES = ["다시 시도", "상담사 연결", "처음으로"]
+_VALIDATION_FALLBACK_QUICK_REPLIES = [
+    {"label": "다시 시도", "domain": "LEADING"},
+    {"label": "상담사 연결", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
 
 
 class _AssistantResponseStreamer:
@@ -141,11 +187,12 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_products_recommendations_tool": "상품 추천 조회 중...",
     "get_events_tool": "이벤트 목록 조회 중...",
     "get_deals_tool": "기획전 목록 조회 중...",
+    "get_event_applicable_products_tool": "이벤트 적용 상품 조회 중...",
+    "get_product_applicable_events_tool": "상품 적용 이벤트 조회 중...",
     "compare_discount_tool": "할인 가격 비교 중...",
     "search_youtube_video_tool": "유튜브 영상 검색 중...",
     # Transaction
     "get_final_price_tool": "가격 정보 조회 중...",
-    "get_available_coupons_tool": "사용 가능 쿠폰 조회 중...",
     "get_my_coupons_tool": "내 쿠폰 조회 중...",
     "get_logistics_inventory_tool": "재고 확인 중...",
     "get_store_inventory_tool": "매장 재고 확인 중...",
@@ -194,13 +241,20 @@ class BaseAgent(ABC):
 
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
+        self._system_prompt_chars = len(prompt or "")
         return create_agent(
             model=self._model,
             tools=self._tools,
-            debug=True,
+            # Keep LangGraph debug stream off in runtime to avoid noisy
+            # `[values]` / `[updates]` payload dumps in container logs.
+            debug=False,
             system_prompt=prompt,
             name=self.name,
         )
+
+    @property
+    def system_prompt_chars(self) -> int:
+        return getattr(self, "_system_prompt_chars", 0)
 
     def invoke(self, messages: list[dict], config: dict | None = None) -> str:
         agent = self._agent
@@ -228,6 +282,11 @@ class BaseAgent(ABC):
         response_streamer = _AssistantResponseStreamer() if suppress_tokens else None
 
         yield {"type": "status", "status": "생각 중..."}
+
+        speculative_guard = (config or {}).get("configurable", {}).get("speculative_tool_guard", {})
+        confirm_event = speculative_guard.get("confirm_event")
+        wait_for_confirmation = speculative_guard.get("wait_for_confirmation")
+        mutating_tools = set(speculative_guard.get("mutating_tools") or [])
 
         for mode, chunk in agent.stream(
             {"messages": messages},
@@ -259,12 +318,20 @@ class BaseAgent(ABC):
                     if isinstance(message, AIMessage):
                         if hasattr(message, "tool_calls") and message.tool_calls:
                             for tc in message.tool_calls:
-                                tool_calls_map[tc["id"]] = {"name": tc["name"], "args": tc.get("args", {})}
-                                display_name = TOOL_DISPLAY_NAMES.get(tc["name"], "답변 중...")
+                                tool_name = tc["name"]
+                                tool_calls_map[tc["id"]] = {"name": tool_name, "args": tc.get("args", {})}
+                                if confirm_event is not None and tool_name in mutating_tools and not confirm_event.is_set():
+                                    logger.info("[%s] Waiting for speculative confirmation before %s", self.name, tool_name)
+                                    if wait_for_confirmation is not None and not wait_for_confirmation():
+                                        logger.info("[%s] Speculative route rejected before %s", self.name, tool_name)
+                                        return
+                                    if wait_for_confirmation is None:
+                                        confirm_event.wait()
+                                display_name = TOOL_DISPLAY_NAMES.get(tool_name, "답변 중...")
                                 yield {
                                     "type": "status",
                                     "status": "tool_start",
-                                    "tool": tc["name"],
+                                    "tool": tool_name,
                                     "display_name": display_name,
                                 }
                         if suppress_tokens:
@@ -298,6 +365,17 @@ class BaseAgent(ABC):
                                 "data": tool_result,
                                 "args": tool_input.get("args", {}),
                             })
+                        # Manual Langfuse span with a one-line summary so the
+                        # trace tree shows what the tool returned at a glance.
+                        # Raw output is still captured by LangChain's auto-span;
+                        # this layer is purely for analyst readability.
+                        _emit_tool_summary_span(
+                            config,
+                            tool_name=message.name,
+                            tool_input=tool_input.get("args", {}),
+                            tool_result=tool_result,
+                            tool_status=tool_status,
+                        )
                         yield {"type": "agent_flow", "agent": f"[{af} AF]", "agent_class": self.name, "status": tool_status}
                         yield {
                             "type": "tool",
@@ -313,6 +391,7 @@ class BaseAgent(ABC):
         # full FE JSON payload (the dominant 2nd-call output token cost).
         code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
         if code_event is not None:
+            code_event["template_source"] = "code_mapper"
             assistant_response = self._get_assistant_response(code_event)
             already_streamed = response_streamer is not None and response_streamer.streamed_any
             if assistant_response:
@@ -334,6 +413,10 @@ class BaseAgent(ABC):
             data_event = self._build_data_event_from_text(accumulated_text, prompt_template)
             already_streamed = response_streamer is not None and response_streamer.streamed_any
             if data_event is not None:
+                # LLM 이 product 템플릿을 직접 emit 한 경우, tags 결정형 주입 +
+                # 스키마 외 hallucinated 필드 (comfort 등) 제거. 다른 템플릿은 no-op.
+                from services.tstation.template_mapper import inject_product_tags_and_sanitize
+                inject_product_tags_and_sanitize(data_event, accumulated_tool_data)
                 assistant_response = self._get_assistant_response(data_event)
                 if assistant_response:
                     if not answering_emitted:
@@ -366,6 +449,7 @@ class BaseAgent(ABC):
                             "assistantResponse": response_streamer.streamed_text,
                             "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
                         },
+                        "nextAction": {"type": "stop", "domain": None},
                     }
                 else:
                     # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
@@ -389,6 +473,7 @@ class BaseAgent(ABC):
                                 "assistantResponse": prose_only,
                                 "quickReplies": [],
                             },
+                            "nextAction": {"type": "stop", "domain": None},
                         }
                     else:
                         yield from self._yield_validation_fallback()
@@ -415,6 +500,7 @@ class BaseAgent(ABC):
                 "assistantResponse": message,
                 "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
             },
+            "nextAction": {"type": "stop", "domain": None},
         }
 
     def _build_data_event(self, structured_response: BaseModel | dict | None) -> dict | None:
@@ -465,10 +551,9 @@ class BaseAgent(ABC):
                 self.name,
             )
             return None
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error("[%s] Invalid JSON in agent response: %s", self.name, exc)
+        parsed = self._parse_agent_json(raw)
+        if parsed is None:
+            logger.error("[%s] Invalid JSON in agent response", self.name)
             return None
         try:
             validated = TypeAdapter(template_cls).validate_python(parsed)
@@ -481,6 +566,24 @@ class BaseAgent(ABC):
             )
             return None
         return self._build_data_event(validated)
+
+    @staticmethod
+    def _parse_agent_json(raw: str) -> Any | None:
+        """Parse LLM JSON, accepting common JSON-like slips without hiding real failures."""
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as strict_exc:
+            # Models sometimes emit JS/Python-ish dicts: {type: 'data'}.
+            normalized = _UNQUOTED_JSON_KEY_RE.sub(r' "\1":', raw)
+            try:
+                return json.loads(normalized)
+            except json.JSONDecodeError:
+                try:
+                    parsed = ast.literal_eval(normalized)
+                except (SyntaxError, ValueError, TypeError) as loose_exc:
+                    logger.debug("Agent JSON parse failed: strict=%s loose=%s", strict_exc, loose_exc)
+                    return None
+                return parsed
 
     @staticmethod
     def _extract_fenced_json(text: str) -> str | None:
@@ -502,10 +605,29 @@ class BaseAgent(ABC):
         If the LLM emitted an explicit fenced JSON block, defer to it — the
         agent has chosen its own template (e.g. comparison intent → quickReply
         instead of the default cheapestProduct mapper).
+
+        listCar exception: when get_my_cars_tool / get_user_vehicles_tool ran,
+        always use the deterministic mapper even if the LLM emitted fenced JSON.
+        The mapper enriches info with car_maker prefix and keeps info/description
+        consistent; LLM-authored JSON drifts in format between turns.
+
+        Store-detail exception: when get_store_detail_tool ran, the LLM's
+        quickReply often slips into PROSE-MODE ("매장 상세정보를 확인했어요.")
+        and the rich detail fields never reach the user — only QC catches it.
+        _map_store_detail_info's own guards defer back to the LLM for Flow 5.1
+        (date-specific datepick / no-slot apology).
         """
         if not accumulated_tool_data:
             return None
-        if BaseAgent._extract_fenced_json(accumulated_text) is not None:
+        _FORCE_CODE_MAPPER_TOOLS = (
+            "get_my_cars_tool",
+            "get_user_vehicles_tool",
+            "get_store_detail_tool",
+        )
+        has_force_code_mapper_tool = any(
+            e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
+        )
+        if not has_force_code_mapper_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
         if not any(e.get("tool") in _MAPPERS for e in accumulated_tool_data):

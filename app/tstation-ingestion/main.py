@@ -92,18 +92,22 @@ def build_embeddings(documents, embedding_svc):
 
 
 def upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc):
-    """Push data into Qdrant."""
+    """Push data into Qdrant using blue/green alias swap."""
     from config.env import settings
     from rag.document_processor import DocumentProcessor
+    from tasks.faq_sync_task import _faq_point_id
 
     vector_size = embedding_svc.get_embedding_dimension()
+    alias_name = settings.QDRANT_COLLECTION_FAQ
+    target_collection = qdrant_svc.create_versioned_collection_name(alias_name)
 
-    qdrant_svc.create_collection_multi_vector(
-        collection_name=settings.QDRANT_COLLECTION_FAQ,
+    qdrant_svc.create_collection_multi_vector_if_absent(
+        collection_name=target_collection,
         vector_size=vector_size,
     )
 
     slim_docs = []
+    point_ids = []
 
     for doc in documents:
         meta = dict(doc.get("metadata", {}))
@@ -119,16 +123,25 @@ def upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc):
                 "metadata": meta,
             }
         )
+        point_ids.append(_faq_point_id(doc.get("id")))
 
     result = qdrant_svc.upsert_multi_vector(
-        collection_name=settings.QDRANT_COLLECTION_FAQ,
+        collection_name=target_collection,
         documents=slim_docs,
         question_vectors=q_vecs,
         answer_vectors=a_vecs,
+        point_ids=point_ids,
         batch_size=50,
     )
 
-    logger.info(f"Indexed {result['upserted_count']} documents")
+    old_collection = qdrant_svc.swap_alias(alias_name, target_collection)
+    logger.info(
+        "Indexed %d documents and moved alias %s: %s -> %s",
+        result["upserted_count"],
+        alias_name,
+        old_collection,
+        target_collection,
+    )
 
 
 def collection_has_data(qdrant_svc, collection_name: str) -> bool:

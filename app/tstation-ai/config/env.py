@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     AI_DEFAULT_PROVIDER: str
     AI_GATEWAY_BASE_URL: str
     AI_GATEWAY_API_KEY: str
+    LITELLM_USER_MAX_BUDGET: float = 20.0       # USD per user per budget period
+    LITELLM_USER_BUDGET_DURATION: str = "1mo"   # 1d | 7d | 1mo
+    MONTHLY_TOKEN_LIMIT: int = 2_000_000        # token quota per user per calendar month
     # Model tiers (reference values — declare what's available)
     AI_MODEL: str
     AI_MODEL_REASONING: str
@@ -57,6 +60,8 @@ class Settings(BaseSettings):
     AI_MODEL_QC_AGENT: str
     AI_MODEL_TRANSACTION_AGENT: str
     AI_QC_ENABLED: bool = False
+    AI_QC_PARALLEL: bool = False
+    AI_SPECULATIVE_CLASSIFY_ENABLED: bool = False
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str

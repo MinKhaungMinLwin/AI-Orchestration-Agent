@@ -1,8 +1,6 @@
 import logging
 from common.tool_cache import tool_cache
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
@@ -15,12 +13,16 @@ logger = logging.getLogger(__name__)
 # STORE AF
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync_detailed as get_store_detail
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_schedule_api_store_schedule_get import sync_detailed as get_store_schedule
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_place_api_store_place_search_get import sync_detailed as search_place
+from common.tstation_be_api_client.hkt_api_client.models import ScheduleMode
 
 # PRICE AF
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
-from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_available_coupons_api_prices_coupons_available_get import sync_detailed as get_available_coupons
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_my_coupons_api_prices_coupons_mine_get import sync_detailed as get_my_coupons
+
+# EVENT / DEAL AF — 상품번호 기준 진행 중 기획전+쿠폰 조회
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_by_product_api_events_deals_by_product_get import sync_detailed as get_deals_by_product
 
 # COUPON AF — 쿠폰 발급
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_goods_api_coupons_issue_goods_post import sync_detailed as issue_coupon_by_goods
@@ -66,61 +68,6 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 
-def _next_cal_days(n: int = 3) -> list[str]:
-    """Return today + next n days as YYYYMMDD strings, using project timezone (TZ_OFFSET env)."""
-    tz_offset = int(os.getenv("TZ_OFFSET", "0"))
-    tz = timezone(timedelta(hours=tz_offset))
-    today = datetime.now(tz).date()
-    return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(0, n + 1)]
-
-
-def _fetch_store_detail_once(shop_id: str, cal_day: str, is_logistics_delivery: bool = False) -> dict:
-    """Fetch store_detail for a single (shop_id, cal_day) pair. Returns {} on failure.
-
-    When ``is_logistics_delivery=True``, the backend applies
-    ``AND CAL_DAY >= FN_GET_NDATE_STR(SYSDATE, B.SHOP_SEQ)`` so only slots after the
-    store-delivery lead time are returned (store-inventory empty + logistics-inventory available).
-    """
-    try:
-        response = get_store_detail(
-            client=get_client(),
-            shop_id=shop_id,
-            cal_day=cal_day,
-            is_logistics_delivery=is_logistics_delivery,
-        )
-        if response.parsed is not None:
-            return _to_dict(response.parsed)
-    except Exception:
-        logger.warning("[_fetch_store_detail_once] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
-    return {}
-
-
-def _count_available_slots(detail: dict) -> int:
-    """Count non-empty available slots in a store_detail response."""
-    if not isinstance(detail, dict):
-        return 0
-    slots = detail.get("available_slots") or detail.get("time_slots") or []
-    return len(slots) if isinstance(slots, list) else 0
-
-
-def _parallel_fetch_store_days(shop_ids: list[str], cal_days: list[str], max_workers: int = 9) -> dict:
-    """Parallel-fetch all (shop_id, cal_day) combinations. Returns {shop_id: {cal_day: detail}}.
-
-    Used by Flow 3.5 (fastest-store search) where per-store logistics state is intentionally
-    ignored — a store without local stock is simply deprioritized by having a later earliest slot,
-    not by applying the lead-time filter.
-    """
-    results: dict[str, dict[str, dict]] = {sid: {} for sid in shop_ids}
-    pairs = [(sid, day) for sid in shop_ids for day in cal_days]
-    if not pairs:
-        return results
-
-    with ThreadPoolExecutor(max_workers=min(len(pairs), max_workers)) as executor:
-        futures = {executor.submit(_fetch_store_detail_once, sid, day): (sid, day) for sid, day in pairs}
-        for future in as_completed(futures):
-            sid, day = futures[future]
-            results[sid][day] = future.result()
-    return results
 
 
 def _fetch_order_detail(ord_no: str) -> dict:
@@ -145,7 +92,7 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
         return orders
 
     detail_map: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(ord_nos), 5)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(ord_nos), 20)) as executor:
         futures = {executor.submit(_fetch_order_detail, ono): ono for ono in ord_nos}
         for future in as_completed(futures):
             ono = futures[future]
@@ -170,7 +117,7 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
 
     Example: {"goods_no": "GXXXXXXXXXXXX", "member_type": "general"}
     """
-    logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
+    logger.debug("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
 
     try:
         response = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
@@ -180,40 +127,11 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product price"
             )
-        logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_final_price_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
         return _error_response(None, str(e), "Failed to get product price")
-
-
-@tool
-@tool_cache(ttl=600)
-def get_available_coupons_tool(mbr_no: str | None = None, lang_cd: str = "ko"):
-    """
-    다운로드 가능 쿠폰 조회.
-
-    Use when user asks "받을 수 있는 쿠폰", "쿠폰 조회", "available coupons".
-
-    Args:
-        mbr_no (str | None): 회원번호 (used for per-user cache key scoping).
-        lang_cd (str): Language code (default: 'ko').
-    """
-    logger.info("[TOOL][get_available_coupons_tool] Called with: mbr_no=%s, lang_cd=%s", mbr_no, lang_cd)
-
-    try:
-        response = get_available_coupons(client=get_client(), lang_cd=lang_cd)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get available coupons"
-            )
-        logger.info("[TOOL][get_available_coupons_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][get_available_coupons_tool] Failed")
-        return _error_response(None, str(e), "Failed to get available coupons")
 
 
 @tool
@@ -226,7 +144,7 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
     Args:
         lang_cd (str): Language code (default: 'ko').
     """
-    logger.info("[TOOL][get_my_coupons_tool] Called with: lang_cd=%s", lang_cd)
+    logger.debug("[TOOL][get_my_coupons_tool] Called with: lang_cd=%s", lang_cd)
 
     try:
         response = get_my_coupons(client=get_client(), lang_cd=lang_cd)
@@ -236,7 +154,7 @@ def get_my_coupons_tool(lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get my coupons"
             )
-        logger.info("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_my_coupons_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_my_coupons_tool] Failed")
@@ -263,7 +181,7 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
 
     Response code: 100=발급 성공, 900=실패(이미 보유 또는 대상 아님).
     """
-    logger.info(
+    logger.debug(
         "[TOOL][issue_coupon_tool] Called with: goods_no=%s, cpn_no=%s",
         goods_no, cpn_no,
     )
@@ -290,11 +208,72 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to issue coupon",
             )
-        logger.info("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][issue_coupon_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][issue_coupon_tool] Failed")
         return _error_response(None, str(e), "Failed to issue coupon")
+
+
+# =====================================================
+# PROMOTION (DEAL + COUPON BY PRODUCT) TOOLS
+# =====================================================
+
+@tool
+@tool_cache(ttl=300)
+def get_product_promotions_tool(goods_no: str):
+    """
+    상품번호 기준 진행 중 기획전 + 매핑된 활성 쿠폰(C301) 목록 조회.
+
+    Use when:
+    - 상품이 특정된(goods_no 확보) 상태에서 사용자가 다음과 같이 물을 때:
+      "이 상품에 적용 가능한 쿠폰 알려줘", "이 상품 기획전 알려줘",
+      "이 상품에 진행 중인 프로모션 / 혜택 / 행사 / 이벤트 있어?".
+    - 이 도구는 "특정 상품에 매핑된 진행 중 기획전쿠폰"만 반환.
+
+    Pre-condition:
+    - goods_no must be confirmed (slot 또는 직전 도구 결과). 없으면 사용 금지.
+
+    Args:
+        goods_no (str): 상품 번호 (예: GXXXXXXXXXXXX).
+
+    Response shape:
+        {
+          "goods_no": "...",
+          "total": <int>,
+          "items": [
+            {
+              "deal_no": "...",
+              "deal_nm": "...",
+              "disp_strt_dtime": "YYYY-MM-DD HH:MM:SS",
+              "disp_end_dtime": "YYYY-MM-DD HH:MM:SS",
+              "coupons": [
+                {"cpn_no": "...", "cpn_knd_cd": "C301", "cpn_prgs_stat_cd": "40"}
+              ]
+            }
+          ]
+        }
+
+    Example: {"goods_no": "G000000314254"}
+    """
+    logger.debug("[TOOL][get_product_promotions_tool] Called with: goods_no=%s", goods_no)
+
+    if not goods_no or not goods_no.strip():
+        return _error_response(None, "InvalidArguments", "goods_no는 필수 입력입니다.")
+
+    try:
+        response = get_deals_by_product(client=get_client(), goods_no=goods_no.strip())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get product promotions",
+            )
+        # logger.debug("[TOOL][get_product_promotions_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_product_promotions_tool] Failed")
+        return _error_response(None, str(e), "Failed to get product promotions")
 
 
 # =====================================================
@@ -320,7 +299,7 @@ def get_logistics_inventory_tool(goods_no: str):
     Example: {"goods_no": "GXXXXXXXXXXXX"}
     """
     body = LogisticsRequest(goods_no=goods_no)
-    logger.info("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
+    logger.debug("[TOOL][get_logistics_inventory_tool] Called with: goods_no=%s", goods_no)
 
     try:
         response = get_logistics_inventory(client=get_client(), body=body)
@@ -330,7 +309,7 @@ def get_logistics_inventory_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get logistics inventory"
             )
-        logger.info("[TOOL][get_logistics_inventory_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_logistics_inventory_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_logistics_inventory_tool] Failed")
@@ -353,7 +332,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
     s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
     body = StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items)
-    logger.info("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)
+    logger.debug("[TOOL][get_store_inventory_tool] Called with: goods_list=%s, shop_id_list=%s", goods_list, shop_id_list)
 
     try:
         response = get_store_inventory(client=get_client(), body=body)
@@ -363,7 +342,7 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store inventory"
             )
-        logger.info("[TOOL][get_store_inventory_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_inventory_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_inventory_tool] Failed")
@@ -387,7 +366,7 @@ def search_place_tool(query: str, size: int = 10):
 
     Example: {"query": "강남역"}
     """
-    logger.info("[TOOL][search_place_tool] Called with: query=%s, size=%s", query, size)
+    logger.debug("[TOOL][search_place_tool] Called with: query=%s, size=%s", query, size)
 
     try:
         response = search_place(client=get_client(), query=query, size=size)
@@ -397,7 +376,7 @@ def search_place_tool(query: str, size: int = 10):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search place"
             )
-        logger.info("[TOOL][search_place_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_place_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_place_tool] Failed")
@@ -405,6 +384,7 @@ def search_place_tool(query: str, size: int = 10):
 
 
 @tool
+@tool_cache(ttl=300)
 def get_nearby_stores_tool(
     user_xpos: float,
     user_ypos: float,
@@ -417,21 +397,34 @@ def get_nearby_stores_tool(
     """
     Get nearby stores within radius based on coordinates.
 
-    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점).
+    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점),
+    svc_codes (매장이 보유한 서비스 코드 리스트).
+
     ⚠️ 수입차 특화점: 사용자가 "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 언급 시 imported_car_only=True.
 
     Args:
         user_xpos (float): X 좌표 (경도).
         user_ypos (float): Y 좌표 (위도).
         radius_km (float): 검색 반경 km (default 10).
-        svc_codes (List[str] | None): 서비스 코드 필터 (e.g., ["101", "102"]).
+        svc_codes (List[str] | None): 매장 서비스 필터 (OR 조건: 하나라도 보유한 매장 반환).
+            응답의 svc_codes 필드와 동일 코드 체계.
+            - "113": 타이어 (온라인 주문)
+            - "116": 배터리 (온라인 주문)
+            - "119": 타이어 보관서비스 (윈터타이어 주문 시 113과 함께 필요)
+            - "120": 수입타이어 취급 (수입차 특화점은 imported_car_only 별도 사용)
+            - "121": 경정비 - 온라인 (엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비)
+            - "122": 경정비 - 오늘장착 (당일 경정비)
+            - "124": 휠얼라이먼트 - 오프라인
+            - "125": 휠얼라이먼트 - 온라인
+            - "126": 무상점검
+            예: 엔진오일 가능 매장 = ["121"], 휠얼라이먼트 가능 매장 = ["124","125"]
         all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
 
     Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F"}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
         "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
         user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
@@ -454,16 +447,16 @@ def get_nearby_stores_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get nearby stores"
             )
-        logger.info("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
-        # Truncate to top 5 stores so the LLM's `location` template (max_length=5
+        # Truncate to top 10 stores so the LLM's `location` template (max_length=10
         # per LocationTemplate schema) doesn't fail structured-output validation
         # and silently drop the entire response. Sort: is_installable=true first
         # (matters for purchase flows), then by distance_km ascending. Response
         # shape is preserved.
         stores = data.get("stores") if isinstance(data, dict) else None
-        if isinstance(stores, list) and len(stores) > 5:
+        if isinstance(stores, list) and len(stores) > 10:
             original_count = len(stores)
             sorted_stores = sorted(
                 stores,
@@ -472,9 +465,9 @@ def get_nearby_stores_tool(
                     s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
                 ),
             )
-            data["stores"] = sorted_stores[:5]
-            logger.info(
-                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 5 (installable-first, distance-asc)",
+            data["stores"] = sorted_stores[:10]
+            logger.debug(
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 10 (installable-first, distance-asc)",
                 original_count,
             )
 
@@ -489,7 +482,8 @@ def get_nearby_stores_tool(
 def get_store_list_tool(
     region_code: str | None = None,
     store_nm: str | None = None,
-    limit: int = 5,
+    limit: int = 10,
+    svc_codes: List[str] | None = None,
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
@@ -506,13 +500,27 @@ def get_store_list_tool(
     - all_my_t_only=True: "all my T"/"올마이티"/"올마이T" 표현 시. 결과에 is_all_my_t 포함, True면 "[all my T]" 표시.
     - imported_car_only=True: "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 표현 시. True면 "[수입차 특화점]" 표시.
     - chl_sct_cd: "티스테이션/t'station/티스테" → "F", "더타이어샵/the tire shop/타이어샵" → "S", None=전체.
+    - svc_codes: 매장 보유 서비스 코드 (OR 필터 + 응답에 동일 필드 노출). 아래 코드 매핑 참고.
 
-    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점).
+    Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점),
+    svc_codes (매장이 보유한 서비스 코드 리스트, 예: ["113","121","124"]).
 
     Args:
         region_code (str | None): 지역명 키워드 (e.g., '서울', '강남', '부산').
         store_nm (str | None): 매장명 키워드 (e.g., '티스테', '극동상사').
         limit (int): 최대 반환 매장 수 (default 5).
+        svc_codes (List[str] | None): 매장 서비스 필터 (OR 조건: 하나라도 보유한 매장 반환).
+            응답의 svc_codes 필드와 동일 코드 체계.
+            - "113": 타이어 (온라인 주문)
+            - "116": 배터리 (온라인 주문)
+            - "119": 타이어 보관서비스 (윈터타이어 주문 시 113과 함께 필요)
+            - "120": 수입타이어 취급 (수입차 특화점은 imported_car_only 별도 사용)
+            - "121": 경정비 - 온라인 (엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비)
+            - "122": 경정비 - 오늘장착 (당일 경정비)
+            - "124": 휠얼라이먼트 - 오프라인
+            - "125": 휠얼라이먼트 - 온라인
+            - "126": 무상점검
+            예: 엔진오일 가능 매장 = ["121"], 휠얼라이먼트 가능 매장 = ["124","125"]
         all_my_t_only (bool): True → all my T 매장만. Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
@@ -522,15 +530,17 @@ def get_store_list_tool(
         - {"region_code": "서울", "limit": 5}
         - {"region_code": None, "store_nm": "극동상사", "limit": 5}
         - {"region_code": "강남", "limit": 5, "imported_car_only": True}
+        - {"region_code": "강남", "svc_codes": ["121"], "limit": 5}  # 강남에서 경정비 가능
+        - {"store_nm": "광교신도시", "svc_codes": ["121"]}  # 광교신도시점이 경정비 가능한지 확인
     """
     # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
-    logger.info(
+    logger.debug(
         "[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
-        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        region_code, store_nm, limit, all_my_t_only, imported_car_only, chl_sct_cd,
+        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
+        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
     )
 
     try:
@@ -539,6 +549,7 @@ def get_store_list_tool(
             region_code=region_code,
             store_nm=store_nm,
             limit=limit,
+            svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
@@ -549,7 +560,7 @@ def get_store_list_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store list"
             )
-        logger.info("[TOOL][get_store_list_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_list_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -572,7 +583,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 
     Example: {"shop_id": "BXXXXX", "cal_day": "20260401"}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][get_store_detail_tool] Called with: shop_id=%s, cal_day=%s, is_logistics_delivery=%s",
         shop_id, cal_day, is_logistics_delivery,
     )
@@ -590,7 +601,7 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get store details"
             )
-        logger.info("[TOOL][get_store_detail_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_store_detail_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_store_detail_tool] Failed")
@@ -598,187 +609,346 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 
 
 @tool
-def get_store_schedule_tool(
-    shop_id: str,
-    days: int = 7,
-    is_logistics_delivery: bool = False,
-    auto_extend_days: int = 14,
-):
+@tool_cache(ttl=120)
+def get_store_schedule_tool(shop_id: str, mode: str):
     """
-    Get store reservation schedule for a range of days (parallel fetch).
+    Get reservation slots for a single store using mode-based cal_day range (single BE call).
 
-    Use instead of calling get_store_detail_tool multiple times.
-    Fetches TODAY through TODAY+(days-1) in parallel.
+    The backend applies a different cal_day range per mode based on inventory state.
+    Choose mode AFTER inspecting get_store_inventory_tool + get_logistics_inventory_tool
+    results for this shop and goods_no:
 
-    Adaptive auto-extend: if all Phase 1 days have zero installable slots AND auto_extend_days>0,
-    automatically fetches the next auto_extend_days days (total window: up to days+auto_extend_days).
+    | mode                          | When to use                                      |
+    |-------------------------------|--------------------------------------------------|
+    | today_only                    | shop ∈ todayShopArray (오늘서비스만)             |
+    | tna_only                      | shop ∈ tnaShopArray, NOT in todayShopArray       |
+    | logistics_only                | 매장재고 X + 물류재고 O                          |
+    | in_store_only                 | 매장재고 O + 물류재고 X (오늘 ∪ T바로배송)       |
+    | in_store_logistics_combined   | 매장재고 O + 물류재고 O (오늘 ∪ T바로 ∪ 일반배송)|
+    | general                       | 단순 매장 방문 (no tire context)                 |
 
     Args:
         shop_id (str): Store ID.
-        days (int): Days to fetch from today (default 7, clamped to [1,7]).
-        is_logistics_delivery (bool): Same as get_store_detail_tool. Default False.
-        auto_extend_days (int): Extra days to scan when Phase 1 is empty (default 14, clamped to [0,21]).
+        mode (str): One of the ScheduleMode values listed above.
 
     Examples:
-        - {"shop_id": "BXXXXX"}
-        - {"shop_id": "FXXXXX", "days": 4}
-        - {"shop_id": "BXXXXX", "is_logistics_delivery": true}
+        - {"shop_id": "BXXXXX", "mode": "in_store_logistics_combined"}
+        - {"shop_id": "FXXXXX", "mode": "logistics_only"}
+        - {"shop_id": "BXXXXX", "mode": "general"}
     """
-    logger.info(
-        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, days=%s, "
-        "is_logistics_delivery=%s, auto_extend_days=%s",
-        shop_id, days, is_logistics_delivery, auto_extend_days,
+    logger.debug(
+        "[TOOL][get_store_schedule_tool] Called with: shop_id=%s, mode=%s",
+        shop_id, mode,
     )
-    days = max(1, min(days, 7))
-    auto_extend_days = max(0, min(auto_extend_days, 21))
 
-    def _fetch_window(cal_days_to_fetch: list[str]) -> list[dict]:
-        out: list[dict] = []
-        if not cal_days_to_fetch:
-            return out
-        with ThreadPoolExecutor(max_workers=min(len(cal_days_to_fetch), 9)) as executor:
-            futures = {
-                executor.submit(
-                    get_store_detail,
-                    client=get_client(),
-                    shop_id=shop_id,
-                    cal_day=cal_day,
-                    is_logistics_delivery=is_logistics_delivery,
-                ): cal_day
-                for cal_day in cal_days_to_fetch
-            }
-            for future in as_completed(futures):
-                cal_day = futures[future]
-                try:
-                    response = future.result()
-                    if response.parsed is not None:
-                        detail = _to_dict(response.parsed)
-                        out.append({
-                            "cal_day": cal_day,
-                            "available_slots": detail.get("available_slots") or [],
-                            "is_installable": detail.get("is_installable", False),
-                            "is_tna_delivery": detail.get("is_tna_delivery", False),
-                        })
-                    else:
-                        out.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
-                except Exception:
-                    logger.warning("[get_store_schedule_tool] Failed for shop_id=%s cal_day=%s", shop_id, cal_day)
-                    out.append({"cal_day": cal_day, "available_slots": [], "is_installable": False, "is_tna_delivery": False})
-        return out
+    try:
+        mode_enum = ScheduleMode(mode)
+    except ValueError:
+        valid = [m.value for m in ScheduleMode]
+        return _error_response(None, "invalid_mode", f"mode must be one of {valid}; got {mode!r}")
 
-    # Phase 1 — initial window
-    phase1_cal_days = _next_cal_days(days - 1)
-    schedule = _fetch_window(phase1_cal_days)
-
-    # Phase 2 — auto-extend when Phase 1 has no installable slots anywhere
-    extended = False
-    has_any_slot = any(
-        entry.get("is_installable") and (entry.get("available_slots") or [])
-        for entry in schedule
-    )
-    if not has_any_slot and auto_extend_days > 0:
-        full_cal_days = _next_cal_days(days + auto_extend_days - 1)
-        phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
-        if phase2_cal_days:
-            logger.info(
-                "[TOOL][get_store_schedule_tool] Phase 1 empty for shop_id=%s; "
-                "auto-extending +%d days (%d new days)",
-                shop_id, auto_extend_days, len(phase2_cal_days),
+    try:
+        response = get_store_schedule(client=get_client(), shop_id=shop_id, mode=mode_enum)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get store schedule"
             )
-            schedule.extend(_fetch_window(phase2_cal_days))
-            extended = True
+        # logger.debug("[TOOL][get_store_schedule_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_store_schedule_tool] Failed")
+        return _error_response(None, str(e), "Failed to get store schedule")
 
-    schedule.sort(key=lambda x: x["cal_day"])
-    return _success_response(200, {
-        "shop_id": shop_id,
-        "schedule": schedule,
-        "extended": extended,
-        "days_fetched": len(schedule),
-    })
+
+def _fetch_schedule_for_shops(shop_ids: list[str], mode: ScheduleMode) -> dict[str, dict]:
+    """Parallel-fetch /api/store/schedule for multiple shops with the same mode.
+
+    Returns {shop_id: parsed_dict}. Empty dict for failed shops.
+    """
+    results: dict[str, dict] = {sid: {} for sid in shop_ids}
+    if not shop_ids:
+        return results
+
+    with ThreadPoolExecutor(max_workers=min(len(shop_ids), 9)) as executor:
+        futures = {
+            executor.submit(get_store_schedule, client=get_client(), shop_id=sid, mode=mode): sid
+            for sid in shop_ids
+        }
+        for future in as_completed(futures):
+            sid = futures[future]
+            try:
+                response = future.result()
+                if response.parsed is not None:
+                    results[sid] = _to_dict(response.parsed)
+            except Exception:
+                logger.warning("[_fetch_schedule_for_shops] Failed for shop_id=%s mode=%s", sid, mode.value)
+    return results
 
 
 @tool
 def get_multi_store_schedule_tool(
     shop_id_list: list[str],
-    initial_days: int = 2,
-    extend_days: int = 1,
+    today_shop_ids: list[str] | None = None,
+    tna_shop_ids: list[str] | None = None,
+    has_logistics: bool = False,
 ):
     """
-    Get reservation schedule for multiple stores (up to 3) with adaptive day extension.
+    Flow 3.5 — find earliest reservation slots across up to 3 stores using **tier cascade**.
 
-    Use for "가장 빨리 방문 가능한 매장" queries — fetches all (shop_id × cal_day) pairs in ONE parallel call.
-    Use INSTEAD OF calling get_store_detail_tool N×M times.
+    The tool selects ONE tier across the whole batch based on inventory state:
 
-    Adaptive: Phase 1 fetches initial_days. If ALL stores have zero slots AND extend_days>0,
-    Phase 2 extends window by extend_days.
+    | Tier | Trigger condition                                       | mode used      |
+    |------|---------------------------------------------------------|----------------|
+    | 1    | At least one candidate ∈ todayShopArray                 | today_only     |
+    | 2    | Tier 1 empty AND ≥1 candidate ∈ tnaShopArray            | tna_only       |
+    | 3    | Tiers 1–2 empty AND has_logistics=True                  | logistics_only |
+    | none | All tiers empty                                         | (no BE call)   |
+
+    Tier 1 queries the today_only intersection; tier 2 the tna intersection; tier 3
+    the remaining candidates not already in today/tna arrays. The first non-empty
+    tier is returned — earlier tiers always win (today > tna > 일반배송).
+
+    Caller MUST first run get_store_inventory_tool + get_logistics_inventory_tool
+    so todayShopArray/tnaShopArray/logistics_qty are known.
 
     Args:
-        shop_id_list (list[str]): Up to 3 shop IDs (extras truncated).
-        initial_days (int): Days to fetch initially (default 2 = TODAY, +1).
-        extend_days (int): Extra days if initial window is empty (default 1).
+        shop_id_list (list[str]): Up to 3 candidate shop IDs (extras truncated).
+        today_shop_ids (list[str] | None): shop_ids in todayShopArray from get_store_inventory_tool.
+        tna_shop_ids (list[str] | None): shop_ids in tnaShopArray from get_store_inventory_tool.
+        has_logistics (bool): True if logistics_qty > 0 (from get_logistics_inventory_tool).
 
-    Example: {"shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
+    Example:
+        {
+          "shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"],
+          "today_shop_ids": ["BXXXXX"],
+          "tna_shop_ids": ["FXXXXX"],
+          "has_logistics": true
+        }
     """
-    logger.info(
-        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, initial_days=%s, extend_days=%s",
-        shop_id_list, initial_days, extend_days,
+    logger.debug(
+        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, "
+        "today_shop_ids=%s, tna_shop_ids=%s, has_logistics=%s",
+        shop_id_list, today_shop_ids, tna_shop_ids, has_logistics,
     )
 
-    shop_ids = [sid for sid in (shop_id_list or []) if sid][:3]
-    if not shop_ids:
+    candidates = [sid for sid in (shop_id_list or []) if sid][:3]
+    if not candidates:
         return _error_response(None, "invalid_input", "shop_id_list is empty")
 
-    initial_days = max(1, min(initial_days, 7))
-    extend_days = max(0, min(extend_days, 5))
+    today_set = set(today_shop_ids or [])
+    tna_set = set(tna_shop_ids or [])
 
-    # Phase 1 — initial window (e.g., 2 days = TODAY, +1)
-    phase1_cal_days = _next_cal_days(initial_days - 1)
-    phase1_results = _parallel_fetch_store_days(shop_ids, phase1_cal_days)
-
-    # Per-store empty check: stores that have zero slots across all initial days
-    stores_without_slots = [
-        sid for sid in shop_ids
-        if not any(
-            _count_available_slots(phase1_results.get(sid, {}).get(day, {})) > 0
-            for day in phase1_cal_days
-        )
-    ]
-
-    merged: dict[str, dict[str, dict]] = phase1_results
-    extended = False
-    all_cal_days = list(phase1_cal_days)
-
-    # Phase 2 — extend ONLY the stores whose initial window is empty.
-    # Fetching per-store preserves correctness (a store that needs day +2 still
-    # gets its +2 data) while avoiding wasted BE calls for stores already filled.
-    if stores_without_slots and extend_days > 0:
-        full_cal_days = _next_cal_days(initial_days + extend_days - 1)
-        phase2_cal_days = [d for d in full_cal_days if d not in phase1_cal_days]
-        if phase2_cal_days:
-            phase2_results = _parallel_fetch_store_days(stores_without_slots, phase2_cal_days)
-            for sid in stores_without_slots:
-                merged[sid] = {**phase1_results.get(sid, {}), **phase2_results.get(sid, {})}
-            all_cal_days.extend(phase2_cal_days)
-            extended = True
-
-    # Shape output: one entry per shop with sorted schedule
-    stores_out = []
-    for sid in shop_ids:
-        schedule = []
-        for day in sorted(merged.get(sid, {}).keys()):
-            detail = merged[sid].get(day) or {}
-            schedule.append({
-                "cal_day": day,
-                "available_slots": detail.get("available_slots") or [],
-                "is_installable": detail.get("is_installable", False),
-                "is_tna_delivery": detail.get("is_tna_delivery", False),
+    # Tier 1 — today_only on candidates ∩ todayShopArray
+    tier1_shops = [sid for sid in candidates if sid in today_set]
+    if tier1_shops:
+        results = _fetch_schedule_for_shops(tier1_shops, ScheduleMode.TODAY_ONLY)
+        if any(r.get("slots") for r in results.values()):
+            return _success_response(200, {
+                "tier": "today_only",
+                "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier1_shops],
+                "candidate_shop_ids": candidates,
             })
-        stores_out.append({"shop_id": sid, "schedule": schedule})
+
+    # Tier 2 — tna_only on candidates ∩ tnaShopArray
+    tier2_shops = [sid for sid in candidates if sid in tna_set]
+    if tier2_shops:
+        results = _fetch_schedule_for_shops(tier2_shops, ScheduleMode.TNA_ONLY)
+        if any(r.get("slots") for r in results.values()):
+            return _success_response(200, {
+                "tier": "tna_only",
+                "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier2_shops],
+                "candidate_shop_ids": candidates,
+            })
+
+    # Tier 3 — logistics_only on remaining candidates (not in today/tna sets)
+    if has_logistics:
+        tier3_shops = [sid for sid in candidates if sid not in today_set and sid not in tna_set]
+        # Fall back to all candidates if filtering removed every shop
+        if not tier3_shops:
+            tier3_shops = list(candidates)
+        results = _fetch_schedule_for_shops(tier3_shops, ScheduleMode.LOGISTICS_ONLY)
+        if any(r.get("slots") for r in results.values()):
+            return _success_response(200, {
+                "tier": "logistics_only",
+                "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier3_shops],
+                "candidate_shop_ids": candidates,
+            })
 
     return _success_response(200, {
-        "stores": stores_out,
-        "extended": extended,
-        "days_fetched": len(set(all_cal_days)),
+        "tier": "none",
+        "stores": [],
+        "candidate_shop_ids": candidates,
+    })
+
+
+def _extract_stores(data: Any) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    stores = data.get("stores") or data.get("items") or []
+    return stores if isinstance(stores, list) else []
+
+
+def _shop_id(store: dict) -> str | None:
+    value = store.get("shop_id") or store.get("shopId") or store.get("shop_seq") or store.get("shopSeq")
+    return str(value) if value else None
+
+
+def _extract_logistics_qty(data: Any) -> int:
+    if not isinstance(data, dict):
+        return 0
+    value = data.get("logistics_qty") or data.get("logisticsQty") or data.get("qty") or 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_inventory_shop_ids(data: Any, key: str) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    values = data.get(key) or data.get(key[0].lower() + key[1:]) or []
+    if not isinstance(values, list):
+        return []
+    shop_ids: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            sid = item.get("shop_id") or item.get("shopId") or item.get("shop_seq") or item.get("shopSeq")
+        else:
+            sid = item
+        if sid:
+            shop_ids.append(str(sid))
+    return shop_ids
+
+
+@tool
+@tool_cache(ttl=120)
+def transaction_store_preview_tool(
+    goods_no: str,
+    ord_qty: int,
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    user_xpos: float | None = None,
+    user_ypos: float | None = None,
+    include_price: bool = True,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+):
+    """
+    Composite preview for purchase/store flow: store candidates + price + stock + earliest schedule.
+
+    Use when goods_no and quantity are known and the user wants nearby/regional stores,
+    stock, or available reservation dates. This is a preview only; never creates an order.
+    """
+    logger.debug(
+        "[TOOL][transaction_store_preview_tool] Called with: goods_no=%s, ord_qty=%s, region_code=%s, "
+        "store_nm=%s, user_xpos=%s, user_ypos=%s, include_price=%s",
+        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, include_price,
+    )
+
+    if not goods_no or ord_qty < 1:
+        return _error_response(None, "invalid_input", "goods_no and ord_qty are required")
+
+    if store_nm:
+        store_nm = normalize_brand_name(store_nm)
+
+    if user_xpos is not None and user_ypos is not None:
+        store_response = get_store_list(
+            client=get_client(),
+            xpos=user_xpos,
+            ypos=user_ypos,
+            radius_km=10.0,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
+    else:
+        store_response = get_store_list(
+            client=get_client(),
+            region_code=region_code,
+            store_nm=store_nm,
+            limit=10,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
+
+    if store_response.parsed is None:
+        return _error_response(
+            store_response.status_code,
+            f"HTTP {store_response.status_code}",
+            store_response.content.decode(errors="ignore") or "Failed to get store candidates",
+        )
+
+    store_data = _to_dict(store_response.parsed)
+    stores = _extract_stores(store_data)
+    candidates = sorted(
+        stores,
+        key=lambda s: (
+            not bool(s.get("is_installable", False)),
+            s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
+        ),
+    )[:3]
+    shop_ids = [sid for store in candidates if (sid := _shop_id(store))]
+    if not shop_ids:
+        return _success_response(store_response.status_code, {
+            "stores": [],
+            "message": "No store candidates found",
+            "price": None,
+            "logistics": None,
+            "inventory": None,
+            "schedule": None,
+        })
+
+    goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
+    shop_id_list = [{"shopId": sid} for sid in shop_ids]
+
+    def _fetch_logistics():
+        body = LogisticsRequest(goods_no=goods_no)
+        return get_logistics_inventory(client=get_client(), body=body)
+
+    def _fetch_store_inventory():
+        g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
+        s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
+        return get_store_inventory(client=get_client(), body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
+
+    def _fetch_price():
+        return get_price(client=get_client(), goods_no=goods_no, member_type=None)
+
+    tasks = {"logistics": _fetch_logistics, "store_inventory": _fetch_store_inventory}
+    if include_price:
+        tasks["price"] = _fetch_price
+
+    results: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        futures = {executor.submit(fn): name for name, fn in tasks.items()}
+        for future in as_completed(futures):
+            name = futures[future]
+            response = future.result()
+            results[name] = _to_dict(response.parsed) if response.parsed is not None else None
+
+    logistics_qty = _extract_logistics_qty(results.get("logistics"))
+    today_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "todayShopArray")
+    tna_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "tnaShopArray")
+    schedule = get_multi_store_schedule_tool.func(
+        shop_id_list=shop_ids,
+        today_shop_ids=today_shop_ids,
+        tna_shop_ids=tna_shop_ids,
+        has_logistics=logistics_qty > 0,
+    )
+
+    return _success_response(200, {
+        "price": results.get("price"),
+        "logistics": results.get("logistics"),
+        "inventory": results.get("store_inventory"),
+        "schedule": schedule.get("data") if isinstance(schedule, dict) else schedule,
+        "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
+        "candidate_shop_ids": shop_ids,
     })
 
 
@@ -801,7 +971,7 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
     Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
-    logger.info("[TOOL][save_to_cart_tool] Called with: goods_info=%s, car_lnc_cd=%s", goods_info_arr_str, car_lnc_cd)
+    logger.debug("[TOOL][save_to_cart_tool] Called with: goods_info=%s, car_lnc_cd=%s", goods_info_arr_str, car_lnc_cd)
 
     try:
         body = SetOrderFormAIRequest(
@@ -817,7 +987,7 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to save to cart"
             )
-        logger.info("[TOOL][save_to_cart_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][save_to_cart_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][save_to_cart_tool] Failed")
@@ -825,7 +995,14 @@ def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None
 
 
 @tool
-def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str | None = None):
+def quick_order_tool(
+    goods_no: str,
+    ord_qty: int,
+    shop_id: str,
+    car_lnc_cd: str | None = None,
+    rsv_date: str | None = None,
+    rsv_hour: str | None = None,
+):
     """
     퀵쇼핑 주문 실행 (매장 선택 포함).
 
@@ -844,11 +1021,16 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
         ord_qty (int): Quantity (min 1).
         shop_id (str): Store ID from store tool results (e.g., "CXXXXX").
         car_lnc_cd (str | None): Vehicle launch code (optional).
+        rsv_date (str | None): 방문 예약일자 YYYYMMDD (e.g., "20260423"). datepick 선택값을 변환해서 전달.
+        rsv_hour (str | None): 방문 예약시간 HH 00~23 두 자리 (e.g., "11"). datepick 선택값의 시(hour)만 두 자리로 전달.
 
-    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX"}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX", "rsv_date": "20260423", "rsv_hour": "11"}
     """
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
-    logger.info("[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s", goods_info_arr_str, shop_id, car_lnc_cd)
+    logger.debug(
+        "[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s, rsv_date=%s, rsv_hour=%s",
+        goods_info_arr_str, shop_id, car_lnc_cd, rsv_date, rsv_hour,
+    )
 
     try:
         body = SetOrderFormAIRequest(
@@ -857,6 +1039,8 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
             drt_pur_yn="Y",
             shop_seq=shop_id,
             car_lnc_cd=car_lnc_cd,
+            rsv_date=rsv_date,
+            rsv_hour=rsv_hour,
         )
         response = set_order_form_ai(client=get_client(), body=body)
         if response.parsed is None:
@@ -865,7 +1049,7 @@ def quick_order_tool(goods_no: str, ord_qty: int, shop_id: str, car_lnc_cd: str 
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to create quick order"
             )
-        logger.info("[TOOL][quick_order_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][quick_order_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][quick_order_tool] Failed")
@@ -882,7 +1066,7 @@ def get_order_status_tool(query_no: str):
 
     Example: {"query_no": "O100017122"}
     """
-    logger.info("[TOOL][get_order_status_tool] Called with: query_no=%s", query_no)
+    logger.debug("[TOOL][get_order_status_tool] Called with: query_no=%s", query_no)
 
     try:
         response = get_order_delivery(client=get_client(), query_no=query_no)
@@ -892,7 +1076,7 @@ def get_order_status_tool(query_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to retrieve order status"
             )
-        logger.info("[TOOL][get_order_status_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_order_status_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_order_status_tool] Failed")
@@ -908,7 +1092,7 @@ def get_orders_of_user_tool():
     - 1 order → auto-call get_order_status_tool with that order number
     - Multiple orders → show list, ask which one they want details for
     """
-    logger.info("[TOOL][get_orders_of_user_tool] Called")
+    logger.debug("[TOOL][get_orders_of_user_tool] Called")
 
     try:
         response = get_orders(client=get_client())
@@ -918,7 +1102,7 @@ def get_orders_of_user_tool():
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to retrieve order list"
             )
-        logger.info("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_orders_of_user_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("orders"), list):
             data["orders"] = _enrich_orders_with_detail(data["orders"])

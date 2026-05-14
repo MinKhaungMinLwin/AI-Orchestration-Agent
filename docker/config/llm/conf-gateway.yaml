@@ -9,6 +9,8 @@ model_list:
       api_base: https://api.openai.com/v1
       api_key: "os.environ/OPENAI_API_KEY"
       reasoning_effort: "xhigh"
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
 
   - model_name: gpt-5.5-reasoning-high
     litellm_params:
@@ -16,6 +18,8 @@ model_list:
       api_base: https://api.openai.com/v1
       api_key: "os.environ/OPENAI_API_KEY"
       reasoning_effort: "high"
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
 
   - model_name: gpt-5.5-reasoning
     litellm_params:
@@ -23,6 +27,8 @@ model_list:
       api_base: https://api.openai.com/v1
       api_key: "os.environ/OPENAI_API_KEY"
       reasoning_effort: "medium"
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
 
   - model_name: gpt-5.5-reasoning-low
     litellm_params:
@@ -30,6 +36,8 @@ model_list:
       api_base: https://api.openai.com/v1
       api_key: "os.environ/OPENAI_API_KEY"
       reasoning_effort: "low"
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
 
   - model_name: gpt-5.5-reasoning-none
     litellm_params:
@@ -37,12 +45,16 @@ model_list:
       api_base: https://api.openai.com/v1
       api_key: "os.environ/OPENAI_API_KEY"
       reasoning_effort: "none"
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
 
   - model_name: gpt-5.5
     litellm_params:
       model: openai/gpt-5.5
       api_base: https://api.openai.com/v1
       api_key: "os.environ/OPENAI_API_KEY"
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
 
   # ── GPT-5.4 (05/03/2026) ───────────────────────────────────────────────────
   - model_name: gpt-5.4-reasoning-high
@@ -322,6 +334,7 @@ model_list:
 #### Settings
 general_settings:
   master_key: "os.environ/AI_GATEWAY_API_KEY"
+  database_url: "os.environ/LITELLM_DB_URL"
 
 litellm_settings:
   drop_params: true
@@ -329,6 +342,7 @@ litellm_settings:
   retry_after: 2
   request_timeout: 180
   callbacks: ["otel"]
-
-# Note: fallbacks require a connected PostgreSQL database (LiteLLM spend tracking).
-# Removed to avoid "No connected db." 400 errors when running without a DB.
+  max_internal_user_budget: 20.0        # $20/month default cap for every user
+  default_max_internal_user_budget: 20.0
+  budget_duration: "1mo"                # resets monthly
+  user_api_key_cache_ttl: 10

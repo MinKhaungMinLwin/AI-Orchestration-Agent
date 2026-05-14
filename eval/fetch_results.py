@@ -71,6 +71,14 @@ def _extract_span_timings(trace_id: str, lf) -> dict:
     Uses temporal ordering instead of parent-child hierarchy because LangGraph nests
     spans multiple levels deep (discovery_agent → agent_node → ChatLiteLLM), so
     direct-children lookup would miss grandchildren.
+
+    Also reads durations from the manual business spans added to the tracing layer:
+      "classify"   → latency.classify_s
+      "agent:*"    → latency.agents_s  (sum of all matching spans)
+      "qc"         → latency.qc_s
+    These replace the old create_score() submissions for the same fields. Old traces
+    that still carry the score values are overwritten by these when both are present
+    (span_timings is applied after scores in _fetch_row_full).
     """
     page = lf.api.observations.get_many(trace_id=trace_id, limit=100)
     obs_list = page.data or []
@@ -128,6 +136,29 @@ def _extract_span_timings(trace_id: str, lf) -> dict:
         gen_s = sum(d for o in agent_gen_obs if (d := _obs_duration_s(o)))
         if gen_s:
             result["span.llm_gen_s"] = round(gen_s, 3)
+
+    # --- Business-span durations (replace old create_score submissions) ---
+    for obs in obs_list:
+        name = obs.name or ""
+        dur = _obs_duration_s(obs)
+        if dur is None:
+            continue
+        if name == "classify":
+            result["latency.classify_s"] = dur
+        elif name == "qc":
+            result["latency.qc_s"] = dur
+        elif name.startswith("agent:"):
+            result["latency.agents_s"] = round(
+                result.get("latency.agents_s", 0.0) + dur, 3
+            )
+
+    # Derive stream_total from agents + qc when both are available
+    if "latency.agents_s" in result and "latency.qc_s" in result:
+        result["latency.stream_total_s"] = round(
+            result["latency.agents_s"] + result["latency.qc_s"], 3
+        )
+    elif "latency.agents_s" in result:
+        result["latency.stream_total_s"] = result["latency.agents_s"]
 
     return result
 

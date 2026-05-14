@@ -61,7 +61,7 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
 
     Example: {"lrcl_cd": "C01", "mdcl_cd": "C0103", "limit": 50}
     """
-    logger.info("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
+    logger.debug("[TOOL][get_faq_tool] Called with: lrcl_cd=%s, mdcl_cd=%s, limit=%s", lrcl_cd, mdcl_cd, limit)
 
     try:
         response = get_faq(client=get_client(), lrcl_cd=lrcl_cd, mdcl_cd=mdcl_cd, limit=limit)
@@ -77,7 +77,7 @@ def get_faq_tool(lrcl_cd: str | None = None, mdcl_cd: str | None = None, limit: 
         items = parsed.get("items", []) if isinstance(parsed, dict) else []
         for item in items:
             item["source"] = "FAQ DB"
-        logger.info("[TOOL][get_faq_tool] Response: %s", response.parsed)
+        logger.debug("[TOOL][get_faq_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, parsed)
     except Exception as e:
         logger.exception("[TOOL][get_faq_tool] Failed")
@@ -102,7 +102,7 @@ def search_faq_rag_tool(
 
     Example: {"query": "환불 가능한가요?", "top_k": 5}
     """
-    logger.info(
+    logger.debug(
         "[TOOL][search_faq_rag_tool] query=%s, top_k=%s, score_threshold=%s",
         query, top_k, score_threshold,
     )
@@ -128,7 +128,7 @@ def search_faq_rag_tool(
         #    Prevents both over-fetch (noise) and under-fetch (missing good docs).
         collection_size = qdrant_service.get_collection_size_cached(settings.QDRANT_COLLECTION_FAQ)
         fetch_k = RAGDynamicConfig.compute_fetch_k(collection_size=collection_size, final_top_k=top_k)
-        logger.info(
+        logger.debug(
             "[TOOL][search_faq_rag_tool] collection_size=%d, fetch_k=%d",
             collection_size, fetch_k,
         )
@@ -142,7 +142,7 @@ def search_faq_rag_tool(
                 top_k=fetch_k,
                 score_threshold=0.0,
             )
-            logger.info("[TOOL][search_faq_rag_tool] Multi-vector search: %d candidates", len(raw_results))
+            logger.debug("[TOOL][search_faq_rag_tool] Multi-vector search: %d candidates", len(raw_results))
         except Exception:
             logger.warning("[TOOL][search_faq_rag_tool] Multi-vector failed, falling back to single-vector")
             raw_results = qdrant_service.search(
@@ -150,6 +150,7 @@ def search_faq_rag_tool(
                 query_vector=query_embedding,
                 top_k=fetch_k,
                 score_threshold=None,
+                using="question",
             )
 
         # 4. Adaptive threshold: detect natural score gap instead of using fixed 0.6.
@@ -160,7 +161,7 @@ def search_faq_rag_tool(
             base_threshold=score_threshold,
         )
         filtered = [r for r in raw_results if r.get("score", 0.0) >= effective_threshold]
-        logger.info(
+        logger.debug(
             "[TOOL][search_faq_rag_tool] adaptive_threshold=%.3f (base=%.3f) → %d/%d passed",
             effective_threshold, score_threshold, len(filtered), len(raw_results),
         )
@@ -180,7 +181,7 @@ def search_faq_rag_tool(
             for r in reranked
         ]
 
-        logger.info(
+        logger.debug(
             "[TOOL][search_faq_rag_tool] Returned %d FAQs (RAG+DB, threshold=%.2f)",
             len(formatted_results), score_threshold,
         )
@@ -216,7 +217,7 @@ def escalate_tool(
         msg_count=msg_count,
         summary=summary,
     )
-    logger.info("[TOOL][escalate_tool] Called with: inq_type_cd=%s, mbr_no=%s, summary=%s", inq_type_cd, mbr_no, summary)
+    logger.debug("[TOOL][escalate_tool] Called with: inq_type_cd=%s, mbr_no=%s, summary=%s", inq_type_cd, mbr_no, summary)
 
     try:
         response = post_escalate(client=get_client(), body=body)
@@ -226,7 +227,7 @@ def escalate_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to escalate to human agent"
             )
-        logger.info("[TOOL][escalate_tool] Response: %s", response.parsed)
+        logger.debug("[TOOL][escalate_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][escalate_tool] Failed")
@@ -249,7 +250,7 @@ def transfer_to_qna_tool(
         ai_summary (str | None): 문의 내용 요약 (max 400자, 1인칭 한국어).
         is_mobile (bool): True → mobile URL 사용.
     """
-    logger.info(
+    logger.debug(
         "[TOOL][transfer_to_qna_tool] Called with: cnsl_clss_seq=%s, inq_tit_nm=%s, ai_summary=%s, is_mobile=%s",
         cnsl_clss_seq, inq_tit_nm, ai_summary, is_mobile,
     )
@@ -260,7 +261,7 @@ def transfer_to_qna_tool(
             inq_tit_nm=inq_tit_nm,
             ai_summary=ai_summary,
         )
-        logger.info(f"[TOOL][transfer_to_qna_tool] Generated URLs: pc={redict_link['pc']}, mobile={redict_link['mobile']}")
+        logger.debug(f"[TOOL][transfer_to_qna_tool] Generated URLs: pc={redict_link['pc']}, mobile={redict_link['mobile']}")
         device_url = redict_link["mobile"] if is_mobile else redict_link["pc"]
         device = "모바일" if is_mobile else "PC"
         response_text = (

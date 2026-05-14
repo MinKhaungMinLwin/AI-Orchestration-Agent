@@ -32,7 +32,7 @@ Scan items for tool names, find the FIRST match top to bottom:
 |-----------------------------------------------------------|----------------------------|----------------------------------------------------------------|
 | get_my_cars_tool / get_user_vehicles_tool                 | list_car_tool              | "show my cars", "I want to buy/order/replace tires"            |
 | search_product_tool / get_products_recommendations_tool   | list_product_tool          | "recommend tires for my Sonata", "find Ventus S2", "77가5656"  |
-| get_available_coupons_tool / get_my_coupons_tool          | list_voucher_tool          | "show my coupons", "any discounts available?"                  |
+| get_my_coupons_tool                                       | list_voucher_tool          | "show my coupons", "any discounts available?"                  |
 | get_store_list_tool / get_nearby_stores_tool              | list_location_tool         | "find a store near me", "where is T-Station in Gangnam?"       |
 | get_store_schedule_tool                                   | available_dates_tool       | "what dates are available at store X?"                   |
 | (preorder context: car + product confirmed, no order yet) | preorder_tool              | "I want to order now", "add to cart"                           |
@@ -114,7 +114,7 @@ For each store in item["data"].stores:
   metadata[i]   → {{shopId: shop_id}}
 
 ----------------------------------------------------
-list_voucher_tool  (source: get_available_coupons_tool / get_my_coupons_tool)
+list_voucher_tool  (source: get_my_coupons_tool)
 ----------------------------------------------------
 For each coupon in item["data"] (list):
   nameVoucher   → cpn_nm
@@ -267,17 +267,12 @@ KEY RULES:
 • Do NOT repeat what the agent just did as a suggestion
 
 ====================================================
-EXAMPLES (each tool call format)
+EXAMPLES (minimal tool call shapes)
 ====================================================
 
-(CASE 1 — conversational)
-quick_reply_tool → {{"assistant_response": "안녕하세요! 무엇을 도와드릴까요?", "quickReplies": ["타이어 추천해줘", "근처 매장 찾아줘", "이벤트 알려줘"], "reason": "No domain tool was called; this is an opening greeting."}}
-quick_reply_tool → {{"assistant_response": "네, 한국타이어는 다양한 사이즈와 용도에 맞는 타이어를 제공하고 있습니다.\n어떤 차량에 맞는 타이어를 찾고 계신가요?", "quickReplies": ["차량번호로 조회", "사이즈 직접 입력", "차량명으로 찾기"], "reason": "No domain tool matched the lookup table; response is a general FAQ answer."}}
-quick_reply_tool → {{"assistant_response": "반품 정책에 대해 안내드릴게요.\n구매 후 **7일 이내**에 신청 가능하며, 미사용 제품에 한해 가능합니다.", "quickReplies": ["반품 문의하고 싶어", "다른 거 물어볼래"], "reason": "No domain tool matched; support agent answered a policy question conversationally."}}
-
-(CASE 2 — unsupported template, data formatted in assistant_response)
-quick_reply_tool → {{"assistant_response": "방문 방법을 선택해 주세요.", "quickReplies": ["매장 방문할게", "배송으로 받을래"], "reason": "No template exists for visit-method selection; options rendered as quick replies."}}
-quick_reply_tool → {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "3개", "4개"], "reason": "No template exists for quantity selection; always offer all four options (1/2/3/4개)."}}
+quick_reply_tool examples:
+- Opening: {{"assistant_response": "안녕하세요! 무엇을 도와드릴까요?", "quickReplies": ["타이어 추천해줘", "근처 매장 찾아줘", "이벤트 알려줘"], "reason": "No domain tool was called; this is an opening greeting."}}
+- Unsupported selection: {{"assistant_response": "몇 개를 주문하시겠습니까?", "quickReplies": ["1개", "2개", "3개", "4개"], "reason": "No template exists for quantity selection; always offer all four options."}}
 
 list_product_tool → {{"assistantResponse": "고객님, 차량에 맞는 타이어를 찾았어요. 원하시는 제품을 선택해 주세요 😊", "items": [
   {{"imageUrl": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/H46201ko.png", "title": "Ventus S2 AS", "tires": "고급형", "comfort": "높음", "price": 118700, "rate": 4.5, "totalQuantity": 0}},
@@ -295,21 +290,9 @@ list_car_tool → {{"assistantResponse": "고객님, 등록된 차량은 아래 
   {{"carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}
 ]}}
 
-list_voucher_tool → {{"assistantResponse": "고객님, 사용 가능한 쿠폰이 있어요. 원하시는 쿠폰을 선택해 주세요.", "items": [
-  {{"nameVoucher": "여름 특별 할인", "discount": "20%", "dateVoucher": "2026-08-31", "downloadLink": null}},
-  {{"nameVoucher": "첫 구매 감사 할인", "discount": "15%", "dateVoucher": "2026-12-31", "downloadLink": null}}
-], "metadata": [
-  {{"couponId": "CPN00001"}},
-  {{"couponId": "CPN00002"}}
-]}}
+list_voucher_tool → {{"assistantResponse": "고객님, 사용 가능한 쿠폰이 있어요. 원하시는 쿠폰을 선택해 주세요.", "items": [{{"nameVoucher": "여름 특별 할인", "discount": "20%", "dateVoucher": "2026-08-31", "downloadLink": null}}], "metadata": [{{"couponId": "CPN00001"}}]}}
 
-list_location_tool → {{"assistantResponse": "고객님, 근처 매장을 찾았어요. 원하시는 매장을 선택해 주세요.", "items": [
-  {{"nameAddress": "Hankook Tire 서울 강남점", "distance": "1.2km", "detailAddress": "서울시 강남구 테헤란로 123", "isAllMyT": true, "todayInstall": true, "tnaDelivery": false, "description": "**영업일:** 월~토\n**영업시간:** 주중 09:00~20:00, 주말 10:00~18:00\n**휴무일:** 일요일/공휴일\n**전화:** 02-1234-5678"}},
-  {{"nameAddress": "Hankook Tire 서울 강북점", "distance": "3.5km", "detailAddress": "서울시 강북구 수유동 456", "isAllMyT": false, "todayInstall": false, "tnaDelivery": true, "description": "**영업일:** 월~토\n**영업시간:** 주중 08:00~19:00, 주말 09:00~15:00\n**휴무일:** 일요일\n**전화:** 02-9876-5432"}}
-], "metadata": [
-  {{"shopId": $shop_id}},
-  {{"shopId": $shop_id}}
-]}}
+list_location_tool → {{"assistantResponse": "고객님, 근처 매장을 찾았어요. 원하시는 매장을 선택해 주세요.", "items": [{{"nameAddress": "Hankook Tire 서울 강남점", "distance": "1.2km", "detailAddress": "서울시 강남구 테헤란로 123", "isAllMyT": true, "todayInstall": true, "tnaDelivery": false, "description": "**영업일:** 월~토\n**영업시간:** 주중 09:00~20:00\n**휴무일:** 일요일\n**전화:** 02-1234-5678"}}], "metadata": [{{"shopId": $shop_id}}]}}
 
 
 list_preview_youtube_tool → {{"assistantResponse": "관련 동영상을 준비했어요. 영상을 클릭해 보세요.", "items": [
@@ -323,13 +306,11 @@ available_dates_tool → {{"assistantResponse": "고객님, 예약 가능한 날
   {{"date": "2026년 4월 17일 (금)", "available": false, "availableTimes": [], "index": 2}}
 ], "selectedDate": 0, "metadata": {{"shopId": $shop_id}}}}
 
-preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 2, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": null}}, "recommendActions": {{"question": "다음 단계로 진행할 항목을 선택해 주세요", "listActions": ["바로 주문하기", "장바구니에 담기"]}}, "isReadyToOrder": true, "isReadyToAddToCart": true, "metadata": {{"goodsId": $goods_no, "shopId": $shop_id, "carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}}}
+preorder_tool → {{"assistantResponse": "고객님, 주문 정보를 확인해 드릴게요. 원하시는 작업을 선택해 주세요.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS 245/45R18", "quantity": 2, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": null}}, "isReadyToOrder": true, "isReadyToAddToCart": true, "metadata": {{"goodsId": $goods_no, "shopId": $shop_id, "carNo": $vehicle_number, "carLncCd": $car_lnc_cd}}}}
 
-order_complete_tool → {{"assistantResponse": "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요. 배송지와 결제 수단을 입력하면 최종 주문이 완료됩니다.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS ($goods_no)", "quantity": 4, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "$goods_no|$qty", "shopSeq": $shop_id, "smrtPayYn": "N", "drtPurYn": "Y"}}, "metadata": {{"ordNo": $ord_no, "goodsId": $goods_no, "shopId": $shop_id}}}}
+order_complete_tool → {{"assistantResponse": "주문이 완료되었습니다! 결제는 결제 페이지에서 진행해 주세요. 배송지와 결제 수단을 입력하면 최종 주문이 완료됩니다.", "orderInfo": {{"carInfo": $vehicle_number, "product": "Ventus S2 AS 245/45R18", "quantity": 4, "storeName": "티스테이션 ($shop_id)", "bookingDateTime": null, "paymentAmount": 680000}}, "isSuccess": true, "type": "order", "message": null, "data": {{"goodsInfoArrStr": "$goods_no|$qty", "shopSeq": $shop_id, "smrtPayYn": "N", "drtPurYn": "Y"}}, "metadata": {{"ordNo": $ord_no, "goodsId": $goods_no, "shopId": $shop_id}}}}
 
-qna_complete_tool (반품/교환/환불 example) → {{"assistantResponse": "1:1 문의 페이지로 이동합니다. 내용을 확인하고 제출해 주세요.", "redictLink": {{"pc": "https://wwwqa.tstation.com/customer-service/qna.do?mode=write&payload=aGVs...", "mobile": "https://mqa.tstation.com/customer-service/qna.do?mode=write&payload=aGVs..."}}, "cnslType": "반품/교환/환불", "title": "타이어 환불 문의", "summary": "구매한 Ventus S1 Evo3 타이어 환불 요청. 장착 후 이상 발견."}}
-
-qna_complete_tool (주문/결제/배송 example) → {{"assistantResponse": "1:1 문의 페이지로 이동합니다. 내용을 확인하고 제출해 주세요.", "redictLink": {{"pc": "https://wwwqa.tstation.com/customer-service/qna.do?mode=write&payload=xyz...", "mobile": "https://mqa.tstation.com/customer-service/qna.do?mode=write&payload=xyz..."}}, "cnslType": "주문/결제/배송", "title": "배송 지연 문의", "summary": "주문한 타이어 배송이 예정일 이후에도 미도착."}}
+qna_complete_tool → {{"assistantResponse": "1:1 문의 페이지로 이동합니다. 내용을 확인하고 제출해 주세요.", "redictLink": {{"pc": "https://wwwqa.tstation.com/customer-service/qna.do?mode=write&payload=aGVs...", "mobile": "https://mqa.tstation.com/customer-service/qna.do?mode=write&payload=aGVs..."}}, "cnslType": "반품/교환/환불", "title": "타이어 환불 문의", "summary": "구매한 타이어 환불 요청."}}
 """
 
 

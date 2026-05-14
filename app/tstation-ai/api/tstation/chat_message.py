@@ -9,8 +9,12 @@ Endpoints:
 - GET /api/messages/user-info - Get user info from JWT
 - POST /api/messages/validate-token - Validate JWT token
 """
+import asyncio
 import json
 import logging
+import re
+import urllib.request
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -38,10 +42,85 @@ from services.tstation.chat import TStationChatServiceV2
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_LITELLM_REG_KEY = "litellm:registered:{user_id}"
+_LITELLM_REG_TTL = 90 * 24 * 60 * 60  # 90 days
+
+
+def _register_litellm_user(user_id: str) -> None:
+    """Register user in LiteLLM budget system on first request.
+
+    Cached in Redis for 90 days so the LiteLLM API is only called once per user.
+    Failures are logged and ignored — chat continues normally regardless.
+    """
+    from config.env import settings
+    from services.tstation.chat_history_service import get_redis_client
+
+    redis = get_redis_client()
+    cache_key = _LITELLM_REG_KEY.format(user_id=user_id)
+    if redis.exists(cache_key):
+        return
+
+    base = settings.AI_GATEWAY_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+
+    payload = json.dumps({
+        "user_id": user_id,
+        "max_budget": settings.LITELLM_USER_MAX_BUDGET,
+        "budget_duration": settings.LITELLM_USER_BUDGET_DURATION,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{base}/user/new",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {settings.AI_GATEWAY_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.getcode() in (200, 409):
+                redis.setex(cache_key, _LITELLM_REG_TTL, "1")
+                logger.info("[LITELLM] Registered user budget: %s ($%.2f/%s)",
+                            user_id, settings.LITELLM_USER_MAX_BUDGET, settings.LITELLM_USER_BUDGET_DURATION)
+    except Exception as exc:
+        logger.warning("[LITELLM] Failed to register user %s: %s", user_id, exc)
+
+
+_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _update_quota_score(user_id: str, tokens: int, trace_id: str, limit: int) -> None:
+    from services.tstation.quota_service import add_monthly_tokens, post_langfuse_score
+    new_total = add_monthly_tokens(user_id, tokens)
+    logger.info("[QUOTA] %s: %d / %d tokens this month", user_id, new_total, limit)
+    post_langfuse_score(
+        trace_id, "monthly_tokens_used", float(new_total),
+        f"{new_total:,} / {limit:,} tokens this month",
+    )
+
 
 def get_current_time() -> str:
     """Get current timestamp in ISO format."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _valid_tracing_id(value: str | None) -> str | None:
+    """Langfuse trace IDs must be 32 lowercase hex chars."""
+    if not value:
+        return None
+    if _TRACE_ID_RE.fullmatch(value):
+        return value
+    logger.warning("[CHAT_MESSAGE] Ignoring invalid tracing_id: %r", value)
+    return None
+
+
+def _ensure_session_owner(service, session_id: str, user_id: str) -> None:
+    """Hide missing and cross-user sessions behind the same 404."""
+    if not service.session_exists(session_id, user_id):
+        raise HTTPException(status_code=404, detail="Session not found")
 
 
 @router.post("/chat", dependencies=[Depends(get_api_key)])
@@ -69,16 +148,35 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     # user is already the decoded JWT payload
     user_id = user.get("user_id")
 
+    # Register user in LiteLLM budget system on first request (fire-and-forget)
+    if user_id:
+        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id))
+
+    # Always generate a trace ID so Langfuse scores are linkable
+    tracing_id = _valid_tracing_id(request.tracing_id) or uuid.uuid4().hex
+
+    # ── Monthly token quota check ──────────────────────────────────────────────
+    if user_id:
+        from config.env import settings
+        from services.tstation.quota_service import is_quota_exceeded, get_monthly_tokens, post_langfuse_score
+        if is_quota_exceeded(user_id, settings.MONTHLY_TOKEN_LIMIT):
+            current = get_monthly_tokens(user_id)
+            post_langfuse_score(
+                tracing_id, "quota_blocked", 1.0,
+                f"Blocked: {current:,} / {settings.MONTHLY_TOKEN_LIMIT:,} tokens this month"
+            )
+            logger.warning("[QUOTA] %s blocked — %d / %d tokens", user_id, current, settings.MONTHLY_TOKEN_LIMIT)
+            raise HTTPException(
+                status_code=429,
+                detail="이번 달 토큰 한도를 초과했어요. 다음 달 1일에 초기화됩니다. 🙏",
+            )
+
     service = get_chat_history_service()
 
-    # Get or create session
-    session_id = service.get_or_create_session_id(request.session_id, user_id)
-
-    # Save user message
-    msg_id = service.save_message(session_id, "user", request.content)
-
-    # Build messages list from history
-    history = service.get_history(session_id)
+    # Redis client is sync; run hot-path calls in worker threads so FastAPI's event loop stays free.
+    session_id = await asyncio.to_thread(service.get_or_create_session_id, request.session_id, user_id)
+    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", request.content, user_id=user_id)
+    history = await asyncio.to_thread(service.get_history_for_llm, session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Add current user message only if not duplicate of last history
@@ -96,13 +194,28 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         session_id=session_id,
         access_token=user["token"],
         user_info=request.user_info,
-        **({"tracing_id": request.tracing_id} if request.tracing_id else {}),
+        chip_context=request.chip_context.model_dump() if request.chip_context else None,
+        **({"tracing_id": tracing_id} if tracing_id else {}),
     )
+
+    # ── Token quota increment (fire-and-forget) ───────────────────────────────
+    if user_id:
+        from services.tstation.quota_service import estimate_tokens
+        from config.env import settings
+        input_tokens = estimate_tokens(request.content)
+        output_estimate = 400  # conservative avg response size in tokens
+        asyncio.create_task(asyncio.to_thread(
+            _update_quota_score, user_id, input_tokens + output_estimate,
+            tracing_id, settings.MONTHLY_TOKEN_LIMIT,
+        ))
 
     # Call chat service
     if request.stream:
-        # For stream mode, we need to save assistant message as it comes
-        # The streaming response will be handled by chat_2 service
+        from services.tstation.chat_history_service import get_async_redis_client
+        _redis = get_async_redis_client()
+        _streaming_key = f"chat:streaming:{session_id}"
+        if await _redis.exists(_streaming_key):
+            raise HTTPException(status_code=409, detail="session_busy")
         return StreamingResponse(
             stream_chat_response(chat_request, session_id, msg_id, service),
             media_type="text/event-stream",
@@ -114,11 +227,11 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )
 
     # Non-stream mode
-    response = TStationChatServiceV2.chat(chat_request)
+    response = await TStationChatServiceV2.chat(chat_request)
 
     if isinstance(response, TStationChatResponse):
-        # Save assistant response to history
-        service.save_message(session_id, "assistant", response.content)
+        # Save assistant response to history without blocking the event loop.
+        await asyncio.to_thread(service.save_message, session_id, "assistant", response.content, user_id=user_id)
 
         return ChatMessageResponse(
             session_id=session_id,
@@ -131,71 +244,102 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     raise HTTPException(status_code=500, detail="Unexpected response type")
 
 
+_STREAMING_KEY = "chat:streaming:{}"
+_ABORT_KEY = "chat:abort:{}"
+_STREAMING_TTL = 120  # seconds
+
+
 async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, service):
     """Stream chat response and save assistant messages as they arrive."""
     from services.tstation.chat import TStationChatServiceV2
+    from services.tstation.chat_history_service import get_async_redis_client
+
+    _redis = get_async_redis_client()
+    _streaming_key = _STREAMING_KEY.format(session_id)
+    _abort_key = _ABORT_KEY.format(session_id)
+
+    await _redis.set(_streaming_key, "1", ex=_STREAMING_TTL)
 
     full_assistant_content = ""
-    assistant_response_ui = None  # Priority: assistantResponse from UI Template Agent
-    template_data = None  # Captured from UI Template Agent data events
+    assistant_response_ui = None
+    template_data = None
 
-    # Stream from chat service
-    stream_response = TStationChatServiceV2.chat(chat_request)
+    try:
+        stream_response = await TStationChatServiceV2.chat(chat_request)
 
-    # Send initial response with session_id
-    initial_response = {
-        "session_id": session_id,
-        "message_id": user_msg_id,
-        "role": "user",
-        "content": chat_request.messages[-1]["content"],
-        "created_at": get_current_time(),
-        "stream_started": True,
-    }
-    yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
+        initial_response = {
+            "session_id": session_id,
+            "message_id": user_msg_id,
+            "role": "user",
+            "content": chat_request.messages[-1]["content"],
+            "created_at": get_current_time(),
+            "stream_started": True,
+        }
+        yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
 
-    async for chunk in stream_response.body_iterator:
-        # Parse the SSE data
-        if chunk.strip().startswith("data: "):
-            data_str = chunk.strip()[6:]  # Remove "data: " prefix
-            if data_str == "[DONE]":
-                break
+        chunk_count = 0
+        async for chunk in stream_response.body_iterator:
+            chunk_count += 1
+            if chunk_count % 5 == 0 and await _redis.exists(_abort_key):
+                await _redis.delete(_abort_key)
+                logger.info("[CHAT_MESSAGE] Stream aborted by client: %s", session_id)
+                yield f"data: {json.dumps({'type': 'aborted'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
-            try:
-                event = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
+            if chunk.strip().startswith("data: "):
+                data_str = chunk.strip()[6:]
+                if data_str == "[DONE]":
+                    break
 
-            # Priority: Capture assistantResponse from UI Template Agent (JSON data event)
-            if event.get("type") == "data":
-                event_data = event.get("data", {})
-                # assistantResponse may be inside data object or at top level
-                if event.get("assistantResponse"):
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    yield chunk
+                    continue
+
+                if event.get("type") == "data":
+                    event_data = event.get("data", {})
+                    if event.get("assistantResponse"):
+                        assistant_response_ui = event["assistantResponse"]
+                    elif event_data.get("assistantResponse"):
+                        assistant_response_ui = event_data["assistantResponse"]
+                    if assistant_response_ui:
+                        logger.debug(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
+                    template_data = event
+                    logger.debug(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
+
+                if event.get("type") == "qc_correction" and event.get("assistantResponse"):
                     assistant_response_ui = event["assistantResponse"]
-                elif event_data.get("assistantResponse"):
-                    assistant_response_ui = event_data["assistantResponse"]
-                if assistant_response_ui:
-                    logger.info(f"[CHAT_MESSAGE] Captured assistantResponse from UI Template: {assistant_response_ui[:50]}...")
-                # template_data = full event (KISS)
-                template_data = event
-                logger.info(f"[CHAT_MESSAGE] Captured template_data: type={template_data.get('type')}, template={template_data.get('template')}")
+                    logger.debug(f"[CHAT_MESSAGE] QC correction applied: {assistant_response_ui[:50]}...")
 
-            # When we receive a message event with assistant content, accumulate it
-            if event.get("type") == "message" and event.get("content"):
-                content = event.get("content", "")
-                if content:
-                    full_assistant_content += content
+                if event.get("type") == "message" and event.get("content"):
+                    content = event.get("content", "")
+                    if content:
+                        full_assistant_content += content
 
             yield chunk
 
-    # Save assistant message after stream completes
-    # Priority: Use assistantResponse from UI Template Agent if available
-    message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
-    if message_to_save:
-        service.save_message(session_id, "assistant", message_to_save, template_data=template_data)
-        logger.info(f"[CHAT_MESSAGE] Saved assistant message" +
-                  (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
+        message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
+        if message_to_save:
+            logger.debug(f"[CHAT_MESSAGE] Saving assistant message" +
+                      (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
 
-    yield "data: [DONE]\n\n"
+            from services.tstation.history_summarizer import refresh_summary
+            asyncio.create_task(asyncio.to_thread(
+                service.save_message,
+                session_id,
+                "assistant",
+                message_to_save,
+                template_data=template_data,
+                user_id=chat_request.user_id,
+            ))
+            asyncio.create_task(refresh_summary(session_id))
+
+        yield "data: [DONE]\n\n"
+
+    finally:
+        await _redis.delete(_streaming_key)
 
 
 @router.get("/sessions", dependencies=[Depends(get_api_key)], response_model=SessionListResponse)
@@ -215,7 +359,7 @@ async def list_sessions(user: dict = Security(get_api_key)):
     user_id = user.get("user_id")
 
     service = get_chat_history_service()
-    sessions = service.list_sessions(user_id)
+    sessions = await asyncio.to_thread(service.list_sessions, user_id)
 
     return SessionListResponse(
         sessions=[SessionInfo(**s) for s in sessions],
@@ -247,12 +391,9 @@ async def get_history(
     user_id = user.get("user_id")
 
     service = get_chat_history_service()
+    await asyncio.to_thread(_ensure_session_owner, service, session_id, user_id)
 
-    # Try to get history - will return empty if session doesn't exist yet
-    try:
-        messages = service.get_history(session_id)
-    except Exception:
-        messages = []
+    messages = await asyncio.to_thread(service.get_history, session_id)
 
     return ChatHistoryResponse(
         session_id=session_id,
@@ -291,20 +432,20 @@ async def append_message(
 
     service = get_chat_history_service()
 
-    # Verify session exists for this user
-    if not service.session_exists(request.session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    await asyncio.to_thread(_ensure_session_owner, service, request.session_id, user_id)
 
     # Validate role
     if request.role not in ("user", "assistant"):
         raise HTTPException(status_code=400, detail="Role must be 'user' or 'assistant'")
 
     # Append message (saved at end due to timestamp score)
-    msg_id = service.save_message(
+    msg_id = await asyncio.to_thread(
+        service.save_message,
         session_id=request.session_id,
         role=request.role,
         content=request.content,
         template_data=request.template_data,
+        user_id=user_id,
     )
 
     return AppendMessageResponse(
@@ -314,6 +455,29 @@ async def append_message(
         role=request.role,
         created_at=get_current_time(),
     )
+
+
+@router.post("/{session_id}/abort", dependencies=[Depends(get_api_key)])
+async def abort_stream(session_id: str, user: dict = Security(get_api_key)):
+    """
+    Abort an active streaming response for a session.
+
+    Returns {"aborted": true} if a stream was cancelled, {"aborted": false} if no active stream.
+    """
+    user_id = user.get("user_id")
+    service = get_chat_history_service()
+    await asyncio.to_thread(_ensure_session_owner, service, session_id, user_id)
+
+    from services.tstation.chat_history_service import get_async_redis_client
+    _redis = get_async_redis_client()
+    _streaming_key = _STREAMING_KEY.format(session_id)
+    _abort_key = _ABORT_KEY.format(session_id)
+
+    if not await _redis.exists(_streaming_key):
+        return {"aborted": False, "session_id": session_id}
+
+    await _redis.set(_abort_key, "1", ex=30)
+    return {"aborted": True, "session_id": session_id}
 
 
 @router.delete("/{session_id}", dependencies=[Depends(get_api_key)], response_model=DeleteSessionResponse)
@@ -341,17 +505,9 @@ async def delete_session(
 
     service = get_chat_history_service()
 
-    # Verify session belongs to user
-    if not service.session_exists(session_id, user_id):
-        raise HTTPException(status_code=404, detail="Session not found")
+    await asyncio.to_thread(_ensure_session_owner, service, session_id, user_id)
 
-    messages_deleted = service.delete_session(session_id)
-
-    return DeleteSessionResponse(
-        success=True,
-        session_id=session_id,
-        messages_deleted=messages_deleted,
-    )
+    messages_deleted = await asyncio.to_thread(service.delete_session, session_id)
 
     return DeleteSessionResponse(
         success=True,
@@ -404,3 +560,4 @@ async def validate_token_endpoint(user: dict = Security(get_api_key)):
         return ValidateTokenResponse(valid=True, user_id=user_id)
     else:
         return ValidateTokenResponse(valid=False, reason="Invalid token")
+

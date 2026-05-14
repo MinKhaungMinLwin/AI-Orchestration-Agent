@@ -56,6 +56,9 @@
     read_only: true
     tmpfs:
       - /tmp
+      # LiteLLM writes Prisma migration diffs here on startup when database_url is set.
+      # tmpfs keeps the container read-only while still allowing migrations to run.
+      - /usr/lib/python3.13/site-packages/litellm_proxy_extras/migrations
     env_file:
       - ../.env
     environment:

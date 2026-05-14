@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+
 import jwt
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,11 @@ def decode_jwt(token: str, secret: Optional[str] = None) -> Optional[dict]:
     except Exception as e:
         logger.exception(f"Error decoding JWT: {e}")
         return None
+
+
+def decode_jwt_unverified(token: str) -> Optional[dict]:
+    """Decode JWT payload without verification. Do not use for authentication."""
+    return decode_jwt(token)
 
 
 def get_user_info_from_token(token: str, secret: Optional[str] = None) -> Optional[dict]:

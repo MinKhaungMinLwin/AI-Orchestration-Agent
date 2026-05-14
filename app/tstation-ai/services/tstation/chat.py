@@ -1,9 +1,11 @@
+import asyncio
 import concurrent.futures
 import json
+import threading
 import logging
 import re
 import time
-from typing import ClassVar, Iterator, Optional
+from typing import Any, AsyncIterator, ClassVar, Iterator
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -11,6 +13,7 @@ from enum import Enum
 
 from services.tstation.common.tstation_be_client import set_tstation_be_token
 from config.env import settings
+from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
@@ -26,6 +29,17 @@ from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
 from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
+from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
+from services.tstation.agents.router import QC_LLM
+from services.tstation.classifier_feedback import log_classifier_redirect
+from config.tracing import (
+    build_trace_config,
+    trace_span as _trace_span,
+    truncate_for_trace as _truncate,
+    _tracing_enabled,
+    tracer,
+    set_trace_name as _set_trace_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +55,58 @@ class AgentDecision(BaseModel):
     reason: str = Field(description="Reason for decision, using english")
 
 
+class AgentPromptProfile(str, Enum):
+    FULL = "full"
+    TRANSACTION_COUPON = "transaction_coupon"
+    TRANSACTION_ORDER = "transaction_order"
+    TRANSACTION_STORE = "transaction_store"
+    TRANSACTION_PRICE_STOCK = "transaction_price_stock"
+    DISCOVERY_SEARCH = "discovery_search"
+    DISCOVERY_RECOMMENDATION = "discovery_recommendation"
+    DISCOVERY_EVENT_CONTENT = "discovery_event_content"
+
+
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
+_speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_decision_verify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S = 0.15
+_SYNC_ITER_SENTINEL = object()
+
+
+def _next_or_sentinel(iterator: Iterator[dict]) -> dict | object:
+    """Advance a sync generator in a worker thread without leaking StopIteration."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _SYNC_ITER_SENTINEL
+
+
+async def _async_from_sync_iter(iterator: Iterator[dict]) -> AsyncIterator[dict]:
+    """Bridge blocking sync agent streams into async SSE without blocking the event loop."""
+    while True:
+        item = await asyncio.to_thread(_next_or_sentinel, iterator)
+        if item is _SYNC_ITER_SENTINEL:
+            break
+        yield item
+
+
+def _parse_agent_declared_next_action(payload: object) -> AgentDecision | None:
+    """Normalize agent-emitted nextAction payload into AgentDecision."""
+    if not isinstance(payload, dict):
+        return None
+    action = str(payload.get("type", "")).strip().lower()
+    reason = "agent_declared_next_action"
+    if action == NextAction.STOP.value:
+        if payload.get("domain") is not None:
+            return None
+        return AgentDecision(next_action=NextAction.STOP, next_domain="null", reason=reason)
+    if action != NextAction.CONTINUE.value:
+        return None
+    domain = str(payload.get("domain", "")).strip().lower()
+    if domain not in {"discovery", "transaction", "support"}:
+        return None
+    return AgentDecision(next_action=NextAction.CONTINUE, next_domain=domain, reason=reason)
 
 
 def prompt_router() -> str:
@@ -91,7 +155,6 @@ def decide_next_action(
     parent_span_id: str | None = None,
 ) -> AgentDecision:
     from langchain_core.messages import SystemMessage, HumanMessage
-    from config.tracing import build_trace_config
 
     structured_model = _decision_structured_model
 
@@ -116,12 +179,13 @@ def decide_next_action(
     )
 
     trace_config = build_trace_config(
-        run_name="decide_next_action",
         session_id=session_id,
         user_id=user_id,
         trace_id=trace_id,
         parent_span_id=parent_span_id,
         tags=["router", "decide_next_action"],
+        prompt_name="router",
+        run_name="💭 next_action",
     )
 
     try:
@@ -148,6 +212,9 @@ class MultiAgentDomain(BaseModel):
 
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
+    execution_plan: list[str] = Field(
+        description="Short ordered plan for the selected domains, without tool names or parameters"
+    )
     user_behavior: str = Field(
         description=(
             "What the user is currently doing in this conversation turn, inferred from full history. "
@@ -174,6 +241,18 @@ class MultiAgentDomain(BaseModel):
         ),
     )
 
+    agent_prompt_profile: AgentPromptProfile = Field(
+        description=(
+            "Prompt profile for the selected domain agent. "
+            "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status), "
+            "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
+            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock with product name only, best-sellers — goods_no NOT yet known). "
+            "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards). "
+            "'discovery_event_content' (events, deals, event-applicable products, product events, YouTube/video). "
+            "Use 'full' for compatibility-only or any mixed/uncertain case."
+        )
+    )
+
     def get_agents(self):
         """Return list of agents based on detected domains."""
         agent_map = {
@@ -198,6 +277,18 @@ class _SlimMultiAgentDomain(BaseModel):
     domains: list[MultiAgentDomain.Domain] = Field(
         description="List of domains detected in the request, ordered by priority"
     )
+    execution_plan: list[str] = Field(
+        description="Short ordered plan for the selected domains, without tool names or parameters"
+    )
+    agent_prompt_profile: AgentPromptProfile = Field(
+        description=(
+            "Prompt profile for the selected domain agent. "
+            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size "
+            "or best-sellers (no goods_no in context); 'discovery_recommendation' for tire recommendation by vehicle, "
+            "tire size, scenario, or continuation from recommendation cards; 'discovery_event_content' for events/deals/video; "
+            "'full' for compatibility-only or uncertain cases."
+        )
+    )
 
 
 # Module-level singletons — avoid re-wrapping LLM per request.
@@ -214,11 +305,22 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 4 outputs:
+Produce 6 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
-3. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
-4. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
+4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
+5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+
+6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+   - "transaction_coupon": coupon/promotion/coupon issue
+   - "transaction_order": order history, order status, cart, quick order
+   - "transaction_store": store search, nearby store, store detail, schedule, store inventory
+   - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
+   - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어")
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock query with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "discovery_event_content": events/deals, event-applicable products, product-applicable events, YouTube/video
+   - "full": compatibility-only, mixed, ambiguous, or uncertain cases
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -259,34 +361,16 @@ In RE-RECOMMENDATION cases:
     into wrong behavior. The Discovery agent has its own Branch A/B logic that
     reads user_behavior to decide whether to re-call the recommendation tool.
 
-Worked example 1 (with 다시 keyword):
-  - Previous: get_products_recommendations_tool(rcmd_type="wet") returned 4 items
-  - Current user message: "주말 나들이용으로 다시"
-  - CORRECT user_behavior: "requesting new recommendation with weekend scenario after previous wet recommendation"
-  - WRONG user_behavior: "selecting weekend-suitable items from previous tire list"
-  - WRONG user_behavior: "filter previous recommendations for weekend use"
+Worked examples (RE-RECOMMENDATION vs FILTER):
+1. PREV="wet" → USER="주말 나들이용으로 다시" → CORRECT behavior: "requesting new recommendation with weekend scenario...". WRONG: "selecting/filtering previous tire list".
+2. PREV="ev" → intervening turn → USER="패밀리 SUV에 잘 맞는 사계절용 추천" → family+사계절 ≠ ev → RE-RECOMMENDATION. CORRECT: "requesting NEW recommendation...". WRONG: "filter previous EV list...".
+3. PREV="ev" → USER="이 EV 타이어 중에서 18인치로" → "이 중에서" (demonstrative) = filter/continuation. CORRECT: "filtering previous EV recommendation list...".
 
-Worked example 2 (NO 다시 keyword — scenario change with intervening turn):
-  - Earlier turn: get_products_recommendations_tool(rcmd_type="ev") returned 4 items (235/55R19)
-  - Intervening turn: get_product_description_tool (description only — does NOT reset PREV)
-  - Current user message: "패밀리 SUV에 잘 맞는 사계절용 추천"
-  - PREV rcmd_type = "ev"; user mentions "패밀리/가족" + "사계절" — clearly
-    different scenario family from "ev" → RE-RECOMMENDATION applies.
-  - CORRECT user_behavior: "requesting NEW recommendation with family + 사계절 scenario; previous rcmd_type='ev' no longer matches"
-  - WRONG user_behavior: "filter previous EV list for family-friendly all-season options"
-  - WRONG user_behavior: "pick 사계절 candidates from previous list"
-
-Worked example 3 (PREV=CUR escape — NOT re-recommendation):
-  - Previous: get_products_recommendations_tool(rcmd_type="ev") returned 4 items
-  - Current user message: "이 EV 타이어 중에서 18인치로"
-  - "EV" matches PREV; "이 중에서" is a demonstrative → continuation, NOT re-recommendation.
-  - user_behavior: "filtering previous EV recommendation list by size 18인치"
-
-Also identify the FLOW SEQUENCE (ordered list of domains) for the request.
+Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation, coupon inquiry (내 쿠폰 / 받을 수 있는 쿠폰 / 쿠폰함 / 다운로드 가능 쿠폰), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
-- SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation (주문 취소 / 취소하고 싶어 / 취소해줘), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
 
@@ -295,42 +379,27 @@ DOMAIN ROUTING EXAMPLES
 ====================================================
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
-1. "i want to buy tires for 12가3456" → DISCOVERY (lookup car → recommend tires → STOP, wait for user)
-2. "쏘나타에 맞는 타이어 추천해줘" → DISCOVERY
-3. "벤투스 S2 가격" / "Dynapro HPX 얼마야?" → DISCOVERY (resolve goods_no first → STOP)
-4. "벤투스 S2 재고 확인해줘" → DISCOVERY (resolve goods_no → STOP)
-5. "벤투스 S2 AS 살 수 있는 매장" → DISCOVERY (resolve goods_no → STOP)
-6. "이벤트 알려줘" / "기획전 정보" → DISCOVERY
-7. "타이어 리뷰 영상 보여줘" → DISCOVERY
-8. "추천 타이어들 가격 비교해줘" → DISCOVERY (compare_discount_tool is in Discovery)
+- "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "이벤트", "리뷰 영상", "추천 가격 비교해줘"
+- 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
+- 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
-1. "{{goods_no}} 가격 얼마야?" → TRANSACTION
-2. "주문할게" / "바로 주문할게" → TRANSACTION
-3. "장바구니에 담아줘" → TRANSACTION
-4. "강남 매장 찾아줘" / "근처 매장" → TRANSACTION
-5. "한남점 예약 가능한 날짜 알려줘" → TRANSACTION
-6. "주문 내역 확인해줘" / "내 주문내역 알려줘" / "주문 조회해줘" → TRANSACTION
-7. "내 쿠폰 보여줘" / "받을 수 있는 쿠폰" / "다운로드 가능 쿠폰은?" / "쿠폰함" → TRANSACTION
-8. "티스테이션 한남점 선택할게" → TRANSACTION (store selection continuation)
+- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰"
 
 SUPPORT — policy, warranty, human agent:
-1. "보증 정책 알려줘" / "반품 가능해?" → SUPPORT
-2. "1:1 문의 작성해줘" / "상담원 연결" → SUPPORT
+- "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify these as SUPPORT — always TRANSACTION (handled by coupon/order tools, NOT FAQ):
-- 내 쿠폰 / 쿠폰 조회 / 쿠폰함 / 다운로드 가능 쿠폰
-- 내 주문내역 / 주문 내역 / 주문 조회 / 내 주문
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어"
 
 LEADING — greeting, unclear intent:
-1. "안녕하세요" / "뭘 도와줄 수 있어?" → LEADING
+- "안녕하세요/도와줘"
 
 ====================================================
 DECISION RULES
 ====================================================
 
-CORE RULE: Classify into EXACTLY ONE domain per turn.
-Each domain does its ONE job and stops. User drives every next step.
+CORE RULE: Prefer one domain per turn. Return multiple domains only when the current user request clearly needs a handoff in the same turn.
+Each domain does its ONE job. The coordinator may skip the extra next-action LLM call when your multi-domain plan is already clear.
 
 DISCOVERY when:
 - Product search by name/keyword (goods_no not yet known)
@@ -347,7 +416,7 @@ TRANSACTION when:
 - Order creation, cart save, order tracking
 - Pre-order confirmation flow
 
-⚠️ "buy/order/purchase" with product NAME (not goods_no) → DISCOVERY first to find goods_no, then STOP and wait for user.
+⚠️ "buy/order/purchase/reserve/예약" with product NAME (not goods_no) → DISCOVERY first to find goods_no. If the same message ALSO has a size that narrows to 1 result, return [DISCOVERY, TRANSACTION]. If NO size → DISCOVERY only (list shown, user selects size next turn).
 ⚠️ "buy/order/purchase" with goods_no already in context → TRANSACTION directly.
 
 SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry
@@ -378,15 +447,8 @@ following alongside the re-trigger word:
   - 구체적 의도 동사: 추천, 검색, 찾, 알려, 비교, 보여, 확인, 사고, 살래
 
 Examples:
-- "다시" → LEADING (bare, no context)
-- "다시 해줘" → LEADING (bare)
-- "다른 거 보여줘" → LEADING (bare; "보여줘" is generic, no domain anchor)
-- "이전 추천 말고" → LEADING (bare re-trigger only)
-- "주말 나들이용으로 다시" → DISCOVERY (has scenario keyword "주말")
-- "벤투스 S2 다시 알려줘" → DISCOVERY/TRANSACTION (has product name)
-- "가격 다시 알려줘" → 이전 컨텍스트의 도메인 그대로 (TRANSACTION if goods_no
-  known, DISCOVERY otherwise — "가격" is a clear domain anchor)
-- "다시 추천해줘" → DISCOVERY (has explicit intent verb "추천")
+- LEADING (bare): "다시", "다시 해줘", "다른 거 보여줘", "이전 추천 말고"
+- DISCOVERY/TRANSACTION (has context): "주말용 다시"(scenario), "벤투스 S2 다시"(product), "가격 다시"(domain anchor), "다시 추천해줘"(verb)
 
 ⚠️ This rule overrides CONTINUATION DETECTION below for bare re-triggers — a
 bare re-trigger is NOT a valid continuation; it's an ambiguous request that
@@ -401,14 +463,8 @@ If the previous agent showed a list and asked user to SELECT (cars, tires, store
 → Classify into that SAME domain — do NOT chain to another domain.
 
 Examples:
-- Previous: Discovery showed car list → User: "제타" → DISCOVERY (same domain continues)
-- Previous: Discovery showed tires → User: "벤투스 S2 AS" → DISCOVERY (same domain continues)
-- Previous: Discovery showed tires → User: "1. 벤투스 S2 AS" → DISCOVERY (ordinal prefix
-  does NOT change domain; the user is still picking a tire from the recommendation list,
-  not placing an order)
-- Previous: Discovery showed tires → User: "1번", "3", "첫번째" → DISCOVERY (pure ordinal)
-- Previous: Transaction showed stores → User: "한남점" → TRANSACTION (same domain continues)
-- Previous: Transaction showed schedule → User: "내일 10시" → TRANSACTION (same domain continues)
+- DISCOVERY continues: Pick car ("제타"), pick tire ("벤투스 S2", "1. 벤투스", "1번")
+- TRANSACTION continues: Pick store ("한남점"), pick date ("내일 10시")
 
 ⚠️ HARD RULE — Tire pick from a Discovery recommendation/search list stays in DISCOVERY.
 Even when user_behavior reads "confirming product selection" or "user picked a tire", the
@@ -444,7 +500,7 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/받을 수 있는 쿠폰/다운로드 가능 쿠폰) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
 - SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
@@ -452,26 +508,102 @@ DOMAINS:
 RULES:
 - G+12 digits in message → TRANSACTION
 - Product name only (벤투스/Ventus/다이나프로/Dynapro/...) + price/stock/buy, no goods_no → DISCOVERY
+- Product name + explicit same-turn order/store request + size, no goods_no → [DISCOVERY, TRANSACTION]
+- Product name + 예약/주문 + NO size, no goods_no → DISCOVERY only (must show list so user picks size)
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
+- 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 매장/근처/올마이티/All My T → TRANSACTION
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
 
 EXAMPLES (tricky cases):
-- "벤투스 S2 가격 얼마야?" → DISCOVERY (product name, no goods_no)
-- "G012345678901 가격" → TRANSACTION (goods_no present)
-- "내 쿠폰 보여줘" → TRANSACTION (NOT SUPPORT)
-- "내 주문내역 알려줘" → TRANSACTION (NOT SUPPORT)
-- "12가3456 타이어 추천" → DISCOVERY
+- "벤투스 S2 가격 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (product name, no goods_no)
+- "G012345678901 가격" → TRANSACTION, agent_prompt_profile=transaction_price_stock
+- "G012345678901 재고 있어?" → TRANSACTION, agent_prompt_profile=transaction_price_stock
+- "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
+- "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
+- "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
+- "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
+- "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
+- "20만원에서 30만원 사이 한국타이어" → DISCOVERY, agent_prompt_profile=discovery_search (product search by price range)
+- "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
+- "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
+- "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
+- "진행 중인 이벤트 보여줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
+- "리뷰 영상 찾아줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
+- "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
+- "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
 
-Output: domains (list with EXACTLY ONE domain) + reason (english).
+Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
+agent_prompt_profile:
+- transaction_coupon: coupon/promotion -> transaction_coupon
+- transaction_order: order/cart/status -> transaction_order
+- transaction_store: store/search/schedule/store inventory -> transaction_store
+- transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
+- discovery_recommendation: tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards ("추천", "내 차에 맞는")
+- discovery_event_content: events/deals, event-applicable products, product-applicable events, YouTube/video
+- full: compatibility-only, mixed, ambiguous, or uncertain
 """
 
 
 class StreamingMultiAgentCoordinator:
     """Orchestrates multiple agents with streaming support."""
+
+    @staticmethod
+    def _compact_tool_results_for_llm(tool_data: list[dict]) -> list[dict]:
+        """Build a smaller tool-result view for agent handoff prompts only."""
+        compact_items: list[dict] = []
+        for item in tool_data:
+            tool_name = item.get("tool", "")
+            data = item.get("data")
+            input_data = item.get("input", item.get("args", {}))
+            raw_output = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            compact = filter_for_context(tool_name, raw_output, input_data)
+            if compact is not None:
+                compact_items.append(compact)
+            else:
+                compact_items.append({"tool": tool_name, "input": input_data, "data": data})
+        return compact_items
+
+    # ---------------------------------------------------------------------
+    # Hardcoded keyword routing (runs BEFORE the LLM router)
+    # ---------------------------------------------------------------------
+    # The LLM router was observed ignoring its own prompt-level routing rules
+    # under heavy slot/context bias (e.g., post-cart "이벤트 목록" got routed
+    # to TRANSACTION because the conversation history was order-flow heavy).
+    # When the user's CURRENT message contains any of the listed phrases, we
+    # hard-pin the domain without invoking the LLM at all — fast and
+    # deterministic.
+    #
+    # Match style: case-sensitive substring match on the cleaned current
+    # user input (after stripping the injected "# Respond in Korean language"
+    # wrapper and the trailing [current_time: ...] suffix).
+    _KEYWORD_FORCE_TABLE: ClassVar[
+        list[tuple[list[str], "MultiAgentDomain.Domain"]]
+    ] = [
+        # SUPPORT — return / refund / warranty / 1:1
+        (
+            ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # DISCOVERY — vehicle lookup / video / event
+        (
+            [
+                "내 차 목록", "내차 목록", "내차목록",
+                "내 차량", "내차량",
+                "내 등록차", "등록차 보여", "등록차량 보여", "등록차량", "등록차",
+                "내 차 보여", "내차 보여", "내차보여",
+                "내 차 중", "내 차중", "내차 중", "내차중",
+                "리뷰 영상", "유튜브", "동영상", "영상 보여",
+                "이벤트", "기획전",
+            ],
+            MultiAgentDomain.Domain.DISCOVERY,
+        ),
+    ]
 
     def __init__(self):
         self.agent_map = {
@@ -480,6 +612,98 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT: support_subagent,
             MultiAgentDomain.Domain.LEADING: leading_agent,
         }
+
+    def _select_agent(self, domain: MultiAgentDomain.Domain, routing: MultiAgentDomain | None):
+        agent = self.agent_map.get(domain)
+        if agent is None:
+            return None
+        profile = getattr(routing, "agent_prompt_profile", AgentPromptProfile.FULL)
+        if domain in (MultiAgentDomain.Domain.TRANSACTION, MultiAgentDomain.Domain.DISCOVERY) and hasattr(
+            agent, "for_prompt_profile"
+        ):
+            profile_value = profile.value if isinstance(profile, AgentPromptProfile) else str(profile)
+            selected_agent = agent.for_prompt_profile(profile_value)
+            logger.info(
+                "[AGENT_PROFILE] domain=%s profile=%s agent=%s",
+                domain.value,
+                profile_value,
+                getattr(selected_agent, "name", selected_agent.__class__.__name__),
+            )
+            return selected_agent
+        return agent
+
+    @staticmethod
+    def _resolve_routing_for_agent_profile(
+        classify_future: concurrent.futures.Future | None,
+        domains: list[MultiAgentDomain.Domain],
+    ) -> MultiAgentDomain | None:
+        if classify_future is None:
+            return None
+
+        if MultiAgentDomain.Domain.TRANSACTION in domains:
+            timeout: float | None = None
+        elif MultiAgentDomain.Domain.DISCOVERY in domains:
+            timeout = 0 if classify_future.done() else _DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S
+        elif classify_future.done():
+            timeout = 0
+        else:
+            return None
+
+        try:
+            verified_domains, routing_result = classify_future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            timeout_ms = timeout * 1000 if timeout is not None else 0
+            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
+            return None
+        except Exception as exc:
+            logger.debug("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
+            return None
+
+        if routing_result is None or not _domains_equal(verified_domains, domains):
+            return None
+        return routing_result
+
+    @staticmethod
+    def _extract_current_user_input(message_content: str) -> str:
+        """Strip the injected `# Respond in Korean language` wrapper and the
+        trailing `[current_time: ...]` block so the result is just the user's
+        typed text.
+        """
+        if not message_content:
+            return ""
+        text = message_content
+        if "# Respond in Korean language" in text:
+            text = text.split("# Respond in Korean language", 1)[1]
+        if "[current_time:" in text:
+            text = text.split("[current_time:", 1)[0]
+        return text.strip()
+
+    @classmethod
+    def _force_keyword_routing(cls, user_input: str) -> "MultiAgentDomain | None":
+        """Return a forced MultiAgentDomain when the user's CURRENT message
+        clearly names a topic that should not depend on conversation context.
+
+        Returns None when no keyword matches — caller should then fall through
+        to the LLM-based router.
+        """
+        if not user_input:
+            return None
+        text = user_input.strip()
+        if not text:
+            return None
+
+        for keywords, domain in cls._KEYWORD_FORCE_TABLE:
+            for kw in keywords:
+                if kw in text:
+                    return MultiAgentDomain(
+                        reason=f"hardcoded keyword routing matched '{kw}'",
+                        domains=[domain],
+                        execution_plan=[f"Run {domain.value} for the matched current-turn topic"],
+                        user_behavior=f"topic shift via keyword '{kw}'",
+                        agent_prompt_profile=AgentPromptProfile.FULL,
+                        flow="hardcoded keyword routing — bypassed LLM router",
+                    )
+        return None
 
     def classify_multi_intent(
         self,
@@ -504,7 +728,23 @@ class StreamingMultiAgentCoordinator:
             (domains, routing_result) — domains for backward compat, full result for context injection.
         """
         from langchain_core.messages import SystemMessage
-        from config.tracing import build_trace_config
+
+        # ---------- Hardcoded keyword routing (bypasses LLM) ----------
+        last_user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_text = self._extract_current_user_input(msg.get("content", ""))
+                break
+
+        forced_result = self._force_keyword_routing(last_user_text)
+        if forced_result is not None:
+            logger.debug(
+                "[MULTI-DOMAIN] Hardcoded routing: domain=%s, msg=%r",
+                forced_result.domains,
+                last_user_text[:80],
+            )
+            return forced_result.domains, forced_result
+        # --------------------------------------------------------------
 
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
@@ -522,12 +762,13 @@ class StreamingMultiAgentCoordinator:
             all_messages = [system_msg] + list(messages)
 
             trace_config = build_trace_config(
-                run_name=run_name,
                 session_id=session_id,
                 user_id=user_id,
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
                 tags=["router", run_name],
+                prompt_name="router",
+                run_name=f"💭 {run_name}",
             )
             raw_result = structured_model.invoke(all_messages, config=trace_config)
 
@@ -537,14 +778,18 @@ class StreamingMultiAgentCoordinator:
                 result = MultiAgentDomain(
                     reason=raw_result.reason,
                     domains=raw_result.domains,
+                    execution_plan=raw_result.execution_plan,
                     user_behavior="",
+                    agent_prompt_profile=raw_result.agent_prompt_profile,
                     flow="",
                 )
             else:
                 result = raw_result
 
-            logger.info(
-                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, behavior={result.user_behavior!r}, flow={result.flow!r}"
+            logger.debug(
+                f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
+                f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, "
+                f"flow={result.flow!r}, profile={result.agent_prompt_profile!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
             return domains, result
@@ -598,6 +843,48 @@ class StreamingMultiAgentCoordinator:
 
         return messages
 
+    @staticmethod
+    def _inject_client_prompt(messages: list[dict]) -> list[dict]:
+        """Inject client custom prompt from Langfuse as a system message.
+
+        Client sets the prompt on Langfuse UI under the name 'client_prompt'.
+        Changes propagate within ~60 seconds, no redeploy needed.
+        If no prompt is configured, messages are returned unchanged.
+        """
+        injection = load_client_injection()
+        if not injection:
+            logger.debug("[CLIENT_PROMPT] No client prompt configured, skipping injection.")
+            return messages
+
+        system_msg = {"role": "system", "content": f"## CLIENT INSTRUCTIONS\n{injection}"}
+        logger.debug("[CLIENT_PROMPT] Injected as system message (chars=%d).", len(injection))
+        return [system_msg] + list(messages)
+
+    @staticmethod
+    def _planner_decision(
+        domains: list[MultiAgentDomain.Domain],
+        routing: MultiAgentDomain | None,
+        current_domain: MultiAgentDomain.Domain,
+    ) -> AgentDecision | None:
+        if routing is None or len(domains) < 2:
+            return None
+        if not routing.execution_plan:
+            return None
+        if current_domain not in domains:
+            return None
+        next_index = domains.index(current_domain) + 1
+        if next_index >= len(domains):
+            return AgentDecision(
+                next_action=NextAction.STOP,
+                next_domain="null",
+                reason="planner_execution_plan_completed",
+            )
+        return AgentDecision(
+            next_action=NextAction.CONTINUE,
+            next_domain=domains[next_index].value,
+            reason="planner_execution_plan",
+        )
+
     def _build_context_message(
         self,
         domain: MultiAgentDomain.Domain,
@@ -629,131 +916,68 @@ class StreamingMultiAgentCoordinator:
     }
 
     @staticmethod
-    def _save_tool_derived_slots(session_id: str, tool_name: str, parsed_data: dict, tool_input: dict | None = None):
-        """Persist goods_no, shop_id, and tire_size from successful tool results/inputs to slots.
-
-        Also clears `pending_intent` when the tool that ran fulfills that intent
-        (see `_TOOL_TO_FULFILL`).
-        """
+    def _apply_tool_derived_slots(slots: Any, tool_name: str, parsed_data: dict, tool_input: dict | None = None) -> bool:
+        """Apply tool-derived slot changes in memory; caller persists once after streaming."""
         from schemas.tstation.slots import ConversationSlots
-        from services.tstation.chat_history_service import get_chat_history_service
 
-        # Fulfillment: if this tool satisfies a pending intent AND succeeded, clear it.
-        # Tools return {"status": "success"|"error", ...}; only "success" counts as fulfillment
-        # so a failed price/stock/order lookup still leaves the intent for retry.
-        # Done BEFORE other slot updates so the cleared state is the one we save.
+        changed = False
+
         fulfilled_intent = StreamingMultiAgentCoordinator._TOOL_TO_FULFILL.get(tool_name)
         tool_succeeded = isinstance(parsed_data, dict) and parsed_data.get("status") == "success"
-        if fulfilled_intent and tool_succeeded:
-            try:
-                svc = get_chat_history_service()
-                current_slots = svc.get_slots(session_id)
-                if current_slots.pending_intent == fulfilled_intent:
-                    new_slots = current_slots.model_copy()
-                    new_slots.pending_intent = None
-                    svc.save_slots(session_id, new_slots)
-                    logger.info(
-                        f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
-                    )
-            except Exception as e:
-                logger.warning(f"[SLOTS] Failed to clear pending_intent: {e}")
+        if fulfilled_intent and tool_succeeded and slots.pending_intent == fulfilled_intent:
+            slots.pending_intent = None
+            changed = True
+            logger.debug(
+                f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
+            )
 
-        # Map tool names to the slot fields they can provide (from output)
+        if tool_name == "search_car_model_tool" and (slots.tire_size is not None or slots.goods_no is not None):
+            slots.tire_size = None
+            slots.goods_no = None
+            changed = True
+            logger.debug("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
+
+        tool_slots = {}
+        if tool_name == "get_products_recommendations_tool" and tool_input:
+            input_tire_size = tool_input.get("tire_size")
+            if input_tire_size:
+                tool_slots["tire_size"] = input_tire_size
+
+        if tool_name == "get_product_description_tool" and tool_input:
+            input_goods_no = tool_input.get("goods_no")
+            if input_goods_no:
+                tool_slots["goods_no"] = input_goods_no
+
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
             "get_store_list_tool": ["shop_id"],
             "get_nearby_stores_tool": ["shop_id"],
             "get_store_inventory_tool": ["shop_id"],
         }
-
-        # When user searches for a different car model, reset tire_size and goods_no
-        # so the previous vehicle's tire_size doesn't persist
-        if tool_name == "search_car_model_tool":
-            try:
-                svc = get_chat_history_service()
-                current_slots = svc.get_slots(session_id)
-                if current_slots.tire_size is not None or current_slots.goods_no is not None:
-                    new_slots = current_slots.model_copy()
-                    new_slots.tire_size = None
-                    new_slots.goods_no = None
-                    svc.save_slots(session_id, new_slots)
-                    logger.info("[SLOTS] Reset tire_size and goods_no due to search_car_model_tool call")
-            except Exception as e:
-                logger.warning(f"[SLOTS] Failed to reset slots on car model search: {e}")
-
-        # Extract tire_size from tool INPUT when recommendation tool is called
-        # This captures the confirmed tire_size that the LLM used for recommendations
-        if tool_name == "get_products_recommendations_tool" and tool_input:
-            input_tire_size = tool_input.get("tire_size")
-            if input_tire_size:
-                try:
-                    svc = get_chat_history_service()
-                    current_slots = svc.get_slots(session_id)
-                    new_slots = ConversationSlots(tire_size=input_tire_size)
-                    updated = current_slots.merge(new_slots)
-                    svc.save_slots(session_id, updated)
-                    logger.info(f"[SLOTS] tire_size saved from {tool_name} input: {input_tire_size}")
-                except Exception as e:
-                    logger.warning(f"[SLOTS] Failed to save tire_size from tool input: {e}")
-
-        # Extract goods_no from tool INPUT when product description tool is called.
-        # Without this, picking a product from the recommend list (Branch S — "1번",
-        # "벤투스 S2 AS") routes through get_product_description_tool but leaves
-        # goods_no=None. The goal-router then treats `model` as missing on the next
-        # "구매할게" turn and routes to Discovery instead of Transaction, breaking
-        # the order auto-chain.
-        if tool_name == "get_product_description_tool" and tool_input:
-            input_goods_no = tool_input.get("goods_no")
-            if input_goods_no:
-                try:
-                    svc = get_chat_history_service()
-                    current_slots = svc.get_slots(session_id)
-                    new_slots = ConversationSlots(goods_no=input_goods_no)
-                    updated = current_slots.merge(new_slots)
-                    svc.save_slots(session_id, updated)
-                    logger.info(f"[SLOTS] goods_no saved from {tool_name} input: {input_goods_no}")
-                except Exception as e:
-                    logger.warning(f"[SLOTS] Failed to save goods_no from tool input: {e}")
-
         fields = tool_slot_extractors.get(tool_name)
-        if not fields:
-            return
+        if fields:
+            data = parsed_data.get("data", parsed_data)
+            if isinstance(data, dict) and "items" in data:
+                items = data["items"]
+                data = items[0] if isinstance(items, list) and len(items) == 1 else None
+            elif isinstance(data, dict) and "stores" in data:
+                stores = data["stores"]
+                data = stores[0] if isinstance(stores, list) and len(stores) == 1 else None
 
-        # Extract values from tool result data
-        tool_slots = {}
-        data = parsed_data.get("data", parsed_data)
+            if isinstance(data, dict):
+                for field in fields:
+                    val = data.get(field)
+                    if val:
+                        tool_slots[field] = val
 
-        # Handle list results (e.g., search results) — only auto-fill if exactly 1 item
-        if isinstance(data, dict) and "items" in data:
-            items = data["items"]
-            if isinstance(items, list) and len(items) == 1:
-                data = items[0]
-            else:
-                return  # Multiple or no results — don't auto-fill
-        elif isinstance(data, dict) and "stores" in data:
-            stores = data["stores"]
-            if isinstance(stores, list) and len(stores) == 1:
-                data = stores[0]
-            else:
-                return
+        if tool_slots:
+            updated = slots.merge(ConversationSlots(**tool_slots))
+            if updated.model_dump() != slots.model_dump():
+                slots.__dict__.update(updated.__dict__)
+                changed = True
+                logger.debug(f"[SLOTS] Tool-derived slots staged from {tool_name}: {tool_slots}")
 
-        for field in fields:
-            val = data.get(field) if isinstance(data, dict) else None
-            if val:
-                tool_slots[field] = val
-
-        if not tool_slots:
-            return
-
-        try:
-            svc = get_chat_history_service()
-            current_slots = svc.get_slots(session_id)
-            new_slots = ConversationSlots(**tool_slots)
-            updated = current_slots.merge(new_slots)
-            svc.save_slots(session_id, updated)
-            logger.info(f"[SLOTS] Tool-derived slots saved from {tool_name}: {tool_slots}")
-        except Exception as e:
-            logger.warning(f"[SLOTS] Failed to save tool-derived slots: {e}")
+        return changed
 
     def stream(
         self,
@@ -767,6 +991,10 @@ class StreamingMultiAgentCoordinator:
         parent_span_id: str | None = None,
         skip_decision: bool = False,
         slot_context_with_intent: str | None = None,
+        classify_future: concurrent.futures.Future | None = None,
+        speculative_guard: dict | None = None,
+        routing_result: MultiAgentDomain | None = None,
+        initial_slots: Any | None = None,
     ) -> Iterator[dict]:
         """
         Chain multiple agents and stream their outputs.
@@ -795,8 +1023,6 @@ class StreamingMultiAgentCoordinator:
         Yields:
             Stream events from all agents in sequence
         """
-        from config.tracing import build_trace_config
-
         # Classify if domains not provided
         # Save original messages before CONVERSATION CONTEXT injection for UI Template Agent
         original_messages = list(messages)
@@ -813,16 +1039,23 @@ class StreamingMultiAgentCoordinator:
         if not domains:
             domains = [MultiAgentDomain.Domain.LEADING]
 
-        logger.info(f"[COORDINATOR] Streaming for domains: {[d.value for d in domains]}")
+        logger.debug(f"[COORDINATOR] Streaming for domains: {[d.value for d in domains]}")
 
         accumulated_context = {}
         accumulated_tool_data = []  # Collect tool outputs for UI Template Agent
         domain_data_event_emitted = False  # Domain agent emitted a `data` event itself
+        pending_slots = initial_slots.model_copy() if initial_slots is not None else None
+        pending_slots_dirty = False
 
         is_first_agent = True
+        decision_verify_future: concurrent.futures.Future | None = None
+        decision_guard: dict | None = None
+        active_routing_result = routing_result
+        if active_routing_result is None:
+            active_routing_result = self._resolve_routing_for_agent_profile(classify_future, domains)
 
         for domain in domains:
-            agent = self.agent_map.get(domain)
+            agent = self._select_agent(domain, active_routing_result)
             if not agent:
                 logger.warning(f"[COORDINATOR] No agent found for domain: {domain}")
                 continue
@@ -882,7 +1115,7 @@ class StreamingMultiAgentCoordinator:
                                 ),
                             }
                         )
-                        logger.info(f"[COORDINATOR] Passing context to {domain.value}")
+                        logger.debug(f"[COORDINATOR] Passing context to {domain.value}")
                         break  # Only take first previous agent
 
             # 4. Append accumulated_tool_data LAST (for UI Template Agent)
@@ -899,80 +1132,314 @@ class StreamingMultiAgentCoordinator:
                         if qty_match:
                             ord_qty = int(qty_match.group(1))
                             accumulated_tool_data.append({"tool": "user_intent", "data": {"ord_qty": ord_qty}})
-                            logger.info(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
+                            logger.debug(f"[COORDINATOR] Extracted ord_qty={ord_qty} from user message")
 
-                tool_summary = json.dumps(accumulated_tool_data, ensure_ascii=False, indent=2)
+                llm_tool_data = StreamingMultiAgentCoordinator._compact_tool_results_for_llm(accumulated_tool_data)
+                tool_summary = json.dumps(llm_tool_data, ensure_ascii=False, separators=(",", ":"))
                 enriched_messages.append(
-                    {"role": "assistant", "content": f"[Previous agent tool results]\n{tool_summary}"}
+                    {"role": "assistant", "content": f"[Previous agent tool facts]\n{tool_summary}"}
                 )
-                logger.info(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
+                logger.debug(f"[COORDINATOR] Passing {len(accumulated_tool_data)} tool results to {domain.value}")
 
             domain_key = domain.value
-            logger.info(
-                f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
-            )
+            # logger.debug(
+            #     f"[COORDINATOR_MESSAGE] Domain: {domain_key}, enriched_messages: {json.dumps(enriched_messages, ensure_ascii=False, indent=2)}"
+            # )
+
+            speculative_buffer: list[dict] = []
+            active_speculative_guard = speculative_guard or decision_guard
+            classifier_done = threading.Event()
+            classifier_result: tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None] | None = None
+            restart_routing_result: MultiAgentDomain | None = None
+
+            if classify_future is not None:
+                def _on_classify_done(future: concurrent.futures.Future):
+                    nonlocal classifier_result
+                    classified_domains, routing = future.result()
+                    classifier_result = (_normalize_domains(classified_domains), routing)
+                    classifier_done.set()
+
+                classify_future.add_done_callback(_on_classify_done)
+
+            def _flush_speculative_buffer() -> Iterator[dict]:
+                nonlocal speculative_buffer
+                yield from speculative_buffer
+                speculative_buffer = []
+
+            def _buffer_or_emit(evt: dict) -> Iterator[dict]:
+                if classify_future is None:
+                    yield evt
+                    return
+                speculative_buffer.append(evt)
+
+            def _verify_speculative_branch() -> tuple[bool, list[MultiAgentDomain.Domain], MultiAgentDomain | None]:
+                nonlocal classify_future, classifier_result
+                if classify_future is None:
+                    return True, domains, None
+                if classifier_result is None:
+                    classified_domains, routing = classify_future.result()
+                    classifier_result = (_normalize_domains(classified_domains), routing)
+                classify_future = None
+                verified_domains, routing_result = classifier_result
+                return _domains_equal(verified_domains, domains), verified_domains, routing_result
+
+            def _wait_for_speculative_confirmation() -> bool:
+                is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                if is_match:
+                    if speculative_guard:
+                        speculative_guard["confirm_event"].set()
+                    return True
+                if speculative_guard:
+                    speculative_guard["mismatch_domains"] = verified_domains
+                    speculative_guard["routing_result"] = verified_routing_result
+                return False
 
             # Yield agent start event
-            yield {
+            yield from _buffer_or_emit({
                 "type": "sub-agent",
                 "agent": f"[{domain_key.upper()} AGENT]",
                 "status": "start",
-            }
+            })
 
-            # Stream from agent and yield events immediately
+            # Stream from agent and yield events immediately after speculation is confirmed
             full_response = ""
             last_agent_called_tools = False
-            agent_trace_config = build_trace_config(
-                run_name=f"{domain_key}_agent",
-                session_id=session_id,
-                user_id=user_id,
+            agent_tools_called: list[str] = []
+            agent_declared_decision: AgentDecision | None = None
+            restart_domains: list[MultiAgentDomain.Domain] | None = None
+
+            # Last user message becomes the agent span's input — keeps the
+            # trace readable instead of dumping the entire enriched_messages
+            # array (which includes slot/tool context blocks).
+            _agent_input_msg = next(
+                (m.get("content", "") for m in reversed(enriched_messages) if m.get("role") == "user"),
+                "",
+            )
+            _agent_prompt_chars = getattr(agent, "system_prompt_chars", 0)
+            _agent_input_chars = sum(len(str(m.get("content", ""))) for m in enriched_messages)
+            _agent_message_count = len(enriched_messages)
+            _agent_started_at = time.perf_counter()
+            _agent_first_tool_ms: float | None = None
+            _agent_first_visible_ms: float | None = None
+            _agent_first_token_ms: float | None = None
+            _agent_first_data_ms: float | None = None
+
+            with _trace_span(
+                f"agent:{domain_key}",
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
-                tags=[domain_key, "agent"],
-            )
-            for event in agent.stream(enriched_messages, config=agent_trace_config):
-                # Tag with source domain for UI
-                event["source_domain"] = domain_key
-                yield event
+                input=_agent_input_msg,
+            ) as _agent_span:
+                # Nest LangChain auto-captured spans (LLM generations, tools)
+                # under this manual agent span. Falls back to the chat root
+                # when tracing is disabled (span.id is None).
+                agent_trace_config = build_trace_config(
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    parent_span_id=_agent_span.id or parent_span_id,
+                    tags=[domain_key, "agent"],
+                    prompt_name=f"{domain_key}_agent",
+                    run_name=f"💭 {domain_key}_agent",
+                )
+                if active_speculative_guard:
+                    if active_speculative_guard is speculative_guard:
+                        active_speculative_guard["wait_for_confirmation"] = _wait_for_speculative_confirmation
+                    agent_trace_config.setdefault("configurable", {})["speculative_tool_guard"] = active_speculative_guard
+                for event in agent.stream(enriched_messages, config=agent_trace_config):
+                    _elapsed_ms = (time.perf_counter() - _agent_started_at) * 1000
+                    if speculative_buffer and active_speculative_guard and active_speculative_guard["confirm_event"].is_set():
+                        yield from _flush_speculative_buffer()
+                    if classify_future is not None and classifier_done.is_set():
+                        is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                        if is_match:
+                            logger.debug(
+                                "[COORDINATOR] speculative confirmed: %s — flushing %d events",
+                                [d.value for d in verified_domains],
+                                len(speculative_buffer),
+                            )
+                            if speculative_guard:
+                                speculative_guard["confirm_event"].set()
+                            yield from _flush_speculative_buffer()
+                        else:
+                            logger.debug(
+                                "[COORDINATOR] speculative mismatch during %s: predicted=%s classify=%s",
+                                domain.value,
+                                [d.value for d in domains],
+                                [d.value for d in verified_domains],
+                            )
+                            restart_domains = verified_domains
+                            restart_routing_result = verified_routing_result
+                            break
 
-                # Track direct data events emitted by the domain agent (JSON output).
-                # When present, skip the UI Template stage below.
-                if event.get("type") == "data":
-                    domain_data_event_emitted = True
+                    # Tag with source domain for UI
+                    event["source_domain"] = domain_key
+                    event_type = event.get("type")
+                    if (
+                        _agent_first_visible_ms is None
+                        and (
+                            event_type == "data"
+                            or (event_type in {"token", "message"} and bool(event.get("content")))
+                        )
+                    ):
+                        _agent_first_visible_ms = _elapsed_ms
+                    if _agent_first_token_ms is None and event_type == "token" and event.get("content"):
+                        _agent_first_token_ms = _elapsed_ms
+                    if _agent_first_data_ms is None and event_type == "data":
+                        _agent_first_data_ms = _elapsed_ms
 
-                # Capture message content for context passing
-                if event.get("type") == "message":
-                    content = event.get("content", "")
-                    if content:
-                        accumulated_context[domain_key] = content
-                        full_response = content
-                        logger.info(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
+                    # Track direct data events emitted by the domain agent (JSON output).
+                    # When present, skip the UI Template stage below.
+                    if event_type == "data":
+                        domain_data_event_emitted = True
+                        parsed_decision = _parse_agent_declared_next_action(event.pop("nextAction", None))
+                        if parsed_decision is not None:
+                            agent_declared_decision = parsed_decision
+                            logger.debug(
+                                "[COORDINATOR] Agent-declared nextAction accepted: %s -> %s",
+                                parsed_decision.next_action.value,
+                                parsed_decision.next_domain,
+                            )
+                    yield from _buffer_or_emit(event)
 
-                # Capture tool outputs for UI Template Agent
-                if event.get("type") == "tool":
-                    last_agent_called_tools = True
-                    tool_output = event.get("output", "")
-                    if tool_output:
-                        try:
-                            parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "input": event.get("input", {}),
-                                "data": parsed,
-                            })
+                    # Capture message content for context passing
+                    if event_type == "message":
+                        content = event.get("content", "")
+                        if content:
+                            accumulated_context[domain_key] = content
+                            full_response = content
+                            logger.debug(f"[COORDINATOR] Captured message for {domain_key}: {content}...")
 
-                            # Persist tool-derived goods_no, shop_id, and tire_size to slots
-                            if session_id and isinstance(parsed, dict):
-                                self._save_tool_derived_slots(
-                                    session_id, event.get("tool", ""), parsed, event.get("input", {})
-                                )
+                    # Capture tool outputs for UI Template Agent
+                    if event_type == "tool":
+                        if _agent_first_tool_ms is None:
+                            _agent_first_tool_ms = _elapsed_ms
+                        last_agent_called_tools = True
+                        tool_name = event.get("tool", "")
+                        if tool_name:
+                            agent_tools_called.append(tool_name)
+                        tool_output = event.get("output", "")
+                        if tool_output:
+                            try:
+                                parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                                accumulated_tool_data.append({
+                                    "tool": tool_name,
+                                    "input": event.get("input", {}),
+                                    "data": parsed,
+                                })
 
-                        except (json.JSONDecodeError, TypeError):
-                            accumulated_tool_data.append({
-                                "tool": event.get("tool", ""),
-                                "input": event.get("input", {}),
-                                "data": tool_output,
-                            })
+                                # Stage tool-derived slot changes in memory; persist once after streaming.
+                                if pending_slots is not None and isinstance(parsed, dict):
+                                    pending_slots_dirty = self._apply_tool_derived_slots(
+                                        pending_slots, tool_name, parsed, event.get("input", {})
+                                    ) or pending_slots_dirty
+
+                            except (json.JSONDecodeError, TypeError):
+                                accumulated_tool_data.append({
+                                    "tool": tool_name,
+                                    "input": event.get("input", {}),
+                                    "data": tool_output,
+                                })
+
+                # One-line story summary leads the dict so Langfuse's tree preview
+                # reads like "discovery → search_product_tool, get_product_description_tool → data".
+                _tools_label = ", ".join(agent_tools_called) if agent_tools_called else "no tools"
+                _data_label = "data" if domain_data_event_emitted else "text"
+                _agent_summary = f"{domain_key} → {_tools_label} → {_data_label}"
+                _agent_total_ms = (time.perf_counter() - _agent_started_at) * 1000
+                logger.debug(
+                    "[AGENT_METRICS] domain=%s total_ms=%.0f first_visible_ms=%s first_tool_ms=%s "
+                    "first_token_ms=%s first_data_ms=%s prompt_chars=%d input_chars=%d messages=%d tools=%d",
+                    domain_key,
+                    _agent_total_ms,
+                    f"{_agent_first_visible_ms:.0f}" if _agent_first_visible_ms is not None else "n/a",
+                    f"{_agent_first_tool_ms:.0f}" if _agent_first_tool_ms is not None else "n/a",
+                    f"{_agent_first_token_ms:.0f}" if _agent_first_token_ms is not None else "n/a",
+                    f"{_agent_first_data_ms:.0f}" if _agent_first_data_ms is not None else "n/a",
+                    _agent_prompt_chars,
+                    _agent_input_chars,
+                    _agent_message_count,
+                    len(agent_tools_called),
+                )
+                _agent_span.update(
+                    output=_truncate({
+                        "summary": _agent_summary,
+                        "response": full_response,
+                        "tools_called": agent_tools_called,
+                        "data_event_emitted": domain_data_event_emitted,
+                        "metrics": {
+                            "total_ms": round(_agent_total_ms, 1),
+                            "first_visible_ms": round(_agent_first_visible_ms, 1)
+                            if _agent_first_visible_ms is not None else None,
+                            "first_tool_ms": round(_agent_first_tool_ms, 1)
+                            if _agent_first_tool_ms is not None else None,
+                            "first_token_ms": round(_agent_first_token_ms, 1)
+                            if _agent_first_token_ms is not None else None,
+                            "first_data_ms": round(_agent_first_data_ms, 1)
+                            if _agent_first_data_ms is not None else None,
+                            "system_prompt_chars": _agent_prompt_chars,
+                            "input_chars": _agent_input_chars,
+                            "message_count": _agent_message_count,
+                        },
+                    }),
+                )
+
+            if restart_domains is None and speculative_guard and speculative_guard.get("mismatch_domains"):
+                restart_domains = speculative_guard.get("mismatch_domains")
+                restart_routing_result = speculative_guard.get("routing_result")
+                logger.debug(
+                    "[COORDINATOR] speculative mismatch before mutating tool: predicted=%s classify=%s",
+                    [d.value for d in domains],
+                    [d.value for d in restart_domains],
+                )
+
+            if restart_domains is None and classify_future is not None:
+                is_match, verified_domains, verified_routing_result = _verify_speculative_branch()
+                if is_match:
+                    if speculative_guard:
+                        speculative_guard["confirm_event"].set()
+                    logger.debug(
+                        "[COORDINATOR] speculative confirmed after %s finished — flushing %d events",
+                        domain.value,
+                        len(speculative_buffer),
+                    )
+                    yield from _flush_speculative_buffer()
+                else:
+                    restart_domains = verified_domains
+                    restart_routing_result = verified_routing_result
+                    logger.debug(
+                        "[COORDINATOR] speculative mismatch after %s finished: predicted=%s classify=%s",
+                        domain.value,
+                        [d.value for d in domains],
+                        [d.value for d in restart_domains],
+                    )
+
+            if restart_domains:
+                if speculative_guard:
+                    speculative_guard["confirm_event"].set()
+                restart_messages = StreamingMultiAgentCoordinator._inject_conversation_context(
+                    original_messages, restart_routing_result
+                )
+                logger.debug(
+                    "[COORDINATOR] discarding speculative %s branch; restarting with %s",
+                    domain.value,
+                    [d.value for d in restart_domains],
+                )
+                yield from self.stream(
+                    messages=restart_messages,
+                    domains=restart_domains,
+                    slot_context=slot_context,
+                    session_id=session_id,
+                    tool_context=tool_context,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    parent_span_id=parent_span_id,
+                    skip_decision=skip_decision,
+                    slot_context_with_intent=slot_context_with_intent,
+                    routing_result=restart_routing_result,
+                    initial_slots=pending_slots,
+                )
+                return
 
             # Yield agent completion event
             yield {
@@ -981,12 +1448,30 @@ class StreamingMultiAgentCoordinator:
                 "status": "done",
             }
 
+            if decision_verify_future is not None and decision_verify_future.done():
+                verified_decision = decision_verify_future.result()
+                mismatch_decision = decision_guard.get("mismatch_decision") if decision_guard else None
+                if mismatch_decision is None:
+                    logger.debug(
+                        "[COORDINATOR] planner verifier confirmed in background: %s -> %s",
+                        verified_decision.next_action,
+                        verified_decision.next_domain,
+                    )
+                else:
+                    logger.warning(
+                        "[COORDINATOR] planner verifier mismatch after speculative continuation: %s -> %s",
+                        mismatch_decision.next_action,
+                        mismatch_decision.next_domain,
+                    )
+                decision_verify_future = None
+                decision_guard = None
+
             # LLM Decision: After first agent, use LLM to decide next action
             # Support domain rarely chains to other agents — skip LLM decision to save ~300ms
             if is_first_agent:
                 is_first_agent = False
                 if domain == MultiAgentDomain.Domain.SUPPORT:
-                    logger.info("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
+                    logger.debug("[COORDINATOR] Support domain — skipping LLM decision, stopping chain")
                     break
 
                 # Caller pre-committed the chain (e.g., P0 auto-chain code gate) —
@@ -994,37 +1479,33 @@ class StreamingMultiAgentCoordinator:
                 # directly to the next domain in `domains`.
                 #
                 # BUT: only proceed if Discovery actually resolved a single goods_no.
-                # `_save_tool_derived_slots` (search_product_tool extractor) only
-                # writes goods_no to slots when the tool returns exactly 1 item;
+                # `_apply_tool_derived_slots` (search_product_tool extractor) only
+                # stages goods_no when the tool returns exactly 1 item;
                 # 0/multiple-result cases leave goods_no=None and Discovery is
                 # already in clarification/selection mode. Chaining Transaction on
                 # top would produce a contradictory "상품 검색이 필요합니다" fallback.
                 if skip_decision and len(domains) >= 2:
-                    goods_no_resolved = False
-                    if session_id:
-                        try:
-                            from services.tstation.chat_history_service import get_chat_history_service
-
-                            post_slots = get_chat_history_service().get_slots(session_id)
-                            goods_no_resolved = post_slots.goods_no is not None
-                        except Exception as e:
-                            logger.warning(f"[COORDINATOR] Failed to verify goods_no post-Discovery: {e}")
+                    goods_no_resolved = pending_slots is not None and pending_slots.goods_no is not None
                     if not goods_no_resolved:
-                        logger.info(
+                        logger.debug(
                             "[COORDINATOR] skip_decision=True but Discovery did not resolve "
                             "goods_no (0 or multiple results) — stopping chain"
                         )
                         break
-                    logger.info(
+                    logger.debug(
                         "[COORDINATOR] skip_decision=True — proceeding to next domain "
                         f"({domains[1].value}) without LLM decision"
                     )
                     continue
 
                 # Agent already produced a complete UI payload — decide_next_action
-                # would return STOP anyway (its prompt: "ONLY CONTINUE when agent cannot complete the task").
-                if domain_data_event_emitted:
-                    logger.info("[COORDINATOR] Data event emitted — skipping decide_next_action")
+                # would return STOP anyway. Keep multi-domain planner/nextAction paths active.
+                if (
+                    domain_data_event_emitted
+                    and agent_declared_decision is None
+                    and self._planner_decision(domains, routing_result, domain) is None
+                ):
+                    logger.debug("[COORDINATOR] Data event emitted — skipping decide_next_action")
                     break
 
                 # P1-B stall recovery (LAST RESORT): when domains was [TRANSACTION]
@@ -1054,15 +1535,7 @@ class StreamingMultiAgentCoordinator:
                     and not last_agent_called_tools
                     and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요", full_response or "")
                 ):
-                    goods_no_still_none = True
-                    if session_id:
-                        try:
-                            from services.tstation.chat_history_service import get_chat_history_service
-
-                            post_slots = get_chat_history_service().get_slots(session_id)
-                            goods_no_still_none = post_slots.goods_no is None
-                        except Exception as e:
-                            logger.warning(f"[COORDINATOR] P1-B slot check failed: {e}")
+                    goods_no_still_none = pending_slots is None or pending_slots.goods_no is None
                     if goods_no_still_none:
                         logger.warning(
                             "[COORDINATOR] P1-B stall recovery: TX-only emitted "
@@ -1105,15 +1578,7 @@ class StreamingMultiAgentCoordinator:
                         full_response or "",
                     )
                 ):
-                    goods_no_set = False
-                    if session_id:
-                        try:
-                            from services.tstation.chat_history_service import get_chat_history_service
-
-                            post_slots = get_chat_history_service().get_slots(session_id)
-                            goods_no_set = post_slots.goods_no is not None
-                        except Exception as e:
-                            logger.warning(f"[COORDINATOR] P1-D slot check failed: {e}")
+                    goods_no_set = pending_slots is not None and pending_slots.goods_no is not None
                     if goods_no_set:
                         logger.warning(
                             "[COORDINATOR] P1-D stall recovery: DISCOVERY-only emitted "
@@ -1124,19 +1589,69 @@ class StreamingMultiAgentCoordinator:
                         skip_decision = True
                         continue
 
-                decision = decide_next_action(
-                    original_messages=messages,
-                    previous_agent_response=full_response,
-                    previous_domain=domain_key,
-                    session_id=session_id,
-                    user_id=user_id,
-                    trace_id=trace_id,
-                    parent_span_id=parent_span_id,
-                )
-                logger.info(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
+                planner_decision = self._planner_decision(domains, routing_result, domain)
+                if agent_declared_decision is not None:
+                    decision = agent_declared_decision
+                    logger.debug(
+                        "[COORDINATOR] Using agent-declared nextAction: %s - %s",
+                        decision.next_action,
+                        decision.reason,
+                    )
+                elif planner_decision is not None:
+                    decision = planner_decision
+                    logger.debug(
+                        "[COORDINATOR] Using planner execution_plan: %s - %s",
+                        decision.next_action,
+                        decision.reason,
+                    )
+                    if decision.next_action == NextAction.CONTINUE and decision.next_domain:
+                        decision_guard = {
+                            "confirm_event": threading.Event(),
+                            "mutating_tools": _SPECULATIVE_MUTATING_TOOLS,
+                        }
+
+                        def _verify_planner_decision() -> AgentDecision:
+                            llm_decision = decide_next_action(
+                                original_messages=messages,
+                                previous_agent_response=full_response,
+                                previous_domain=domain_key,
+                                session_id=session_id,
+                                user_id=user_id,
+                                trace_id=trace_id,
+                                parent_span_id=parent_span_id,
+                            )
+                            planned_domain = decision.next_domain.lower()
+                            verified_domain = (llm_decision.next_domain or "").lower()
+                            verified = (
+                                llm_decision.next_action == decision.next_action
+                                and verified_domain == planned_domain
+                            )
+                            if verified:
+                                decision_guard["confirm_event"].set()
+                            else:
+                                decision_guard["mismatch_decision"] = llm_decision
+                            return llm_decision
+
+                        def _wait_for_decision_verifier() -> bool:
+                            decision_verify_future.result()
+                            return decision_guard["confirm_event"].is_set()
+
+                        decision_guard["wait_for_confirmation"] = _wait_for_decision_verifier
+                        decision_verify_future = _decision_verify_executor.submit(_verify_planner_decision)
+                else:
+                    decision = decide_next_action(
+                        original_messages=messages,
+                        previous_agent_response=full_response,
+                        previous_domain=domain_key,
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        parent_span_id=parent_span_id,
+                    )
+                    logger.debug(f"[COORDINATOR] LLM Decision: {decision.next_action} - {decision.reason}")
 
                 if decision.next_action == NextAction.STOP or not decision.next_domain:
-                    logger.info("[COORDINATOR] Stopping multi-agent chain")
+                    logger.debug("[COORDINATOR] Stopping multi-agent chain")
                     break
 
                 # Map next_domain string to enum
@@ -1163,7 +1678,7 @@ class StreamingMultiAgentCoordinator:
         _has_relevant_tool_data = accumulated_tool_data and (_has_qna or _has_non_support_data)
         assistant_text = next((c for c in reversed(list(accumulated_context.values())) if c and c.strip()), "")
         if domain_data_event_emitted:
-            logger.info("[COORDINATOR] Domain agent emitted data event — skipping UI Template Agent")
+            logger.debug("[COORDINATOR] Domain agent emitted data event — skipping UI Template Agent")
         elif _has_agent_response and (_no_tools_called or _has_relevant_tool_data):
             trigger_reason = f"{len(accumulated_tool_data)} tool outputs"
             logger.warning(
@@ -1180,6 +1695,9 @@ class StreamingMultiAgentCoordinator:
                 "source_domain": domain_key if "domain_key" in locals() else "ui_template",
             }
 
+        if pending_slots_dirty and pending_slots is not None:
+            yield {"type": "internal_slots", "slots": pending_slots}
+
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
 
@@ -1195,7 +1713,6 @@ _INTERNAL_JARGON_PATTERN = re.compile(
     r"No tool data retrieved|tool data|source data",
     re.IGNORECASE,
 )
-
 
 # ---------------------------------------------------------------------------
 # Rule-Based Routing — fast-path classifier (no LLM call)
@@ -1229,6 +1746,10 @@ _TRANSACTION_FAST_RE = re.compile(
 # in slots.py's GOAL_PLANS appear here; mismatches simply fall through to the
 # next classifier.
 _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
+    # product_search: bare product-keyword turn (no transactional intent, no
+    # recommend verb). Goal completes when goods_no resolves; until then the
+    # search step lives in Discovery (search_product_tool).
+    ("product_search", "search"): MultiAgentDomain.Domain.DISCOVERY,
     # store_with_stock: model/size live in Discovery (search_product_tool),
     # qty/shop in Transaction (qty quickReply + store search).
     ("store_with_stock", "model"): MultiAgentDomain.Domain.DISCOVERY,
@@ -1244,6 +1765,11 @@ _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
     ("place_order", "size"): MultiAgentDomain.Domain.DISCOVERY,
     ("place_order", "qty"): MultiAgentDomain.Domain.TRANSACTION,
     ("place_order", "shop"): MultiAgentDomain.Domain.TRANSACTION,
+    # store_finder: pure store search. region is the only checklist step.
+    # Missing region → Transaction asks (with quickReply chips); the
+    # user_preferences_text slot persists across the clarification turn so
+    # the criteria carry into the completion step (see _GOAL_COMPLETE_DOMAIN).
+    ("store_finder", "region"): MultiAgentDomain.Domain.TRANSACTION,
 }
 
 # Where to route when every checklist step is satisfied — final tool call lives
@@ -1253,6 +1779,9 @@ _GOAL_COMPLETE_DOMAIN: "dict[str, MultiAgentDomain.Domain]" = {
     "store_with_stock": MultiAgentDomain.Domain.TRANSACTION,
     "price_inquiry": MultiAgentDomain.Domain.TRANSACTION,
     "place_order": MultiAgentDomain.Domain.TRANSACTION,
+    # store_finder: once region is filled, Transaction runs the store search
+    # and applies the captured user_preferences_text (if any) to filter/rank.
+    "store_finder": MultiAgentDomain.Domain.TRANSACTION,
 }
 
 # When the user's latest turn signals a deliberate pivot away from the persisted
@@ -1265,6 +1794,77 @@ _GOAL_SWITCH_RE = re.compile(r"다른|새로|이번엔|바꿔|이전\s*추천\s*
 # code (useful if downstream telemetry shows mis-routes; the LLM classifier
 # remains the safety net regardless).
 _GOAL_FAST_PATH_ENABLED = True
+
+
+_SPECULATIVE_UNSAFE_DOMAINS = set()
+_SPECULATIVE_MUTATING_TOOLS = {
+    "quick_order_tool",
+    "save_to_cart_tool",
+    "issue_coupon_tool",
+    "escalate_tool",
+    "transfer_to_qna_tool",
+}
+
+
+def _normalize_domains(domains: "list[MultiAgentDomain.Domain] | None") -> list[MultiAgentDomain.Domain]:
+    if not domains:
+        return [MultiAgentDomain.Domain.LEADING]
+    normalized = []
+    for domain in domains:
+        if domain not in normalized:
+            normalized.append(domain)
+    return normalized or [MultiAgentDomain.Domain.LEADING]
+
+
+def _domains_equal(left: "list[MultiAgentDomain.Domain] | None", right: "list[MultiAgentDomain.Domain] | None") -> bool:
+    return _normalize_domains(left) == _normalize_domains(right)
+
+
+def _domains_from_strings(values: list[str]) -> "list[MultiAgentDomain.Domain] | None":
+    domain_map = {domain.value: domain for domain in MultiAgentDomain.Domain}
+    domains = []
+    for value in values:
+        domain = domain_map.get(str(value).upper())
+        if domain is not None and domain not in domains:
+            domains.append(domain)
+    return domains or None
+
+
+def _dedupe_domain_values(values: list[str]) -> list[str]:
+    deduped = []
+    for value in values:
+        domain = str(value).upper()
+        if domain in _VALID_CHIP_DOMAINS and domain not in deduped:
+            deduped.append(domain)
+    return deduped
+
+
+def _quick_reply_domain_values_from_event(event: dict) -> list[str]:
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return []
+    quick_replies = event_data.get("quickReplies")
+    if not isinstance(quick_replies, list):
+        return []
+    return _dedupe_domain_values([
+        str(item.get("domain", "")).upper()
+        for item in quick_replies
+        if isinstance(item, dict)
+    ])
+
+
+def _predicted_domain_values_from_event(event: dict) -> list[str]:
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return []
+    predicted = event_data.get("predictedDomains") or event_data.get("predicted_domains")
+    if not isinstance(predicted, list):
+        return []
+    return _dedupe_domain_values([str(item).upper() for item in predicted])
+
+
+def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> bool:
+    return bool(domains) and not any(domain in _SPECULATIVE_UNSAFE_DOMAINS for domain in domains)
 
 
 def _goal_based_classify(
@@ -1291,7 +1891,7 @@ def _goal_based_classify(
         return None
 
     if last_user_text and _GOAL_SWITCH_RE.search(last_user_text):
-        logger.info("[GOAL_ROUTER] goal-switch keyword in text — falling through")
+        logger.debug("[GOAL_ROUTER] goal-switch keyword in text — falling through")
         return None
 
     next_step_id = merged_slots.next_goal_step_id()
@@ -1299,14 +1899,35 @@ def _goal_based_classify(
     if next_step_id is None:
         domain = _GOAL_COMPLETE_DOMAIN.get(goal_type)
         if domain is not None:
-            logger.info(f"[GOAL_ROUTER] goal={goal_type} all steps done → {domain.value}")
+            logger.debug(f"[GOAL_ROUTER] goal={goal_type} all steps done → {domain.value}")
             return [domain]
         return None
 
     domain = _GOAL_NEXT_STEP_DOMAIN.get((goal_type, next_step_id))
     if domain is not None:
-        logger.info(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
+        logger.debug(f"[GOAL_ROUTER] goal={goal_type} next_step={next_step_id} → {domain.value}")
         return [domain]
+    return None
+
+
+def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
+    """Always-on SUPPORT fast-path for unambiguous escalation/policy keywords.
+
+    DECISION_LLM (small QC-tier model) has been observed to mis-route
+    '상담사 연결' / '상담원 연결' to LEADING — leaving LeadingAgent (which has
+    no transfer_to_qna_tool) to refuse the request and surface a "상담사 연결"
+    quickReply chip that, when tapped, loops back into the same refusal.
+
+    Bypass classification when an explicit support trigger is present so the
+    request always reaches SupportAgent's transfer_to_qna_tool. Independent of
+    `_RULE_BASED_ROUTING_ENABLED` so escalation cannot be silently disabled
+    alongside the broader rule-based path.
+    """
+    if not text:
+        return None
+    if _SUPPORT_FAST_RE.search(text):
+        logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
+        return [MultiAgentDomain.Domain.SUPPORT]
     return None
 
 
@@ -1336,22 +1957,22 @@ def _rule_based_classify(
 
     # Case 1: Pure greeting (short, no additional intent)
     if _GREETING_ONLY_RE.match(text):
-        logger.info("[RULE_ROUTER] Greeting fast-path → LEADING")
+        logger.debug("[RULE_ROUTER] Greeting fast-path → LEADING")
         return [MultiAgentDomain.Domain.LEADING]
 
     # Case 2: Clear support / escalation keywords
     if _SUPPORT_FAST_RE.search(text):
-        logger.info(f"[RULE_ROUTER] Support keyword fast-path → SUPPORT: {text[:60]!r}")
+        logger.debug(f"[RULE_ROUTER] Support keyword fast-path → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
 
     # Case 3: goods_no already in slots + transactional keyword in current turn
     if merged_slots.goods_no and _TRANSACTION_FAST_RE.search(text):
-        logger.info(f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION")
+        logger.debug(f"[RULE_ROUTER] goods_no={merged_slots.goods_no!r} in slots + transactional keyword → TRANSACTION")
         return [MultiAgentDomain.Domain.TRANSACTION]
 
     # Case 4: goods_no pattern directly written in user text + transactional keyword
     if re.search(r"G\d{9,}", text) and _TRANSACTION_FAST_RE.search(text):
-        logger.info("[RULE_ROUTER] goods_no literal in text + transactional keyword → TRANSACTION")
+        logger.debug("[RULE_ROUTER] goods_no literal in text + transactional keyword → TRANSACTION")
         return [MultiAgentDomain.Domain.TRANSACTION]
 
     return None
@@ -1367,48 +1988,109 @@ def _sanitize_response(text: str) -> str:
     return text
 
 
-_FACTUAL_CLAIM_PATTERN = re.compile(
-    r"\d{1,3}(?:,\d{3})*\s*원"  # 가격 (e.g. 150,000원)
-    r"|G\d{9,}"  # goods_no (e.g. GXXXXXXXXXXXX)
-    r"|shop(?:Seq|_id|Id)"  # 매장 ID
-    r"|재고|할인|%\s*할인"  # 재고/할인
-    r"|\d{3}/\d{2,3}[a-zA-Z]+\d{2}"  # 타이어 사이즈 (e.g. 225/40R18, 245/40ZR19)
-    r"|티스테이션\s*\S*점"  # 매장명 (e.g. 티스테이션 양평점, 티스테이션판교점)
-    r"|F\d{5}\b"  # shop_id (e.g. F01234)
-    r"|\d{4}\s*년"  # 연도 (e.g. 2025년)
-    r"|최신|신상|신제품|출시(?:일|연도|시기)?|등록\s*(?:일|상품|연도)"  # 시점/신제품 표현
-    r"|구형|구버전|이전\s*세대|차세대|신세대"  # 세대 비교
-    r"|\d+\s*세대|\d+\s*대\s*제품",  # n세대/n대 제품
-    re.IGNORECASE,
+
+_QC_REQUIRED_TOOLS = frozenset({
+    # Price, discount, promotion, coupon
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "get_my_coupons_tool",
+    "issue_coupon_tool",
+    "get_product_promotions_tool",
+    "get_product_applicable_events_tool",
+    "get_event_applicable_products_tool",
+    "get_deals_tool",
+    # Stock, store detail, schedule, purchase preview
+    "get_logistics_inventory_tool",
+    "get_store_inventory_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "transaction_store_preview_tool",
+    "get_store_detail_tool",
+    # Cart, order, order status
+    "save_to_cart_tool",
+    "quick_order_tool",
+    "get_order_status_tool",
+    "get_orders_of_user_tool",
+    # Product facts, fitment, policy/support answers
+    "check_compatibility_tool",
+    "search_product_tool",
+    "get_products_recommendations_tool",
+    "get_product_description_tool",
+    "get_best_selling_products_tool",
+    "get_faq_tool",
+    "search_faq_rag_tool",
+})
+_QC_SKIP_TEMPLATES = frozenset({"listCar", "qnaComplete", "datepick"})
+_TEMPLATE_QC_POLICY = {
+    "product": {"source": "code_mapper", "qc": "skip_default_response"},
+    "voucher": {"source": "code_mapper", "qc": "skip_default_response"},
+    "cheapestProduct": {"source": "code_mapper", "qc": "skip_default_response"},
+    "previewYoutube": {"source": "code_mapper", "qc": "skip_default_response"},
+    "location": {"source": "code_mapper", "qc": "skip_default_response"},
+    "datepick": {"source": "code_mapper", "qc": "skip_default_response"},
+    "listCar": {"source": "code_mapper", "qc": "skip_default_response"},
+    "qnaComplete": {"source": "code_mapper", "qc": "skip_default_response"},
+    # Path B: LLM writes the JSON; QC may correct field values.
+    "preOrder": {"source": "llm_json", "qc": "required"},
+    "orderComplete": {"source": "llm_json", "qc": "required"},
+}
+_QC_SKIP_CODE_MAPPED_TEMPLATES = frozenset(
+    template for template, policy in _TEMPLATE_QC_POLICY.items()
+    if policy["source"] == "code_mapper" and policy["qc"] == "skip_default_response"
 )
+_LLM_WRITTEN_TEMPLATES = frozenset(
+    template for template, policy in _TEMPLATE_QC_POLICY.items()
+    if policy["source"] == "llm_json"
+)
+# Valid domains a quick reply chip may declare for classifier skip
+_VALID_CHIP_DOMAINS = frozenset({"DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING"})
 
 
-def _has_factual_claims(text: str) -> bool:
-    """Check if draft contains factual commerce claims that need QC verification."""
-    return bool(_FACTUAL_CLAIM_PATTERN.search(text))
-
-
-# Tools whose output is a deterministic DB passthrough — agent cannot hallucinate facts.
-_QC_SKIP_TOOLS = frozenset({
-    "get_my_cars_tool",
-    "transfer_to_qna_tool",
-})
-
-# Templates that carry no LLM-interpreted facts (car list, QnA escalation).
-_QC_SKIP_TEMPLATES = frozenset({
-    "listCar",
-    "qnaComplete",
-    "datepick",
-})
-
-
-def _should_skip_qc(called_tool_names: set[str], last_template: str | None) -> bool:
-    """Return True when QC is provably unnecessary for this turn."""
+def _qc_skip_reason(
+    called_tool_names: set[str],
+    last_template: str | None,
+    template_source: str | None = None,
+    assistant_response_source: str | None = None,
+) -> str | None:
+    if (
+        template_source == "code_mapper"
+        and assistant_response_source == "default"
+        and last_template in _QC_SKIP_CODE_MAPPED_TEMPLATES
+    ):
+        return f"code_mapped_{last_template}"
     if last_template in _QC_SKIP_TEMPLATES:
-        return True
-    if called_tool_names and called_tool_names.issubset(_QC_SKIP_TOOLS):
-        return True
-    return False
+        return f"template_{last_template}"
+    if not bool(called_tool_names & _QC_REQUIRED_TOOLS):
+        return "no_qc_required_tools"
+    return None
+
+
+def _should_skip_qc(
+    called_tool_names: set[str],
+    last_template: str | None,
+    template_source: str | None = None,
+    assistant_response_source: str | None = None,
+) -> bool:
+    return _qc_skip_reason(
+        called_tool_names,
+        last_template,
+        template_source,
+        assistant_response_source,
+    ) is not None
+
+
+def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
+    """Returns (corrected_text, template_json | None)."""
+    if "[Template:" not in qc_result:
+        return qc_result, None
+    parts = qc_result.split("[Template:", 1)
+    corrected_text = parts[0].strip()
+    try:
+        newline_idx = parts[1].index("\n")
+        json_str = parts[1][newline_idx + 1:].strip()
+        return corrected_text, json.loads(json_str)
+    except (ValueError, json.JSONDecodeError):
+        return corrected_text, None
 
 
 # Singleton coordinator instance
@@ -1431,7 +2113,12 @@ _coordinator = StreamingMultiAgentCoordinator()
 _TEMPLATE_ENRICH_MAX_TURNS = 1
 
 
-def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -> list[dict]:
+def _enrich_messages_with_template_data(
+    messages: list[dict],
+    session_id: str,
+    *,
+    assistant_template_messages: list[dict] | None = None,
+) -> list[dict]:
     """Attach template_data from Redis to recent assistant card turns.
 
     Walks messages in reverse and enriches up to _TEMPLATE_ENRICH_MAX_TURNS
@@ -1443,14 +2130,22 @@ def _enrich_messages_with_template_data(messages: list[dict], session_id: str) -
     Token-context concerns are bounded by the cap; the BE-filtered
     tool_context (loaded as a separate system message) preserves additional
     older-turn structured data.
+
+    Pass `assistant_template_messages` to reuse already-fetched recent
+    assistant messages with template_data and skip the extra Redis round-trip.
     """
     if not session_id:
         return messages
 
     try:
-        from services.tstation.chat_history_service import get_chat_history_service
+        if assistant_template_messages is None:
+            from services.tstation.chat_history_service import get_chat_history_service
+            assistant_template_messages = (
+                get_chat_history_service()
+                .get_recent_assistant_messages_with_template_data(session_id, _TEMPLATE_ENRICH_MAX_TURNS)
+            )
 
-        redis_messages = get_chat_history_service().get_history(session_id)
+        redis_messages = assistant_template_messages
 
         # content -> template_data map. If two assistant turns share identical
         # content, the chronologically-latest template_data wins — acceptable
@@ -1600,7 +2295,7 @@ class TStationChatServiceV2:
             "",
         ]
 
-        for idx, item in enumerate(tool_data):
+        for idx, item in enumerate(tool_data[:3]):
             tool_name = item.get("tool", "")
             label = tool_labels.get(tool_name, tool_name)
             tool_input = item.get("input", {})
@@ -1615,22 +2310,155 @@ class TStationChatServiceV2:
             lines.append(header)
 
             if isinstance(data, list):
-                for i, row in enumerate(data, 1):
+                for i, row in enumerate(data[:5], 1):
                     if isinstance(row, dict):
                         if row.get("_truncated"):
                             lines.append(f"  ... {row['_truncated']}")
                         else:
                             row_str = " | ".join(f"{k}: {v}" for k, v in row.items())
-                            lines.append(f"  {i}. {row_str}")
+                            lines.append(f"  {i}. {row_str[:1000]}")
                     else:
                         lines.append(f"  {i}. {row}")
             elif isinstance(data, dict):
                 row_str = " | ".join(f"{k}: {v}" for k, v in data.items())
-                lines.append(f"  {row_str}")
+                lines.append(f"  {row_str[:1500]}")
 
             lines.append("")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _active_context_values(slots: Any) -> set[str]:
+        """Return stable confirmed identifiers used to prune prompt context.
+
+        This is data-based compaction, not intent/routing logic: it only keeps
+        facts that match already-confirmed IDs or sizes.
+        """
+        values = set()
+        for field in ("goods_no", "shop_id", "tire_size"):
+            value = getattr(slots, field, None)
+            if value is not None:
+                values.add(str(value))
+        return values
+
+    @staticmethod
+    def _value_contains_active_context(value: Any, active_values: set[str]) -> bool:
+        if not active_values:
+            return False
+        if isinstance(value, dict):
+            return any(
+                TStationChatServiceV2._value_contains_active_context(v, active_values)
+                for v in value.values()
+            )
+        if isinstance(value, list):
+            return any(TStationChatServiceV2._value_contains_active_context(v, active_values) for v in value)
+        text = str(value)
+        return any(active in text for active in active_values)
+
+    @staticmethod
+    def _compact_context_item(item: dict, active_values: set[str]) -> dict:
+        """Narrow list rows to confirmed IDs/sizes when possible."""
+        if not active_values:
+            return item
+        data = item.get("data")
+        if not isinstance(data, list):
+            return item
+
+        matched_rows = [
+            row
+            for row in data
+            if isinstance(row, dict)
+            and TStationChatServiceV2._value_contains_active_context(row, active_values)
+        ]
+        if not matched_rows:
+            return item
+
+        compacted = dict(item)
+        compacted["data"] = matched_rows
+        if len(matched_rows) < len(data):
+            compacted["data"].append(
+                {"_truncated": f"{len(data) - len(matched_rows)} non-active row(s) omitted"}
+            )
+        return compacted
+
+    @staticmethod
+    def _select_tool_context_for_prompt(
+        tool_data: list[dict],
+        slots: Any,
+        max_items: int = 3,
+    ) -> list[dict]:
+        """Select prompt context by confirmed data and recency.
+
+        Redis keeps the full tool context for deterministic resolvers. This
+        function only reduces what the LLM has to read in the current prompt.
+        """
+        if not tool_data:
+            return []
+
+        active_values = TStationChatServiceV2._active_context_values(slots)
+        selected: list[dict] = []
+        selected_ids: set[int] = set()
+
+        if active_values:
+            for item in tool_data:
+                if TStationChatServiceV2._value_contains_active_context(item, active_values):
+                    selected.append(TStationChatServiceV2._compact_context_item(item, active_values))
+                    selected_ids.add(id(item))
+                    if len(selected) >= max_items:
+                        break
+
+        for item in tool_data:
+            if len(selected) >= max_items:
+                break
+            if id(item) in selected_ids:
+                continue
+            selected.append(item)
+
+        return selected
+
+    @staticmethod
+    def _messages_chars(messages: list[dict]) -> int:
+        """Count text chars in message contents for prompt-size observability."""
+        total = 0
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                total += len(content)
+            else:
+                total += len(str(content))
+        return total
+
+    @staticmethod
+    def _is_user_context_message(message: dict) -> bool:
+        """Identify injected user profile context that does not help domain classification."""
+        content = message.get("content", "")
+        return isinstance(content, str) and content.startswith("## USER CONTEXT INFORMATION")
+
+    @staticmethod
+    def _compact_messages_for_classifier(
+        messages: list[dict],
+        max_messages: int = 6,
+        max_chars: int = 6000,
+    ) -> list[dict]:
+        """Build a smaller message view for the router LLM only.
+
+        Domain classification needs recent conversation shape and the current
+        user request. The full agent prompt still receives the unmodified
+        messages, but the classifier should not pay for user-profile blocks or
+        stale long history.
+        """
+        candidates = [
+            dict(message)
+            for message in messages
+            if not TStationChatServiceV2._is_user_context_message(message)
+        ]
+        if not candidates:
+            return [dict(message) for message in messages[-1:]]
+
+        selected = candidates[-max_messages:]
+        while len(selected) > 1 and TStationChatServiceV2._messages_chars(selected) > max_chars:
+            selected = selected[1:]
+        return selected
 
     @staticmethod
     def _resolve_goods_no_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
@@ -1650,12 +2478,12 @@ class TStationChatServiceV2:
           3. Multiple items with matching tire_size → pick the one whose goods_nm
              has the highest token overlap (≥2 tokens required to avoid false hits)
 
-        Only the most recent search_product_tool entry is inspected.
+        Only the most recent product-listing tool entry is inspected.
         Returns None when no confident match is found.
 
         Expected tool_context entry shape (produced by filter_for_context in
         g_qc_agent/source_filter.py, which is what gets persisted to Redis):
-            {"tool": "search_product_tool",
+            {"tool": "search_product_tool" | "get_products_recommendations_tool",
              "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
              "input": {...}}
         Note: `data` is a LIST directly, and the size field is `tire_size_1`
@@ -1665,8 +2493,9 @@ class TStationChatServiceV2:
             return None
 
         items: list[dict] = []
+        PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
         for entry in prev_tool_data:
-            if entry.get("tool") != "search_product_tool":
+            if entry.get("tool") not in PRODUCT_LIST_TOOLS:
                 continue
             data = entry.get("data")
             # Primary shape: filter_for_context stores data as a list directly
@@ -1724,7 +2553,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def _resolve_tire_size_from_history_template(user_text: str, history: list[dict]) -> str | None:
+    def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
         """Match a user's vehicle-selection reply against the metadata of the
         most recent assistant message that rendered a `listCar` template, and
         return the picked car's tireSize.
@@ -1739,37 +2568,26 @@ class TStationChatServiceV2:
             tire_size can be recovered at selection time without an extra LLM
             tool call.
 
-        Expected history msg shape (from chat_history_service.get_history):
-            {"role": "assistant", "content": "...",
-             "template_data": {"type": "data", "template": "listCar",
-                               "data": {"listCar": [{"licensePlate": "12가3456",
-                                                     "info": "K7 2.5 GDI", ...}],
-                                        "metadata": [{"carNo": "12가3456",
-                                                      "carLncCd": "01",
-                                                      "tireSize": "225/45R17",
-                                                      "tireSizeRe": "225/45R17"}]}}}
+        Expected template_data shape (from chat_history_service.get_latest_template_data):
+            {"type": "data", "template": "listCar",
+             "data": {"listCar": [{"licensePlate": "12가3456", "info": "K7 2.5 GDI", ...}],
+                      "metadata": [{"carNo": "12가3456", "carLncCd": "01",
+                                    "tireSize": "225/45R17", "tireSizeRe": "225/45R17"}]}}
 
         Matching strategy (first hit wins):
           1. License plate verbatim ("12가3456", "123가4567") against carNo.
           2. Ordinal at the start ("1.", "1번", "2)") → metadata[idx-1].
           3. Token-overlap against listCar[i].info — unique top scorer required.
         """
-        if not user_text or not history:
+        if not user_text or not isinstance(template_data, dict):
             return None
 
         latest_listcar: dict | None = None
-        for msg in reversed(history):
-            if msg.get("role") != "assistant":
-                continue
-            template_data = msg.get("template_data")
-            if not isinstance(template_data, dict):
-                continue
-            if template_data.get("template") != "listCar":
-                continue
-            data = template_data.get("data")
-            if isinstance(data, dict):
-                latest_listcar = data
-                break
+        if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), dict):
+            latest_listcar = template_data.get("data")
+        elif isinstance(template_data.get("listCar"), list):
+            # Defensive: allow passing the inner payload directly.
+            latest_listcar = template_data
         if latest_listcar is None:
             return None
 
@@ -1831,7 +2649,7 @@ class TStationChatServiceV2:
         shop_id of the matched store.
 
         Mirrors _resolve_goods_no_from_selection for stores. When a store list
-        had more than 1 store, `_save_tool_derived_slots` skips shop_id
+        had more than 1 store, `_apply_tool_derived_slots` skips shop_id
         auto-save (can't guess which one). This resolver fills that gap by
         matching the user's selection reply to the prior list.
 
@@ -1899,7 +2717,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def _resolve_shop_id_from_history_template(user_text: str, history: list[dict]) -> str | None:
+    def _resolve_shop_id_from_history_template(user_text: str, template_data: dict | None) -> str | None:
         """Match a user's list-selection reply against the metadata of the most
         recent assistant message that rendered a `location` template.
 
@@ -1909,38 +2727,27 @@ class TStationChatServiceV2:
         shown to the user", so matching against it is more robust than against
         raw tool output.
 
-        Expected history msg shape (from chat_history_service.get_history):
-            {"role": "assistant", "content": "...",
-             "template_data": {"type": "data", "template": "location",
-                               "data": {"stores": [{"nameAddress": "티스테이션 한남점", ...}],
-                                        "metadata": [{"shopId": "F07782"}]}}}
+        Expected template_data shape (from chat_history_service.get_latest_template_data):
+            {"type": "data", "template": "location",
+             "data": {"stores": [{"nameAddress": "티스테이션 한남점", ...}],
+                      "metadata": [{"shopId": "F07782"}]}}
 
         Matching strategy:
           1. Ordinal at the start ("1.", "5번", "3)") → metadata[idx-1].shopId
           2. Token-overlap against stores[].nameAddress — only resolves when
              exactly ONE store has the top score
         """
-        if not user_text or not history:
+        if not user_text or not isinstance(template_data, dict):
             return None
 
         text = user_text.strip()
 
-        # Find the most recent assistant message with a `location` template.
-        # Stop at the first such message; do not fall through to older lists,
-        # because the user's selection refers to the latest one shown.
         target_template: dict | None = None
-        for msg in reversed(history):
-            if msg.get("role") != "assistant":
-                continue
-            td = msg.get("template_data")
-            if not isinstance(td, dict):
-                continue
-            if td.get("template") != "location":
-                continue
-            inner = td.get("data")
-            if isinstance(inner, dict):
-                target_template = inner
-            break
+        if template_data.get("template") == "location" and isinstance(template_data.get("data"), dict):
+            target_template = template_data.get("data")
+        elif isinstance(template_data.get("stores"), list):
+            # Defensive: allow passing the inner payload directly.
+            target_template = template_data
 
         if not target_template:
             return None
@@ -1983,7 +2790,7 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
-    def chat(request: TStationChatRequest):
+    async def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
         """
@@ -2018,34 +2825,37 @@ class TStationChatServiceV2:
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
         _parent_span_id = None
-        from config.tracing import _tracing_enabled, tracer
+        _set_trace_name(last_user_msg[:60] if last_user_msg else None)
         if _tracing_enabled:
             _parent_span = tracer.start_span(
                 name="chat",
                 trace_context={"trace_id": request.tracing_id},
-                input=last_user_msg,
+                input=_truncate(last_user_msg),
             )
+            # Lock trace.input to the user's message right at the start so the
+            # Langfuse UI doesn't fall back to whichever child chain (e.g. QC)
+            # last touched the trace. trace.output is set in _stream_response_multi
+            # at the end of the stream.
             _parent_span.update_trace(
+                name=(last_user_msg[:60] if last_user_msg else "chat"),
                 session_id=request.session_id,
                 user_id=request.user_id,
+                input=_truncate(last_user_msg),
             )
             _parent_span_id = _parent_span.id
 
-        # Step 1: Enrich messages with template_data from Redis history
-        enriched_messages = _enrich_messages_with_template_data(
-            [dict(msg) for msg in request.messages],
-            request.session_id,
-        )
-        # Step 2: Build messages with user info
-        request_with_enriched = TStationChatRequest(
-            messages=enriched_messages,
+        # Step 1: Prep raw messages — enrichment happens after Redis prefetch below.
+        # Build plain messages now as a fallback (used if Redis prefetch fails entirely).
+        raw_messages = [dict(msg) for msg in request.messages]
+        _request_plain = TStationChatRequest(
+            messages=raw_messages,
             session_id=request.session_id,
             user_id=request.user_id,
             access_token=request.access_token,
             stream=request.stream,
             user_info=request.user_info,
         )
-        messages = TStationChatServiceV2._build_messages_with_user_info(request_with_enriched)
+        messages = TStationChatServiceV2._build_messages_with_user_info(_request_plain)
 
         # Keep at most 20 messages (10 turns) before sending to LLM.
         # Slots and last_user_text are extracted from request.messages (untouched above).
@@ -2053,9 +2863,8 @@ class TStationChatServiceV2:
         if len(messages) > _MAX_HISTORY_MESSAGES:
             dropped = len(messages) - _MAX_HISTORY_MESSAGES
             messages = messages[-_MAX_HISTORY_MESSAGES:]
-            logger.info(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
-
-        logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, indent=2)}")
+            logger.debug(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
+        classifier_messages = TStationChatServiceV2._compact_messages_for_classifier(messages)
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
         # Wrapped in try/except so slot failures never block the main chat flow
@@ -2066,6 +2875,9 @@ class TStationChatServiceV2:
         slot_context = None
         slot_context_with_intent = None
         tool_context = None
+        routing_result = None
+        speculative_classify_future: concurrent.futures.Future | None = None
+        classify_future: concurrent.futures.Future | None = None
 
         # Defaults hoisted above the try block so the P0 auto-chain gate below
         # can safely inspect them even if slot processing raises.
@@ -2073,18 +2885,64 @@ class TStationChatServiceV2:
         regex_slots = ConversationSlots()
         merged_slots = ConversationSlots()
         goods_no_resolved_this_turn = False
+        quick_reply_domain_values: list[str] = []
+        predicted_domain_values: list[str] = []
 
         try:
             chat_history_svc = get_chat_history_service()
 
-            # 1) Load existing slots + tool context from Redis in parallel (independent reads)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pool:
-                _slots_f = _pool.submit(chat_history_svc.get_slots, request.session_id)
-                _tool_ctx_f = _pool.submit(chat_history_svc.get_tool_context, request.session_id)
-                existing_slots = _slots_f.result()
-                prev_tool_data = _tool_ctx_f.result()
+            # 1) Load only the targeted Redis data needed on the hot path (using async Pipeline).
+            (
+                recent_template_msgs,
+                existing_slots,
+                prev_tool_data,
+                latest_listcar_tmpl,
+                latest_location_tmpl,
+                quick_reply_domain_values,
+                predicted_domain_values,
+            ) = await chat_history_svc.get_chat_context_pipeline_async(
+                request.session_id, _TEMPLATE_ENRICH_MAX_TURNS
+            )
             _t_slots = time.perf_counter()
-            logger.info(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+            logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
+
+            # 1a) Enrich messages with template_data from prefetched history and rebuild.
+            # Overrides the plain fallback built above — no extra Redis round-trip.
+            enriched_messages = _enrich_messages_with_template_data(
+                raw_messages, request.session_id, assistant_template_messages=recent_template_msgs
+            )
+            _request_enriched = TStationChatRequest(
+                messages=enriched_messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                access_token=request.access_token,
+                stream=request.stream,
+                user_info=request.user_info,
+            )
+            messages = TStationChatServiceV2._build_messages_with_user_info(_request_enriched)
+            if len(messages) > _MAX_HISTORY_MESSAGES:
+                messages = messages[-_MAX_HISTORY_MESSAGES:]
+            messages_chars = TStationChatServiceV2._messages_chars(messages)
+            classifier_messages = TStationChatServiceV2._compact_messages_for_classifier(messages)
+            classifier_messages_chars = TStationChatServiceV2._messages_chars(classifier_messages)
+            logger.debug("[CONTEXT] messages_count=%d messages_chars=%d", len(messages), messages_chars)
+            logger.debug(
+                "[CLASSIFIER_CTX] messages_count=%d messages_chars=%d original_messages=%d original_chars=%d",
+                len(classifier_messages),
+                classifier_messages_chars,
+                len(messages),
+                messages_chars,
+            )
+            logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
+
+            classify_future = _speculative_classify_executor.submit(
+                _coordinator.classify_multi_intent,
+                classifier_messages,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+                parent_span_id=_parent_span_id,
+            )
 
             # 2) Extract regex-based slots from the LATEST user message only
             for msg in reversed(request.messages):
@@ -2095,7 +2953,7 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
-            logger.info(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
+            logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
             # 3.5) If the user explicitly asked for a recommendation in THIS turn
             # AND did not also include a fresh transactional keyword, clear any
@@ -2107,7 +2965,7 @@ class TStationChatServiceV2:
             user_asked_for_recommend = ConversationSlots.has_recommend_intent(last_user_text)
             turn_has_new_transactional = regex_slots.pending_intent is not None
             if merged_slots.pending_intent is not None and user_asked_for_recommend and not turn_has_new_transactional:
-                logger.info(
+                logger.debug(
                     f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
                     f"— user switched back to recommendation"
                 )
@@ -2146,7 +3004,7 @@ class TStationChatServiceV2:
                         most_recent_listing_tool = tool
                         break
                 if most_recent_listing_tool == "get_products_recommendations_tool":
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
                         f"— most recent list source is get_products_recommendations_tool "
                         f"(user is in recommendation flow, not transactional)"
@@ -2166,7 +3024,7 @@ class TStationChatServiceV2:
                 if resolved_goods_no:
                     merged_slots.goods_no = resolved_goods_no
                     goods_no_resolved_this_turn = True
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
                         f"list-selection against prior search_product_tool result"
                     )
@@ -2184,13 +3042,12 @@ class TStationChatServiceV2:
             # Transaction.
             if merged_slots.tire_size is None:
                 try:
-                    history = chat_history_svc.get_history(request.session_id)
                     resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
-                        last_user_text, history
+                        last_user_text, latest_listcar_tmpl
                     )
                     if resolved_tire_size:
                         merged_slots.tire_size = resolved_tire_size
-                        logger.info(
+                        logger.debug(
                             f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
                             f"vehicle-selection against last `listCar` template metadata"
                         )
@@ -2199,7 +3056,7 @@ class TStationChatServiceV2:
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
             # the most recent get_nearby_stores_tool / get_store_list_tool result.
-            # `_save_tool_derived_slots` only auto-saves shop_id when the tool returned
+            # `_apply_tool_derived_slots` only auto-saves shop_id when the tool returned
             # exactly 1 store — multi-result lists (nearby stores within radius, region
             # searches) leave shop_id=None. When the user then picks a store from that
             # list, STEP 5A Step 4 needs shop_id to call get_store_schedule_tool; without
@@ -2209,7 +3066,7 @@ class TStationChatServiceV2:
                 resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(last_user_text, prev_tool_data)
                 if resolved_shop_id:
                     merged_slots.shop_id = resolved_shop_id
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                         f"list-selection against prior store-list tool result"
                     )
@@ -2220,7 +3077,7 @@ class TStationChatServiceV2:
                         for e in prev_tool_data
                         if e.get("tool") in ("get_nearby_stores_tool", "get_store_list_tool")
                     ]
-                    logger.info(
+                    logger.debug(
                         f"[SLOTS] shop_id resolver (tool path) no-match: "
                         f"user_text={last_user_text[:60]!r}, "
                         f"store_tool_entries={store_tool_entries}"
@@ -2236,21 +3093,20 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    history = chat_history_svc.get_history(request.session_id)
                     resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
-                        last_user_text, history
+                        last_user_text, latest_location_tmpl
                     )
                     if resolved_shop_id:
                         merged_slots.shop_id = resolved_shop_id
-                        logger.info(
+                        logger.debug(
                             f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                             f"list-selection against last `location` template metadata"
                         )
                 except Exception as e:
                     logger.warning(f"[SLOTS] history shop_id fallback failed: {e}")
 
-            # 4) Save merged slots to Redis
-            chat_history_svc.save_slots(request.session_id, merged_slots)
+            # 4) Save merged slots to Redis without blocking the async request path.
+            await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
 
             # 5) Build slot context strings for agent injection.
             # `slot_context` (no pending_intent) is the default for all agents — Discovery,
@@ -2268,11 +3124,17 @@ class TStationChatServiceV2:
 
             # 6) Format tool context for prompt injection
             if prev_tool_data:
-                tool_context = TStationChatServiceV2._format_tool_context(prev_tool_data)
+                prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(prev_tool_data, merged_slots)
+                tool_context = TStationChatServiceV2._format_tool_context(prompt_tool_data)
                 # Cap tool context to avoid consuming too much of the context window
-                if len(tool_context) > 8000:
-                    tool_context = tool_context[:8000] + "\n... (일부 생략)"
-                logger.info(f"[TOOL_CTX] Loaded {len(prev_tool_data)} tool results ({len(tool_context)} chars)")
+                if len(tool_context) > 4000:
+                    tool_context = tool_context[:4000] + "\n... (일부 생략)"
+                logger.debug(
+                    "[TOOL_CTX] Loaded %d tool results, injected %d (%d chars)",
+                    len(prev_tool_data),
+                    len(prompt_tool_data),
+                    len(tool_context),
+                )
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
@@ -2280,26 +3142,102 @@ class TStationChatServiceV2:
             slot_context_with_intent = None
 
         # Domain classification (separate from slot processing — must not fail)
-        # Fast-path order: goal-based (deterministic checklist) → rule-based
-        # (regex) → LLM classifier (multi-intent, conversational context).
+        # Fast-path order: chip_context → quickReplies → predictedDomains → goal/rule → LLM.
         # Each layer returns None to defer to the next.
-        routing_result = None
-        fast_domains = (
-            _goal_based_classify(last_user_text, merged_slots)
-            or _rule_based_classify(last_user_text, merged_slots)
-        )
-        if fast_domains is not None:
-            domains = fast_domains
-            # No routing_result → no CONVERSATION CONTEXT injection (not needed for clear-intent cases)
-        else:
-            domains, routing_result = _coordinator.classify_multi_intent(
-                messages,
-                session_id=request.session_id,
-                user_id=request.user_id,
-                trace_id=request.tracing_id,
-                parent_span_id=_parent_span_id,
+        # Wrapped in a manual `classify` span so Langfuse shows a single clean
+        # node: input=last user text, output=domains. Any nested LLM call from
+        # classify_multi_intent attaches under this span via parent_span_id.
+        _chip_domain: str | None = None
+        _chip_ctx = request.chip_context or {}
+        if isinstance(_chip_ctx, dict):
+            _d = _chip_ctx.get("domain")
+            if _d in _VALID_CHIP_DOMAINS:
+                _chip_domain = _d
+
+        with _trace_span(
+            "classify",
+            trace_id=request.tracing_id,
+            parent_span_id=_parent_span_id,
+            input=last_user_text,
+        ) as _classify_span:
+            import asyncio
+
+            if classify_future is None:
+                classify_future = _speculative_classify_executor.submit(
+                    _coordinator.classify_multi_intent,
+                    classifier_messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_classify_span.id or _parent_span_id,
+                )
+
+            if settings.AI_SPECULATIVE_CLASSIFY_ENABLED:
+                predicted_domains = None
+                if _chip_domain:
+                    predicted_domains = [MultiAgentDomain.Domain[_chip_domain]]
+                    _classify_path = "chip_speculative"
+                else:
+                    predicted_domains = (
+                        _domains_from_strings(quick_reply_domain_values)
+                        or _domains_from_strings(predicted_domain_values)
+                        or _goal_based_classify(last_user_text, merged_slots)
+                        or _support_fast_path(last_user_text)
+                        or _rule_based_classify(last_user_text, merged_slots)
+                    )
+                    _classify_path = "speculative"
+
+                transaction_predicted = (
+                    predicted_domains is not None
+                    and MultiAgentDomain.Domain.TRANSACTION in predicted_domains
+                )
+                if (
+                    predicted_domains is not None
+                    and not transaction_predicted
+                    and (_chip_domain or _is_speculative_safe(predicted_domains))
+                ):
+                    domains = predicted_domains
+                    speculative_classify_future = classify_future
+                    logger.debug("[CLASSIFIER] %s domains=%s — background verify", _classify_path, [d.value for d in domains])
+                else:
+                    domains, routing_result = await asyncio.to_thread(classify_future.result)
+                    _classify_path = "llm_profile" if transaction_predicted else "llm"
+            else:
+                domains, routing_result = await asyncio.to_thread(classify_future.result)
+                _classify_path = "llm"
+
+            if routing_result is not None:
+                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+            messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+            # Langfuse shows the first ~100 chars of `output` as the span preview.
+            # Lead with a one-line summary so the trace tree reads like a story
+            # without needing to expand the node.
+            _domain_label = "+".join(d.value for d in domains) if domains else "?"
+            _classify_summary = f"{_classify_path} → {_domain_label}"
+            logger.info(
+                "[CLASSIFIER_RESULT] path=%s domains=%s profile=%s",
+                _classify_path,
+                [d.value for d in domains],
+                (
+                    routing_result.agent_prompt_profile.value
+                    if routing_result and isinstance(routing_result.agent_prompt_profile, AgentPromptProfile)
+                    else None
+                ),
             )
-            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+            _classify_span.update(
+                output=_truncate({
+                    "summary": _classify_summary,
+                    "domains": [d.value for d in domains],
+                    "path": _classify_path,
+                    "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
+                    "flow": getattr(routing_result, "flow", None) if routing_result else None,
+                    "agent_prompt_profile": (
+                        routing_result.agent_prompt_profile.value
+                        if routing_result and isinstance(routing_result.agent_prompt_profile, AgentPromptProfile)
+                        else None
+                    ),
+                }),
+            )
         _t_classify = time.perf_counter()
 
         # Post-classification redirect: when the user's current-turn reply was a
@@ -2321,10 +3259,23 @@ class TStationChatServiceV2:
             and goods_no_resolved_this_turn
             and merged_slots.pending_intent is not None
         ):
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] Post-classification redirect: goods_no={merged_slots.goods_no!r} "
                 f"resolved from list-selection + pending_intent={merged_slots.pending_intent!r} "
                 f"→ [DISCOVERY] → [TRANSACTION]"
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="post_classification",
+                classifier_domains=["discovery"],
+                corrected_domains=["transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "goods_no": merged_slots.goods_no,
+                    "pending_intent": merged_slots.pending_intent,
+                    "goods_no_resolved_this_turn": True,
+                },
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
@@ -2353,11 +3304,23 @@ class TStationChatServiceV2:
             and merged_slots.goods_no is not None
             and regex_slots.pending_intent is not None
         ):
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
                 f"goods_no={merged_slots.goods_no!r} (carried), "
                 f"fresh_intent={regex_slots.pending_intent!r}, "
                 f"session_id={request.session_id} → domains=[TRANSACTION]"
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0c",
+                classifier_domains=["discovery"],
+                corrected_domains=["transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "goods_no_carried": merged_slots.goods_no,
+                    "fresh_intent": regex_slots.pending_intent,
+                },
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
@@ -2408,12 +3371,26 @@ class TStationChatServiceV2:
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
             skip_decision = True
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] P0 auto-chain gate triggered: "
                 f"pending_intent={merged_slots.pending_intent!r} "
                 f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
                 f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0_auto_chain",
+                classifier_domains=["discovery"],
+                corrected_domains=["discovery", "transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "pending_intent": merged_slots.pending_intent,
+                    "fresh_intent_this_turn": regex_slots.pending_intent,
+                    "tire_size": merged_slots.tire_size,
+                    "tire_model": merged_slots.tire_model,
+                },
             )
 
         # P0b TRANSACTION → DISCOVERY+TRANSACTION redirect: when the classifier
@@ -2455,12 +3432,25 @@ class TStationChatServiceV2:
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
             skip_decision = True
-            logger.info(
+            logger.debug(
                 f"[COORDINATOR] P0b TX→DISC+TX redirect: classifier=[TRANSACTION], "
                 f"goods_no=None, tire_size={merged_slots.tire_size!r}, "
                 f"tire_model={merged_slots.tire_model!r}, "
                 f"has_product_keyword={ConversationSlots.has_product_keyword(last_user_text)}, "
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0b",
+                classifier_domains=["transaction"],
+                corrected_domains=["discovery", "transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "tire_size": merged_slots.tire_size,
+                    "tire_model": merged_slots.tire_model,
+                    "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
+                },
             )
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
@@ -2470,21 +3460,17 @@ class TStationChatServiceV2:
         # through every signature in the agent → mapper chain.
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
-        from services.tstation.template_mapper import current_goal_type
+        from services.tstation.template_mapper import current_goal_type, current_pending_intent
         current_goal_type.set(merged_slots.goal_type)
+        current_pending_intent.set(merged_slots.pending_intent)
 
         _t_prestream = time.perf_counter()
-        logger.info(
+        logger.debug(
             f"[LATENCY] pre-stream — slots={(_t_slots - _t0)*1000:.0f}ms "
             f"classify={(_t_classify - _t_slots)*1000:.0f}ms "
             f"other={(_t_prestream - _t_classify)*1000:.0f}ms "
             f"total={(_t_prestream - _t0)*1000:.0f}ms"
         )
-        if request.tracing_id:
-            from config.tracing import _tracing_enabled, tracer
-            if _tracing_enabled:
-                tracer.create_score(trace_id=request.tracing_id, name="latency.slots_ms", value=round((_t_slots - _t0) * 1000))
-                tracer.create_score(trace_id=request.tracing_id, name="latency.classify_ms", value=round((_t_classify - _t_slots) * 1000))
 
         # STREAM MODE
         if request.stream:
@@ -2499,8 +3485,12 @@ class TStationChatServiceV2:
                     trace_id=request.tracing_id,
                     skip_decision=skip_decision,
                     slot_context_with_intent=slot_context_with_intent,
+                    classify_future=speculative_classify_future,
+                    routing_result=routing_result,
+                    initial_slots=merged_slots,
                     parent_span=_parent_span,
                     parent_span_id=_parent_span_id,
+                    request_started_at=_t0,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -2515,7 +3505,7 @@ class TStationChatServiceV2:
             final_content = ""
             last_message_content = ""
 
-            for event_str in TStationChatServiceV2._stream_response_multi(
+            async for event_str in TStationChatServiceV2._stream_response_multi(
                 messages,
                 domains,
                 slot_context,
@@ -2525,8 +3515,12 @@ class TStationChatServiceV2:
                 trace_id=request.tracing_id,
                 skip_decision=skip_decision,
                 slot_context_with_intent=slot_context_with_intent,
+                classify_future=speculative_classify_future,
+                routing_result=routing_result,
+                initial_slots=merged_slots,
                 parent_span=_parent_span,
                 parent_span_id=_parent_span_id,
+                request_started_at=_t0,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -2559,8 +3553,9 @@ class TStationChatServiceV2:
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
+
     @staticmethod
-    def _stream_response_multi(
+    async def _stream_response_multi(
         messages: list[dict],
         domains: list[MultiAgentDomain.Domain] | None = None,
         slot_context: str | None = None,
@@ -2568,14 +3563,18 @@ class TStationChatServiceV2:
         tool_context: str | None = None,
         user_id: str | None = None,
         trace_id: str | None = None,
-        parent_span=None,
+        parent_span: Any | None = None,
         parent_span_id: str | None = None,
         skip_decision: bool = False,
         slot_context_with_intent: str | None = None,
+        classify_future: concurrent.futures.Future | None = None,
+        routing_result: MultiAgentDomain | None = None,
+        initial_slots: Any | None = None,
+        request_started_at: float | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
-        logger.info(
+        logger.debug(
             "[REQUEST_CONFIG] "
             f"default={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL} | "
             f"leading={_s.AI_DEFAULT_PROVIDER}/{_s.AI_MODEL_LEADING_AGENT} | "
@@ -2586,14 +3585,25 @@ class TStationChatServiceV2:
         )
 
         _t_stream_start = time.perf_counter()
-        draft_response = ""
+        _t_request_start = request_started_at or _t_stream_start
+        draft_response = ""       # text only — used for history/message sync
+        draft_for_qc = ""         # text + template payload — passed to QC only
         source_data_chunks = []
+        buffered_data_events: list[dict] = []  # DATA events held until after QC
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
         last_template: str | None = None
+        last_template_source: str | None = None
+        last_assistant_response_source: str | None = None
         coordinator_done_event = None  # Hold the premature [DONE] event
         agent_count = 0  # Track how many agents have started
+        next_quick_reply_domain_values: list[str] = []
+        next_predicted_domain_values: list[str] = []
+        pending_slots = None
+        # Hoisted so the trace summary at end-of-stream can reference QC verdict
+        # even when the draft was empty and the QC block below never ran.
+        _qc_passed = True
 
         # Detailed latency tracking state
         _lat_tool_start: dict[str, float] = {}
@@ -2604,6 +3614,22 @@ class TStationChatServiceV2:
         _lat_first_token_seen: bool = False
         _lat_first_token_time: float | None = None
         _lat_prev_agent_done: float | None = None
+        _lat_waiting_post_tool_output_since: float | None = None
+        _lat_agent_pre_tool_think_ms = 0.0
+        _lat_agent_post_tool_output_ms = 0.0
+        _lat_agent_llm_generation_ms = 0.0
+        _lat_tool_ms = 0.0
+        _lat_decide_next_action_ms = 0.0
+        _lat_qc_ms = 0.0
+        _lat_first_visible_ms: float | None = None
+        qc_skip_reason: str | None = None
+        qc_executed = False
+
+        def _mark_first_visible(now: float | None = None) -> None:
+            nonlocal _lat_first_visible_ms
+            if _lat_first_visible_ms is None:
+                _lat_first_visible_ms = ((now or time.perf_counter()) - _t_request_start) * 1000
+                logger.debug(f"[LATENCY] first_visible={_lat_first_visible_ms:.0f}ms")
 
         user_query = ""
         for msg in reversed(messages):
@@ -2617,9 +3643,21 @@ class TStationChatServiceV2:
         # to avoid the "long text flashes then gets replaced by card" UX issue.
         from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP
 
+        _SUPPRESS_ON_TOOLS = frozenset(
+            tool
+            for tool, template in _TOOL_TEMPLATE_MAP.items()
+            if template in {"product", "voucher", "cheapestProduct", "previewYoutube", "location", "datepick"}
+        )
         _suppress_tokens = False
 
-        for event in _coordinator.stream(
+        speculative_guard = None
+        if classify_future is not None:
+            speculative_guard = {
+                "confirm_event": threading.Event(),
+                "mutating_tools": _SPECULATIVE_MUTATING_TOOLS,
+            }
+
+        coordinator_iter = _coordinator.stream(
             messages,
             domains=domains,
             slot_context=slot_context,
@@ -2630,7 +3668,12 @@ class TStationChatServiceV2:
             parent_span_id=parent_span_id,
             skip_decision=skip_decision,
             slot_context_with_intent=slot_context_with_intent,
-        ):
+            classify_future=classify_future,
+            speculative_guard=speculative_guard,
+            routing_result=routing_result,
+            initial_slots=initial_slots,
+        )
+        async for event in _async_from_sync_iter(coordinator_iter):
             _lat_now = time.perf_counter()
             event_type = event.get("type")
 
@@ -2641,12 +3684,19 @@ class TStationChatServiceV2:
             # the local QC / sanitize step still has the full text). ---
             if event_type == "token":
                 if event.get("content"):
-                    draft_response += event["content"]
+                    if _lat_waiting_post_tool_output_since is not None:
+                        _post_tool_ms = (_lat_now - _lat_waiting_post_tool_output_since) * 1000
+                        _lat_agent_post_tool_output_ms += _post_tool_ms
+                        logger.debug(f"[LATENCY]   llm_post_tool_output={_post_tool_ms:.0f}ms")
+                        _lat_waiting_post_tool_output_since = None
+                    if not _suppress_tokens:
+                        draft_response += event["content"]
+                        draft_for_qc += event["content"]
                     if not _lat_first_token_seen:
                         _lat_first_token_seen = True
                         _lat_first_token_time = _lat_now
                         if _lat_think_start is not None:
-                            logger.info(f"[LATENCY]   llm_think={(_lat_now - _lat_think_start)*1000:.0f}ms")
+                            logger.debug(f"[LATENCY]   llm_think={(_lat_now - _lat_think_start)*1000:.0f}ms")
                 continue
 
             # --- INTERCEPT MESSAGES (History Sync ONLY) ---
@@ -2660,17 +3710,12 @@ class TStationChatServiceV2:
                 tool_name = event.get("tool", "Unknown")
                 called_tool_names.add(tool_name)
                 if tool_name in _lat_tool_start:
-                    logger.info(f"[LATENCY]   tool={tool_name} {(_lat_now - _lat_tool_start.pop(tool_name))*1000:.0f}ms")
+                    _tool_ms = (_lat_now - _lat_tool_start.pop(tool_name)) * 1000
+                    _lat_tool_ms += _tool_ms
+                    logger.debug(f"[LATENCY]   tool={tool_name} {_tool_ms:.0f}ms")
+                _lat_waiting_post_tool_output_since = _lat_now
                 # Suppress tokens when a "list display" tool is called (card will replace text).
                 # Exclude car lookup tools — agent may need to show selection text first.
-                _SUPPRESS_ON_TOOLS = {
-                    "search_product_tool",
-                    "get_products_recommendations_tool",
-                    "get_available_coupons_tool",
-                    "get_my_coupons_tool",
-                    "compare_discount_tool",
-                    "search_youtube_video_tool",
-                }
                 if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
                 input_data = event.get("input", {})
@@ -2692,6 +3737,10 @@ class TStationChatServiceV2:
 
                 continue
 
+            if event_type == "internal_slots":
+                pending_slots = event.get("slots")
+                continue
+
             # --- INTERCEPT EARLY DONE EVENT ---
             if event_type == "sub-agent" and event.get("agent") == "[DONE]":
                 coordinator_done_event = event
@@ -2699,22 +3748,63 @@ class TStationChatServiceV2:
 
             # --- INTERCEPT DATA EVENTS (UI Template Agent) ---
             if event_type == "data":
+                if _lat_waiting_post_tool_output_since is not None:
+                    _post_tool_ms = (_lat_now - _lat_waiting_post_tool_output_since) * 1000
+                    _lat_agent_post_tool_output_ms += _post_tool_ms
+                    logger.debug(f"[LATENCY]   post_tool_data_event={_post_tool_ms:.0f}ms")
+                    _lat_waiting_post_tool_output_since = None
                 last_template = event.get("template") or last_template
+                event_template_source = event.pop("template_source", None)
+                if isinstance(event_template_source, str):
+                    last_template_source = event_template_source
+                event_response_source = event.pop("assistant_response_source", None)
+                if isinstance(event_response_source, str):
+                    last_assistant_response_source = event_response_source
+                for value in _quick_reply_domain_values_from_event(event):
+                    if value not in next_quick_reply_domain_values:
+                        next_quick_reply_domain_values.append(value)
+                for value in _predicted_domain_values_from_event(event):
+                    if value not in next_predicted_domain_values:
+                        next_predicted_domain_values.append(value)
                 event_data = event.get("data", {})
-                if isinstance(event_data, dict) and event_data.get("assistantResponse"):
-                    assistant_response = event_data["assistantResponse"]
-                    source_domain = str(event.get("source_domain", "ui_template")).upper()
-                    assistant_msg_event = {
-                        "type": "message",
-                        "content": assistant_response,
-                        "agent": f"[{source_domain} AGENT]",
-                    }
-                    original_message_events.append(assistant_msg_event)
-                    logger.info(
-                        f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
-                    )
-                # Pass through data event to frontend
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if isinstance(event_data, dict):
+                    if event_data.get("assistantResponse"):
+                        assistant_response = event_data["assistantResponse"]
+                        if _suppress_tokens:
+                            draft_response = assistant_response
+                            draft_for_qc = assistant_response
+                        source_domain = str(event.get("source_domain", "ui_template")).upper()
+                        assistant_msg_event = {
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": f"[{source_domain} AGENT]",
+                        }
+                        original_message_events.append(assistant_msg_event)
+                        logger.debug(
+                            f"[COORDINATOR] Captured assistantResponse from data event ({source_domain}): {assistant_response[:50]}..."
+                        )
+                    # For Path B templates only — LLM wrote the JSON so QC must verify it.
+                    # Path A templates (code mapper) are correct by construction; including their
+                    # JSON confuses QC into unnecessary text rewrites.
+                    if last_template in _LLM_WRITTEN_TEMPLATES:
+                        template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
+                        if template_payload:
+                            draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                # Inject quickReplies into orderComplete (LLM-written path; mapper path injects via _map_order_complete).
+                if last_template == "orderComplete" and isinstance(event_data, dict) and "quickReplies" not in event_data:
+                    if event_data.get("isSuccess"):
+                        event_data["quickReplies"] = [
+                            {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+                            {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
+                    else:
+                        event_data["quickReplies"] = [
+                            {"label": "다시 시도", "domain": "TRANSACTION"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
+                # Buffer data event — yield after QC so assistantResponse is always verified
+                buffered_data_events.append(event)
                 continue
 
             # --- RESET DRAFT when a new sub-agent starts (multi-agent chaining) ---
@@ -2725,23 +3815,36 @@ class TStationChatServiceV2:
                 _sub_agent = event.get("agent", "?")
                 if _sub_status == "start":
                     if _lat_prev_agent_done is not None:
-                        logger.info(f"[LATENCY] decide_next_action={(_lat_now - _lat_prev_agent_done)*1000:.0f}ms")
+                        _decision_ms = (_lat_now - _lat_prev_agent_done) * 1000
+                        _lat_decide_next_action_ms += _decision_ms
+                        logger.debug(f"[LATENCY] decide_next_action={_decision_ms:.0f}ms")
                     _lat_agent_start = _lat_now
                     _lat_agent_name = _sub_agent
                     _lat_think_start = None
                     _lat_pre_tool_think_start = None
                     _lat_first_token_seen = False
                     _lat_first_token_time = None
+                    _lat_waiting_post_tool_output_since = None
                     agent_count += 1
                     if agent_count > 1 and draft_response.strip():
-                        logger.info(
+                        logger.debug(
                             f"[QC_LAYER] Resetting draft_response for agent #{agent_count} — last agent should produce unified response"
                         )
                         draft_response = ""
+                        draft_for_qc = ""
                         original_message_events = []
+                        buffered_data_events = []
+                        last_template_source = None
+                        last_assistant_response_source = None
                 elif _sub_status == "done" and _lat_agent_start is not None:
                     _llm_gen = (_lat_now - _lat_first_token_time) * 1000 if _lat_first_token_time else 0
-                    logger.info(
+                    _lat_agent_llm_generation_ms += _llm_gen
+                    if _lat_waiting_post_tool_output_since is not None:
+                        _post_tool_ms = (_lat_now - _lat_waiting_post_tool_output_since) * 1000
+                        _lat_agent_post_tool_output_ms += _post_tool_ms
+                        logger.debug(f"[LATENCY]   post_tool_done={_post_tool_ms:.0f}ms")
+                        _lat_waiting_post_tool_output_since = None
+                    logger.debug(
                         f"[LATENCY] agent={_lat_agent_name} total={(_lat_now - _lat_agent_start)*1000:.0f}ms "
                         f"llm_gen={_llm_gen:.0f}ms"
                     )
@@ -2752,7 +3855,9 @@ class TStationChatServiceV2:
                 _status_val = event.get("status", "")
                 if _status_val == "tool_start":
                     if _lat_pre_tool_think_start is not None:
-                        logger.info(f"[LATENCY]   llm_pre_tool_think={(_lat_now - _lat_pre_tool_think_start)*1000:.0f}ms")
+                        _pre_tool_ms = (_lat_now - _lat_pre_tool_think_start) * 1000
+                        _lat_agent_pre_tool_think_ms += _pre_tool_ms
+                        logger.debug(f"[LATENCY]   llm_pre_tool_think={_pre_tool_ms:.0f}ms")
                         _lat_pre_tool_think_start = None
                     _lat_tool_start[event.get("tool", "?")] = _lat_now
                 elif _status_val == "생각 중...":
@@ -2769,42 +3874,129 @@ class TStationChatServiceV2:
         # 2. QC AGENT
         # Gated by AI_QC_ENABLED. When enabled, fact-checks the draft against
         # filtered tool source data using AI_MODEL_QC_AGENT (lightweight model).
+        # AI_QC_PARALLEL=true: yield data events before QC so FE renders immediately;
+        # a qc_correction event is emitted afterward only when a correction is needed.
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
 
+            _qc_passed = True  # default: no correction needed
+            qc_template_corrections: dict | None = None
+            _can_apply_json = False
+            _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL
+
+            # PARALLEL MODE: yield data events immediately so FE can render before QC completes
+            if _parallel_qc:
+                for buffered_evt in buffered_data_events:
+                    _mark_first_visible()
+                    yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
+
             if _s.AI_QC_ENABLED:
+                _qc_started_at = time.perf_counter()
                 source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
+                qc_skip_reason = _qc_skip_reason(
+                    called_tool_names,
+                    last_template,
+                    last_template_source,
+                    last_assistant_response_source,
+                )
 
-                if (
-                    _has_factual_claims(draft_response)
-                    and source_data_chunks
-                    and not _should_skip_qc(called_tool_names, last_template)
-                ):
+                if called_tool_names and qc_skip_reason is None:
+                    qc_executed = True
                     try:
-                        from services.tstation.agents.g_qc_agent.agent import invoke_qc
-                        from services.tstation.agents.router import QC_LLM
-                        from config.tracing import build_trace_config
-
-                        trace_config = build_trace_config(
-                            run_name="qc_agent",
-                            session_id=session_id,
-                            user_id=user_id,
+                        with _trace_span(
+                            "qc",
                             trace_id=trace_id,
                             parent_span_id=parent_span_id,
-                            tags=["qc"],
-                        )
-                        qc_result = invoke_qc(QC_LLM, user_query, draft_response, source_data, config=trace_config)
-                        if qc_result.strip() and qc_result.strip().upper() != "PASS":
-                            draft_response = qc_result.strip()
-                            logger.info("[QC_LAYER] QC corrected the response")
-                        else:
-                            logger.info("[QC_LAYER] QC passed")
+                            input={
+                                "user_query": user_query,
+                                "draft": draft_for_qc,
+                                "source_data": source_data,
+                            },
+                        ) as _qc_span:
+                            trace_config = build_trace_config(
+                                session_id=session_id,
+                                user_id=user_id,
+                                trace_id=trace_id,
+                                parent_span_id=_qc_span.id or parent_span_id,
+                                tags=["qc"],
+                                prompt_name="qc_agent",
+                                run_name="💭 qc_check",
+                            )
+                            qc_result = await ainvoke_qc(
+                                QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
+                            )
+                            qc_result = qc_result.strip()
+                            _qc_passed = not qc_result or qc_result.upper() == "PASS"
+                            logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
+                            logger.debug(f"[QC_LAYER] Source: {source_data[:500]}")
+                            logger.debug(f"[QC_LAYER] QC result: {qc_result[:500]}")
+                            if not _qc_passed:
+                                corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
+                                draft_response = corrected_text or draft_response
+                                _can_apply_json = qc_template_corrections and last_template in _LLM_WRITTEN_TEMPLATES
+                                logger.debug(
+                                    f"[QC_LAYER] QC corrected the response"
+                                    + (f" (+ {len(qc_template_corrections)} JSON field(s) applied)" if _can_apply_json else " (text only)")
+                                )
+                            else:
+                                logger.debug("[QC_LAYER] QC passed")
+                            # Show verdict + corrected-field count up front so the
+                            # qc node tells the story without expanding.
+                            _qc_corr_count = len(qc_template_corrections) if qc_template_corrections else 0
+                            if _qc_passed:
+                                _qc_summary = "PASS"
+                            elif _qc_corr_count:
+                                _qc_summary = f"CORRECTED (text + {_qc_corr_count} JSON field)"
+                            else:
+                                _qc_summary = "CORRECTED (text)"
+                            _qc_span.update(
+                                output=_truncate({
+                                    "summary": _qc_summary,
+                                    "verdict": "PASS" if _qc_passed else "CORRECTED",
+                                    "result": qc_result,
+                                }),
+                            )
                     except Exception as e:
                         logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+                elif called_tool_names:
+                    logger.debug(
+                        "[QC_LAYER] Skipped QC: reason=%s template=%s source=%s response_source=%s tools=%s",
+                        qc_skip_reason,
+                        last_template,
+                        last_template_source,
+                        last_assistant_response_source,
+                        sorted(called_tool_names),
+                    )
+                _lat_qc_ms = (time.perf_counter() - _qc_started_at) * 1000
+
+            if _parallel_qc:
+                # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
+                if not _qc_passed:
+                    correction_evt: dict = {"type": "qc_correction", "assistantResponse": draft_response}
+                    if _can_apply_json:
+                        correction_evt["template"] = last_template
+                        correction_evt["corrections"] = qc_template_corrections
+                    yield f"data: {json.dumps(correction_evt, ensure_ascii=False)}\n\n"
+                    logger.debug("[QC_LAYER] Parallel mode: emitted qc_correction patch")
+            else:
+                # SEQUENTIAL (default): yield buffered DATA events with corrections applied
+                for buffered_evt in buffered_data_events:
+                    if not _qc_passed:
+                        evt_data = buffered_evt.get("data", {})
+                        if isinstance(evt_data, dict):
+                            if "assistantResponse" in evt_data:
+                                evt_data["assistantResponse"] = draft_response
+                            if _can_apply_json:
+                                for k, v in qc_template_corrections.items():
+                                    if k != "assistantResponse" and k in evt_data:
+                                        evt_data[k] = v
+                    _mark_first_visible()
+                    yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
             if original_message_events:
                 final_msg_event = original_message_events[-1]
                 final_msg_event["content"] = draft_response
+                _mark_first_visible()
                 yield f"data: {json.dumps(final_msg_event, ensure_ascii=False)}\n\n"
         else:
             # FALLBACK HISTORY SYNC: If no text was generated, only yield message events
@@ -2812,33 +4004,135 @@ class TStationChatServiceV2:
             # messages to Redis, as it pollutes the LLM's future context window.
             for msg_event in original_message_events:
                 if msg_event.get("content", "").strip():  # <-- ONLY yield if it has text
+                    _mark_first_visible()
                     yield f"data: {json.dumps(msg_event, ensure_ascii=False)}\n\n"
 
-        # 4. PERSIST TOOL CONTEXT for next turn (only overwrite when new tool results exist)
-        if session_id and tool_context_items:
+        # 4. PERSIST NEXT-TURN CONTEXT
+        if session_id and (
+            tool_context_items
+            or next_quick_reply_domain_values
+            or next_predicted_domain_values
+            or pending_slots is not None
+        ):
             try:
                 from services.tstation.chat_history_service import get_chat_history_service
 
-                get_chat_history_service().save_tool_context(session_id, tool_context_items)
+                history_svc = get_chat_history_service()
+
+                await history_svc.finalize_chat_context_async(
+                    session_id=session_id,
+                    tool_data=tool_context_items,
+                    quick_reply_domains=next_quick_reply_domain_values,
+                    predicted_domains=next_predicted_domain_values,
+                    user_id=user_id,
+                )
+                if pending_slots is not None:
+                    await history_svc.save_slots_async(session_id, pending_slots, user_id=user_id)
             except Exception as e:
-                logger.warning(f"[TOOL_CTX] Failed to save tool context: {e}")
+                logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")
 
         _t_qc = time.perf_counter()
-        logger.info(
+        _lat_stream_total_ms = (_t_qc - _t_request_start) * 1000
+        logger.debug(
             f"[LATENCY] stream — agents={(_t_agents - _t_stream_start)*1000:.0f}ms "
-            f"qc={(_t_qc - _t_agents)*1000:.0f}ms "
-            f"total={(_t_qc - _t_stream_start)*1000:.0f}ms"
+            f"first_visible={_lat_first_visible_ms or 0:.0f}ms "
+            f"pre_tool_think={_lat_agent_pre_tool_think_ms:.0f}ms "
+            f"post_tool_output={_lat_agent_post_tool_output_ms:.0f}ms "
+            f"llm_gen={_lat_agent_llm_generation_ms:.0f}ms "
+            f"tools={_lat_tool_ms:.0f}ms "
+            f"decision={_lat_decide_next_action_ms:.0f}ms "
+            f"qc={_lat_qc_ms:.0f}ms "
+            f"stream_total={_lat_stream_total_ms:.0f}ms"
         )
-        if trace_id:
-            from config.tracing import _tracing_enabled, tracer
-            if _tracing_enabled:
-                tracer.create_score(trace_id=trace_id, name="latency.agents_ms", value=round((_t_agents - _t_stream_start) * 1000))
-                tracer.create_score(trace_id=trace_id, name="latency.qc_ms", value=round((_t_qc - _t_agents) * 1000))
-                tracer.create_score(trace_id=trace_id, name="latency.stream_total_ms", value=round((_t_qc - _t_stream_start) * 1000))
 
         if parent_span is not None:
-            parent_span.update_trace(name="chat", output=draft_response)
+            # The augmented user message has a CONVERSATION CONTEXT prefix and
+            # a [current_time: ...] suffix injected upstream. Strip them so the
+            # trace name reflects what the user actually typed (e.g.
+            # "벤투스 S2 AS 225/55R17") instead of the augmentation header.
+            _last_user_raw = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
+            )
+            _last_user = StreamingMultiAgentCoordinator._extract_current_user_input(_last_user_raw) or _last_user_raw
+            # Trace `output` carries the actual assistant response so the Langfuse
+            # trace list shows what the user saw. Routing / tool / template / QC
+            # metadata moves to `metadata` (and the `qc` child span already holds
+            # the verdict + result for drill-down).
+            _route = "→".join(d.value for d in domains) if domains else ""
+            _trace_metadata = {
+                "route": _route,
+                "tools": sorted(called_tool_names),
+                "template": last_template,
+                "template_source": last_template_source,
+                "template_qc_policy": _TEMPLATE_QC_POLICY.get(last_template or ""),
+                "assistant_response_source": last_assistant_response_source,
+                "qc": "PASS" if _qc_passed else "CORRECTED",
+                "qc_executed": qc_executed,
+                "qc_skip_reason": qc_skip_reason,
+                "latency_ms": int(_lat_stream_total_ms),
+                "latency_first_visible_ms": (
+                    round(_lat_first_visible_ms) if _lat_first_visible_ms is not None else None
+                ),
+                "latency_stream_total_ms": round(_lat_stream_total_ms),
+                "latency_agent_pre_tool_think_ms": round(_lat_agent_pre_tool_think_ms),
+                "latency_agent_post_tool_output_ms": round(_lat_agent_post_tool_output_ms),
+                "latency_agent_llm_generation_ms": round(_lat_agent_llm_generation_ms),
+                "latency_qc_ms": round(_lat_qc_ms),
+            }
+            _trace_output = _truncate(draft_response)
+            _trace_input = _truncate(_last_user)
+            # Set both the parent span's own output AND the trace-level output.
+            parent_span.update(output=_trace_output)
+            parent_span.update_trace(
+                name=(_last_user[:60] if _last_user else "chat"),
+                input=_trace_input,
+                output=_trace_output,
+                metadata=_trace_metadata,
+            )
+            # Create a final "✅ response" observation that carries the
+            # user-visible answer as its I/O. Langfuse v3 trace overview falls
+            # back to displaying the latest child chain's I/O (e.g. QC chain
+            # returning "PASS", or the agent chain dumping the message
+            # history) when no other signal wins. By making this the very last
+            # observation in the trace with input=user-message and output=
+            # assistant-response, the trace overview reads what the user
+            # actually saw — regardless of which child chains ran earlier.
+            if trace_id and _tracing_enabled:
+                try:
+                    # Name the final span with the user's question — Langfuse v3
+                    # also derives trace.name from the latest observation, so a
+                    # generic "response" name would override the user-message
+                    # trace name we set on the parent span.
+                    _response_span_name = (_last_user[:60] if _last_user else "response")
+                    response_span = tracer.start_span(
+                        name=_response_span_name,
+                        trace_context={"trace_id": trace_id, "parent_span_id": parent_span_id},
+                        input=_trace_input,
+                    )
+                    response_span.update(output=_trace_output)
+                    response_span.update_trace(
+                        name=_response_span_name,
+                        input=_trace_input,
+                        output=_trace_output,
+                    )
+                    response_span.end()
+                except Exception as exc:
+                    logger.debug("[TRACE] response span failed: %s", exc)
+            logger.debug(
+                "[TRACE] Sealed trace output (%d chars) route=%s qc=%s recording=%s",
+                len(draft_response),
+                _route or "?",
+                "PASS" if _qc_passed else "CORRECTED",
+                getattr(getattr(parent_span, "_otel_span", None), "is_recording", lambda: "?")(),
+            )
             parent_span.end()
+            # Force immediate OTel batch export so the trace.output update we just
+            # set is visible in Langfuse UI without waiting for the next periodic
+            # flush.
+            try:
+                tracer.flush()
+            except Exception as exc:
+                logger.debug("[TRACE] flush failed: %s", exc)
 
         # 5. FINALIZE THE STREAM
         if coordinator_done_event:

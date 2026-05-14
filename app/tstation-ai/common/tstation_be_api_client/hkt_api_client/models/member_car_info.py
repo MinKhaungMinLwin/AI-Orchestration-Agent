@@ -37,6 +37,7 @@ class MemberCarInfo:
         car_eng_vol (None | str | Unset): 차량 배기량
         car_type (None | str | Unset): 차량 타입
         car_origin (None | str | Unset): 차량 제조국
+        car_maker (None | str | Unset): 차량 제조사
         pc_img_path_nm (None | str | Unset): PC 이미지 경로
         mo_img_path_nm (None | str | Unset): 모바일 이미지 경로
         thnl_img_path_nm (None | str | Unset): 썸네일 이미지 경로
@@ -64,6 +65,7 @@ class MemberCarInfo:
     car_eng_vol: None | str | Unset = UNSET
     car_type: None | str | Unset = UNSET
     car_origin: None | str | Unset = UNSET
+    car_maker: None | str | Unset = UNSET
     pc_img_path_nm: None | str | Unset = UNSET
     mo_img_path_nm: None | str | Unset = UNSET
     thnl_img_path_nm: None | str | Unset = UNSET
@@ -202,6 +204,12 @@ class MemberCarInfo:
         else:
             car_origin = self.car_origin
 
+        car_maker: None | str | Unset
+        if isinstance(self.car_maker, Unset):
+            car_maker = UNSET
+        else:
+            car_maker = self.car_maker
+
         pc_img_path_nm: None | str | Unset
         if isinstance(self.pc_img_path_nm, Unset):
             pc_img_path_nm = UNSET
@@ -267,6 +275,8 @@ class MemberCarInfo:
             field_dict["car_type"] = car_type
         if car_origin is not UNSET:
             field_dict["car_origin"] = car_origin
+        if car_maker is not UNSET:
+            field_dict["car_maker"] = car_maker
         if pc_img_path_nm is not UNSET:
             field_dict["pc_img_path_nm"] = pc_img_path_nm
         if mo_img_path_nm is not UNSET:
@@ -478,6 +488,15 @@ class MemberCarInfo:
 
         car_origin = _parse_car_origin(d.pop("car_origin", UNSET))
 
+        def _parse_car_maker(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        car_maker = _parse_car_maker(d.pop("car_maker", UNSET))
+
         def _parse_pc_img_path_nm(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -528,6 +547,7 @@ class MemberCarInfo:
             car_eng_vol=car_eng_vol,
             car_type=car_type,
             car_origin=car_origin,
+            car_maker=car_maker,
             pc_img_path_nm=pc_img_path_nm,
             mo_img_path_nm=mo_img_path_nm,
             thnl_img_path_nm=thnl_img_path_nm,

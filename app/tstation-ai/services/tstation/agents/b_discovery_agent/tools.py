@@ -22,12 +22,16 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 
 # Product Recommendation
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync_detailed as get_products_recommendations
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_best_sellers_api_product_best_sellers_get import sync_detailed as get_best_sellers
+from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 
 
 # Event/Deal
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_events_api_events_get import sync_detailed as get_events
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_event_applicable_products_multi_api_events_applicable_products_get import sync_detailed as get_event_applicable_products
+from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_product_applicable_events_api_events_applicable_events_get import sync_detailed as get_product_applicable_events
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
@@ -60,6 +64,8 @@ DOMAIN_TOOL_MAP = {
         # Event/Deal
         "get_events",
         "get_deals",
+        "get_event_applicable_products",
+        "get_product_applicable_events",
     },
     "transaction": {
         # Price
@@ -119,7 +125,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
     "tire_size_1", "tire_size_2",
     # Visual / pricing
-    "image_url", "price", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    "image_url", "price", "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching
     "tot_scr",
     "t_comfort", "t_silence", "t_life_span", "t_fuel_eff_convert",
@@ -129,8 +135,10 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
+    # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
+    "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count", "comfort",
+    "rating_avg", "rate", "review_count",
 })
 
 
@@ -170,6 +178,35 @@ def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
         logger.warning("[_sort_items] Unknown sort_by=%s; passing through", sort_by)
         return items
     return sorted(items, key=key_func)
+
+
+def _filter_by_price(
+    items: list[dict],
+    min_price: int | None,
+    max_price: int | None,
+) -> list[dict]:
+    """Filter items by effective price (sale price preferred over original).
+
+    Items with no price information are excluded when a price filter is active —
+    we cannot verify they are within budget.
+
+    Applied BEFORE _enrich_items_with_descriptions to avoid fetching descriptions
+    for items that will be discarded. extra_fvr_sale_prc comes from the main
+    search/recommendation BE response so it is available on raw items.
+    """
+    if not min_price and not max_price:
+        return items
+    result = []
+    for item in items:
+        effective_price = item.get("extra_fvr_sale_prc") or item.get("price") or 0
+        if not effective_price:
+            continue
+        if min_price and effective_price < min_price:
+            continue
+        if max_price and effective_price > max_price:
+            continue
+        result.append(item)
+    return result
 
 
 def _slim_product_item(item: dict) -> dict:
@@ -220,7 +257,7 @@ def _strip_brand_only_keyword(keyword: str | None) -> str | None:
     return keyword
 
 
-def _fetch_description(goods_no: str) -> dict:
+def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
     """Fetch product description and return flat fields the LLM whitelist keeps.
 
     The description endpoint returns nested `images: [{img_path_nm, thnl_path_nm}, ...]`
@@ -231,7 +268,7 @@ def _fetch_description(goods_no: str) -> dict:
       - `review_count` ← rating.review_count (used for sort_by="review_desc")
     """
     try:
-        response = get_product_description(client=get_client(), goods_no=goods_no)
+        response = get_product_description(client=client, goods_no=goods_no)
         if response.parsed is None:
             return {}
         desc = _to_dict(response.parsed)
@@ -267,8 +304,9 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
         return [_slim_product_item(item) for item in items]
 
     desc_map: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 5)) as executor:
-        futures = {executor.submit(_fetch_description, gno): gno for gno in goods_nos}
+    client = get_client()
+    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 20)) as executor:
+        futures = {executor.submit(_fetch_description, gno, client): gno for gno in goods_nos}
         for future in as_completed(futures):
             gno = futures[future]
             desc_map[gno] = future.result()
@@ -299,7 +337,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 
     Example: {"goods_no": "GXXXXXXXXXXXX", "car_no": "12가3456", "owner_nm": "홍길동"}
     """
-    logger.info("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, owner_nm=%s", goods_no, car_no, owner_nm)
+    logger.debug("[TOOL][check_compatibility_tool] Called with: goods_no=%s, car_no=%s, owner_nm=%s", goods_no, car_no, owner_nm)
 
     try:
         response = check_compatibility(client=get_client(), goods_no=goods_no, car_no=car_no, owner_nm=owner_nm)
@@ -309,7 +347,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to check tire compatibility"
             )
-        logger.info("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][check_compatibility_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][check_compatibility_tool] Failed")
@@ -324,6 +362,8 @@ def search_product_tool(
     size: str | None = None,
     brand_cd: str = "HK",
     sort_by: str | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
 ):
     """
     상품 검색.
@@ -366,6 +406,15 @@ def search_product_tool(
             - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 BE 기본 순서 유지.
+        min_price (int | None): 최소 가격 필터 (원 단위). Optional.
+            예: 200_000 ("20만원 이상")
+        max_price (int | None): 최대 가격 필터 (원 단위). Optional.
+            예: 300_000 ("30만원 이하")
+
+    Notes:
+        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
+        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
+        - 가격 정보 없는 상품은 필터 적용 시 제외됨.
 
     Examples:
         - {"keyword": "벤투스 S2", "limit": 5, "size": "225/45R17"}
@@ -375,34 +424,46 @@ def search_product_tool(
         - {"size": "235/55R19", "brand_cd": "BS"}  # 브리지스톤 사이즈만으로 검색
         - {"size": "225/45R17", "sort_by": "price_asc"}  # 가장 저렴한 순으로 정렬
         - {"keyword": "벤투스", "size": "225/45R17", "sort_by": "rating_desc"}  # 평점 높은 순
+        - {"brand_cd": "HK", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 한국타이어
+        - {"keyword": "벤투스 S2", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...}
+              or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
+              or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
     normalized_keyword = _strip_brand_only_keyword(keyword)
     if normalized_keyword != keyword:
-        logger.info(
+        logger.debug(
             "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
             keyword, brand_cd,
         )
-    logger.info(
-        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s",
-        normalized_keyword, limit, size, brand_cd, sort_by,
+    has_price_filter = bool(min_price or max_price)
+    fetch_limit = limit * 4 if has_price_filter else limit
+    logger.debug(
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
+        normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
     )
 
     try:
-        response = search_product(client=get_client(), keyword=normalized_keyword, limit=limit, size=size, brand_cd=brand_cd)
+        response = search_product(client=get_client(), keyword=normalized_keyword, limit=fetch_limit, size=size, brand_cd=brand_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search products"
             )
-        logger.info("[TOOL][search_product_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_product_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
+            if has_price_filter:
+                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                if not data["items"]:
+                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
+            if has_price_filter:
+                data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
@@ -429,7 +490,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
 
     Example: {"car_no": "12가3456", "owner_nm": "홍길동"}
     """
-    logger.info("[TOOL][get_user_vehicles_tool] Called with: car_no=%s, owner_nm=%s", car_no, owner_nm)
+    logger.debug("[TOOL][get_user_vehicles_tool] Called with: car_no=%s, owner_nm=%s", car_no, owner_nm)
 
     try:
         response = get_user_vehicles(client=get_client(), car_no=car_no, owner_nm=owner_nm)
@@ -439,7 +500,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get user vehicles"
             )
-        logger.info("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
@@ -466,7 +527,7 @@ def get_my_cars_tool(mbr_no: str):
 
     Example: {"mbr_no": "MXXXXXXXXX"}
     """
-    logger.info("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
+    logger.debug("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
 
     try:
         response = get_member_cars(client=get_client(), mbr_no=mbr_no)
@@ -476,7 +537,7 @@ def get_my_cars_tool(mbr_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get member cars"
             )
-        logger.info("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_my_cars_tool] Failed")
@@ -503,7 +564,7 @@ def search_car_model_tool(keyword: str, limit: int = 20):
 
     Example: {"keyword": "소나타", "limit": 20}
     """
-    logger.info("[TOOL][search_car_model_tool] Called with: keyword=%s, limit=%s", keyword, limit)
+    logger.debug("[TOOL][search_car_model_tool] Called with: keyword=%s, limit=%s", keyword, limit)
 
     try:
         response = search_car_model(client=get_client(), keyword=keyword, limit=limit)
@@ -513,7 +574,7 @@ def search_car_model_tool(keyword: str, limit: int = 20):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search car models"
             )
-        logger.info("[TOOL][search_car_model_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_car_model_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_car_model_tool] Failed")
@@ -541,7 +602,7 @@ def search_car_model_groups_tool(keyword: str):
 
     Example: {"keyword": "K7"}
     """
-    logger.info("[TOOL][search_car_model_groups_tool] Called with: keyword=%s", keyword)
+    logger.debug("[TOOL][search_car_model_groups_tool] Called with: keyword=%s", keyword)
 
     try:
         response = search_car_model_groups(client=get_client(), keyword=keyword)
@@ -551,7 +612,7 @@ def search_car_model_groups_tool(keyword: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to search car model groups"
             )
-        logger.info("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][search_car_model_groups_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][search_car_model_groups_tool] Failed")
@@ -576,7 +637,7 @@ def get_car_trims_tool(car_model_det: str):
 
     Example: {"car_model_det": "더 뉴 K7(VG)"}
     """
-    logger.info("[TOOL][get_car_trims_tool] Called with: car_model_det=%s", car_model_det)
+    logger.debug("[TOOL][get_car_trims_tool] Called with: car_model_det=%s", car_model_det)
 
     try:
         response = get_car_trims(client=get_client(), car_model_det=car_model_det)
@@ -586,7 +647,7 @@ def get_car_trims_tool(car_model_det: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get car trims"
             )
-        logger.info("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_car_trims_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_car_trims_tool] Failed")
@@ -604,7 +665,7 @@ def get_product_description_tool(goods_no: str):
 
     Example: {"goods_no": "GXXXXXXXXXXXX"}
     """
-    logger.info("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
+    logger.debug("[TOOL][get_product_description_tool] Called with: goods_no=%s", goods_no)
 
     try:
         response = get_product_description(client=get_client(), goods_no=goods_no)
@@ -614,7 +675,7 @@ def get_product_description_tool(goods_no: str):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product description"
             )
-        logger.info("[TOOL][get_product_description_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_product_description_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
@@ -625,11 +686,15 @@ def get_product_description_tool(goods_no: str):
 @tool_cache(ttl=300)
 def get_products_recommendations_tool(
     rcmd_type: RcmdType,
-    limit: int = 5,
+    limit: int = 10,
     brand_cd: str = "HK",
     car_lnc_cd: str | None = None,
     tire_size: str | None = None,
     sort_by: str | None = None,
+    season_nm: str | None = None,
+    pfm_nm: str | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
 ):
     """
     Product Recommendation — top N products by rcmd_type.
@@ -656,10 +721,11 @@ def get_products_recommendations_tool(
     - safe_kids: 안전 (T_RLX_ISN_YN='O', 정숙·하중 우선)
     - all_weather: 전천후 (WET, T_SNOW, T_ICE 높은 순)
     - warranty: 워런티 가능 (WRT_GRTE_TERM 긴 순)
+    - summer: 여름용 (SEASON_NM='여름', WET·T_HIGH_HAND_AVG 높은 순)
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 5, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -677,6 +743,33 @@ def get_products_recommendations_tool(
             - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 rcmd_type 의 BE 정렬 그대로 유지.
+        season_nm (str | None, optional): 계절 직교 필터. rcmd_type 과 직교로 적용된다.
+            - "여름": 여름용 타이어만
+            - "겨울": 겨울용 타이어만
+            - "사계절": 사계절 타이어만
+            ⚠️ 신규(동적) rcmd_type 에만 적용됨 (tstation/discount/value 제외).
+            "여름용 타이어 추천" 단일 의도면 rcmd_type="summer" 사용 (필터 불필요).
+        pfm_nm (str | None, optional): 성능 등급 직교 필터. rcmd_type 과 직교로 적용된다.
+            - "SPORT": 스포츠/퍼포먼스
+            - "COMFORT": 편안한 승차감
+            - "RUNFLAT": 런플랫
+            ⚠️ 신규(동적) rcmd_type 에만 적용됨.
+            "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
+        min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
+            예: 200_000 ("20만원 이상")
+        max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
+            예: 300_000 ("30만원 이하")
+
+    Combined-intent guidance (직교 필터):
+        - "퍼포먼스 좋은 여름용" → rcmd_type="performance", season_nm="여름"
+        - "조용한 사계절" → rcmd_type="low_vibration", season_nm="사계절"
+        - "런플랫 중에 빗길 강한" → rcmd_type="wet", pfm_nm="RUNFLAT"
+        - "30만원 이하 사계절 타이어" → rcmd_type="all_weather", max_price=300_000
+        - "20만원~30만원 가성비 타이어" → rcmd_type="value", min_price=200_000, max_price=300_000
+
+    Notes:
+        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
+        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
 
     Examples:
         - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
@@ -685,23 +778,33 @@ def get_products_recommendations_tool(
         - {"rcmd_type": "warranty", "limit": 5, "brand_cd": "HK"}
         - {"rcmd_type": "all_weather", "tire_size": "245/45R18", "sort_by": "price_asc"}  # 가장 저렴한 사계절 타이어
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
+        - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
+        - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
+        - {"rcmd_type": "value", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 가성비
+        - {"rcmd_type": "tstation", "tire_size": "225/45R17", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
 
     Returns:
-        dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+        dict: {"status": "success", "http_status": ..., "data": ...}
+              or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
+              or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
-    logger.info(
-        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by,
+    has_price_filter = bool(min_price or max_price)
+    fetch_limit = limit * 4 if has_price_filter else limit
+    logger.debug(
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
+        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
     )
 
     try:
         response = get_products_recommendations(
             client=get_client(),
             rcmd_type=rcmd_type,
-            limit=limit,
+            limit=fetch_limit,
             brand_cd=brand_cd,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
+            season_nm=season_nm,
+            pfm_nm=pfm_nm,
         )
         if response.parsed is None:
             return _error_response(
@@ -709,11 +812,17 @@ def get_products_recommendations_tool(
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get product recommendations"
             )
-        logger.info("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
+            if has_price_filter:
+                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                if not data["items"]:
+                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
+            if has_price_filter:
+                data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
@@ -730,7 +839,7 @@ def get_events_tool(lang_cd: str = "ko"):
 
     Example: {"lang_cd": "ko"}
     """
-    logger.info("[TOOL][get_events_tool] Called with: lang_cd=%s", lang_cd)
+    logger.debug("[TOOL][get_events_tool] Called with: lang_cd=%s", lang_cd)
 
     try:
         response = get_events(client=get_client(), lang_cd=lang_cd)
@@ -740,7 +849,7 @@ def get_events_tool(lang_cd: str = "ko"):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get events"
             )
-        logger.info("[TOOL][get_events_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_events_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_events_tool] Failed")
@@ -749,9 +858,78 @@ def get_events_tool(lang_cd: str = "ko"):
 
 @tool
 @tool_cache(ttl=600)
+def get_event_applicable_products_tool(evt_no_list: list[str]):
+    """이벤트 적용 가능 상품 조회 — 여러 이벤트에 적용 가능한 상품 목록을 이벤트별 그룹핑하여 반환.
+
+    Use when user asks "이 이벤트에 어떤 상품이 적용돼?", "이벤트 대상 상품 보여줘",
+    "이벤트 적용 가능한 상품 알려줘" 등. 단일 이벤트도 1개 list 로 전달.
+
+    Args:
+        evt_no_list (list[str]): 이벤트 번호 목록 (1~10개). 예: ["E000001234", "E000005678"].
+
+    Example: {"evt_no_list": ["E000001234", "E000005678"]}
+    """
+    logger.debug("[TOOL][get_event_applicable_products_tool] Called with: evt_no_list=%s", evt_no_list)
+
+    if not evt_no_list:
+        return _error_response(None, "evt_no_list is empty", "evt_no_list는 최소 1개 이상 필요합니다.")
+
+    # BE 는 [E1, E2] 또는 E1,E2 형식의 단일 쿼리 문자열을 받음
+    evt_no_param = f"[{','.join(str(e).strip() for e in evt_no_list)}]"
+
+    try:
+        response = get_event_applicable_products(client=get_client(), evt_no=evt_no_param)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get applicable products"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_event_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to get applicable products")
+
+
+@tool
+@tool_cache(ttl=600)
+def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
+    """상품 적용 가능 이벤트 조회 — 특정 상품에 적용 가능한 진행 중 이벤트 목록.
+
+    Use when user asks "이 상품에 어떤 이벤트가 적용돼?", "이 상품에 적용 가능한 이벤트 알려줘",
+    "지금 이 타이어 사면 어떤 행사 받을 수 있어?" 등. 진행 중(EVT_PRGS_STAT_CD='10')
+    이벤트만 반환되며 50(상품 매핑) / 80(패턴 매핑) 양쪽 모두 포함.
+
+    Args:
+        goods_no (str): 상품 번호 (예: 'G000000317693').
+        lang_cd (str): 이벤트명 언어 코드. Default 'ko'.
+
+    Example: {"goods_no": "G000000317693", "lang_cd": "ko"}
+    """
+    logger.debug(
+        "[TOOL][get_product_applicable_events_tool] Called with: goods_no=%s, lang_cd=%s",
+        goods_no, lang_cd,
+    )
+
+    try:
+        response = get_product_applicable_events(client=get_client(), goods_no=goods_no, lang_cd=lang_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get applicable events"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_product_applicable_events_tool] Failed")
+        return _error_response(None, str(e), "Failed to get applicable events")
+
+
+@tool
+@tool_cache(ttl=600)
 def get_deals_tool():
     """기획전 목록 조회 — 현재 전시 중인 기획전 목록."""
-    logger.info("[TOOL][get_deals_tool] Called")
+    logger.debug("[TOOL][get_deals_tool] Called")
 
     try:
         response = get_deals(client=get_client())
@@ -761,7 +939,7 @@ def get_deals_tool():
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get deals"
             )
-        logger.info("[TOOL][get_deals_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_deals_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][get_deals_tool] Failed")
@@ -781,7 +959,7 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
 
     Example: {"goods_no_list": ["GXXXXXXXXXXXX", "GXXXXXXXXXXXX"], "quantity": 4}
     """
-    logger.info("[TOOL][compare_discount_tool] Called with: goods_no_list=%s, quantity=%s", goods_no_list, quantity)
+    logger.debug("[TOOL][compare_discount_tool] Called with: goods_no_list=%s, quantity=%s", goods_no_list, quantity)
 
     try:
         response = get_discount_compare(client=get_client(), goods_no_list=goods_no_list, quantity=quantity)
@@ -791,7 +969,7 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to compare discount prices"
             )
-        logger.info("[TOOL][compare_discount_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][compare_discount_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
         logger.exception("[TOOL][compare_discount_tool] Failed")
@@ -808,7 +986,7 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
         query (str): 검색어 (e.g., '벤투스 S1 evo3 리뷰', 'iON evo').
         max_results (int): 최대 반환 영상 수. Default 3.
     """
-    logger.info("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
+    logger.debug("[TOOL][search_youtube_video_tool] Called with: query=%s, max_results=%s", query, max_results)
 
     try:
         from youtube_search import YoutubeSearch
@@ -845,7 +1023,7 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
             if len(formatted_results) >= max_results:
                 break
                 
-        logger.info("[TOOL][search_youtube_video_tool] Found %d official videos", len(formatted_results))
+        logger.debug("[TOOL][search_youtube_video_tool] Found %d official videos", len(formatted_results))
         
         if not formatted_results:
              return {
@@ -880,14 +1058,77 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...} or {"status": "error", ...}
     """
-    logger.info("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
+    logger.debug("[TOOL][get_final_price_tool] Called with: goods_no=%s, member_type=%s", goods_no, member_type)
     try:
         response = get_price(client=get_client(), goods_no=goods_no, member_type=member_type)
         if response.parsed is None:
             return {"status": "error", "http_status": response.status_code, "reason": f"HTTP {response.status_code}", "message": "Failed to get product price"}
-        logger.info("[TOOL][get_final_price_tool] Response: %s", response.parsed)
+        # logger.debug("[TOOL][get_final_price_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:
         logger.exception("[TOOL][get_final_price_tool] Failed")
         return {"status": "error", "reason": str(e), "message": "Failed to get product price"}
+
+
+_BEST_SELLER_PERIOD_MAP: dict[str, BestSellerPeriod] = {
+    "day": BestSellerPeriod.DAY,
+    "week": BestSellerPeriod.WEEK,
+    "month": BestSellerPeriod.MONTH,
+    "3months": BestSellerPeriod.VALUE_3,
+}
+
+
+@tool
+@tool_cache(ttl=600)
+def get_best_selling_products_tool(period: str = "month", limit: int = 5):
+    """
+    기간별 베스트셀러 상품 조회 (PR_GOODS_SUM 판매 수량 기준 정렬).
+
+    Period mapping (사용자 표현 → period 값):
+    - "오늘 가장 많이 팔린 상품 / 오늘의 베스트" → period="day"
+    - "이번 주 / 금주 베스트" → period="week"
+    - "이번 달 / 이달의 / 월별 베스트" → period="month"
+    - "요즘 / 최근 / 인기 / 잘 나가는 / 잘 팔리는" → period="month" (모호한 최근성 표현은 month로 매핑)
+    - "최근 3개월 / 분기 베스트" → period="3months"
+
+    Args:
+        period (str): "day" | "week" | "month" | "3months". Default "month".
+        limit (int): 반환 상품 수 (1-50). Default 5.
+
+    Response: BestSellerResponse — items 의 각 행에 goods_no, goods_nm,
+        tire_size_1/2, image_url, extra_fvr_sale_prc, extra_fvr_sale_per, sale_qty.
+
+    Example: {"period": "month", "limit": 5}
+    """
+    logger.debug("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
+
+    period_enum = _BEST_SELLER_PERIOD_MAP.get(period)
+    if period_enum is None:
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": f"period must be one of {sorted(_BEST_SELLER_PERIOD_MAP.keys())}; got {period!r}",
+        }
+    if not isinstance(limit, int) or not (1 <= limit <= 50):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "limit must be an int between 1 and 50",
+        }
+
+    try:
+        response = get_best_sellers(client=get_client(), period=period_enum, limit=limit)
+        if response.parsed is None:
+            return {
+                "status": "error",
+                "http_status": response.status_code,
+                "reason": f"HTTP {response.status_code}",
+                "message": response.content.decode(errors="ignore") or "Failed to get best-selling products",
+            }
+        # logger.debug("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
+        data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
+        return {"status": "success", "http_status": response.status_code, "data": data}
+    except Exception as e:
+        logger.exception("[TOOL][get_best_selling_products_tool] Failed")
+        return {"status": "error", "reason": str(e), "message": "Failed to get best-selling products"}

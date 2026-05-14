@@ -38,7 +38,7 @@ app/tstation-ai/api/router_local.py
 playground
 bin
 # Claude
-.claude
+.claude/
 .mcp.json
 plans
 

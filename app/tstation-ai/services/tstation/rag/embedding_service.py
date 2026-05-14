@@ -6,22 +6,43 @@ Supports multiple embedding models:
 - Cohere
 """
 
+import hashlib
+import json
 import logging
 import os
 import time
 from typing import Optional
 
+import redis as _redis
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────
-# In-process embedding cache (per-worker, not shared across pods)
+# L1: In-process embedding cache (per-worker, <1ms hit)
 # Key:   "{model}:{text}"   Value: (vector, inserted_monotonic)
 # TTL:   1 hour — query embeddings don't change within a session
 # Max:   2000 entries — prevents unbounded memory growth
+#
+# L2: Redis shared cache (cross-worker, ~2ms hit)
+# Key:   "embed:{model}:{md5(text)}"   TTL: 1 hour
 # ─────────────────────────────────────────────────────────────
 _embed_cache: dict[str, tuple[list[float], float]] = {}
 _EMBED_CACHE_TTL: float = 3600.0
 _EMBED_CACHE_MAX: int = 2000
+
+_redis_embed: Optional[_redis.Redis] = None
+
+
+def _get_redis_embed() -> Optional[_redis.Redis]:
+    global _redis_embed
+    if _redis_embed is None:
+        from config.env import settings
+        url = getattr(settings, "REDIS_CONVERSATION_MANAGEMENT_URL", None)
+        if url:
+            _redis_embed = _redis.from_url(
+                url, socket_timeout=1, socket_connect_timeout=1, decode_responses=True
+            )
+    return _redis_embed
 
 
 class EmbeddingService:
@@ -103,36 +124,55 @@ class EmbeddingService:
 
     def embed_text_cached(self, text: str) -> list[float]:
         """
-        Generate embedding with in-process TTL cache.
+        Generate embedding with two-layer cache.
 
-        Cache hit  → returns stored vector in <1ms (vs 120–350ms API call).
-        Cache miss → calls embed_text(), stores result.
-        Cache key  → "{model}:{text}" so different models never collide.
-        Eviction   → LRU-lite: when cache exceeds _EMBED_CACHE_MAX, oldest
-                     half is dropped (simple, no overhead).
+        L1 (in-process dict) → <1ms, per-worker only.
+        L2 (Redis)           → ~2ms, shared across all workers.
+        Cache miss           → calls embed_text() (~150ms API call).
         """
-        cache_key = f"{self.model}:{text}"
+        l1_key = f"{self.model}:{text}"
+        l2_key = f"embed:{self.model}:{hashlib.md5(text.encode()).hexdigest()}"
         now = time.monotonic()
 
-        entry = _embed_cache.get(cache_key)
+        # L1: in-process cache
+        entry = _embed_cache.get(l1_key)
         if entry is not None:
             vector, inserted_at = entry
             if now - inserted_at < _EMBED_CACHE_TTL:
-                logger.debug("[EmbeddingService] cache HIT  (len=%d)", len(text))
+                logger.debug("[EmbeddingService] L1 HIT (len=%d)", len(text))
                 return vector
-            del _embed_cache[cache_key]  # expired
+            del _embed_cache[l1_key]
+
+        # L2: Redis shared cache
+        r = _get_redis_embed()
+        if r is not None:
+            try:
+                cached = r.get(l2_key)
+                if cached is not None:
+                    vector = json.loads(cached)
+                    _embed_cache[l1_key] = (vector, now)
+                    logger.debug("[EmbeddingService] L2 Redis HIT (len=%d)", len(text))
+                    return vector
+            except Exception:
+                logger.debug("[EmbeddingService] Redis unavailable, falling through to API")
 
         vector = self.embed_text(text)
 
-        # Evict oldest half when full
+        if r is not None:
+            try:
+                r.setex(l2_key, int(_EMBED_CACHE_TTL), json.dumps(vector))
+            except Exception:
+                pass
+
+        # Evict oldest half when L1 is full
         if len(_embed_cache) >= _EMBED_CACHE_MAX:
             sorted_keys = sorted(_embed_cache, key=lambda k: _embed_cache[k][1])
             for old_key in sorted_keys[: _EMBED_CACHE_MAX // 2]:
                 del _embed_cache[old_key]
-            logger.debug("[EmbeddingService] cache evicted %d entries", _EMBED_CACHE_MAX // 2)
+            logger.debug("[EmbeddingService] L1 evicted %d entries", _EMBED_CACHE_MAX // 2)
 
-        _embed_cache[cache_key] = (vector, now)
-        logger.debug("[EmbeddingService] cache MISS (len=%d)", len(text))
+        _embed_cache[l1_key] = (vector, now)
+        logger.debug("[EmbeddingService] cache MISS → API (len=%d)", len(text))
         return vector
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
