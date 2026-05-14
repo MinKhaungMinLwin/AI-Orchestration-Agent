@@ -19,6 +19,7 @@ from services.tstation.agents.b_discovery_agent.tools import get_products_recomm
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_best_selling_products_tool
+from services.tstation.agents.c_transaction_agent.tools import get_product_promotions_tool
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -1137,7 +1138,10 @@ for "이벤트", "기획전", "행사", or event-applicable products.
 
 
 ## AFTER A PRODUCT LIST WAS SHOWN
-- If the user picks a product by name or ordinal, resolve goods_no from prior context and call get_product_description_tool.
+- If the user picks a product by name or ordinal from a prior discount recommendation list, resolve goods_no
+  from prior context and call get_product_promotions_tool to explain which active promotion/event provides
+  the discount.
+- Otherwise, if the user picks a product by name or ordinal, resolve goods_no from prior context and call get_product_description_tool.
 - Do not call search_product_tool when the previous recommendation/search list already contains the selected product.
 - After get_product_description_tool, emit quickReply with exactly these chips:
   [{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]
@@ -1147,7 +1151,8 @@ for "이벤트", "기획전", "행사", or event-applicable products.
 - get_my_cars_tool: registered vehicle selection for "my car" recommendation.
 - get_user_vehicles_tool: fallback when user provides car_no + owner name.
 - get_products_recommendations_tool: the main recommendation engine. Call it immediately once branch inputs are clear.
-- get_product_description_tool: product detail after user selects from a previous list.
+- get_product_description_tool: product detail after user selects from a previous non-discount list.
+- get_product_promotions_tool: active promotion/event/coupon source after user selects from a discount recommendation list.
 - search_product_tool: last-resort fallback only when a selected product cannot be resolved from prior context.
 
 
@@ -1155,6 +1160,9 @@ for "이벤트", "기획전", "행사", or event-applicable products.
 When get_my_cars_tool/get_user_vehicles_tool returns 1+ cars, respond with ONLY 1 short Korean sentence. The system renders the listCar card.
 When get_products_recommendations_tool returns 1+ products, respond with ONLY 1 short Korean sentence. The system renders the product card.
 When get_product_description_tool is used, output exactly ONE fenced JSON quickReply block.
+When get_product_promotions_tool is used, output exactly ONE fenced JSON quickReply block that names the active
+promotion/event/deal and date range when present. If none are found, say no active promotion/event is currently
+mapped to this product.
 For no-result/error/clarification cases, output exactly ONE fenced JSON quickReply block.
 
 Allowed templates: quickReply, product, listCar.
@@ -1546,6 +1554,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_deals_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
+        "get_product_promotions_tool": "Price",
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
         "get_final_price_tool": "Price",
@@ -1568,6 +1577,7 @@ class DiscoverySubAgent(BaseAgent):
             get_deals_tool,
             get_event_applicable_products_tool,
             get_product_applicable_events_tool,
+            get_product_promotions_tool,
             compare_discount_tool,
             get_final_price_tool,
         ]
@@ -1590,6 +1600,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_user_vehicles_tool,
                 get_products_recommendations_tool,
                 get_product_description_tool,
+                get_product_promotions_tool,
                 search_product_tool,
             ]
             system_prompt = get_discovery_recommendation_system_prompt

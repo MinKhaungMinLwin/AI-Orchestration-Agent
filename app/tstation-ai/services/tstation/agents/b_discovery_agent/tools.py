@@ -289,6 +289,60 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
         return {}
 
 
+def _fetch_price_fields(goods_no: str, client: AuthenticatedClient) -> dict:
+    """Fetch price fields needed to display discount-card backup data."""
+    try:
+        response = get_price(client=client, goods_no=goods_no, member_type=None)
+        if response.parsed is None:
+            return {}
+        price = _to_dict(response.parsed)
+        return {
+            key: price[key]
+            for key in ("sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per")
+            if price.get(key) not in (None, "", 0)
+        }
+    except Exception:
+        logger.warning("[_fetch_price_fields] Failed for goods_no=%s", goods_no)
+        return {}
+
+
+def _enrich_items_with_price_fields(items: list[dict]) -> list[dict]:
+    """Fill missing sale_prc for discount recommendations.
+
+    Recommendation rows already provide discount price/rate, but not always the
+    base sale_prc. The product card needs sale_prc to expose originalPrice and
+    discountAmount, so enrich only this narrow discount-card path.
+    """
+    if not items:
+        return items
+
+    goods_nos = [
+        item.get("goods_no")
+        for item in items
+        if item.get("goods_no") and not item.get("sale_prc")
+    ]
+    if not goods_nos:
+        return items
+
+    price_map: dict[str, dict] = {}
+    client = get_client()
+    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 10)) as executor:
+        futures = {executor.submit(_fetch_price_fields, gno, client): gno for gno in goods_nos}
+        for future in as_completed(futures):
+            gno = futures[future]
+            price_map[gno] = future.result()
+
+    enriched: list[dict] = []
+    for item in items:
+        goods_no = item.get("goods_no")
+        merged = dict(item)
+        for key, value in price_map.get(goods_no, {}).items():
+            if merged.get(key) in (None, "", 0):
+                merged[key] = value
+        enriched.append(merged)
+    return enriched
+
+
 def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
     """Parallel-fetch descriptions for each item, merge into item dicts, then slim.
 
@@ -819,6 +873,8 @@ def get_products_recommendations_tool(
                 data["items"] = _filter_by_price(data["items"], min_price, max_price)
                 if not data["items"]:
                     return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+            if str(rcmd_type) == "discount":
+                data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
             if has_price_filter:
