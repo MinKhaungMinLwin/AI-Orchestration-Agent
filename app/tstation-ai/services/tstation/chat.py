@@ -3445,8 +3445,9 @@ class TStationChatServiceV2:
         # through every signature in the agent → mapper chain.
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
-        from services.tstation.template_mapper import current_goal_type
+        from services.tstation.template_mapper import current_goal_type, current_pending_intent
         current_goal_type.set(merged_slots.goal_type)
+        current_pending_intent.set(merged_slots.pending_intent)
 
         _t_prestream = time.perf_counter()
         logger.debug(
