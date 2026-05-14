@@ -57,6 +57,9 @@ T = TypeVar("T")
 
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+# Matches trailing `quickReplies: [...]` that the model sometimes appends when it fails
+# to emit a proper fenced JSON block (plain-text fallback path in stream()).
+_INLINE_QUICK_REPLIES_RE = re.compile(r"\n\s*quickReplies:\s*(\[.*?\])\s*$", re.DOTALL | re.IGNORECASE)
 _UNQUOTED_JSON_KEY_RE = re.compile(r"(?<=[{,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
 
 
@@ -461,6 +464,20 @@ class BaseAgent(ABC):
                     # generic validation-failure apology.
                     prose_only = accumulated_text.strip()
                     if prose_only and self._extract_fenced_json(accumulated_text) is None:
+                        # Model emitted plain text instead of fenced JSON. Strip any
+                        # trailing `quickReplies: [...]` annotation and parse chips.
+                        chips: list[dict] = []
+                        m = _INLINE_QUICK_REPLIES_RE.search(prose_only)
+                        if m:
+                            prose_only = prose_only[:m.start()].strip()
+                            try:
+                                raw = json.loads(m.group(1))
+                                chips = [
+                                    {"label": c, "domain": None} if isinstance(c, str) else c
+                                    for c in raw if c
+                                ]
+                            except (json.JSONDecodeError, TypeError):
+                                pass
                         yield {"type": "token", "content": prose_only}
                         yield {
                             "type": "message",
@@ -472,7 +489,7 @@ class BaseAgent(ABC):
                             "template": "quickReply",
                             "data": {
                                 "assistantResponse": prose_only,
-                                "quickReplies": [],
+                                "quickReplies": chips,
                             },
                             "nextAction": {"type": "stop", "domain": None},
                         }
