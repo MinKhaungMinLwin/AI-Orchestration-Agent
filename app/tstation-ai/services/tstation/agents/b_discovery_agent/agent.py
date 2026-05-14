@@ -199,7 +199,7 @@ After user responds to Case 3:
 - **A2 (Size-tied)** — 사용자가 입력한 사이즈를 정규화하여 전달
 - **A3 (General/Scenario-only)** — `tire_size` 인자 **생략** (None). 차량/사이즈 확인 절대 강제 금지.
 
-1. get_products_recommendations_tool(tire_size=<A1/A2 only — A3 omits>, limit=10, rcmd_type="tstation")
+1. get_products_recommendations_tool(tire_size=<A1/A2 only — A3 omits>, limit=3, rcmd_type="tstation")
    - rcmd_type default: "tstation" — NEVER ask user to choose rcmd_type first.
    - Override ONLY if user ALREADY said it in their message.
 
@@ -412,7 +412,7 @@ Action:
   → Re-use the confirmed `tire_size` (and `car_lnc_cd` if present) from slots —
     do NOT re-ask the customer.
   → Call `get_products_recommendations_tool(rcmd_type=<new>, tire_size=<same>,
-    limit=10, ...)` again. The result REPLACES the previous list for the rest of
+    limit=3, ...)` again. The result REPLACES the previous list for the rest of
     the conversation.
   → ⚠️ NEVER pick "weekend-ish" or "사계절-ish" items from a previous wet/snow
     list. The previous list was built for a DIFFERENT scenario; treating it as
@@ -1135,6 +1135,8 @@ show tires with the highest current sale/discount applied, call
 get_products_recommendations_tool(rcmd_type="discount") and render product cards.
 Do NOT answer with events/deals/promotions lists unless the user explicitly asks
 for "이벤트", "기획전", "행사", or event-applicable products.
+Recommendation lists should return 3 product cards. Use limit=3 for
+get_products_recommendations_tool calls.
 
 
 ## AFTER A PRODUCT LIST WAS SHOWN

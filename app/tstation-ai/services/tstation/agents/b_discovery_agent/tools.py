@@ -740,7 +740,7 @@ def get_product_description_tool(goods_no: str):
 @tool_cache(ttl=300)
 def get_products_recommendations_tool(
     rcmd_type: RcmdType,
-    limit: int = 10,
+    limit: int = 3,
     brand_cd: str = "HK",
     car_lnc_cd: str | None = None,
     tire_size: str | None = None,
@@ -779,7 +779,7 @@ def get_products_recommendations_tool(
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 3, maximum is 100.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -826,7 +826,7 @@ def get_products_recommendations_tool(
         - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
 
     Examples:
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
+        - {"rcmd_type": "tstation", "limit": 3, "brand_cd": "HK"}
         - {"rcmd_type": "wet", "limit": 5, "brand_cd": "HK", "tire_size": "245/45R18"}
         - {"rcmd_type": "ev", "limit": 5, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX"}
         - {"rcmd_type": "warranty", "limit": 5, "brand_cd": "HK"}
