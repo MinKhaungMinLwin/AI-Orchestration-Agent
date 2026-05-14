@@ -786,6 +786,21 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     items, metadata = items[:10], metadata[:10]
 
+    # In order context, when the agent calls get_store_list_tool alone (no
+    # nearby/place search) and gets back exactly 1 store, this is a shop_id
+    # resolution turn — the user already selected a store from a previously
+    # shown list and the agent is resolving the name to an ID before calling
+    # inventory/schedule tools. Rendering the card again creates an infinite
+    # loop because the FE re-sends the store name on each click.
+    is_shopid_resolution = (
+        has_order_intent
+        and len(items) == 1
+        and "get_nearby_stores_tool" not in called_tools
+        and "search_place_tool" not in called_tools
+    )
+    if is_shopid_resolution:
+        return None
+
     # `isBookingFlow` controls FE click routing (True → /chat to advance the
     # flow; False → /append, just renders the description bubble). True when
     # either: (a) this turn explicitly carries a transactional signal —
