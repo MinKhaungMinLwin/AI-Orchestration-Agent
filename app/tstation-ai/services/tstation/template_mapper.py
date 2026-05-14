@@ -74,6 +74,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # location
     "get_store_list_tool": "location",
     "get_nearby_stores_tool": "location",
+    "transaction_store_preview_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
     # orderComplete (cart-save / quick-order — terminal step in transaction flow)
@@ -95,6 +96,7 @@ _BOOKING_SIGNAL_TOOLS = frozenset({
     "get_final_price_tool",
     "save_to_cart_tool",
     "quick_order_tool",
+    "transaction_store_preview_tool",
 })
 
 # Korean short weekday labels used for datepick `date` strings.
@@ -683,7 +685,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             detail_by_shop_id[shop_id] = raw
 
     items, metadata = [], []
-    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool"):
+    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -784,6 +786,21 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     items, metadata = items[:10], metadata[:10]
 
+    # In order context, when the agent calls get_store_list_tool alone (no
+    # nearby/place search) and gets back exactly 1 store, this is a shop_id
+    # resolution turn — the user already selected a store from a previously
+    # shown list and the agent is resolving the name to an ID before calling
+    # inventory/schedule tools. Rendering the card again creates an infinite
+    # loop because the FE re-sends the store name on each click.
+    is_shopid_resolution = (
+        has_order_intent
+        and len(items) == 1
+        and "get_nearby_stores_tool" not in called_tools
+        and "search_place_tool" not in called_tools
+    )
+    if is_shopid_resolution:
+        return None
+
     # `isBookingFlow` controls FE click routing (True → /chat to advance the
     # flow; False → /append, just renders the description bubble). True when
     # either: (a) this turn explicitly carries a transactional signal —
@@ -795,7 +812,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
-        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup()
+        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup() or has_order_intent
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
@@ -1294,6 +1311,7 @@ _MAPPERS: dict[str, Any] = {
     "search_youtube_video_tool": _map_preview_youtube,
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
+    "transaction_store_preview_tool": _map_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
     "save_to_cart_tool": _map_order_complete,
@@ -1342,6 +1360,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
+        ("transaction_store_preview_tool", _map_location),
         # Lowest priority — only fires when neither the location card path
         # (info-only `_map_location` returns None) nor any higher-priority
         # template applies. Owns the Flow 5 General single-store info answer.
