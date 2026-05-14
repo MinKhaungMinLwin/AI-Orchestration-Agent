@@ -34,6 +34,9 @@ For clarifications, no-result, failure, or text-only responses, output exactly o
 ```json
 {"type":"data","template":"quickReply","data":{"assistantResponse":"<Korean answer>","quickReplies":[],"predictedDomains":["TRANSACTION"]},"nextAction":{"type":"stop","domain":null}}
 ```
+For `quickReply`, `quickReplies` MUST be a list of objects, never strings:
+- CORRECT: `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
+- WRONG: `["내 쿠폰 조회"]`
 """
 
 _TRANSACTION_FULL_BODY = """
@@ -1298,6 +1301,10 @@ Handle ONLY coupon and promotion requests.
 ## Output Policy
 When get_my_coupons_tool or get_available_coupons_tool returns coupons, respond with ONLY 1 short Korean sentence.
 The system renders the voucher card from the tool result; do not list coupon names or IDs in text.
+When a coupon tool returns no coupons, or when asking a clarification, emit exactly one `quickReply` JSON block.
+In that JSON, `quickReplies` MUST be objects with `label` and `domain`, for example:
+`[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"받을 수 있는 쿠폰 조회","domain":"TRANSACTION"}]`.
+Never emit `quickReplies` as a plain string array.
 """
 
 
@@ -1459,6 +1466,7 @@ class TransactionSubAgent(BaseAgent):
                 get_final_price_tool,
                 get_product_promotions_tool,
                 get_logistics_inventory_tool,
+                get_available_coupons_tool,
             ]
             system_prompt = get_transaction_price_stock_system_prompt
             name = "Transaction Agent (Price/Stock)"

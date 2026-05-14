@@ -62,12 +62,15 @@ class AgentPromptProfile(str, Enum):
     TRANSACTION_STORE = "transaction_store"
     TRANSACTION_PRICE_STOCK = "transaction_price_stock"
     DISCOVERY_SEARCH = "discovery_search"
+    DISCOVERY_RECOMMENDATION = "discovery_recommendation"
+    DISCOVERY_EVENT_CONTENT = "discovery_event_content"
 
 
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 _speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _decision_verify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S = 0.15
 _SYNC_ITER_SENTINEL = object()
 
 
@@ -244,7 +247,9 @@ class MultiAgentDomain(BaseModel):
             "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status), "
             "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
             "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock with product name only, best-sellers — goods_no NOT yet known). "
-            "Use 'full' for tire recommendation, vehicle lookup, events/deals/YouTube, or any mixed/uncertain case."
+            "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards). "
+            "'discovery_event_content' (events, deals, event-applicable products, product events, YouTube/video). "
+            "Use 'full' for compatibility-only or any mixed/uncertain case."
         )
     )
 
@@ -279,7 +284,9 @@ class _SlimMultiAgentDomain(BaseModel):
         description=(
             "Prompt profile for the selected domain agent. "
             "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size "
-            "or best-sellers (no goods_no in context); 'full' for recommendation, vehicle lookup, events, or uncertain cases."
+            "or best-sellers (no goods_no in context); 'discovery_recommendation' for tire recommendation by vehicle, "
+            "tire size, scenario, or continuation from recommendation cards; 'discovery_event_content' for events/deals/video; "
+            "'full' for compatibility-only or uncertain cases."
         )
     )
 
@@ -310,8 +317,10 @@ Produce 6 outputs:
    - "transaction_order": order history, order status, cart, quick order
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
+   - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock query with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
-   - "full": tire recommendation ("추천"), vehicle lookup, events/deals/YouTube, mixed, ambiguous, or uncertain cases
+   - "discovery_event_content": events/deals, event-applicable products, product-applicable events, YouTube/video
+   - "full": compatibility-only, mixed, ambiguous, or uncertain cases
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -517,12 +526,14 @@ EXAMPLES (tricky cases):
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
-- "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=full
-- "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=full (price range recommendation)
+- "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
+- "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "20만원에서 30만원 사이 한국타이어" → DISCOVERY, agent_prompt_profile=discovery_search (product search by price range)
 - "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
+- "진행 중인 이벤트 보여줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
+- "리뷰 영상 찾아줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
 - "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
 
@@ -533,7 +544,9 @@ agent_prompt_profile:
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
 - discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
-- full: tire recommendation ("추천"), vehicle lookup ("내 차에 맞는"), events/deals/YouTube, mixed, ambiguous, or uncertain
+- discovery_recommendation: tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards ("추천", "내 차에 맞는")
+- discovery_event_content: events/deals, event-applicable products, product-applicable events, YouTube/video
+- full: compatibility-only, mixed, ambiguous, or uncertain
 """
 
 
@@ -629,6 +642,8 @@ class StreamingMultiAgentCoordinator:
 
         if MultiAgentDomain.Domain.TRANSACTION in domains:
             timeout: float | None = None
+        elif MultiAgentDomain.Domain.DISCOVERY in domains:
+            timeout = 0 if classify_future.done() else _DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S
         elif classify_future.done():
             timeout = 0
         else:
@@ -637,7 +652,8 @@ class StreamingMultiAgentCoordinator:
         try:
             verified_domains, routing_result = classify_future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
-            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout * 1000)
+            timeout_ms = timeout * 1000 if timeout is not None else 0
+            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
             return None
         except Exception as exc:
             logger.debug("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)

@@ -88,6 +88,7 @@ class QuickReplyDataEvent(BaseModel):
     type: Literal["data"] = "data"
     template: Literal["quickReply"] = "quickReply"
     data: QuickReplyTemplate
+    nextAction: "NextActionPayload | None" = None
 
 
 class RedictLink(BaseModel):
