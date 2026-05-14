@@ -78,7 +78,7 @@ class QuickReplyTemplate(TemplatePayload):
 
     TEMPLATE_NAME: ClassVar[str] = "quickReply"
 
-    _MAX_QUICK_REPLIES = 4
+    _MAX_QUICK_REPLIES: ClassVar[int] = 4
 
     assistantResponse: str = Field(..., min_length=1)
     quickReplies: list[QuickReplyChip] = Field(default_factory=list)
