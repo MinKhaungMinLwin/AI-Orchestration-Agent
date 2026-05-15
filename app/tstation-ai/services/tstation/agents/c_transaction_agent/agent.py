@@ -1587,7 +1587,8 @@ When get_my_coupons_tool returns coupons, respond with ONLY 1 short Korean sente
 The system renders the voucher card from the tool result; do not list coupon names or IDs in text.
 When a coupon tool returns no coupons, or when asking a clarification, emit exactly one `quickReply` JSON block.
 In that JSON, `quickReplies` MUST be objects with `label` and `domain`, for example:
-`[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"받을 수 있는 쿠폰 조회","domain":"TRANSACTION"}]`.
+`[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"내 주문 조회","domain":"TRANSACTION"}]`.
+다운로드 가능 쿠폰 조회 기능은 제공하지 않으므로, "받을 수 있는 쿠폰 조회" / "다운로드 가능 쿠폰" 류 라벨은 quickReplies 에 절대 포함하지 마라.
 Never emit `quickReplies` as a plain string array.
 """
 

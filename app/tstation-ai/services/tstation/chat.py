@@ -385,7 +385,7 @@ DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
-- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰", "오늘 취소하면 수수료 있나요?"
+- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰", "오늘 취소하면 수수료 있나요?"
 
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
