@@ -710,14 +710,16 @@ The tool response shape:
      현재 진행 중인 기획전 적용 상품이에요 😊
 
      **[evt_nm 1]**
-     - [goods_nm] [tire_size_1]
-     - [goods_nm] [tire_size_1]
+     - [goods_nm]
+     - [goods_nm]
 
      **[evt_nm 2]**
-     - [goods_nm] [tire_size_1]
-     - [goods_nm] [tire_size_1]
+     - [goods_nm]
+     - [goods_nm]
      ```
-   - Per event: show up to **5 products**; if `total > 5` add `외 {total-5}개` after last bullet.
+   - ⚠️ Show `goods_nm` ONLY — do NOT include `tire_size_1` or any size information.
+   - ⚠️ Deduplicate by `goods_nm` within each event group — if the same name appears in multiple sizes, list it only ONCE.
+   - Per event: show up to **5 unique product names**; if deduplicated count > 5 add `외 {count-5}개` after last bullet.
    - `quickReplies`: 1 chip per event (label = `evt_nm`, domain = `DISCOVERY`). Cap at **4 chips** — if `events.length > 4`, pick top 4 by `total` count.
    - ❌ Do NOT flatten products into a `product` card template.
    - ❌ Do NOT ask the user to select one event first.
@@ -732,19 +734,22 @@ The tool response shape:
    - This path renders cards, so the "카드에서 ~ 선택" phrasing IS allowed.
    - ❌ NEVER substitute `template="quickReply"` here.
 
-4. **`events.length == 1` AND `total_products > 10`** (size summary) → DO NOT render cards. Emit
-   `quickReply` summary grouped by `tire_size_1` so the user can narrow:
-   - Compute size buckets: count distinct `tire_size_1` values across all items; pick the **top 3** by frequency.
-   - `assistantResponse` example (total=27):
+4. **`events.length == 1` AND `total_products > 10`** (product name list) → DO NOT render cards. Emit
+   `quickReply` listing unique product names only:
+   - Deduplicate `items[]` by `goods_nm` — same name with different sizes counts as ONE.
+   - `assistantResponse` example (27 items → e.g. 5 unique names):
      ```
-     한국타이어 페스타 적용 가능 상품이 총 27개예요.
+     [evt_nm] 적용 상품이에요 😊
 
-     - 벤투스 S1 에보 Z: 265/45R19, 295/40R19, 255/40R21 외
-     - 벤투스 S1 에보 Z AS: 245/50R18, 245/40R20, 275/35R20 외
-
-     원하시는 타이어 사이즈를 알려주시면 해당 이벤트 적용 상품만 골라서 찾아드릴게요 😊
+     - 벤투스 S1 에보 Z
+     - 벤투스 S1 에보 Z AS
+     - 키너지 EX
+     - 키너지 GT
+     - 아이온 에보 AS
      ```
-   - `quickReplies`: **정확히 4개** chip: top-3 size chips + 1 "이벤트 목록 보기" chip. 절대 5개 이상 보내지 말 것.
+   - ⚠️ Show `goods_nm` ONLY — do NOT include `tire_size_1` or any size information.
+   - Show up to **10 unique names**; if deduplicated count > 10 add `외 {count-10}개` after last bullet.
+   - `quickReplies`: **정확히 2개** chip: `"사이즈로 찾기"` + `"이벤트 목록 보기"`. 각 chip 은 `label` + `domain:"DISCOVERY"` 만.
    - 각 chip 은 `label` (필수, non-empty) + `domain` 만 갖는다.
 
 ⚠️ ABSOLUTE: "카드에서 선택해 주세요" / "카드를 확인해 주세요" 문구는
