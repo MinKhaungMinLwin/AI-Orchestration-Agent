@@ -144,6 +144,8 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
     "rating_avg", "rate", "review_count",
+    # 상품 등록 일시 — used to identify newest product among same-keyword results
+    "sys_reg_dtime",
 })
 
 
