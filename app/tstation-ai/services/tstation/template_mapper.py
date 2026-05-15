@@ -913,6 +913,11 @@ def _parse_tm_to_hour(tm: str) -> int | None:
     return h if 0 <= h <= 23 else None
 
 
+def _is_bookable_hour(hour: int) -> bool:
+    """Return whether a parsed hour may be shown as a selectable booking slot."""
+    return hour != 12
+
+
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Map slot-emitting tools to a `datepick` event.
 
@@ -958,7 +963,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not cal_day or hour is None:
             continue
         bucket = by_day.setdefault(cal_day, set())
-        if is_installable:
+        if is_installable and _is_bookable_hour(hour):
             bucket.add(hour)
 
     if not by_day:
@@ -1033,7 +1038,7 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         hours: list[int] = []
         for s in slot_strs:
             h = _parse_tm_to_hour(str(s))
-            if h is not None:
+            if h is not None and _is_bookable_hour(h):
                 hours.append(h)
         hours = sorted(set(hours))
         if not hours:
