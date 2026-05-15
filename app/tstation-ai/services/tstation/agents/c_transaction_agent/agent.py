@@ -1308,7 +1308,8 @@ Trigger: 직전 턴에 쿠폰 조회가 있었고 ("가진 쿠폰 중 할인 제
 - get_product_promotions_tool 결과 (도구는 deal + coupon 둘 다 반환; 답변에는 사용자 의도 도메인만):
   - 사용자 의도 = "쿠폰":
     • items 비어있으면 → "현재 이 상품에 적용 가능한 쿠폰이 없어요 😊"
-    • items 존재 시 → coupons[] 갯수만 자연어로 요약. 기획전 이름 언급 X.
+    • items 존재 시 → 모든 items[].coupons[] 의 `cpn_nm` 을 dedup 해서 bullet 또는 콤마 리스트로 노출. cpn_nm 이 null 이면 "이름 없는 쿠폰" 으로 표시. 기획전 이름 / cpn_no 언급 X.
+      Example: `"이 상품에 적용 가능한 쿠폰이 있어요 😊\n- 한국타이어 상품 할인쿠폰\n- 키너지EX 스페셜 할인"`
   - 사용자 의도 = "기획전":
     • items 비어있으면 → "현재 이 상품에 적용 가능한 기획전이 없어요 😊"
     • items 존재 시 → 기획전명 + 진행 기간(disp_strt~end_dtime) 만 안내. 쿠폰 개수 언급 X.
@@ -1698,7 +1699,8 @@ When a coupon tool returns no coupons, or when asking a clarification, emit exac
 When get_product_promotions_tool returns items (도구 응답은 deal + coupon 둘 다; 답변은 사용자 의도 도메인만):
 - 사용자가 "쿠폰" 의도 → quickReply, assistantResponse 에 **쿠폰만** 언급.
   - items[].coupons 가 모두 비어있으면: `"현재 이 상품에 적용 가능한 쿠폰이 없어요 😊"`
-  - coupons 존재: `"이 상품에 적용 가능한 쿠폰이 있어요 😊"` (갯수만 자연어, 기획전 이름 언급 X). 🚫 발급 CTA ("쿠폰 받기 라고 말씀해 주세요" 등) 절대 미노출.
+  - coupons 존재: 모든 items[].coupons[] 의 `cpn_nm` 을 dedup 해서 bullet 리스트로 노출. cpn_nm 이 null 인 항목은 "이름 없는 쿠폰" 으로 표시.
+    Example: `"이 상품에 적용 가능한 쿠폰이 있어요 😊\n- <cpn_nm 1>\n- <cpn_nm 2>"`. 기획전명 / cpn_no / deal_no 노출 X. 🚫 발급 CTA 절대 미노출.
 - 사용자가 "기획전" 의도 → quickReply, assistantResponse 에 **기획전만** 언급.
   - items[] 빈 배열이면: `"현재 이 상품에 적용 가능한 기획전이 없어요 😊"`
   - items 존재: `"<deal_nm> (<disp_strt_dtime 의 yyyy-mm-dd> ~ <disp_end_dtime 의 yyyy-mm-dd>) 기획전에서 이 상품을 만나실 수 있어요 😊"` (쿠폰 갯수/CTA 언급 X).
