@@ -246,8 +246,8 @@ class MultiAgentDomain(BaseModel):
             "Prompt profile for the selected domain agent. "
             "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status), "
             "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
-            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock with product name only, best-sellers — goods_no NOT yet known). "
-            "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards). "
+            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock/discount-price with specific product name, best-sellers — goods_no NOT yet known). "
+            "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT specific product name, or continuation from recommendation cards). "
             "'discovery_event_content' (events, deals, event-applicable products, product events, YouTube/video). "
             "Use 'full' for compatibility-only or any mixed/uncertain case."
         )
@@ -283,10 +283,11 @@ class _SlimMultiAgentDomain(BaseModel):
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
-            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size "
-            "or best-sellers (no goods_no in context); 'discovery_recommendation' for tire recommendation by vehicle, "
-            "tire size, scenario, or continuation from recommendation cards; 'discovery_event_content' for events/deals/video; "
-            "'full' for compatibility-only or uncertain cases."
+            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size, "
+            "price/stock/discount-price with specific product name, or best-sellers (no goods_no in context); "
+            "'discovery_recommendation' for tire recommendation by vehicle, tire size, scenario, "
+            "discount ranking WITHOUT a specific product name, or continuation from recommendation cards; "
+            "'discovery_event_content' for events/deals/video; 'full' for compatibility-only or uncertain cases."
         )
     )
 
@@ -315,12 +316,12 @@ Produce 6 outputs:
 6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order
-   - "transaction_store": store search, nearby store, store detail, schedule, store inventory
-   - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
-   - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어")
-   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock query with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
-   - "discovery_event_content": events/deals, event-applicable products, product-applicable events, YouTube/video
-   - "full": compatibility-only, mixed, ambiguous, or uncertain cases
+   - "transaction_store": store search, nearby store, store detail, schedule, store inventory; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
+   - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
+   - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
+   - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -528,14 +529,23 @@ EXAMPLES (tricky cases):
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
+- "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
+- "할인율 높은 타이어 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (highest discount applied)
 - "20만원에서 30만원 사이 한국타이어" → DISCOVERY, agent_prompt_profile=discovery_search (product search by price range)
 - "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
+- "다이나프로 HPX 할인된 가격이 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product + discount price = search, NOT recommendation)
+- "벤투스 S2 할인가 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product name → search for it, not discount ranking)
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
 - "진행 중인 이벤트 보여줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "리뷰 영상 찾아줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
 - "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
+- [Prior context: agent showed size options for "오목천점 예약" request] User says "255/45R20" → TRANSACTION, agent_prompt_profile=transaction_store (size selection inside active reservation flow — needs store+schedule, NOT price/stock)
+- [Prior context: agent showed size options for "오목천점 예약" request] User says "255/55R18" → TRANSACTION, agent_prompt_profile=transaction_store (same rule: reservation context overrides price_stock profile)
+- "2026년 4월 23일 (목)\n11:00" → TRANSACTION, agent_prompt_profile=full (datepick UI selection — date+newline+time pattern means user picked a slot; full profile needed for preOrder → quick_order flow)
+- "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
+- [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
 Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
 agent_prompt_profile:
@@ -543,9 +553,9 @@ agent_prompt_profile:
 - transaction_order: order/cart/status -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock with product name only, best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
-- discovery_recommendation: tire recommendation by vehicle, tire size, scenario, or continuation from recommendation cards ("추천", "내 차에 맞는")
-- discovery_event_content: events/deals, event-applicable products, product-applicable events, YouTube/video
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
+- discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
+- discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain
 """
 
@@ -1498,16 +1508,6 @@ class StreamingMultiAgentCoordinator:
                     )
                     continue
 
-                # Agent already produced a complete UI payload — decide_next_action
-                # would return STOP anyway. Keep multi-domain planner/nextAction paths active.
-                if (
-                    domain_data_event_emitted
-                    and agent_declared_decision is None
-                    and self._planner_decision(domains, routing_result, domain) is None
-                ):
-                    logger.debug("[COORDINATOR] Data event emitted — skipping decide_next_action")
-                    break
-
                 # P1-B stall recovery (LAST RESORT): when domains was [TRANSACTION]
                 # alone (P0b gate did not catch the case) and Transaction emitted a
                 # "상품을 검색…" fallback line WITHOUT calling any tool, with goods_no
@@ -1529,11 +1529,20 @@ class StreamingMultiAgentCoordinator:
                 #      legitimately called e.g. get_orders_of_user_tool stay untouched.
                 #   3. `full_response` matches a search-fallback regex.
                 #   4. `goods_no` still None in slots after the Transaction turn.
+                #
+                # IMPORTANT: this check must run BEFORE the `domain_data_event_emitted`
+                # early break below — Transaction often emits a `quickReply` template
+                # with empty `quickReplies` when stalled (e.g. "정확한 상품을 선택해
+                # 주세요"), which sets domain_data_event_emitted=True and would
+                # otherwise short-circuit recovery.
                 if (
                     domain == MultiAgentDomain.Domain.TRANSACTION
                     and len(domains) == 1
                     and not last_agent_called_tools
-                    and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요", full_response or "")
+                    and re.search(
+                        r"상품을?\s*검색|상품\s*검색이?\s*필요|상품을?\s*선택|먼저\s*선택|정확한\s*상품",
+                        full_response or "",
+                    )
                 ):
                     goods_no_still_none = pending_slots is None or pending_slots.goods_no is None
                     if goods_no_still_none:
@@ -1588,6 +1597,19 @@ class StreamingMultiAgentCoordinator:
                         domains.append(MultiAgentDomain.Domain.TRANSACTION)
                         skip_decision = True
                         continue
+
+                # Agent already produced a complete UI payload — decide_next_action
+                # would return STOP anyway. Keep multi-domain planner/nextAction paths active.
+                # NOTE: positioned AFTER P1-B/P1-D stall recovery so that recovery can
+                # fire even when a stuck quickReply (e.g. empty quickReplies asking the
+                # user to "select" with no options) was emitted as a data event.
+                if (
+                    domain_data_event_emitted
+                    and agent_declared_decision is None
+                    and self._planner_decision(domains, routing_result, domain) is None
+                ):
+                    logger.debug("[COORDINATOR] Data event emitted — skipping decide_next_action")
+                    break
 
                 planner_decision = self._planner_decision(domains, routing_result, domain)
                 if agent_declared_decision is not None:
@@ -1980,12 +2002,20 @@ def _rule_based_classify(
 
 def _sanitize_response(text: str) -> str:
     """Replace internal jargon with user-friendly fallback if response has no useful content."""
-    stripped = text.strip()
+    stripped = _strip_qc_verdict_from_user_text(text).strip()
     if not stripped:
         return _FALLBACK_RESPONSE
     if _INTERNAL_JARGON_PATTERN.search(stripped) and len(stripped) < 100:
         return _FALLBACK_RESPONSE
-    return text
+    return stripped
+
+
+def _strip_qc_verdict_from_user_text(text: str) -> str:
+    """Remove standalone QC verdict markers from user-facing text."""
+    if not isinstance(text, str):
+        return ""
+    lines = [line for line in text.splitlines() if line.strip().upper() != "PASS"]
+    return "\n".join(lines)
 
 
 
@@ -3423,11 +3453,25 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
-            and merged_slots.goods_no is None
             and (
-                merged_slots.tire_size is not None
-                or merged_slots.tire_model is not None
-                or ConversationSlots.has_product_keyword(last_user_text)
+                # Original case: no goods_no in slots + any product hint
+                (
+                    merged_slots.goods_no is None
+                    and (
+                        merged_slots.tire_size is not None
+                        or merged_slots.tire_model is not None
+                        or ConversationSlots.has_product_keyword(last_user_text)
+                    )
+                )
+                # Fresh-product case: user mentioned brand keyword + fresh size in
+                # CURRENT turn — treat any prior goods_no as stale (different product
+                # from prior session activity). Without this, P0b would skip the
+                # redirect and Transaction would emit a "정확한 상품을 선택해 주세요"
+                # quickReply with no path forward.
+                or (
+                    ConversationSlots.has_product_keyword(last_user_text)
+                    and regex_slots.tire_size is not None
+                )
             )
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
@@ -3769,7 +3813,8 @@ class TStationChatServiceV2:
                 event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     if event_data.get("assistantResponse"):
-                        assistant_response = event_data["assistantResponse"]
+                        assistant_response = _sanitize_response(event_data["assistantResponse"])
+                        event_data["assistantResponse"] = assistant_response
                         if _suppress_tokens:
                             draft_response = assistant_response
                             draft_for_qc = assistant_response

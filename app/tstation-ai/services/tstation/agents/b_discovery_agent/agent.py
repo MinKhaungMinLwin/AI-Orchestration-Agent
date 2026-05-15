@@ -19,6 +19,7 @@ from services.tstation.agents.b_discovery_agent.tools import get_products_recomm
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_best_selling_products_tool
+from services.tstation.agents.c_transaction_agent.tools import get_product_promotions_tool
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -198,7 +199,7 @@ After user responds to Case 3:
 - **A2 (Size-tied)** — 사용자가 입력한 사이즈를 정규화하여 전달
 - **A3 (General/Scenario-only)** — `tire_size` 인자 **생략** (None). 차량/사이즈 확인 절대 강제 금지.
 
-1. get_products_recommendations_tool(tire_size=<A1/A2 only — A3 omits>, limit=10, rcmd_type="tstation")
+1. get_products_recommendations_tool(tire_size=<A1/A2 only — A3 omits>, limit=3, rcmd_type="tstation")
    - rcmd_type default: "tstation" — NEVER ask user to choose rcmd_type first.
    - Override ONLY if user ALREADY said it in their message.
 
@@ -217,7 +218,7 @@ After user responds to Case 3:
 
    **Step B — 단일 키워드 매핑 (no combined match → single keyword)**
      • "가성비" → "value"
-     • "할인", "최고 할인" → "discount"
+     • "할인", "세일", "최고 할인", "할인율 높은", "많이 할인되는", "세일 많이 하는 타이어" → "discount"
      • "빗길", "장마", "비 올 때" → "wet"
      • "눈길", "빙판", "겨울철" → "snow"
      • "고속", "고속도로" → "high_speed"
@@ -411,7 +412,7 @@ Action:
   → Re-use the confirmed `tire_size` (and `car_lnc_cd` if present) from slots —
     do NOT re-ask the customer.
   → Call `get_products_recommendations_tool(rcmd_type=<new>, tire_size=<same>,
-    limit=10, ...)` again. The result REPLACES the previous list for the rest of
+    limit=3, ...)` again. The result REPLACES the previous list for the rest of
     the conversation.
   → ⚠️ NEVER pick "weekend-ish" or "사계절-ish" items from a previous wet/snow
     list. The previous list was built for a DIFFERENT scenario; treating it as
@@ -966,7 +967,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `listCar` shape (max 5; no auto-select even for 1 car):
 Schema: `{type:"data", template:"listCar", data:{assistantResponse:str, listCar:[{licensePlate:str, info:str, description:str, imageUrl:str}], metadata:[{carNo:str, carLncCd:str, tireSize:str, tireSizeRe:str}]}}`
@@ -986,6 +987,9 @@ Backend → FE field mapping (all templates):
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| `sale_prc` | `products[i].originalPrice` | `null` if missing/0 |
+| `extra_fvr_sale_per` | `products[i].discountRate` | `null` if missing/0 |
+| `sale_prc - extra_fvr_sale_prc` | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |
@@ -1080,6 +1084,7 @@ Handle ONLY tire recommendation flows by registered vehicle, tire size, or drivi
 - Use this profile for recommendation requests: "추천", "맞는 타이어", "내 차", vehicle number, tire size, EV/all-season/wet/snow/value/family/performance scenarios.
 - Do NOT handle events/deals/YouTube here. If the request is about those topics, answer with a short quickReply asking the user to clarify.
 - Do NOT handle product-name search as the primary flow. Product-name search belongs to discovery_search.
+- Do NOT handle price or discount queries for a specific named product (e.g. "벤투스 S2 할인가", "다이나프로 HPX 가격"). Those belong to discovery_search.
 
 
 ## CONFIRMED SLOTS
@@ -1108,7 +1113,8 @@ Choose exactly one branch before calling tools:
 Default rcmd_type is "tstation".
 Override only when the user already gave a scenario:
 - value/cheap/cost-effective -> value
-- discount -> discount
+- discount / sale / highest discount / heavily discounted tires -> discount
+- "세일 많이 하는 타이어", "할인 많이 되는 타이어", "할인율 높은 타이어", "가장 많이 할인되는 타이어" -> discount
 - wet/rain -> wet
 - snow/winter -> snow
 - highway/high speed -> high_speed
@@ -1128,9 +1134,20 @@ Override only when the user already gave a scenario:
 If the user gives a price budget/range, pass min_price/max_price to the recommendation tool.
 If the user asks for cheapest/rating/review order, pass sort_by when supported by the tool.
 
+Discounted tire ranking is a product recommendation flow. For requests asking to
+show tires with the highest current sale/discount applied, call
+get_products_recommendations_tool(rcmd_type="discount") and render product cards.
+Do NOT answer with events/deals/promotions lists unless the user explicitly asks
+for "이벤트", "기획전", "행사", or event-applicable products.
+Recommendation lists should return 3 product cards. Use limit=3 for
+get_products_recommendations_tool calls.
+
 
 ## AFTER A PRODUCT LIST WAS SHOWN
-- If the user picks a product by name or ordinal, resolve goods_no from prior context and call get_product_description_tool.
+- If the user picks a product by name or ordinal from a prior discount recommendation list, resolve goods_no
+  from prior context and call get_product_promotions_tool to explain which active promotion/event provides
+  the discount.
+- Otherwise, if the user picks a product by name or ordinal, resolve goods_no from prior context and call get_product_description_tool.
 - Do not call search_product_tool when the previous recommendation/search list already contains the selected product.
 - After get_product_description_tool, emit quickReply with exactly these chips:
   [{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]
@@ -1140,7 +1157,8 @@ If the user asks for cheapest/rating/review order, pass sort_by when supported b
 - get_my_cars_tool: registered vehicle selection for "my car" recommendation.
 - get_user_vehicles_tool: fallback when user provides car_no + owner name.
 - get_products_recommendations_tool: the main recommendation engine. Call it immediately once branch inputs are clear.
-- get_product_description_tool: product detail after user selects from a previous list.
+- get_product_description_tool: product detail after user selects from a previous non-discount list.
+- get_product_promotions_tool: active promotion/event/coupon source after user selects from a discount recommendation list.
 - search_product_tool: last-resort fallback only when a selected product cannot be resolved from prior context.
 
 
@@ -1148,6 +1166,9 @@ If the user asks for cheapest/rating/review order, pass sort_by when supported b
 When get_my_cars_tool/get_user_vehicles_tool returns 1+ cars, respond with ONLY 1 short Korean sentence. The system renders the listCar card.
 When get_products_recommendations_tool returns 1+ products, respond with ONLY 1 short Korean sentence. The system renders the product card.
 When get_product_description_tool is used, output exactly ONE fenced JSON quickReply block.
+When get_product_promotions_tool is used, output exactly ONE fenced JSON quickReply block that names the active
+promotion/event/deal and date range when present. If none are found, say no active promotion/event is currently
+mapped to this product.
 For no-result/error/clarification cases, output exactly ONE fenced JSON quickReply block.
 
 Allowed templates: quickReply, product, listCar.
@@ -1169,6 +1190,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Product-applicable events: events that apply to a known product/goods_no.
 - Video/review: "영상", "리뷰 영상", "유튜브", "동영상".
 - Do NOT handle recommendation, product search, price/stock, store, order, coupon, warranty, or complaints here.
+- Do NOT handle discounted tire ranking such as "세일 많이 하는 타이어", "할인 많이 되는 타이어", or "할인율 높은 타이어". Those belong to discovery_recommendation with rcmd_type="discount".
 
 
 ## TOOL USE
@@ -1462,7 +1484,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `cheapestProduct` shape (exactly 1 item):
 Schema: `{type:"data", template:"cheapestProduct", data:{assistantResponse:str, cheapestProduct:[{title:str, originalPrice:int, quantity:int, totalDiscount:int, productDiscount:int, couponDiscount:int, finalPrice:int}], metadata:[{goodsId:str}]}}`
@@ -1476,6 +1498,9 @@ Backend → FE field mapping:
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| `sale_prc` | `products[i].originalPrice` | `null` if missing/0 |
+| `extra_fvr_sale_per` | `products[i].discountRate` | `null` if missing/0 |
+| `sale_prc - extra_fvr_sale_prc` | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |
@@ -1538,6 +1563,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_deals_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
+        "get_product_promotions_tool": "Price",
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
         "get_final_price_tool": "Price",
@@ -1560,6 +1586,7 @@ class DiscoverySubAgent(BaseAgent):
             get_deals_tool,
             get_event_applicable_products_tool,
             get_product_applicable_events_tool,
+            get_product_promotions_tool,
             compare_discount_tool,
             get_final_price_tool,
         ]
@@ -1582,6 +1609,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_user_vehicles_tool,
                 get_products_recommendations_tool,
                 get_product_description_tool,
+                get_product_promotions_tool,
                 search_product_tool,
             ]
             system_prompt = get_discovery_recommendation_system_prompt

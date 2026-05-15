@@ -26,7 +26,7 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "list_key": "items",
         "keep": {
             "goods_no", "goods_nm", "tire_size_1",
-            "extra_fvr_sale_prc", "extra_fvr_sale_per",
+            "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
             # 신규 케이스용 점수/속성 (QC 사실 검증용)
             "wet", "t_snow", "t_ice", "t_highspd", "t_highspd_cd",
             "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
@@ -47,6 +47,14 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "prc_grd_nm",
             # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
             "goods_pfm_nm",
+        },
+    },
+    # sale_qty 는 내부 정렬 근거 — 사용자 노출 금지. QC source 에서 제거해 QC 가 "사실 추가" 정정을 못하도록 차단.
+    "get_best_selling_products_tool": {
+        "list_key": "items",
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1",
+            "extra_fvr_sale_prc", "extra_fvr_sale_per",
         },
     },
     "get_faq_tool": {
@@ -91,7 +99,7 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
         "list_key": "items",
         "keep": {
             "goods_no", "goods_nm", "tire_size_1",
-            "extra_fvr_sale_prc", "extra_fvr_sale_per",
+            "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
             "tot_scr", "t_comfort", "t_silence", "t_life_span",
             # 신규 케이스용 점수/속성 (대화 컨텍스트 보존)
             "wet", "t_snow", "t_ice", "t_highspd",

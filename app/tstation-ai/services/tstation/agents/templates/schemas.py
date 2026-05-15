@@ -4,9 +4,12 @@ Each migrated domain agent should use a structured response schema so the model
 returns the final FE payload in a guaranteed shape.
 """
 
+import logging
 from typing import Annotated, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class TemplatePayload(BaseModel):
@@ -75,9 +78,19 @@ class QuickReplyTemplate(TemplatePayload):
 
     TEMPLATE_NAME: ClassVar[str] = "quickReply"
 
+    _MAX_QUICK_REPLIES: ClassVar[int] = 4
+
     assistantResponse: str = Field(..., min_length=1)
-    quickReplies: list[QuickReplyChip] = Field(default_factory=list, max_length=4)
+    quickReplies: list[QuickReplyChip] = Field(default_factory=list)
     predictedDomains: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("quickReplies")
+    @classmethod
+    def truncate_quick_replies(cls, v: list[QuickReplyChip]) -> list[QuickReplyChip]:
+        if len(v) > cls._MAX_QUICK_REPLIES:
+            logger.warning("quickReplies has %d chips, truncating to %d", len(v), cls._MAX_QUICK_REPLIES)
+            return v[: cls._MAX_QUICK_REPLIES]
+        return v
 
 
 class QuickReplyDataEvent(BaseModel):
