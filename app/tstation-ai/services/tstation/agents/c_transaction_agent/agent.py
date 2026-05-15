@@ -555,8 +555,10 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
      - location.stores: **재고 있는 매장만 필터링**해서 표시. 각 store description 끝에 라벨 추가 — 매장재고: "[매장재고]" / T바로배송: "[T바로배송]"
      → STOP. 사용자가 매장 선택 시 Flow 3-Single STEP A의 결과를 재사용해 응답 (이미 inventory 결과가 있으므로 inventory 재호출 금지).
    → **매장재고 0 + 물류재고 있음** (`logistics_qty > 0`): emit `location` 템플릿
-     - assistantResponse: "[지역]에는 매장 재고가 없지만, 물류 배송으로 장착 가능한 매장입니다. 원하시는 매장을 선택해 주세요."
+     - assistantResponse: "[지역]에는 현재 매장 재고가 없어 오늘 바로 방문 구매는 어렵습니다. 물류 배송을 통해 [rsv_install_date] 이후 장착 가능합니다. 원하시는 매장을 선택해 주세요."
+       (rsv_install_date 없으면 "물류 배송 일정은 주문 후 안내됩니다"로 대체)
      - location.stores: 지역 매장 리스트. 각 description에 "[물류배송]" 라벨 추가.
+     ⚠️ 이 케이스에서 "T바로배송 가능합니다" 표현 절대 금지 — T바로배송은 tnaShopArray 매장에만 해당.
    → **모두 없음** (`logistics_qty = 0`): emit `quickReply`
      - rsv_sale_yn = "Y": assistantResponse "[지역]에는 재고가 없지만, [rsv_install_date] 이후 예약 주문 가능합니다." + quickReplies ["다른 지역 확인", "예약 주문"]
      - rsv_sale_yn = "N": assistantResponse "[지역]에는 현재 재고가 있는 매장이 없습니다." + quickReplies ["다른 지역 확인"]
@@ -589,7 +591,10 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 ── STEP B: Logistics inventory (fallback) ──
 4. `get_logistics_inventory_tool(goods_no)`
    → logistics_qty > 0: emit `quickReply`
-     - assistantResponse: "[shop_nm]에는 매장 재고가 없지만, 물류 배송으로 장착 가능합니다."
+     - assistantResponse: "[shop_nm]에는 현재 매장 재고가 없어 오늘 즉시 방문 구매·장착은 불가합니다. 물류 배송을 통해 [rsv_install_date] 이후 장착 가능합니다."
+       (rsv_install_date 없으면 "물류 배송 일정은 주문 후 확인 가능합니다"로 대체)
+     ⚠️ "T바로배송 가능합니다" 절대 금지 — T바로배송은 tnaShopArray에 있는 매장만 해당. 이 케이스는 tnaShopArray 미포함.
+     ⚠️ "지금 가면 바로 살 수 있어?" / "즉시 구매 가능?" 류 질문이 직전에 있었다면 답변 첫 문장에 "현재 [shop_nm]에는 재고가 없어 즉시 방문 구매는 어렵습니다."를 반드시 포함할 것.
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
    → logistics_qty = 0 + rsv_sale_yn = "Y": emit `quickReply`
