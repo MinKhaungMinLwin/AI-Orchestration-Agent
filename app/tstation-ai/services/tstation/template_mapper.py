@@ -988,7 +988,15 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
     cal_day; cal_day itself isn't in the response, so we read it from the
     tool's input args. Falls back to None when args.cal_day is missing or
     slots are empty/unparseable.
+
+    Booking-intent guard: when the same turn carries no booking-signal tool
+    (stock/price/cart/order), the user is asking for plain store info, not
+    booking a slot. Returning None lets `_map_store_detail_info` render the
+    info card instead of an unwanted reservation picker.
     """
+    called_tools = {e.get("tool", "") for e in tool_data_list}
+    if not (called_tools & _BOOKING_SIGNAL_TOOLS):
+        return None
     for entry in _find_entries(tool_data_list, "get_store_detail_tool"):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if not isinstance(args, dict):
@@ -1252,7 +1260,11 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     - ``cal_day`` other than today implies Flow 5.1 (date-specific) — defer to
       the LLM so it can emit datepick or the "no slots, try another date"
       apology message for that specific date.
-    - Non-empty ``available_slots`` is Flow 5.1 with availability → datepick.
+
+    Note: non-empty ``available_slots`` no longer skips info rendering.
+    `_map_datepick_from_detail` already guards on booking-signal tools, so
+    by the time we get here without those signals the user is asking for
+    plain info — slot presence is incidental, not a routing decision.
     """
     called_tools = {e.get("tool", "") for e in tool_data_list}
     if "get_store_schedule_tool" in called_tools or "get_multi_store_schedule_tool" in called_tools:
@@ -1273,10 +1285,6 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     kst = datetime.timezone(datetime.timedelta(hours=9))
     today = datetime.datetime.now(kst).strftime("%Y%m%d")
     if cal_day and cal_day != today:
-        return None
-
-    slots = raw.get("available_slots")
-    if isinstance(slots, list) and slots:
         return None
 
     shop_nm = _get_str(raw, "shop_nm")
