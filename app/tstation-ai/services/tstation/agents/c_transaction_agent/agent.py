@@ -1244,8 +1244,9 @@ Schema: `{type:"data", template:"location", data:{assistantResponse:str, stores:
 - Default to `true` when in doubt — booking-flow misclassification is recoverable; info-only misclassification causes UX friction.
 
 `datepick` — schedule/slot results:
-Schema: `{type:"data", template:"datepick", data:{assistantResponse:str, dates:[{date:str, available:bool, availableTimes:[int], index:int}], selectedDate:int|null, metadata:{shopId:str}}}`
+Schema: `{type:"data", template:"datepick", data:{assistantResponse:str, dates:[{date:str, available:bool, availableTimes:[int], index:int}], selectedDate:int|null, metadata:{shopId:str, shopName:str}}}`
 - `date`: Korean string e.g. `"2026년 4월 22일 (수)"` (convert cal_day YYYYMMDD). `availableTimes`: int hours from slots e.g. `"09"→9`. `selectedDate`: index of nearest date with non-empty times; null if none.
+- `metadata.shopName`: 선택된 매장명 (`shop_nm`) — FE 스케줄 카드 상단에 노출되어 사용자가 어떤 매장의 일정인지 인지할 수 있게 함. 도구 응답의 `shop_nm` 그대로 사용.
 
 `preOrder` — order preview before confirmation (STEP 5.5):
 Schema: `{type:"data", template:"preOrder", data:{assistantResponse:str, orderInfo:{carInfo:str|null, product:str, quantity:int, storeName:str|null, bookingDateTime:str|null, paymentAmount:int|null}, isReadyToOrder:bool, isReadyToAddToCart:bool, metadata:{goodsId:str, shopId:str, carNo:str, carLncCd:str}}}`

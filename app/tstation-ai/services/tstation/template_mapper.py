@@ -923,6 +923,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return _map_datepick_from_detail(tool_data_list, assistant_text)
 
     shop_id = _get_str(raw, "shop_id")
+    shop_nm = _get_str(raw, "shop_nm")
     slots = raw.get("slots")
     if not shop_id or not isinstance(slots, list):
         return _map_datepick_from_detail(tool_data_list, assistant_text)
@@ -968,6 +969,9 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
 
     short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
+    metadata: dict = {"shopId": shop_id}
+    if shop_nm:
+        metadata["shopName"] = shop_nm
     return {
         "type": "data",
         "template": "datepick",
@@ -975,7 +979,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         "data": {
             "dates": dates,
             "selectedDate": selected_idx,
-            "metadata": {"shopId": shop_id},
+            "metadata": metadata,
             "assistantResponse": short,
         },
     }
@@ -1020,6 +1024,10 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         if not hours:
             continue
         short, response_source = _summarize_with_source(assistant_text, "datepick", 1)
+        shop_nm = _get_str(raw, "shop_nm")
+        metadata: dict = {"shopId": shop_id}
+        if shop_nm:
+            metadata["shopName"] = shop_nm
         return {
             "type": "data",
             "template": "datepick",
@@ -1032,7 +1040,7 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
                     "index": 0,
                 }],
                 "selectedDate": 0,
-                "metadata": {"shopId": shop_id},
+                "metadata": metadata,
                 "assistantResponse": short,
             },
         }
