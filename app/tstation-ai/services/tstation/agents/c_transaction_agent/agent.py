@@ -171,6 +171,14 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 
 ## STORE SEARCH — CALL TOOL IMMEDIATELY (no clarification needed)
 - If goods_no + qty are known and the user wants purchase/store/stock/schedule preview → prefer transaction_store_preview_tool.
+  After transaction_store_preview_tool returns, interpret result.data:
+  → tier ≠ "none": slots exist in result.data.stores → render datepick directly from those slots.
+  → tier = "none" + candidate_shop_ids non-empty + reservation/booking intent ("예약", "장착", "방문 날짜"):
+    Immediately call get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode="general") in the same turn
+    → datepick. ⚠️ tier="none" means no same-day slot, NOT that reservation is impossible — future
+    slots may still be available. Do NOT stop or respond with "재고 없음 / 확인되지 않음".
+  → tier = "none" + candidate_shop_ids empty: store not found or not installable →
+    emit quickReply: "해당 조건에 맞는 매장이 없어요." + quickReplies ["다른 매장 찾기"]
 - Region name (강남, 부산, 해운대 등) → get_store_list_tool(region_code=...)
 - Store name (티스테이션 역삼점 등) → get_store_list_tool(store_nm=...)
 - Address / landmark / "XXX 근처" → search_place_tool(query) → get_nearby_stores_tool(x, y)
