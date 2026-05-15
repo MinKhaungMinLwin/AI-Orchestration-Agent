@@ -2002,12 +2002,20 @@ def _rule_based_classify(
 
 def _sanitize_response(text: str) -> str:
     """Replace internal jargon with user-friendly fallback if response has no useful content."""
-    stripped = text.strip()
+    stripped = _strip_qc_verdict_from_user_text(text).strip()
     if not stripped:
         return _FALLBACK_RESPONSE
     if _INTERNAL_JARGON_PATTERN.search(stripped) and len(stripped) < 100:
         return _FALLBACK_RESPONSE
-    return text
+    return stripped
+
+
+def _strip_qc_verdict_from_user_text(text: str) -> str:
+    """Remove standalone QC verdict markers from user-facing text."""
+    if not isinstance(text, str):
+        return ""
+    lines = [line for line in text.splitlines() if line.strip().upper() != "PASS"]
+    return "\n".join(lines)
 
 
 
@@ -3805,7 +3813,8 @@ class TStationChatServiceV2:
                 event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     if event_data.get("assistantResponse"):
-                        assistant_response = event_data["assistantResponse"]
+                        assistant_response = _sanitize_response(event_data["assistantResponse"])
+                        event_data["assistantResponse"] = assistant_response
                         if _suppress_tokens:
                             draft_response = assistant_response
                             draft_for_qc = assistant_response
