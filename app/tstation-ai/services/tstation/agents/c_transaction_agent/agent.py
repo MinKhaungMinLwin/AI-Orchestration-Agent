@@ -1167,16 +1167,20 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
 4. Interpret 주문상태 / 배송상태 from the result and respond with EXACTLY ONE of:
 
    **A. No active/recent online order found (pure store visit reservation, no online order):**
-   → "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 매장 또는 1:1 문의로 취소를 요청해 주세요."
+   → assistantResponse: "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
+   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
-   → "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n취소를 원하시면 1:1 문의를 통해 진행해 주시면 안내드릴게요 😊"
+   → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n취소를 원하시면 1:1 문의를 통해 진행해 주시면 안내드릴게요 😊"
+   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
-   → "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
+   → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
+   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **D. Multiple orders found — cannot determine which one:**
    → Show order list (주문번호, 상품명, 예약일시 if available, 주문상태) and ask: "어떤 주문에 대해 문의하시는 건가요?"
+   → quickReplies: [] (wait for user to pick an order)
    → After user picks, re-evaluate against cases A/B/C above.
 
 ⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 1:1 문의, not the store.
@@ -1637,16 +1641,20 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
 4. Respond with EXACTLY ONE of:
 
    **A. No active/recent online order found (pure store visit reservation, no online order):**
-   → "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 매장 또는 1:1 문의로 취소를 요청해 주세요."
+   → assistantResponse: "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
+   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
-   → "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n취소를 원하시면 1:1 문의를 통해 진행해 주시면 안내드릴게요 😊"
+   → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n취소를 원하시면 1:1 문의를 통해 진행해 주시면 안내드릴게요 😊"
+   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
-   → "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
+   → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
+   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **D. Multiple possible orders found — cannot determine which one:**
    → Show order list (주문번호, 상품명, 예약일시 if available, 주문상태) and ask: "어떤 주문에 대해 문의하시는 건가요?"
+   → quickReplies: [] (wait for user to pick an order)
    → After user picks, re-evaluate against cases B/C above.
 
 ⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 1:1 문의, not the store.

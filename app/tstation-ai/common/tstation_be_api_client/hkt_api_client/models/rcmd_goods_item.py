@@ -54,6 +54,7 @@ class RcmdGoodsItem:
         label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB, VARCHAR2). 라벨 표기용 — 정숙성 내부 점수와 별개
         wrt_grte_term (int | None | Unset): 워런티 보증 기간 개월 (WRT_GRTE_TERM)
         rating_avg (float | None | Unset): 평균 평점 (RATING_AVG)
+        sys_reg_dtime (None | str | Unset): 상품 등록 일시 (PR_GOODS_BASE.SYS_REG_DTIME, 형식: 'YYYY-MM-DD HH24:MI:SS')
         image_url (None | str | Unset):
         title (None | str | Unset):
         price (int | None | Unset):
@@ -95,6 +96,7 @@ class RcmdGoodsItem:
     label_pndb: None | str | Unset = UNSET
     wrt_grte_term: int | None | Unset = UNSET
     rating_avg: float | None | Unset = UNSET
+    sys_reg_dtime: None | str | Unset = UNSET
     image_url: None | str | Unset = UNSET
     title: None | str | Unset = UNSET
     price: int | None | Unset = UNSET
@@ -303,6 +305,12 @@ class RcmdGoodsItem:
         else:
             rating_avg = self.rating_avg
 
+        sys_reg_dtime: None | str | Unset
+        if isinstance(self.sys_reg_dtime, Unset):
+            sys_reg_dtime = UNSET
+        else:
+            sys_reg_dtime = self.sys_reg_dtime
+
         image_url: None | str | Unset
         if isinstance(self.image_url, Unset):
             image_url = UNSET
@@ -406,6 +414,8 @@ class RcmdGoodsItem:
             field_dict["wrt_grte_term"] = wrt_grte_term
         if rating_avg is not UNSET:
             field_dict["rating_avg"] = rating_avg
+        if sys_reg_dtime is not UNSET:
+            field_dict["sys_reg_dtime"] = sys_reg_dtime
         if image_url is not UNSET:
             field_dict["image_url"] = image_url
         if title is not UNSET:
@@ -721,6 +731,15 @@ class RcmdGoodsItem:
 
         rating_avg = _parse_rating_avg(d.pop("rating_avg", UNSET))
 
+        def _parse_sys_reg_dtime(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        sys_reg_dtime = _parse_sys_reg_dtime(d.pop("sys_reg_dtime", UNSET))
+
         def _parse_image_url(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -801,6 +820,7 @@ class RcmdGoodsItem:
             label_pndb=label_pndb,
             wrt_grte_term=wrt_grte_term,
             rating_avg=rating_avg,
+            sys_reg_dtime=sys_reg_dtime,
             image_url=image_url,
             title=title,
             price=price,
