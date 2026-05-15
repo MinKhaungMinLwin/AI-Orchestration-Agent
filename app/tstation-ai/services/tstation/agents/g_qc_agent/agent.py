@@ -23,6 +23,13 @@ Output the corrected draft if any factual claim is wrong — fix only the wrong 
 
 No preamble, no explanation. Output only PASS or the corrected draft.
 
+## get_product_description_tool — descriptive summary protection (DO NOT trim)
+When the Source Data contains `slogan`, `pc_prod_tech_desc`, `rating`, or `reviews` (i.e. the draft is summarizing a product description tool output), prose summaries derived from these fields are LEGITIMATE — do NOT remove them.
+- 제품 설명 요약 (e.g. "SUV 전용 프리미엄 컴포트 타이어로 정숙성·조종 안정성을 강화한 제품"): valid if the underlying keywords appear in `slogan` or `pc_prod_tech_desc` (HTML tags stripped). Output PASS.
+- 평점·리뷰 수 (e.g. "평점 3.8점, 리뷰 6건"): only correct if the number is wrong vs `rating.rating_avg` / `rating.review_count`. If accurate, PASS.
+- 리뷰 요약 (e.g. "'정숙성이 뛰어나다'는 후기가 있어요"): valid if the substance matches any non-null `reviews[].gdas_cont`. Do NOT require an exact word-for-word quote — short paraphrases are fine.
+- NEVER trim the description summary down to just the rating+review count line. If the draft naturally includes all 4 elements (description summary, rating, review count, review snippet), keep all 4.
+
 ## orderComplete template — context-derived fields (DO NOT correct from tool output)
 When the draft contains an `orderComplete` template, these `orderInfo` fields come from CONVERSATION CONTEXT (the `preOrder` card shown in a prior turn), NOT from `quick_order_tool` result:
 - `orderInfo.storeName` — format is "shop_nm (shop_id)". NEVER replace with a bare shop_id like "F08890".

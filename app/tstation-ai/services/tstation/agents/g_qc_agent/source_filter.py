@@ -69,7 +69,9 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
 
 # tool_name → drop_keys for single-object responses
 _DROP_TOOL_RULES: dict[str, set[str]] = {
-    "get_product_description_tool": {"images", "reviews", "pc_prod_remark_desc", "pc_prod_tech_desc", "slogan"},
+    # slogan / pc_prod_tech_desc / reviews 는 description 요약·리뷰 요약의 출처라 QC 검증에 필요 (drop 금지).
+    # pc_prod_remark_desc(보증/AS 템플릿 문구) 와 images 만 QC 검증과 무관해 drop.
+    "get_product_description_tool": {"images", "pc_prod_remark_desc"},
 }
 
 
