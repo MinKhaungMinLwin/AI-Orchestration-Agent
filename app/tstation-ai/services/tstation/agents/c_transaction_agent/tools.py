@@ -156,10 +156,10 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
 
 
 
-def _fetch_order_detail(ord_no: str) -> dict:
+def _fetch_order_detail(ord_no: str, client: AuthenticatedClient | None = None) -> dict:
     """Fetch order delivery detail for a single ord_no, return detail dict or empty on failure."""
     try:
-        response = get_order_delivery(client=get_client(), query_no=ord_no)
+        response = get_order_delivery(client=client or get_client(), query_no=ord_no)
         if response.parsed is None:
             return {}
         return _to_dict(response.parsed)
@@ -178,8 +178,9 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
         return orders
 
     detail_map: dict[str, dict] = {}
+    detail_client = get_client()
     with ThreadPoolExecutor(max_workers=min(len(ord_nos), 20)) as executor:
-        futures = {executor.submit(_fetch_order_detail, ono): ono for ono in ord_nos}
+        futures = {executor.submit(_fetch_order_detail, ono, detail_client): ono for ono in ord_nos}
         for future in as_completed(futures):
             ono = futures[future]
             detail_map[ono] = future.result()

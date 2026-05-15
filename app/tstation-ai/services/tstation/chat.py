@@ -370,7 +370,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
 - SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -501,7 +501,7 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용) [⚠️ NOT SUPPORT — must check order/logistics state].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
 - SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
@@ -515,6 +515,7 @@ RULES:
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 매장/근처/올마이티/All My T → TRANSACTION
+- 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
 - 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용 → TRANSACTION, agent_prompt_profile=transaction_order
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
@@ -527,6 +528,8 @@ EXAMPLES (tricky cases):
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
+- "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
 - "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order (check order/logistics state, NOT FAQ)
 - "예약 취소하면 비용이 발생하나요?" → TRANSACTION, agent_prompt_profile=transaction_order (store visit vs online order must be determined from orders)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
