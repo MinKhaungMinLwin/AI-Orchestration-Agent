@@ -163,6 +163,15 @@ If get_my_cars_tool returns 2+ cars AND user already provided a car_no in their 
 → Match that car_no against the list → extract tire_size_fr → go to RECOMMEND ENGINE immediately.
 → Do NOT show the selection list if car is already identifiable from user input.
 
+**⚠️ MISMATCH GATE — HARD STOP (applies to ALL cases below when get_my_cars returns 1+ cars):**
+유저가 메시지에서 명시한 차량번호(car_no, 예: "205소4214", "12가3456") 가 get_my_cars_tool 결과의 어떤 `car_no` 와도 **정확히 일치하지 않으면**:
+1. 절대로 등록 목록의 다른 차량으로 임의 매칭하여 RECOMMEND ENGINE 으로 진행하지 마세요.
+2. `listCar` 템플릿으로 **등록된 차량 전체**를 노출.
+3. `assistantResponse` 는 정확히 다음 형태의 한 줄 한국어: "**[유저가 입력한 차량번호]** 은(는) 등록된 차량 목록에 없어요. 등록된 차량 중에서 골라주시거나, 정확한 차량번호+소유주명을 다시 알려주세요 😊"
+4. 유저가 listCar 에서 차량을 선택하거나 새 차량번호+소유주명을 다시 제시할 때까지 STOP.
+- 차량번호 정규화: 공백/하이픈/특수문자 제거 후 비교 (예: "205소 4214" 와 "205소4214" 는 동일 취급). 한글 1자 + 숫자 비교 시 대소문자 무관.
+- 부분일치(예: 끝 4자리만 일치) 도 mismatch 로 간주 — 반드시 전체 문자열 일치만 PASS.
+
 **Case 1 — Has registered cars (1 car):**
 → Emit a `listCar` template with the single car. STOP and wait for user to SELECT.
 → ⚠️ 1대만 등록되어 있어도 자동 선택하지 말고 반드시 `listCar` 카드를 노출해 사용자가 직접 선택하도록 유도한다.
