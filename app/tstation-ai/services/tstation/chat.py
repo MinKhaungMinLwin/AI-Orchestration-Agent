@@ -1508,16 +1508,6 @@ class StreamingMultiAgentCoordinator:
                     )
                     continue
 
-                # Agent already produced a complete UI payload — decide_next_action
-                # would return STOP anyway. Keep multi-domain planner/nextAction paths active.
-                if (
-                    domain_data_event_emitted
-                    and agent_declared_decision is None
-                    and self._planner_decision(domains, routing_result, domain) is None
-                ):
-                    logger.debug("[COORDINATOR] Data event emitted — skipping decide_next_action")
-                    break
-
                 # P1-B stall recovery (LAST RESORT): when domains was [TRANSACTION]
                 # alone (P0b gate did not catch the case) and Transaction emitted a
                 # "상품을 검색…" fallback line WITHOUT calling any tool, with goods_no
@@ -1539,11 +1529,20 @@ class StreamingMultiAgentCoordinator:
                 #      legitimately called e.g. get_orders_of_user_tool stay untouched.
                 #   3. `full_response` matches a search-fallback regex.
                 #   4. `goods_no` still None in slots after the Transaction turn.
+                #
+                # IMPORTANT: this check must run BEFORE the `domain_data_event_emitted`
+                # early break below — Transaction often emits a `quickReply` template
+                # with empty `quickReplies` when stalled (e.g. "정확한 상품을 선택해
+                # 주세요"), which sets domain_data_event_emitted=True and would
+                # otherwise short-circuit recovery.
                 if (
                     domain == MultiAgentDomain.Domain.TRANSACTION
                     and len(domains) == 1
                     and not last_agent_called_tools
-                    and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요|상품\s*선택이?\s*필요|먼저\s*선택", full_response or "")
+                    and re.search(
+                        r"상품을?\s*검색|상품\s*검색이?\s*필요|상품을?\s*선택|먼저\s*선택|정확한\s*상품",
+                        full_response or "",
+                    )
                 ):
                     goods_no_still_none = pending_slots is None or pending_slots.goods_no is None
                     if goods_no_still_none:
@@ -1598,6 +1597,19 @@ class StreamingMultiAgentCoordinator:
                         domains.append(MultiAgentDomain.Domain.TRANSACTION)
                         skip_decision = True
                         continue
+
+                # Agent already produced a complete UI payload — decide_next_action
+                # would return STOP anyway. Keep multi-domain planner/nextAction paths active.
+                # NOTE: positioned AFTER P1-B/P1-D stall recovery so that recovery can
+                # fire even when a stuck quickReply (e.g. empty quickReplies asking the
+                # user to "select" with no options) was emitted as a data event.
+                if (
+                    domain_data_event_emitted
+                    and agent_declared_decision is None
+                    and self._planner_decision(domains, routing_result, domain) is None
+                ):
+                    logger.debug("[COORDINATOR] Data event emitted — skipping decide_next_action")
+                    break
 
                 planner_decision = self._planner_decision(domains, routing_result, domain)
                 if agent_declared_decision is not None:
@@ -3433,11 +3445,25 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
-            and merged_slots.goods_no is None
             and (
-                merged_slots.tire_size is not None
-                or merged_slots.tire_model is not None
-                or ConversationSlots.has_product_keyword(last_user_text)
+                # Original case: no goods_no in slots + any product hint
+                (
+                    merged_slots.goods_no is None
+                    and (
+                        merged_slots.tire_size is not None
+                        or merged_slots.tire_model is not None
+                        or ConversationSlots.has_product_keyword(last_user_text)
+                    )
+                )
+                # Fresh-product case: user mentioned brand keyword + fresh size in
+                # CURRENT turn — treat any prior goods_no as stale (different product
+                # from prior session activity). Without this, P0b would skip the
+                # redirect and Transaction would emit a "정확한 상품을 선택해 주세요"
+                # quickReply with no path forward.
+                or (
+                    ConversationSlots.has_product_keyword(last_user_text)
+                    and regex_slots.tire_size is not None
+                )
             )
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
