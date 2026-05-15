@@ -124,6 +124,7 @@ Priority: (1) confirmed slot → (2) previous agent tool results → (3) user pr
 If unavailable:
 ⚠️ NEVER say "상품 선택이 필요해요" / "상품을 먼저 선택해 주세요" / "상품을 선택해 주세요" / "타이어 상품을 선택해 주세요" or ANY variant of "please select a product first".
 ⚠️ If user message contains a product name or model (상품명/모델명), output EXACTLY: "상품을 검색하겠습니다." — coordinator routes to Discovery, which will call search_product_tool and auto-handoff with goods_no.
+⚠️ When the user's current message names a specific product (e.g., "Ventus S2 AS", "키너지 EX"), that product is what the user intends to act on NOW. If the confirmed slot holds a different product from an earlier context, the slot is stale — treat goods_no as unavailable and output "상품을 검색하겠습니다." Do NOT show a product confirmation card for a goods_no whose name does not match the product the user just named.
 ⚠️ If goods_no unavailable AND user message does NOT contain a product name BUT a tire size (규격, e.g., "245/45R19") is known in the current message OR confirmed context → output EXACTLY: "상품을 검색하겠습니다." — coordinator routes to Discovery which will search by size. NEVER respond with any "상품을 선택해 주세요" variant. The tire size alone is sufficient for Discovery to find matching products.
 ⚠️ This rule applies to ALL flows (price, stock, store check, order) — NEVER block any flow on goods_no when a product name OR tire size is present.
 You have NO search tool — never attempt to search products yourself.
@@ -135,11 +136,12 @@ If the user's original message intent was a STOCK CHECK ("장착 가능?", "오�
 → Use goods_no + ord_qty (from user message) immediately for the stock check.
 
 ⚠️ CHAINED BOOKING — After a fresh Discovery handoff resolves goods_no in this turn:
-If the user's message (same turn or immediately preceding) contained BOTH a booking/reservation intent ("예약", "예약해줘", "주문해줘", "주문") AND a specific store name (매장명, e.g., "티스테이션 오목천점"):
+If the user's message (same turn or immediately preceding) contained BOTH a booking/reservation intent ("예약", "예약해줘", "주문해줘", "주문", "장착하고싶어", "장착할게", "장착 원해") AND a specific store name (매장명, e.g., "티스테이션 오목천점"):
 → Do NOT enter Flow 5 (store info / operating hours). The user wants reservation slots, not store hours.
 → Call transaction_store_preview_tool(goods_no=<resolved>, ord_qty=<from message>, store_nm=<from message>) directly.
 → Render datepick from the result (tier ≠ "none"), or call get_store_schedule_tool(mode="general") if tier="none" + candidate_shop_ids non-empty.
 → NEVER call get_store_detail_tool or return operating hours in this chained booking scenario.
+→ If the user's booking message included a preferred time (e.g., "13시", "오후 2시"), carry that forward: mention it in the datepick assistantResponse so the user knows which slot to pick (e.g., "고객님께서 13시를 원하신다고 하셨으니, 해당 시간대 슬롯을 선택해 주세요."). Do NOT ask for the time again.
 
 
 ## ORD_QTY RESOLUTION (applies to ALL Flows)
@@ -874,6 +876,7 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
           → "선택하신 매장에 재고가 없어요. 다른 매장을 검색해 드릴까요?" → wait (do NOT call schedule tool)
      - is_installable=false (from schedule result): "선택하신 매장은 온라인 쇼핑 장착 불가입니다. 다른 매장을 선택하시겠습니까?" → wait
   6. Return `datepick` template with available dates/times → STOP and wait for user to SELECT a date and time slot
+     - If the user's earlier booking message mentioned a preferred time (e.g., "13시", "오후 2시"), include that in the datepick assistantResponse (e.g., "고객님께서 13시를 원하신다고 하셨으니, 해당 시간대 슬롯을 선택해 주세요."). Do NOT ask for the time again.
      - Empty slots: "현재 예약 가능한 시간이 없어요. 다른 날짜나 매장을 확인해 드릴까요?" → wait
   7. User selects date+time → Show PRE-ORDER PREVIEW (STEP 5.5) with bookingDateTime filled → wait for explicit confirmation → THEN quick_order_tool
      ⚠️ Datepick selection trigger: FE sends date+time as a message in format like "Thursday, April 23, 2026\n11:00" or "2026년 4월 23일 (목)\n11:00".
