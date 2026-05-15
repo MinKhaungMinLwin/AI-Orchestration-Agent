@@ -2849,6 +2849,10 @@ class TStationChatServiceV2:
             (m.get("content", "") for m in reversed(request.messages) if m.get("role") == "user"),
             "",
         )
+        # Seed Discovery's car_no mismatch audit (deterministic guard against
+        # the LLM recommending tires for a registered car the user did not name).
+        from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
+        _audit_set_user_message(last_user_msg)
         pii_detected = check_pii(last_user_msg)
         if pii_detected:
             logger.warning(f"[CHAT_V2] PII guardrail blocked: {pii_detected}")

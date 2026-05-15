@@ -7,6 +7,11 @@ from services.tstation.common.tstation_be_client import get_tstation_be_client
 from langchain.tools import tool
 from common.tool_cache import tool_cache
 
+from services.tstation.agents.b_discovery_agent._car_no_audit import (
+    detect_car_no_mismatch,
+    set_registered_car_nos,
+)
+
 logger = logging.getLogger(__name__)
 
 # Product Compatibility
@@ -561,8 +566,27 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
         return _error_response(None, str(e), "Failed to get user vehicles")
 
 
-@tool
 @tool_cache(ttl=600)
+def _get_my_cars_cached(mbr_no: str):
+    """Internal cached BE call. Public wrapper applies the audit hook below."""
+    logger.debug("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
+
+    try:
+        response = get_member_cars(client=get_client(), mbr_no=mbr_no)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get member cars"
+            )
+        # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_cars_tool] Failed")
+        return _error_response(None, str(e), "Failed to get member cars")
+
+
+@tool
 def get_my_cars_tool(mbr_no: str):
     """
     사용자 등록 차량 조회 (회원번호 기준).
@@ -581,21 +605,16 @@ def get_my_cars_tool(mbr_no: str):
 
     Example: {"mbr_no": "MXXXXXXXXX"}
     """
-    logger.debug("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
-
-    try:
-        response = get_member_cars(client=get_client(), mbr_no=mbr_no)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get member cars"
-            )
-        # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
-    except Exception as e:
-        logger.exception("[TOOL][get_my_cars_tool] Failed")
-        return _error_response(None, str(e), "Failed to get member cars")
+    result = _get_my_cars_cached(mbr_no)
+    # Record registered car_no list for downstream mismatch audit. Runs on
+    # cache hit as well, so subsequent tools in the same turn always see it.
+    if isinstance(result, dict) and result.get("status") == "success":
+        data = result.get("data") or {}
+        items = data.get("items") if isinstance(data, dict) else None
+        if isinstance(items, list):
+            car_nos = [it.get("car_no", "") for it in items if isinstance(it, dict)]
+            set_registered_car_nos(car_nos)
+    return result
 
 
 @tool
@@ -842,6 +861,29 @@ def get_products_recommendations_tool(
               or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
               or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
     """
+    # Deterministic guard: if the user named a car_no in this turn and it
+    # does not match any registered car, short-circuit before issuing the
+    # BE call. The LLM has repeatedly ignored prompt-only rules and proceeded
+    # to recommend tires for an unrelated registered car.
+    mismatched_plate = detect_car_no_mismatch()
+    if mismatched_plate is not None:
+        logger.info(
+            "[TOOL][get_products_recommendations_tool] BLOCKED by car_no audit: "
+            "user requested %s but it is not in get_my_cars_tool result",
+            mismatched_plate,
+        )
+        return _error_response(
+            http_status=412,
+            reason="CAR_NO_MISMATCH",
+            message=(
+                f"유저가 명시한 차량번호 '{mismatched_plate}' 가 get_my_cars_tool 의 등록 차량 목록에 없습니다. "
+                "이 차량에 대해 추천을 진행하지 마세요. 대신 listCar 템플릿으로 등록된 차량만 노출하고 "
+                f"assistantResponse 를 정확히 다음과 같이 작성하세요: "
+                f"\"**{mismatched_plate}** 은(는) 등록된 차량 목록에 없어요. "
+                "등록된 차량 중에서 골라주시거나, 정확한 차량번호+소유주명을 다시 알려주세요 😊\""
+            ),
+        )
+
     has_price_filter = bool(min_price or max_price)
     fetch_limit = limit * 4 if has_price_filter else limit
     logger.debug(
