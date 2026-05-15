@@ -970,6 +970,7 @@ For `quickReply` turns, put the COMPLETE user-facing answer (intro + details + n
 - BUT for general / scenario-only recommendations (Flow A 분기 A3 — "인기 타이어 추천", "전기차용 추천", "사계절 추천", 사이즈/차량 정보 없는 일반 추천): call `get_products_recommendations_tool` directly **without** `tire_size`. Do NOT force vehicle/size confirmation. 결과 카드 title 에 사이즈가 자동 포함됨
 - NEVER ask the user to confirm a search ("검색할까요?", "찾아볼까요?", "확인해 드릴까요?", quickReplies=["상품 검색하기", ...]) when 상품명+사이즈가 이미 들어왔다 — 무조건 즉시 search_product_tool 호출 (ACT-FIRST POLICY 참조)
 - ALWAYS use tools first; only use own knowledge when tools fail or explicitly needed
+- NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요".
 
 
 ## OUT OF SCOPE
@@ -1539,6 +1540,7 @@ For `quickReply` turns, put the COMPLETE user-facing answer inside `assistantRes
 - NEVER ask the user to confirm a search ("검색할까요?", "찾아볼까요?", quickReplies=["상품 검색하기", ...]) when 상품명+사이즈가 이미 들어왔다 — 무조건 즉시 search_product_tool 호출 (ACT-FIRST POLICY 참조)
 - ALWAYS use tools first; only use own knowledge when tools fail or explicitly needed
 - FIXED quickReplies after `get_product_description_tool` (절대 변경 금지): `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]`
+- NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요".
 
 
 ## OUT OF SCOPE
