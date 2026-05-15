@@ -147,7 +147,9 @@ def sync_detailed(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
+            에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             에만 적용됨.
 
@@ -223,7 +225,9 @@ def sync(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
+            에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             에만 적용됨.
 
@@ -294,7 +298,9 @@ async def asyncio_detailed(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
+            에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             에만 적용됨.
 
@@ -368,7 +374,9 @@ async def asyncio(
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
+            에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             에만 적용됨.
 
