@@ -77,6 +77,62 @@ _VALIDATION_FALLBACK_QUICK_REPLIES = [
     {"label": "처음으로", "domain": "LEADING"},
 ]
 
+# 주문 수량을 묻는 quickReply 는 항상 1/2/3/4 4개 chip 을 노출해야 한다.
+# LLM 이 가끔 일부 chip 을 누락 (예: ["4개","2개"]) 하거나 중복 (["2개","2개"]) 시켜
+# UX 가 깨지므로 결정적 후처리로 정규화한다.
+_CANONICAL_QTY_CHIPS = ("1개", "2개", "3개", "4개")
+_QTY_CHIP_LABEL_RE = re.compile(r"^\s*\d+\s*개\s*$")
+_QTY_PROMPT_RE = re.compile(
+    r"주문\s*수량"
+    r"|몇\s*개\s*(?:주문|구매|확인|예약|받|살|쓸|장바구니|결제|보내|들여|선택)"
+    r"|수량(?:을\s*(?:알려|선택|입력|말씀)|이\s*어떻|은\s*\d+\s*개)"
+    r"|수량\s*[:：]"
+)
+
+
+def _normalize_qty_quick_replies(payload: dict) -> None:
+    """주문 수량 질문 시 chip 을 결정적으로 ["1개","2개","3개","4개"] 로 강제.
+
+    Trigger 조건 (모두 만족):
+    - template == "quickReply"
+    - assistantResponse 가 qty-asking 패턴 (`_QTY_PROMPT_RE`) 매칭
+    - 기존 chip 이 모두 "N개" 모양 (혼합/비 qty chip 이면 보호하기 위해 skip)
+    """
+    if payload.get("template") != "quickReply":
+        return
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return
+    assistant_response = data.get("assistantResponse") or ""
+    if not _QTY_PROMPT_RE.search(assistant_response):
+        return
+    chips = data.get("quickReplies")
+    chip_list = chips if isinstance(chips, list) else []
+    labels = [c.get("label") if isinstance(c, dict) else c for c in chip_list]
+    qty_shaped = [
+        isinstance(label, str) and bool(_QTY_CHIP_LABEL_RE.match(label))
+        for label in labels
+    ]
+    # 빈 배열이거나 chip 이 모두 qty 모양일 때만 정규화 — 다른 라벨이 섞이면 보존.
+    if labels and not all(qty_shaped):
+        return
+    if tuple(labels) == _CANONICAL_QTY_CHIPS:
+        return  # 이미 정상
+    domains = {
+        c.get("domain")
+        for c in chip_list
+        if isinstance(c, dict) and c.get("domain")
+    }
+    domain = next(iter(domains)) if len(domains) == 1 else "TRANSACTION"
+    data["quickReplies"] = [
+        {"label": label, "domain": domain} for label in _CANONICAL_QTY_CHIPS
+    ]
+    logger.info(
+        "[base_agent] Normalized qty quickReply chips: was %s, now %s",
+        labels,
+        list(_CANONICAL_QTY_CHIPS),
+    )
+
 
 class _AssistantResponseStreamer:
     """OUTPUT_TEMPLATE 응답에서 `assistantResponse` 값만 토큰 단위로 흘려보내는
@@ -544,6 +600,7 @@ class BaseAgent(ABC):
             logger.warning("[%s] Structured response missing data object — skipping", self.name)
             return None
 
+        _normalize_qty_quick_replies(payload)
         return payload
 
     @staticmethod

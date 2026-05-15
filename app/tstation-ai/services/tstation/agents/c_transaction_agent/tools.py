@@ -68,6 +68,92 @@ def _success_response(http_status: int, data: Any) -> dict:
     return {"status": "success", "http_status": http_status, "data": data}
 
 
+_STORE_BRAND_PREFIXES = ("티스테이션 ", "더타이어샵 ")
+
+
+def _strip_brand_prefix(shop_nm: str) -> str:
+    for prefix in _STORE_BRAND_PREFIXES:
+        if shop_nm.startswith(prefix):
+            return shop_nm[len(prefix):]
+    return shop_nm
+
+
+def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict | None:
+    """Validate user's store_nm input against returned shop_nm values (after brand prefix strip).
+
+    Fires only when user_input (or its brand-stripped form) looks like a branch name (ends with "점").
+
+    Returns:
+        None — validation passes (Case b) or doesn't apply (region search, brand-only, etc.)
+        dict — override tool response payload for Case (a) empty or Case (c) mismatch
+    """
+    if not user_input:
+        return None
+
+    user_branch = _strip_brand_prefix(user_input)
+    if not user_branch.endswith("점"):
+        return None
+
+    if not stores:
+        region = user_branch[:-1]
+        confirmation_msg = (
+            f"고객님, '{user_input}'으로 검색되는 매장이 없습니다. "
+            f"'{region}' 지역으로 검색해 드릴까요?"
+        )
+        return {
+            "status": "store_name_no_match",
+            "http_status": 200,
+            "data": {
+                "user_input": user_input,
+                "suggested_region": region,
+                "stores": [],
+                "validation_message": confirmation_msg,
+                "instruction_to_agent": (
+                    f"DETERMINISTIC GUARD: 사용자 입력 '{user_input}' 으로 매장 검색 결과 없음. "
+                    f"validation_message 를 그대로 emit + quickReplies: "
+                    f"[\"네, {region} 지역으로 검색\", \"다른 매장 찾기\"]. "
+                    f"이 턴에 다른 store/schedule/inventory 도구 호출 절대 금지. STOP."
+                ),
+            },
+        }
+
+    branch_names = [_strip_brand_prefix(s.get("shop_nm", "")) for s in stores]
+    if any(b == user_branch for b in branch_names):
+        return None
+
+    candidate_names = [s.get("shop_nm", "") for s in stores]
+    if len(candidate_names) == 1:
+        confirmation_msg = (
+            f"고객님, 요청하신 '{user_input}'으로 검색한 결과 "
+            f"'{candidate_names[0]}' 매장이 있는데 이 매장이 맞을까요?"
+        )
+        quick_reply_hint = '["네, 맞아요", "다른 매장 찾기"]'
+    else:
+        joined = "\n".join(f"- {name}" for name in candidate_names)
+        confirmation_msg = (
+            f"고객님, 요청하신 '{user_input}'으로 검색한 결과 다음 매장들이 있는데, "
+            f"원하시는 매장이 있나요?\n{joined}"
+        )
+        quick_reply_hint = "각 candidates 매장명을 chip 으로 + [\"다른 매장 찾기\"]"
+    return {
+        "status": "store_name_mismatch",
+        "http_status": 200,
+        "data": {
+            "user_input": user_input,
+            "candidates": candidate_names,
+            "stores": [],
+            "validation_message": confirmation_msg,
+            "instruction_to_agent": (
+                f"DETERMINISTIC GUARD: 사용자 입력 '{user_input}' 과 매칭된 매장 분점명이 정확히 일치하지 않음 "
+                f"(candidates={candidate_names}). "
+                f"validation_message 를 그대로 emit + quickReplies: {quick_reply_hint}. "
+                f"get_store_schedule_tool / get_store_detail_tool / get_store_inventory_tool / "
+                f"get_multi_store_schedule_tool 절대 호출 금지. STOP."
+            ),
+        },
+    }
+
+
 
 
 def _fetch_order_detail(ord_no: str) -> dict:
@@ -393,6 +479,7 @@ def get_nearby_stores_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    limit: int = 10,
 ):
     """
     Get nearby stores within radius based on coordinates.
@@ -421,8 +508,10 @@ def get_nearby_stores_tool(
         all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
+        limit (int): 반환 매장 수 상한 (1-10). Default 10. 사용자가 "N개"를 명시하면
+            그 값을 전달. location 카드 max_length=10 제약 때문에 10 초과 시 10으로 클램핑.
 
-    Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F"}
+    Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F", "limit": 5}
     """
     logger.debug(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
@@ -450,13 +539,12 @@ def get_nearby_stores_tool(
         # logger.debug("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
-        # Truncate to top 10 stores so the LLM's `location` template (max_length=10
-        # per LocationTemplate schema) doesn't fail structured-output validation
-        # and silently drop the entire response. Sort: is_installable=true first
-        # (matters for purchase flows), then by distance_km ascending. Response
-        # shape is preserved.
+        # Truncate to top `limit` stores (clamped to 10 — LocationTemplate
+        # max_length=10). Sort: is_installable=true first (matters for purchase
+        # flows), then by distance_km ascending. Response shape is preserved.
+        cap = max(1, min(int(limit), 10))
         stores = data.get("stores") if isinstance(data, dict) else None
-        if isinstance(stores, list) and len(stores) > 10:
+        if isinstance(stores, list) and len(stores) > cap:
             original_count = len(stores)
             sorted_stores = sorted(
                 stores,
@@ -465,10 +553,10 @@ def get_nearby_stores_tool(
                     s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
                 ),
             )
-            data["stores"] = sorted_stores[:10]
+            data["stores"] = sorted_stores[:cap]
             logger.debug(
-                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 10 (installable-first, distance-asc)",
-                original_count,
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top %d (installable-first, distance-asc)",
+                original_count, cap,
             )
 
         return _success_response(response.status_code, data)
@@ -477,8 +565,47 @@ def get_nearby_stores_tool(
         return _error_response(None, str(e), "Failed to get nearby stores")
 
 
-@tool
 @tool_cache(ttl=1800)
+def _get_store_list_cached(
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    limit: int = 10,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+) -> dict:
+    """Internal cached BE call. Validation runs in `get_store_list_tool` after this returns."""
+    logger.debug(
+        "[TOOL][_get_store_list_cached] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
+        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
+        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+    )
+    try:
+        response = get_store_list(
+            client=get_client(),
+            region_code=region_code,
+            store_nm=store_nm,
+            limit=limit,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get store list"
+            )
+        data = _to_dict(response.parsed)
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][_get_store_list_cached] Failed")
+        return _error_response(None, str(e), "Failed to get store list")
+
+
+@tool
 def get_store_list_tool(
     region_code: str | None = None,
     store_nm: str | None = None,
@@ -508,7 +635,7 @@ def get_store_list_tool(
     Args:
         region_code (str | None): 지역명 키워드 (e.g., '서울', '강남', '부산').
         store_nm (str | None): 매장명 키워드 (e.g., '티스테', '극동상사').
-        limit (int): 최대 반환 매장 수 (default 5).
+        limit (int): 최대 반환 매장 수 (default 10). 사용자가 "N개" 명시 시 그 값 전달.
         svc_codes (List[str] | None): 매장 서비스 필터 (OR 조건: 하나라도 보유한 매장 반환).
             응답의 svc_codes 필드와 동일 코드 체계.
             - "113": 타이어 (온라인 주문)
@@ -533,39 +660,30 @@ def get_store_list_tool(
         - {"region_code": "강남", "svc_codes": ["121"], "limit": 5}  # 강남에서 경정비 가능
         - {"store_nm": "광교신도시", "svc_codes": ["121"]}  # 광교신도시점이 경정비 가능한지 확인
     """
-    # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
-    logger.debug(
-        "[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
-        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+    result = _get_store_list_cached(
+        region_code=region_code,
+        store_nm=store_nm,
+        limit=limit,
+        svc_codes=svc_codes,
+        all_my_t_only=all_my_t_only,
+        imported_car_only=imported_car_only,
+        chl_sct_cd=chl_sct_cd,
     )
 
-    try:
-        response = get_store_list(
-            client=get_client(),
-            region_code=region_code,
-            store_nm=store_nm,
-            limit=limit,
-            svc_codes=svc_codes,
-            all_my_t_only=all_my_t_only,
-            imported_car_only=imported_car_only,
-            chl_sct_cd=chl_sct_cd,
-        )
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get store list"
+    if store_nm and isinstance(result, dict) and result.get("status") == "success":
+        data = result.get("data") or {}
+        stores = data.get("stores", []) if isinstance(data, dict) else []
+        validation_override = _validate_store_nm_exact_match(user_input=store_nm, stores=stores)
+        if validation_override is not None:
+            logger.info(
+                "[TOOL][get_store_list_tool] store_nm validation override: status=%s, user_input=%s",
+                validation_override.get("status"), store_nm,
             )
-        # logger.debug("[TOOL][get_store_list_tool] Response: %s", response.parsed)
-        data = _to_dict(response.parsed)
-        return _success_response(response.status_code, data)
-    except Exception as e:
-        logger.exception("[TOOL][get_store_list_tool] Failed")
-        return _error_response(None, str(e), "Failed to get store list")
+            return validation_override
+    return result
 
 
 @tool

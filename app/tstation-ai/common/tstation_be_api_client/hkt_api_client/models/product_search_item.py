@@ -33,6 +33,7 @@ class ProductSearchItem:
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가. 회원 유형에 따라 PR_GOODS_DSCNT_PRC_INFO(일반) 또는
             PR_GOODS_ENTR_DSCNT_PRC_INFO(PARTNER)에서 join
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
+        sys_reg_dtime (None | str | Unset): 상품 등록 일시 (PR_GOODS_BASE.SYS_REG_DTIME, 형식: 'YYYY-MM-DD HH24:MI:SS')
     """
 
     goods_no: str
@@ -50,6 +51,7 @@ class ProductSearchItem:
     sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
+    sys_reg_dtime: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -127,6 +129,12 @@ class ProductSearchItem:
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
 
+        sys_reg_dtime: None | str | Unset
+        if isinstance(self.sys_reg_dtime, Unset):
+            sys_reg_dtime = UNSET
+        else:
+            sys_reg_dtime = self.sys_reg_dtime
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -161,6 +169,8 @@ class ProductSearchItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
+        if sys_reg_dtime is not UNSET:
+            field_dict["sys_reg_dtime"] = sys_reg_dtime
 
         return field_dict
 
@@ -274,6 +284,15 @@ class ProductSearchItem:
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
 
+        def _parse_sys_reg_dtime(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        sys_reg_dtime = _parse_sys_reg_dtime(d.pop("sys_reg_dtime", UNSET))
+
         product_search_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
@@ -290,6 +309,7 @@ class ProductSearchItem:
             sale_prc=sale_prc,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
+            sys_reg_dtime=sys_reg_dtime,
         )
 
         product_search_item.additional_properties = d

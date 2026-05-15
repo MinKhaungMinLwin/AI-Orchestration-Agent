@@ -1560,30 +1560,42 @@ class StreamingMultiAgentCoordinator:
 
                 # P1-D stall recovery (DISCOVERY counterpart of P1-B): when
                 # domains was [DISCOVERY] alone and Discovery emitted a
-                # transactional handoff line (재고/가격/매장/주문 ... 이어갈게요/
-                # 이어드릴게요/확인해 드릴게요/진행해 드릴게요) WITHOUT calling
-                # any tool, with goods_no already resolved in slots. Without
-                # recovery, the user is stranded — the stream ends with only
-                # an "I'll continue" message and the actual transactional
-                # tool never runs.
+                # transactional handoff line (재고/가격/매장/주문/도착/배송 ...
+                # 이어갈게요/이어드릴게요/이어갑니다/확인해 드릴게요/
+                # 진행해 드릴게요) without a tool call OR after only a
+                # product-search tool call (the 1-result transaction handoff
+                # path which intentionally calls search_product_tool and then
+                # hands off). Without recovery, the user is stranded — the
+                # stream ends with only an "I'll continue" message and the
+                # actual transactional tool never runs.
                 #
                 # Conditions (ALL must hold):
                 #   1. The first/only domain executed was DISCOVERY.
-                #   2. `last_agent_called_tools is False` — Discovery did not
-                #      call any tool (legitimate Discovery turns calling
-                #      search_product_tool / get_youtube_video_tool stay untouched).
+                #   2. EITHER no tool was called OR only product-search-class
+                #      tools were called (search_product_tool /
+                #      get_products_recommendations_tool /
+                #      get_best_selling_products_tool). Other tool calls
+                #      (e.g. youtube preview, car list) stay untouched.
                 #   3. `full_response` matches the transactional handoff regex.
                 #   4. `goods_no` is set in slots — TRANSACTION can run.
                 #
                 # Recovery: extend `domains` IN-PLACE with [TRANSACTION]
                 # (mutation propagates to the active for-loop iterator).
+                _PRODUCT_SEARCH_TOOLS = {
+                    "search_product_tool",
+                    "get_products_recommendations_tool",
+                    "get_best_selling_products_tool",
+                }
+                only_product_search_called = bool(agent_tools_called) and all(
+                    t in _PRODUCT_SEARCH_TOOLS for t in agent_tools_called
+                )
                 if (
                     domain == MultiAgentDomain.Domain.DISCOVERY
                     and len(domains) == 1
-                    and not last_agent_called_tools
+                    and (not last_agent_called_tools or only_product_search_called)
                     and re.search(
-                        r"(재고|가격|매장|주문|장착|예약).{0,30}"
-                        r"(이어갈게요|이어드릴게요|확인해\s*드릴게요|진행해\s*드릴게요|진행할게요)",
+                        r"(재고|가격|매장|주문|장착|예약|도착|배송).{0,30}"
+                        r"(이어갈게요|이어드릴게요|이어갑니다|확인해\s*드릴게요|진행해\s*드릴게요|진행할게요|진행합니다|확인합니다)",
                         full_response or "",
                     )
                 ):
@@ -1591,8 +1603,9 @@ class StreamingMultiAgentCoordinator:
                     if goods_no_set:
                         logger.warning(
                             "[COORDINATOR] P1-D stall recovery: DISCOVERY-only emitted "
-                            "transactional-handoff text with no tool call and goods_no "
-                            "set — extending chain to [TRANSACTION] as recovery."
+                            "transactional-handoff text (tools_called=%s) and goods_no "
+                            "set — extending chain to [TRANSACTION] as recovery.",
+                            agent_tools_called,
                         )
                         domains.append(MultiAgentDomain.Domain.TRANSACTION)
                         skip_decision = True
@@ -1683,8 +1696,18 @@ class StreamingMultiAgentCoordinator:
                     "support": MultiAgentDomain.Domain.SUPPORT,
                 }
                 next_domain = next_domain_map.get(decision.next_domain.lower())
-                if next_domain:
-                    domains = [next_domain] + [d for d in domains if d != next_domain]
+                if next_domain and next_domain not in domains:
+                    # IMPORTANT: in-place mutation only — the enclosing
+                    # `for domain in domains` iterator must see the new
+                    # entry. Rebinding `domains = [...]` (the previous
+                    # implementation) silently leaves the iterator on the
+                    # original list, so a CONTINUE decision after a
+                    # speculative DISCOVERY turn was dropped and the chain
+                    # stalled (e.g. "강남점 예약 가능 시간" → Discovery emits
+                    # `nextAction.continue.transaction` but TRANSACTION never
+                    # runs and the user sees only "이어갈게요" prose).
+                    # `append` matches the P1-D recovery shape (line 1610).
+                    domains.append(next_domain)
 
         # Legacy UI Template Agent path is disabled.
         # Domain agents should emit `data` events directly. If a migrated agent misses a
@@ -2836,6 +2859,10 @@ class TStationChatServiceV2:
             (m.get("content", "") for m in reversed(request.messages) if m.get("role") == "user"),
             "",
         )
+        # Seed Discovery's car_no mismatch audit (deterministic guard against
+        # the LLM recommending tires for a registered car the user did not name).
+        from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
+        _audit_set_user_message(last_user_msg)
         pii_detected = check_pii(last_user_msg)
         if pii_detected:
             logger.warning(f"[CHAT_V2] PII guardrail blocked: {pii_detected}")
