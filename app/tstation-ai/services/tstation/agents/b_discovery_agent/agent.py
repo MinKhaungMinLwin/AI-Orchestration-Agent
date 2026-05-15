@@ -650,7 +650,12 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
     ❌ FORBIDDEN: asking the user to choose an event before Step 2.
 - 기획전 / 기획전 목록 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
-- 이벤트 적용 가능 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" → call `get_event_applicable_products_tool(evt_no_list=[...])` with the evt_no(s) from prior conversation. evt_no 가 없으면 먼저 `get_events_tool` 로 목록을 보여주고 사용자 선택을 받는다.
+- 이벤트 적용 가능 상품 / 이벤트 적용 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" / "이벤트 적용 상품 보여줘" →
+  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active events — follow the SAME 2-step flow as "기획전 상품" trigger above:
+    Step 1: call `get_events_tool(lang_cd="ko")` (or reuse prior turn's events list if it's the immediately preceding turn — DO NOT re-render the events list as quickReply; intermediate data only).
+    Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>][:10])`.
+    ❌ FORBIDDEN: asking the user "어떤 이벤트?" / showing the events list with one-button-per-event for the user to pick. The whole point is to aggregate across every active event — Flow F.0 rule 2 then renders the products grouped by event name.
+  ✅ EXCEPTION (user has explicitly named a single event — e.g. "한국타이어 페스타 적용 상품", or prior turn was a single-event narrowing flow F.1): call `get_event_applicable_products_tool(evt_no_list=[<that one evt_no>])` with just that event.
 - "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 먼저 상품 검색/추천을 통해 확보한 뒤 호출.
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
 
