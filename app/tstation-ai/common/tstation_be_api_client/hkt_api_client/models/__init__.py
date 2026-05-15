@@ -59,6 +59,8 @@ from .product_search_response import ProductSearchResponse
 from .rcmd_goods_item import RcmdGoodsItem
 from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
+from .reservation_list_item import ReservationListItem
+from .reservation_list_response import ReservationListResponse
 from .review_item import ReviewItem
 from .review_rating import ReviewRating
 from .schedule_mode import ScheduleMode
@@ -139,6 +141,8 @@ __all__ = (
     "RcmdGoodsItem",
     "RcmdType",
     "RecommendationResponse",
+    "ReservationListItem",
+    "ReservationListResponse",
     "ReviewItem",
     "ReviewRating",
     "ScheduleMode",
