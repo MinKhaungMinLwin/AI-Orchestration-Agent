@@ -22,7 +22,6 @@ class BestSellerItem:
         image_url (None | str | Unset): 대표 이미지 (IMG_PATH_NM)
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
-        sale_qty (int | None | Unset): 해당 기간 판매 수량 (PR_GOODS_SUM 기준)
     """
 
     goods_no: str
@@ -32,7 +31,6 @@ class BestSellerItem:
     image_url: None | str | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
-    sale_qty: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -74,12 +72,6 @@ class BestSellerItem:
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
 
-        sale_qty: int | None | Unset
-        if isinstance(self.sale_qty, Unset):
-            sale_qty = UNSET
-        else:
-            sale_qty = self.sale_qty
-
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -99,8 +91,6 @@ class BestSellerItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
-        if sale_qty is not UNSET:
-            field_dict["sale_qty"] = sale_qty
 
         return field_dict
 
@@ -163,15 +153,6 @@ class BestSellerItem:
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
 
-        def _parse_sale_qty(data: object) -> int | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(int | None | Unset, data)
-
-        sale_qty = _parse_sale_qty(d.pop("sale_qty", UNSET))
-
         best_seller_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
@@ -180,7 +161,6 @@ class BestSellerItem:
             image_url=image_url,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
-            sale_qty=sale_qty,
         )
 
         best_seller_item.additional_properties = d
