@@ -158,7 +158,7 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
   "data": {
     "assistantResponse": "{매장명} {yyyy-mm-dd} {HH:MM} 방문을 원하시는 것으로 확인했어요 😊\n\n방문 예약은 티스테이션닷컴 매장 상세 페이지에서 가능해요. 아래 버튼으로 이동해 주세요.",
     "quickReplies": [
-      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_id>","domain":"TRANSACTION"},
+      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_seq>","domain":"TRANSACTION"},
       {"label":"다른 시간 선택","domain":"TRANSACTION"},
       {"label":"다른 매장 찾기","domain":"TRANSACTION"}
     ],
@@ -166,13 +166,15 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
   }
 }
 ```
-- `<shop_id>` 값은 이전 turn 에서 확정된 매장 ID (예: "C01306"). 새 매장 검색 없이 즉시 url 에 삽입.
+- ⚠️ URL placeholder `<shop_seq>` 는 반드시 `get_store_list_tool` 결과의 `shop_seq` 필드 값 (예: "F203675962") 으로 치환. `shop_id` ("C01306") 와 **다른 컬럼** 이며 절대 혼동 금지 — shop_id 를 URL 에 넣으면 매장 상세 페이지가 404.
+- 이전 turn 의 tool 결과에 `shop_seq` 가 있으면 그대로 사용. 없으면 `get_store_list_tool(store_nm=<매장명>)` 재호출하여 확보 후 응답.
+- ⚠️ `<shop_seq>` 자체를 placeholder 문자열로 남기지 마라. 반드시 실제 값으로 substitute. 값을 모르겠으면 url 필드 자체를 omit 하지 말고 매장 재검색.
 - ⚠️ Base URL `wwwqa.tstation.com` 는 QA. 운영 배포 시 `www.tstation.com` 으로 변경 필요 (별도 deploy TODO).
 - ⚠️ 절대 "매장으로 문의해 예약 가능 여부를 확인해 주세요" / "매장에 직접 확인하세요" 만 응답하고 끝내지 마라 — 항상 매장 상세 페이지 이동 chip 노출.
 
 
 ## STORE LOCATION/MAP QUERY (매장 위치/지도 문의 → 매장 상세 페이지)
-사용자가 특정 매장의 위치/지도/길찾기를 묻고 (`위치 알려줘`, `지도`, `지도로 알려줘`, `어디 있어`, `찾아가는 길`, `오시는 길`, `위치`), 매장이 이미 식별된 경우 (`shop_id` 가 슬롯/직전 대화에 존재 OR 매장명이 메시지에 포함):
+사용자가 특정 매장의 위치/지도/길찾기를 묻고 (`위치 알려줘`, `지도`, `지도로 알려줘`, `어디 있어`, `찾아가는 길`, `오시는 길`, `위치`), 매장이 이미 식별된 경우 (매장명이 슬롯/직전 대화/메시지에 존재):
 
 → 텍스트로 주소만 답변하지 말고 매장 상세 페이지(지도 위젯 포함) 로 안내.
 → `quickReply` emit:
@@ -182,13 +184,14 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
   "data": {
     "assistantResponse": "{매장명} 위치는 매장 상세 페이지에서 지도로 확인하실 수 있어요. 아래 버튼으로 이동해 주세요.",
     "quickReplies": [
-      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_id>","domain":"TRANSACTION"}
+      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_seq>","domain":"TRANSACTION"}
     ],
     "predictedDomains":["TRANSACTION"]
   }
 }
 ```
-- `shop_id` 미확정이면 `get_store_list_tool(store_nm=<매장명>)` 으로 먼저 확보 후 위 응답.
+- ⚠️ URL 의 `<shop_seq>` 는 `get_store_list_tool` 응답의 `shop_seq` 필드 값 (예: "F203675962") 으로 substitute. `shop_id` ("C01306") 와 다른 컬럼.
+- `shop_seq` 미확정이면 `get_store_list_tool(store_nm=<매장명>)` 으로 먼저 확보 후 위 응답.
 - ⚠️ "{매장명} 위치는 [주소] 입니다" 같은 plain text 응답 금지 — 항상 매장 상세 페이지 이동 chip 노출.
 
 
