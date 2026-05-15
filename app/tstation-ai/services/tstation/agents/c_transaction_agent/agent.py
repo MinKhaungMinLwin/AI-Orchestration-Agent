@@ -105,6 +105,12 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
 - NEVER emit `preOrder` with `paymentAmount: null` unless STEP D fallback explicitly applies (tool failed or SP=null/0).
 - A datepick selection does NOT exempt you from price resolution. Price MUST be present in the card.
 
+⚠️ rsv_date / rsv_hour PARSING — DO NOT confuse day and hour:
+- rsv_date: from the DATE portion only. "2026년 5월 15일 (금)" → "20260515". The day number (15) is NOT the hour.
+- rsv_hour: from the TIME portion ONLY (after the newline). "17:00" → "17", "09:00" → "09". Always two-digit zero-padded.
+- When calling quick_order_tool after user confirms preOrder (e.g., "ㅇㅇ", "네"), re-read the datepick selection message from conversation history or preOrder.orderInfo.bookingDateTime.
+  bookingDateTime "2026년 5월 15일 (금) 17:00" → rsv_date="20260515", rsv_hour="17" (NOT "15").
+
 
 ## GOODS_NO RESOLUTION
 Priority: (1) confirmed slot → (2) previous agent tool results → (3) user provides directly
@@ -1222,6 +1228,14 @@ Schema: `{type:"data", template:"preOrder", data:{assistantResponse:str, orderIn
 `orderComplete` — result of `quick_order_tool` ONLY (NOT `save_to_cart_tool`):
 Schema: `{type:"data", template:"orderComplete", data:{assistantResponse:str, orderInfo:{carInfo:str|null, product:str, quantity:int, storeName:str|null, bookingDateTime:str|null, paymentAmount:int|null}, isSuccess:bool, type:str, message:str|null, data:{status:str}, metadata:{ordNo:str, goodsId:str, shopId:str}}}`
 - `type`: 항상 `"order"`. `message`: null on success | error string on failure.
+- ⚠️ FIELD CARRY-OVER FROM preOrder (MANDATORY): After `quick_order_tool` succeeds, ALL `orderInfo` fields MUST be copied verbatim from the `preOrder` card emitted in the PREVIOUS turn. Do NOT re-derive from `quick_order_tool` output and do NOT emit null for any field that was populated in preOrder:
+  • `storeName` ← copy from preOrder.orderInfo.storeName (e.g. "티스테이션 오목천점 (F08890)")
+  • `bookingDateTime` ← copy from preOrder.orderInfo.bookingDateTime (e.g. "2026년 5월 15일 (금) 17:00")
+  • `paymentAmount` ← copy from preOrder.orderInfo.paymentAmount (integer, e.g. 848000)
+  • `carInfo` ← copy from preOrder.orderInfo.carInfo
+  • `product` ← copy from preOrder.orderInfo.product
+  • `quantity` ← copy from preOrder.orderInfo.quantity
+  `quick_order_tool` result provides ONLY: `isSuccess`, `metadata.ordNo` (= ord_no field), and `data.status`.
 - ⚠️ `save_to_cart_tool` 응답은 `orderComplete` 가 아니라 `quickReply` 로 emit (위 HARDCODED RULE 분기 2번 참고).
 
 Rules:

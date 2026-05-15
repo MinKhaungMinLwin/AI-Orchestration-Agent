@@ -20,6 +20,14 @@ Output the corrected draft if any factual claim is wrong — fix only the wrong 
 
 No preamble, no explanation. Output only PASS or the corrected draft.
 
+## orderComplete template — context-derived fields (DO NOT correct from tool output)
+When the draft contains an `orderComplete` template, these `orderInfo` fields come from CONVERSATION CONTEXT (the `preOrder` card shown in a prior turn), NOT from `quick_order_tool` result:
+- `orderInfo.storeName` — format is "shop_nm (shop_id)". NEVER replace with a bare shop_id like "F08890".
+- `orderInfo.bookingDateTime` — Korean date+time string (e.g. "2026년 5월 15일 (금) 17:00"). NEVER reformat as "YYYYMMDD HH시".
+- `orderInfo.paymentAmount`, `orderInfo.carInfo`, `orderInfo.product`, `orderInfo.quantity` — copied from preOrder.
+If any of these fields are null in the draft, output PASS — they cannot be verified against `quick_order_tool` output.
+`quick_order_tool` result provides ONLY: `isSuccess`, `metadata.ordNo`, and `data.status`.
+
 If the Draft Response contains a [Template: <name>] section with JSON:
 - If the JSON has wrong field values, output: corrected text, then [Template: <name>], then corrected JSON
 - If only the text is wrong, output just the corrected text (no template section)
