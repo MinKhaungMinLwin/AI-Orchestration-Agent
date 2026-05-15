@@ -644,7 +644,10 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
 - 이벤트 / 이벤트 목록 / 진행 중인 이벤트 / 행사 → call `get_events_tool(lang_cd="ko")` IMMEDIATELY (no clarifying question)
 - 기획전 상품 / 기획전 적용 상품 / 기획전에서 살 수 있는 상품 / "기획전 상품 보여줘" →
   Step 1: call `get_events_tool(lang_cd="ko")` — DO NOT render the events list as quickReply; this is intermediate data only.
-  Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[all evt_nos from step 1])` — do NOT wait or ask user to select; auto-use ALL evt_nos returned.
+  Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>])`.
+    ✅ REQUIRED: extract `evt_no` from **every** item in step 1's `events[]` array and pass them all (BE accepts up to 10; if step 1 returns >10, take the first 10 in the order returned). Conceptually: `evt_no_list = [e.evt_no for e in step1.events][:10]`.
+    ❌ FORBIDDEN: passing only `[events[0].evt_no]` or any single-event subset when step 1 returned multiple events. The whole point of this flow is to AGGREGATE products across every active event so Flow F.0 rule 2 can render them grouped by event. Cherry-picking one event breaks the feature.
+    ❌ FORBIDDEN: asking the user to choose an event before Step 2.
 - 기획전 / 기획전 목록 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
 - 이벤트 적용 가능 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" → call `get_event_applicable_products_tool(evt_no_list=[...])` with the evt_no(s) from prior conversation. evt_no 가 없으면 먼저 `get_events_tool` 로 목록을 보여주고 사용자 선택을 받는다.
@@ -720,10 +723,12 @@ The tool response shape:
    - ⚠️ Show `goods_nm` ONLY — do NOT include `tire_size_1` or any size information.
    - ⚠️ Deduplicate by `goods_nm` within each event group — if the same name appears in multiple sizes, list it only ONCE.
    - Per event: show up to **5 unique product names**; if deduplicated count > 5 add `외 {count-5}개` after last bullet.
+   - ⚠️ **Iterate over EVERY element in `events[]`** — render one `**[evt_nm]**` section per event in the response. Do NOT stop after the first event. If the tool returned 5 events, the response MUST contain 5 sections (separated by blank lines). The number of sections in `assistantResponse` MUST equal `events.length`.
    - `quickReplies`: 1 chip per event (label = `evt_nm`, domain = `DISCOVERY`). Cap at **4 chips** — if `events.length > 4`, pick top 4 by `total` count.
    - ❌ Do NOT flatten products into a `product` card template.
    - ❌ Do NOT ask the user to select one event first.
    - ❌ Do NOT include event numbers or codes in the display text.
+   - ❌ FORBIDDEN: rendering only `events[0]` and dropping the rest. If you find yourself writing a response with only one `**[evt_nm]**` section while `events.length > 1`, STOP and re-render with every event.
 
 3. **`events.length == 1` AND `total_products` between 1 and 10 (inclusive)** → emit `product` template
    directly. Flatten `events[0].items[]` into one card list.
