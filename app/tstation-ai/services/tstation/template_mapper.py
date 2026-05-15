@@ -148,8 +148,23 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
 
 
 def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
-    """Filter accumulated_tool_data by tool name."""
-    return [e for e in tool_data_list if e.get("tool", "") in tool_names]
+    """Filter accumulated_tool_data by tool name; skip error-status entries.
+
+    Tool wrappers emit `{"status": "error", "http_status": ..., ...}` on failure
+    (e.g. BE 404). Without this filter, downstream mappers fall through to
+    `_unwrap` which returns the error dict as-is, and the mapper produces a
+    placeholder row with all-empty fields — visible to the user as a blank
+    card next to real results.
+    """
+    out: list[dict] = []
+    for e in tool_data_list:
+        if e.get("tool", "") not in tool_names:
+            continue
+        data = e.get("data")
+        if isinstance(data, dict) and data.get("status") == "error":
+            continue
+        out.append(e)
+    return out
 
 
 def _yyyymmdd_to_korean_date(s: str) -> str:
