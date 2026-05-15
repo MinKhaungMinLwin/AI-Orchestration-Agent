@@ -70,7 +70,9 @@ class ConversationSlots(BaseModel):
         (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d{2})[\s/]?(\d{2})(?!\d)"), "{0}/{1}R{2}"),
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
-    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개")
+    # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
+    # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
+    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
 
     # Intent patterns. Order = priority: first match wins when a single user turn
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
