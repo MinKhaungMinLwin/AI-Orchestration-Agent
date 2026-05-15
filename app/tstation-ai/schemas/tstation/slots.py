@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 # Unfulfilled user intent carried across turns until explicitly fulfilled by a matching tool call.
 # "recommend" is the default/implicit intent and is intentionally NOT stored as a pending intent —
 # only actionable transactional intents are tracked here.
-PendingIntent = Literal["price", "stock", "order"]
+# "reservation" covers 매장 방문 예약 (타이어 장착 외에 와이퍼/배터리/얼라인먼트/경정비 등
+# 부가 서비스 예약 포함). Distinguished from "order" — "예약" 단독 발화는 서비스 방문이지
+# 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
+PendingIntent = Literal["price", "stock", "order", "reservation"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -98,6 +101,11 @@ class ConversationSlots(BaseModel):
         (re.compile(r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가"), "price"),
         (re.compile(r"재고|입고|장착\s*가능"), "stock"),
         (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
+        # 매장 방문 예약 — 와이퍼/배터리/얼라인먼트/경정비 등 부가 서비스 예약 포함.
+        # "주문 예약" 같은 복합 발화는 위의 "order" 패턴이 먼저 매칭되어 reservation 으로
+        # 떨어지지 않는다 (first-match-wins). 취소/변경 동사는 downstream 분류기·prompt
+        # 가 별도 처리하므로 여기서는 broad match 로 두고 컨텍스트만 표시.
+        (re.compile(r"예약"), "reservation"),
     ]
 
     # Recommend patterns — when the user asks for a fresh recommendation,
@@ -405,6 +413,11 @@ class ConversationSlots(BaseModel):
             slots.goal_type = "price_inquiry"
         elif slots.pending_intent == "order":
             slots.goal_type = "place_order"
+        elif slots.pending_intent == "reservation":
+            # 서비스 방문 예약 — region 슬롯 채우기가 1차 미션이므로 store_finder
+            # 체크리스트 재사용. 매장 선택 후 일정 잡기(datepick)는 prompt 측에서
+            # chain 처리. 별도 reservation goal_type 신설은 follow-up 과제.
+            slots.goal_type = "store_finder"
         elif cls.has_store_finder_intent(user_text):
             # Pure store search: no stock/price/order intent, but the user is
             # explicitly asking for a store. Routes through goal-router so the
@@ -431,6 +444,7 @@ class ConversationSlots(BaseModel):
             len(text_stripped) <= 8
             or cls.has_store_finder_intent(user_text)
             or slots.pending_intent == "stock"
+            or slots.pending_intent == "reservation"
         )
         if should_extract_region:
             region_match = cls._REGION_PATTERN.search(user_text)
@@ -444,6 +458,7 @@ class ConversationSlots(BaseModel):
         is_store_related = (
             cls.has_store_finder_intent(user_text)
             or slots.pending_intent == "stock"
+            or slots.pending_intent == "reservation"
         )
         if is_store_related and cls._has_preference_hints(user_text):
             slots.user_preferences_text = user_text.strip()
@@ -557,6 +572,7 @@ class ConversationSlots(BaseModel):
             "price": "가격 조회",
             "stock": "재고 확인",
             "order": "주문 진행",
+            "reservation": "방문 예약",
         }
 
         entity_lines = []

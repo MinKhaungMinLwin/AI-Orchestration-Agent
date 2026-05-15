@@ -724,17 +724,16 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # they were authoritative when the list endpoint simply omits them.
     has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
     is_list_browsing = current_goal_type.get() == "store_finder"
-    # Order/stock flow arrived via casual conversation ("구매한다고", "재고 확인해줘")
-    # rather than the formal goal checklist — goal_type stays None but pending_intent
-    # is set. Treat these as booking context so the location card is rendered.
-    # ⚠️ ContextVar holds the raw `PendingIntent` enum value ("price"/"stock"/"order"),
-    # NOT the Korean prompt label ("주문 진행"/"재고 확인") emitted via `to_prompt_context`.
-    # Comparing against Korean labels here always evaluated False, which silently
-    # forced isBookingFlow=false on every store-list card emitted under an
-    # order/stock pending_intent — store clicks fell into the FE append-only branch
-    # and never advanced to datepick. Compare against enum values instead.
-    has_order_intent = current_pending_intent.get() in ("order", "stock")
-    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_order_intent:
+    # Booking-implying intents that arrived via casual conversation ("구매한다고",
+    # "재고 확인해줘", "와이퍼 예약좀") rather than the formal goal checklist.
+    # ⚠️ ContextVar holds the raw `PendingIntent` enum value
+    # ("price"/"stock"/"order"/"reservation"), NOT the Korean prompt labels
+    # ("주문 진행"/"재고 확인"/"방문 예약"). Compare against enum values.
+    # "reservation" is included so 매장 방문 예약 (와이퍼/배터리/얼라인먼트 등 부가
+    # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
+    # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
+    has_booking_intent = current_pending_intent.get() in ("order", "stock", "reservation")
+    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_booking_intent:
         return None
 
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
@@ -862,7 +861,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # inventory/schedule tools. Rendering the card again creates an infinite
     # loop because the FE re-sends the store name on each click.
     is_shopid_resolution = (
-        has_order_intent
+        has_booking_intent
         and len(items) == 1
         and "get_nearby_stores_tool" not in called_tools
         and "search_place_tool" not in called_tools
@@ -881,7 +880,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
-        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup() or has_order_intent
+        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup() or has_booking_intent
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
