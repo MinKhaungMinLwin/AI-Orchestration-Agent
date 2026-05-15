@@ -177,6 +177,7 @@ Typical user intents:
 • “Checkout”
 • “Track my order”
 • “Book installation”
+• “Find a store with tire storage (hotel) service” (e.g. “청주에 타이어 보관 서비스 가능한 매장 있어?”, “타이어 호텔 서비스 되는 매장 찾아줘”, “겨울 타이어 보관해주는 매장”)
 
 ----------------------------------------------------
 
