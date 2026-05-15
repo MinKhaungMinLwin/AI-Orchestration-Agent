@@ -393,6 +393,7 @@ def get_nearby_stores_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    limit: int = 10,
 ):
     """
     Get nearby stores within radius based on coordinates.
@@ -421,8 +422,10 @@ def get_nearby_stores_tool(
         all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
+        limit (int): 반환 매장 수 상한 (1-10). Default 10. 사용자가 "N개"를 명시하면
+            그 값을 전달. location 카드 max_length=10 제약 때문에 10 초과 시 10으로 클램핑.
 
-    Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F"}
+    Example: {"user_xpos": 127.0276, "user_ypos": 37.4979, "radius_km": 20, "chl_sct_cd": "F", "limit": 5}
     """
     logger.debug(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
@@ -450,13 +453,12 @@ def get_nearby_stores_tool(
         # logger.debug("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
-        # Truncate to top 10 stores so the LLM's `location` template (max_length=10
-        # per LocationTemplate schema) doesn't fail structured-output validation
-        # and silently drop the entire response. Sort: is_installable=true first
-        # (matters for purchase flows), then by distance_km ascending. Response
-        # shape is preserved.
+        # Truncate to top `limit` stores (clamped to 10 — LocationTemplate
+        # max_length=10). Sort: is_installable=true first (matters for purchase
+        # flows), then by distance_km ascending. Response shape is preserved.
+        cap = max(1, min(int(limit), 10))
         stores = data.get("stores") if isinstance(data, dict) else None
-        if isinstance(stores, list) and len(stores) > 10:
+        if isinstance(stores, list) and len(stores) > cap:
             original_count = len(stores)
             sorted_stores = sorted(
                 stores,
@@ -465,10 +467,10 @@ def get_nearby_stores_tool(
                     s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
                 ),
             )
-            data["stores"] = sorted_stores[:10]
+            data["stores"] = sorted_stores[:cap]
             logger.debug(
-                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top 10 (installable-first, distance-asc)",
-                original_count,
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top %d (installable-first, distance-asc)",
+                original_count, cap,
             )
 
         return _success_response(response.status_code, data)
@@ -508,7 +510,7 @@ def get_store_list_tool(
     Args:
         region_code (str | None): 지역명 키워드 (e.g., '서울', '강남', '부산').
         store_nm (str | None): 매장명 키워드 (e.g., '티스테', '극동상사').
-        limit (int): 최대 반환 매장 수 (default 5).
+        limit (int): 최대 반환 매장 수 (default 10). 사용자가 "N개" 명시 시 그 값 전달.
         svc_codes (List[str] | None): 매장 서비스 필터 (OR 조건: 하나라도 보유한 매장 반환).
             응답의 svc_codes 필드와 동일 코드 체계.
             - "113": 타이어 (온라인 주문)

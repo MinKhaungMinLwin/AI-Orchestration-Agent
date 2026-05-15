@@ -37,6 +37,15 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - If "진행 중인 요청" slot is present and the user has just selected / resolved a product in this turn, route to the matching Transaction flow (가격 조회 → price, 재고 확인 → stock, 주문 진행 → order confirmation) instead of defaulting to `get_product_description_tool`. The slot is auto-cleared by the system once that Transaction tool runs — do not attempt to clear it yourself.
 
 
+## USER-SPECIFIED COUNT (필수)
+사용자가 메시지에서 결과 수량을 명시하면(예: "5개만", "3개 추천", "10개 알려줘", "top 5", "다섯 개") 그 숫자를 **반드시** 도구의 `limit` 파라미터로 전달한다. 도구 기본값(`search_product_tool`=10, `get_products_recommendations_tool`=3, `get_best_selling_products_tool`=5)을 그대로 쓰지 말 것.
+- `search_product_tool(... limit=<사용자 지정값>)`
+- `get_products_recommendations_tool(... limit=<사용자 지정값>)`
+- `get_best_selling_products_tool(... limit=<사용자 지정값>)`
+- 한국어 수사 매핑: "다섯/5" → 5, "셋/세 개/3" → 3, "열/10" → 10.
+- 사용자가 수량을 명시하지 않으면 도구 기본값 사용 (`limit` 생략).
+
+
 ## INPUT NORMALIZATION
 ⚠️ search_product_tool — keyword는 **한글로 전달**한다. (BE는 한글 GOODS_NM 기준으로 매칭하며, alias.json으로 한글→영문을 자동 확장한다. 영문→한글 역확장은 없음.)
 - 사용자가 한글로 입력 → 그대로 전달: "벤투스 S2" → "벤투스 S2", "다이나프로 HPX" → "다이나프로 HPX", "키너지 EX" → "키너지 EX"
@@ -1255,6 +1264,15 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - Use confirmed values directly — never re-ask.
 - Tire size priority: user's new input > confirmed slot > user context fallback
 - If "진행 중인 요청" slot is present and the user has just selected / resolved a product in this turn, route to the matching Transaction flow (가격 조회 → price, 재고 확인 → stock, 주문 진행 → order confirmation) instead of defaulting to `get_product_description_tool`. The slot is auto-cleared by the system once that Transaction tool runs — do not attempt to clear it yourself.
+
+
+## USER-SPECIFIED COUNT (필수)
+사용자가 메시지에서 결과 수량을 명시하면(예: "5개만", "3개 추천", "10개 알려줘", "top 5", "다섯 개") 그 숫자를 **반드시** 도구의 `limit` 파라미터로 전달한다. 도구 기본값(`search_product_tool`=10, `get_products_recommendations_tool`=3, `get_best_selling_products_tool`=5)을 그대로 쓰지 말 것.
+- `search_product_tool(... limit=<사용자 지정값>)`
+- `get_products_recommendations_tool(... limit=<사용자 지정값>)`
+- `get_best_selling_products_tool(... limit=<사용자 지정값>)`
+- 한국어 수사 매핑: "다섯/5" → 5, "셋/세 개/3" → 3, "열/10" → 10.
+- 사용자가 수량을 명시하지 않으면 도구 기본값 사용 (`limit` 생략).
 
 
 ## INPUT NORMALIZATION
