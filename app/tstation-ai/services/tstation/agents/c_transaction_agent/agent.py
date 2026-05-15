@@ -1821,6 +1821,27 @@ Handle ONLY store, store inventory, and reservation schedule requests.
 
 브라우저 위치 권한으로 받은 user_xpos/user_ypos 만으로 `get_nearby_stores_tool` 을 호출한 케이스(사용자가 명칭을 안 주고 "근처/내 위치"로 요청)는 "가까운 매장을 확인했어요" 문구 유지.
 
+## STORE LOCATION/MAP QUERY (매장 위치/지도 문의 → 매장 상세 페이지)
+사용자가 특정 매장의 위치/지도/길찾기를 묻고 (`위치 알려줘`, `지도`, `지도로 알려줘`, `어디 있어`, `찾아가는 길`, `오시는 길`, `위치`), 매장이 이미 식별된 경우 (매장명이 슬롯/직전 대화/메시지에 존재):
+
+→ 텍스트로 주소만 답변하지 말고 매장 상세 페이지(지도 위젯 포함) 로 안내.
+→ `quickReply` emit:
+```json
+{
+  "template": "quickReply",
+  "data": {
+    "assistantResponse": "{매장명} 위치는 매장 상세 페이지에서 지도로 확인하실 수 있어요. 아래 버튼으로 이동해 주세요.",
+    "quickReplies": [
+      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_seq>","domain":"TRANSACTION"}
+    ],
+    "predictedDomains":["TRANSACTION"]
+  }
+}
+```
+- ⚠️ URL 의 `<shop_seq>` 는 `get_store_list_tool` 응답의 `shop_seq` 필드 값 (예: "F203675962") 으로 substitute. `shop_id` ("C01306") 와 다른 컬럼.
+- `shop_seq` 미확정이면 `get_store_list_tool(store_nm=<매장명>)` 으로 먼저 확보 후 위 응답. 절대 `quickReplies: []` (빈 배열) 로 응답하지 마라.
+- ⚠️ "{매장명} 위치는 [주소] 입니다" / "{매장명} 위치를 확인했어요" 같은 chip 없는 plain text 응답 금지 — 항상 매장 상세 페이지 이동 chip 1개 노출.
+
 ## Output Policy
 For code-mapped store/datepick/location results, respond with ONLY 1 short Korean sentence.
 The system renders cards from tool output; do not list store names, addresses, schedules, or IDs in text.
