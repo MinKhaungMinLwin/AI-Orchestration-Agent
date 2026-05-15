@@ -25,6 +25,9 @@ class OrderDeliveryResponse:
         inv_no (None | str | Unset): 운송장 번호
         hdc_cd (None | str | Unset): 택배사 코드
         dlv_fcst_dtime (None | str | Unset): 도착 예정 일시
+        shop_nm (None | str | Unset): 매장명 (방문 예약 매장)
+        tel_no (None | str | Unset): 매장 전화번호
+        rsv_dtime (None | str | Unset): 매장 방문 예약 일시 (YYYY-MM-DD HH:MI)
     """
 
     query_no: str
@@ -37,6 +40,9 @@ class OrderDeliveryResponse:
     inv_no: None | str | Unset = UNSET
     hdc_cd: None | str | Unset = UNSET
     dlv_fcst_dtime: None | str | Unset = UNSET
+    shop_nm: None | str | Unset = UNSET
+    tel_no: None | str | Unset = UNSET
+    rsv_dtime: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -96,6 +102,24 @@ class OrderDeliveryResponse:
         else:
             dlv_fcst_dtime = self.dlv_fcst_dtime
 
+        shop_nm: None | str | Unset
+        if isinstance(self.shop_nm, Unset):
+            shop_nm = UNSET
+        else:
+            shop_nm = self.shop_nm
+
+        tel_no: None | str | Unset
+        if isinstance(self.tel_no, Unset):
+            tel_no = UNSET
+        else:
+            tel_no = self.tel_no
+
+        rsv_dtime: None | str | Unset
+        if isinstance(self.rsv_dtime, Unset):
+            rsv_dtime = UNSET
+        else:
+            rsv_dtime = self.rsv_dtime
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -121,6 +145,12 @@ class OrderDeliveryResponse:
             field_dict["hdc_cd"] = hdc_cd
         if dlv_fcst_dtime is not UNSET:
             field_dict["dlv_fcst_dtime"] = dlv_fcst_dtime
+        if shop_nm is not UNSET:
+            field_dict["shop_nm"] = shop_nm
+        if tel_no is not UNSET:
+            field_dict["tel_no"] = tel_no
+        if rsv_dtime is not UNSET:
+            field_dict["rsv_dtime"] = rsv_dtime
 
         return field_dict
 
@@ -210,6 +240,33 @@ class OrderDeliveryResponse:
 
         dlv_fcst_dtime = _parse_dlv_fcst_dtime(d.pop("dlv_fcst_dtime", UNSET))
 
+        def _parse_shop_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_nm = _parse_shop_nm(d.pop("shop_nm", UNSET))
+
+        def _parse_tel_no(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tel_no = _parse_tel_no(d.pop("tel_no", UNSET))
+
+        def _parse_rsv_dtime(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        rsv_dtime = _parse_rsv_dtime(d.pop("rsv_dtime", UNSET))
+
         order_delivery_response = cls(
             query_no=query_no,
             ord_no=ord_no,
@@ -221,6 +278,9 @@ class OrderDeliveryResponse:
             inv_no=inv_no,
             hdc_cd=hdc_cd,
             dlv_fcst_dtime=dlv_fcst_dtime,
+            shop_nm=shop_nm,
+            tel_no=tel_no,
+            rsv_dtime=rsv_dtime,
         )
 
         order_delivery_response.additional_properties = d
