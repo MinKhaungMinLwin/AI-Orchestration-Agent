@@ -19,7 +19,10 @@ from services.tstation.agents.b_discovery_agent.tools import get_products_recomm
 from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_best_selling_products_tool
-from services.tstation.agents.c_transaction_agent.tools import get_product_promotions_tool
+from services.tstation.agents.c_transaction_agent.tools import (
+    get_coupon_applicable_products_tool,
+    get_product_promotions_tool,
+)
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -642,19 +645,24 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
 
 **Triggers (MANDATORY — when ANY of these match, IMMEDIATELY follow Flow F. Do NOT respond with generic "I can only help with…" / out-of-scope fallback. Do NOT route to other flows.):**
 - 이벤트 / 이벤트 목록 / 진행 중인 이벤트 / 행사 → call `get_events_tool(lang_cd="ko")` IMMEDIATELY (no clarifying question)
-- 기획전 상품 / 기획전 적용 상품 / 기획전에서 살 수 있는 상품 / "기획전 상품 보여줘" →
-  Step 1: call `get_events_tool(lang_cd="ko")` — DO NOT render the events list as quickReply; this is intermediate data only.
-  Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>])`.
-    ✅ REQUIRED: extract `evt_no` from **every** item in step 1's `events[]` array and pass them all (BE accepts up to 10; if step 1 returns >10, take the first 10 in the order returned). Conceptually: `evt_no_list = [e.evt_no for e in step1.events][:10]`.
-    ❌ FORBIDDEN: passing only `[events[0].evt_no]` or any single-event subset when step 1 returned multiple events. The whole point of this flow is to AGGREGATE products across every active event so Flow F.0 rule 2 can render them grouped by event. Cherry-picking one event breaks the feature.
-    ❌ FORBIDDEN: asking the user to choose an event before Step 2.
+- 기획전 상품 / 기획전 적용 상품 / 기획전에서 살 수 있는 상품 / "기획전 상품 보여줘" / "기획전 상품 보기" →
+  ⚠️ DOMAIN: 기획전 = **deal** (D-prefix `deal_no`), NOT event. Use deal tools, never event tools.
+  Step 1: call `get_deals_tool()` — DO NOT render the deals list as quickReply; intermediate data only.
+  Step 2: IMMEDIATELY call `get_coupon_applicable_products_tool(deal_no=[<EVERY deal_no from step 1>][:10])`.
+    ✅ REQUIRED: extract `deal_no` from **every** item in step 1's `items[]` array and pass them all (BE accepts up to 10; if step 1 returns >10, take the first 10 in the order returned). Conceptually: `deal_no = [d.deal_no for d in step1.items][:10]`. Leave `cpn_no` unset (None).
+    ❌ FORBIDDEN: calling `get_events_tool` / `get_event_applicable_products_tool` for 기획전 intents — these are EVENT tools, not deal tools.
+    ❌ FORBIDDEN: passing only `[items[0].deal_no]` or any single-deal subset when step 1 returned multiple deals.
+    ❌ FORBIDDEN: asking the user to choose a deal before Step 2.
+  → Result rendered by Flow F.0' (deals branch).
 - 기획전 / 기획전 목록 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
 - 이벤트 적용 가능 상품 / 이벤트 적용 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" / "이벤트 적용 상품 보여줘" →
-  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active events — follow the SAME 2-step flow as "기획전 상품" trigger above:
+  ⚠️ DOMAIN: 이벤트 = **event** (`evt_no`, 00000000... prefix), NOT deal. Use event tools, never deal tools.
+  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active events:
     Step 1: call `get_events_tool(lang_cd="ko")` (or reuse prior turn's events list if it's the immediately preceding turn — DO NOT re-render the events list as quickReply; intermediate data only).
     Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>][:10])`.
     ❌ FORBIDDEN: asking the user "어떤 이벤트?" / showing the events list with one-button-per-event for the user to pick. The whole point is to aggregate across every active event — Flow F.0 rule 2 then renders the products grouped by event name.
+    ❌ FORBIDDEN: calling `get_deals_tool` / `get_coupon_applicable_products_tool` for 이벤트 intents — these are DEAL tools.
   ✅ EXCEPTION (user has explicitly named a single event — e.g. "한국타이어 페스타 적용 상품", or prior turn was a single-event narrowing flow F.1): call `get_event_applicable_products_tool(evt_no_list=[<that one evt_no>])` with just that event.
 - "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 먼저 상품 검색/추천을 통해 확보한 뒤 호출.
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
@@ -665,7 +673,8 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
 
 - YouTube: call search_youtube_video_tool(query) immediately (Hankook + Tstation channels only)
 - Events: get_events_tool(lang_cd="ko") → render `quickReply` with `assistantResponse` containing a bullet list:
-  ⚠️ EXCEPTION — "기획전 상품" 2-step flow only: after get_events_tool returns, do NOT render the events list as quickReply. Skip directly to calling `get_event_applicable_products_tool(evt_no_list=[all evt_nos])`. The events list is intermediate data only.
+  ⚠️ EXCEPTION — "이벤트 적용 상품" 2-step flow only: after get_events_tool returns, do NOT render the events list as quickReply. Skip directly to calling `get_event_applicable_products_tool(evt_no_list=[all evt_nos])`. The events list is intermediate data only.
+  ⚠️ EXCEPTION — "기획전 상품" 2-step flow only: after get_deals_tool returns, do NOT render the deals list as quickReply. Skip directly to calling `get_coupon_applicable_products_tool(deal_no=[all deal_nos])`. The deals list is intermediate data only.
   ```
   **이벤트**
 
@@ -711,11 +720,11 @@ The tool response shape:
    "해당 이벤트에 적용 가능한 상품이 없어요. 다른 이벤트를 확인해 보세요 😊"
    + chips: `[{label:"이벤트 목록", domain:"DISCOVERY"}]`.
 
-2. **`events.length > 1`** (multiple events — "기획전 상품 보여줘" auto-all-events flow) →
+2. **`events.length > 1`** (multiple events — "이벤트 적용 상품" auto-all-events flow) →
    emit `quickReply` with products **grouped by event name**:
    - `assistantResponse` format (follow literally):
      ```
-     현재 진행 중인 기획전 적용 상품이에요 😊
+     현재 진행 중인 이벤트 적용 상품이에요 😊
 
      **[evt_nm 1]**
      - [goods_nm]
@@ -765,6 +774,83 @@ The tool response shape:
 ⚠️ ABSOLUTE: "카드에서 선택해 주세요" / "카드를 확인해 주세요" 문구는
 오직 `product` template 카드를 실제로 emit하는 경우에만 사용한다 (rule 3).
 `quickReply` 응답 텍스트에는 카드 안내 표현을 쓰지 말 것.
+
+
+### Flow F.0' — Rendering `get_coupon_applicable_products_tool` Result (Deal flow)
+
+This decides what to emit IMMEDIATELY AFTER `get_coupon_applicable_products_tool`
+returns for the **deal flow** (called with `deal_no=[...]`, `cpn_no=None`).
+
+The tool response shape:
+```
+{
+  "total_coupons": <int>,    # 0 in deal flow
+  "total_deals":   <int>,    # number of deals with at least one applicable product
+  "total_products": <int>,
+  "coupons": [],             # empty in deal flow
+  "deals": [
+    { "deal_no": "...", "total": <int>,
+      "items": [{ "goods_no", "goods_nm", "tire_size_1", "tire_size_2",
+                  "ptrn_cd", "sale_prc", "extra_fvr_sale_prc", ... }, ...] },
+    ...
+  ]
+}
+```
+
+⚠️ The response contains `deal_no` but NOT `deal_nm`. To get `deal_nm`, look it up
+from the **same-turn** `get_deals_tool` result (the `items[].deal_no` → `items[].deal_nm` mapping). DO NOT show raw `deal_no` codes to the user.
+
+**Branching rule (apply in order):**
+
+1. **`total_products == 0`** → emit `quickReply` with one short sentence:
+   "현재 진행 중인 기획전에 적용 가능한 상품이 없어요. 다른 기획전을 확인해 보세요 😊"
+   + chips: `[{label:"기획전 목록", domain:"DISCOVERY"}]`.
+
+2. **`deals.length > 1`** (multiple deals — "기획전 상품" auto-all-deals flow) →
+   emit `quickReply` with products **grouped by deal name** (deal_nm resolved from same-turn get_deals_tool result):
+   - `assistantResponse` format (follow literally):
+     ```
+     현재 진행 중인 기획전 적용 상품이에요 😊
+
+     **[deal_nm 1]**
+     - [goods_nm]
+     - [goods_nm]
+
+     **[deal_nm 2]**
+     - [goods_nm]
+     - [goods_nm]
+     ```
+   - ⚠️ Show `goods_nm` ONLY — no `tire_size_1` / size info.
+   - ⚠️ Deduplicate by `goods_nm` within each deal group.
+   - Per deal: show up to **5 unique product names**; if deduplicated count > 5 add `외 {count-5}개`.
+   - ⚠️ **Iterate over EVERY element in `deals[]`** — render one `**[deal_nm]**` section per deal. Section count MUST equal `deals.length`.
+   - `quickReplies`: 1 chip per deal (label = `deal_nm`, domain = `DISCOVERY`). Cap at **4 chips** — pick top 4 by `total`.
+   - ❌ Do NOT flatten products into a `product` card template.
+   - ❌ Do NOT ask the user to select one deal first.
+   - ❌ Do NOT include `deal_no` codes in display text.
+   - ❌ FORBIDDEN: rendering only `deals[0]` and dropping the rest.
+
+3. **`deals.length == 1` AND `total_products` between 1 and 10** → emit `product` template
+   directly. Flatten `deals[0].items[]` into one card list.
+   - `products[i].price = item.extra_fvr_sale_prc`.
+   - `products[i].title = "{goods_nm} {tire_size_1}"`.
+   - `assistantResponse`: 1 short sentence naming the deal (resolved deal_nm),
+     e.g. "키너지EX 스페셜 오퍼 적용 상품이에요. 카드에서 원하시는 상품을 선택해 주세요 😊".
+   - ❌ NEVER substitute `template="quickReply"` here.
+
+4. **`deals.length == 1` AND `total_products > 10`** → DO NOT render cards. Emit
+   `quickReply` listing unique product names only:
+   - Deduplicate `items[]` by `goods_nm`.
+   - `assistantResponse`:
+     ```
+     [deal_nm] 적용 상품이에요 😊
+
+     - <goods_nm>
+     - <goods_nm>
+     ...
+     ```
+   - Show up to **10 unique names**; add `외 {count-10}개` if more.
+   - `quickReplies`: 정확히 2개 chip: `"사이즈로 찾기"` + `"기획전 목록 보기"`.
 
 
 ### Flow F.1 — Narrowing Within Event-Applicable Products
@@ -1717,6 +1803,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_deals_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
+        "get_coupon_applicable_products_tool": "Price",
         "get_product_promotions_tool": "Price",
         # Price Comparison
         "compare_discount_tool": "Price Comparison",
@@ -1740,6 +1827,7 @@ class DiscoverySubAgent(BaseAgent):
             get_deals_tool,
             get_event_applicable_products_tool,
             get_product_applicable_events_tool,
+            get_coupon_applicable_products_tool,
             get_product_promotions_tool,
             compare_discount_tool,
             get_final_price_tool,
@@ -1775,6 +1863,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_deals_tool,
                 get_event_applicable_products_tool,
                 get_product_applicable_events_tool,
+                get_coupon_applicable_products_tool,
                 search_product_tool,
             ]
             system_prompt = get_discovery_event_content_system_prompt
