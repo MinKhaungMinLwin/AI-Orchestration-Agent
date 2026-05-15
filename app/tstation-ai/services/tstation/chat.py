@@ -1543,7 +1543,7 @@ class StreamingMultiAgentCoordinator:
                     domain == MultiAgentDomain.Domain.TRANSACTION
                     and len(domains) == 1
                     and not last_agent_called_tools
-                    and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요", full_response or "")
+                    and re.search(r"상품을?\s*검색|상품\s*검색이?\s*필요|상품\s*선택이?\s*필요|먼저\s*선택", full_response or "")
                 ):
                     goods_no_still_none = pending_slots is None or pending_slots.goods_no is None
                     if goods_no_still_none:

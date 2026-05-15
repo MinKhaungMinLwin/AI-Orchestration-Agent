@@ -114,7 +114,10 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
 
 ## GOODS_NO RESOLUTION
 Priority: (1) confirmed slot → (2) previous agent tool results → (3) user provides directly
-If unavailable → "상품을 검색하겠습니다." (coordinator routes to Discovery)
+If unavailable:
+⚠️ NEVER say "상품 선택이 필요해요" / "상품을 먼저 선택해 주세요" / "상품을 선택해 주세요".
+⚠️ If user message contains a product name or model (상품명/모델명), output EXACTLY: "상품을 검색하겠습니다." — coordinator routes to Discovery, which will call search_product_tool and auto-handoff with goods_no.
+⚠️ This rule applies to ALL flows (price, stock, store check, order) — NEVER block any flow on goods_no when a product name is present in the user message.
 You have NO search tool — never attempt to search products yourself.
 
 
