@@ -727,7 +727,13 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Order/stock flow arrived via casual conversation ("구매한다고", "재고 확인해줘")
     # rather than the formal goal checklist — goal_type stays None but pending_intent
     # is set. Treat these as booking context so the location card is rendered.
-    has_order_intent = current_pending_intent.get() in ("주문 진행", "재고 확인")
+    # ⚠️ ContextVar holds the raw `PendingIntent` enum value ("price"/"stock"/"order"),
+    # NOT the Korean prompt label ("주문 진행"/"재고 확인") emitted via `to_prompt_context`.
+    # Comparing against Korean labels here always evaluated False, which silently
+    # forced isBookingFlow=false on every store-list card emitted under an
+    # order/stock pending_intent — store clicks fell into the FE append-only branch
+    # and never advanced to datepick. Compare against enum values instead.
+    has_order_intent = current_pending_intent.get() in ("order", "stock")
     if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_order_intent:
         return None
 
