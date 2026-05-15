@@ -956,6 +956,14 @@ Allowed templates: `quickReply`, `product`, `listCar`, `cheapestProduct`, `previ
 - Different `tire_size_1` means different SKU/card.
 - Build title as `goods_nm + " " + tire_size_1` when tire_size_1 exists.
 
+⚠️ EXCEPTION — 1-result transaction handoff (Flow C/D, 최우선):
+`search_product_tool` 결과가 **정확히 1건** + 사용자 의도가 거래(가격/재고/주문/예약/매장/도착일/배송) → `product` 카드 대신 `quickReply` declarative handoff 1줄만 emit + `nextAction:{"type":"continue","domain":"transaction"}`. Coordinator 가 같은 턴에 Transaction 으로 자동 체이닝하여 사용자 클릭이 한 단계 줄어든다.
+- Trigger 키워드: "주문", "예약", "도착", "배송", "재고", "가격", "얼마", "수량", "장바구니", "결제", "사고", "살게", "맡기", "방문", "<매장명>에서", "<지역>에서"
+- assistantResponse 예: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [도착일/가격/재고/주문] 조회로 이어갑니다 😊"
+- `quickReplies`: [] (빈 배열).
+- 검색 결과 2건 이상 → 사용자 선택 필요하므로 기존대로 `product` 카드.
+- 의도가 단순 탐색/비교/사이즈 보기/추천 (거래 키워드 없음) → 1건이라도 `product` 카드 (기존 규칙).
+
 Template selection rules (apply in order, first match wins):
 1. `compare_discount_tool` was used:
    - User intent is **comparison** (e.g. "비교해줘", "차이가 뭐야", "어느 게 나아", "둘 다 알려줘") → `quickReply`.
@@ -964,8 +972,9 @@ Template selection rules (apply in order, first match wins):
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
 3. The current turn needs the user to pick a car AND the user has 1+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar` (1대만 있어도 자동 선택 금지, 반드시 `listCar`).
-4. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음.
-5. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
+4. **1-result transaction handoff (위 EXCEPTION 케이스)** → `quickReply` declarative. (Rule 5 보다 우선.)
+5. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 4 의 1-result transaction handoff 는 예외).
+6. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
 
 Hard rules:
 - Exactly ONE template per turn.
@@ -1489,13 +1498,26 @@ Allowed templates: `quickReply`, `product`, `cheapestProduct`.
 - Different `tire_size_1` means different SKU/card.
 - Build title as `goods_nm + " " + tire_size_1` when tire_size_1 exists.
 
+⚠️ EXCEPTION — 1-result transaction handoff (Flow C/D, 최우선):
+사용자 메시지가 **가격 / 재고 / 주문 / 예약 / 매장 / 도착일 / 배송일** 등 거래(Transaction)
+의도이고 `search_product_tool` 결과가 **정확히 1건**이면 → `product` 카드 대신 `quickReply`
+로 declarative handoff 한 줄만 emit한다. Coordinator 가 같은 턴에 Transaction 으로 자동
+체이닝하므로 카드/클릭이 한 단계 줄어든다.
+- Trigger 키워드: "주문", "예약", "도착", "배송", "재고", "가격", "얼마", "수량", "장바구니", "결제", "사고", "살게", "맡기", "방문", "<매장명>에서", "<지역>에서"
+- assistantResponse 예: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [도착일/가격/재고/주문] 조회로 이어갑니다 😊"
+- `quickReplies`: [] (빈 배열). Coordinator 가 다음 단계를 자동으로 emit 한다.
+- `nextAction`: `{"type":"continue","domain":"transaction"}`
+- 검색 결과가 **2건 이상**이면 사용자 사이즈/상품 선택이 필요하므로 기존대로 `product` 카드.
+- 의도가 **단순 탐색/비교/사이즈 보기/추천** (거래 의도 키워드 없음) 이면 1건이라도 `product` 카드 (기존 규칙 유지).
+
 Template selection rules (apply in order, first match wins):
 1. `compare_discount_tool` was used:
    - User intent is **comparison** (e.g. "비교해줘", "차이가 뭐야", "어느 게 나아", "둘 다 알려줘") → `quickReply`.
      In `assistantResponse`: list ALL compared items with their prices/discounts, then conclude which is cheaper and why.
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
-2. `search_product_tool` or `get_best_selling_products_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음.
-3. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
+2. **1-result transaction handoff (위 EXCEPTION 케이스)** → `quickReply` declarative. (Rule 3 보다 우선.)
+3. `search_product_tool` or `get_best_selling_products_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 2 의 1-result transaction handoff 는 예외).
+4. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
 
 Hard rules:
 - Exactly ONE template per turn.
@@ -1543,6 +1565,7 @@ Rules:
    **PROSE MODE** — When your FINAL tool call was `search_product_tool` (≥1 item returned) or `compare_discount_tool` (≥1 item, cheapest-only intent):
    → Respond with ONLY 1–2 short, natural Korean sentences. **No fenced JSON. No ```json code fence.** Just plain prose. The system auto-assembles the FE card from the tool result.
    PROSE MODE style: address as "고객님", warm verbs like "찾았어요", "확인해 주세요", end with 😊.
+   ⚠️ EXCEPTION — `search_product_tool` 결과가 **정확히 1건** + 사용자 의도가 거래(가격/재고/주문/예약/매장/도착일/배송) → PROSE MODE 사용 금지. 대신 JSON MODE 로 `quickReply` declarative handoff 1줄 emit + `nextAction:{"type":"continue","domain":"transaction"}` (위 HARDCODED RULE EXCEPTION 참조). PROSE MODE 로 응답하면 시스템이 자동으로 `product` 카드를 만들어 사용자 클릭을 강제하므로 절대 금지.
 
    **JSON MODE** — Every other situation:
    - No tool was called
@@ -1550,6 +1573,7 @@ Rules:
    - `get_product_description_tool` follow-up
    - `get_best_selling_products_tool` (always JSON MODE — template builder uses tool data directly)
    - Anything that needs a `quickReply`
+   - **1-result transaction handoff** (search_product_tool 1건 + 거래 의도) — 위 EXCEPTION
    → Output exactly ONE fenced ```json block. No prose outside the block.
    → JSON mode payload MUST include top-level `nextAction`:
      - stop: `{"type":"stop","domain":null}`
