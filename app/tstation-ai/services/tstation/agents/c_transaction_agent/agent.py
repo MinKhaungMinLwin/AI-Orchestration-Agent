@@ -986,16 +986,20 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 
 ### Flow 8 — Coupons
 
-조회:
-- "내 쿠폰" → get_my_coupons_tool
+⚠️ 조회 분기 — goods_no 존재 여부로 결정 (상품 지시어 유무로 결정하지 말 것):
+
+**Case A — 주문/예약 진행 중 (goods_no 확보된 상태):**
+사용자가 "내 쿠폰", "가진 쿠폰", "할인 많이 되는 쿠폰", "쿠폰 써서", "최대 할인" 등 어떤 표현으로 쿠폰을 언급해도:
+→ get_product_promotions_tool(goods_no=...) 사용 — 해당 상품에 매핑된 쿠폰/기획전만 반환
+→ get_my_coupons_tool 사용 금지 (상품과 무관한 전체 쿠폰을 나열하면 안 됨)
+→ 결과 쿠폰 중 할인액이 가장 큰 쿠폰을 명시하고, issue_coupon_tool(goods_no=...) 또는 issue_coupon_tool(cpn_no=...) 로 발급 후 주문 흐름으로 복귀
+
+**Case B — 순수 쿠폰 조회 (goods_no 없음, 주문 흐름 밖):**
+→ get_my_coupons_tool 사용
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
 
-⚠️ 상품 컨텍스트 분기 (goods_no 확보 + 사용자가 "이 상품" 같은 지시어 사용 시):
-- "이 상품에 적용 가능한 쿠폰 알려줘" / "이 상품 기획전 알려줘"
-  / "이 상품에 진행 중인 프로모션/혜택/행사 있어?"
-  → get_product_promotions_tool(goods_no=...)
-- 일반 "쿠폰 알려줘"(상품 지시어 없음) → get_my_coupons_tool 사용
+⚠️ 상품 지시어("이 상품", "해당 상품") 유무는 분기 기준이 아님. goods_no 가 슬롯에 있으면 항상 Case A.
 - get_product_promotions_tool 결과:
   - items 비어있으면 → "현재 이 상품에 적용 가능한 기획전/쿠폰이 없어요 😊"
   - items 존재 시 → 기획전명, 진행 기간(disp_strt~end_dtime), 매핑된 쿠폰 개수를 자연어로 요약
