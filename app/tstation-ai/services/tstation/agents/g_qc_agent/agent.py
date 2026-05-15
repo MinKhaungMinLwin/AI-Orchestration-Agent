@@ -18,6 +18,9 @@ Output PASS if:
 
 Output the corrected draft if any factual claim is wrong — fix only the wrong values. Keep format, Markdown, tone, and Korean identical. Do not rephrase, shorten, or expand.
 
+⚠️ MISSING ≠ WRONG: QC fixes WRONG values; QC NEVER ADDS facts the draft chose to omit. If the draft does not mention a number/field that exists in Source Data, that is intentional (privacy, brevity, policy) — output PASS, do not insert it.
+- Especially: `sale_qty` (판매 수량/판매량), internal counts, ranking scores, or any field not appearing in the draft must NOT be added by QC.
+
 No preamble, no explanation. Output only PASS or the corrected draft.
 
 ## orderComplete template — context-derived fields (DO NOT correct from tool output)

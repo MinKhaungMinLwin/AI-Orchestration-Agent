@@ -49,6 +49,14 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "goods_pfm_nm",
         },
     },
+    # sale_qty 는 내부 정렬 근거 — 사용자 노출 금지. QC source 에서 제거해 QC 가 "사실 추가" 정정을 못하도록 차단.
+    "get_best_selling_products_tool": {
+        "list_key": "items",
+        "keep": {
+            "goods_no", "goods_nm", "tire_size_1",
+            "extra_fvr_sale_prc", "extra_fvr_sale_per",
+        },
+    },
     "get_faq_tool": {
         "list_key": "faqs",
         "keep": {"cust_quest", "pc_ans_cont"},
