@@ -1053,11 +1053,14 @@ Verify each required field is non-null. If any is missing, resolve it instead of
    | 배송상태 | 배송중 |
    | 송장번호 | 999999 |
    | 배송예정일시 | 2026-04-18 15:00:00 |
+   | 예약 매장 | 티스테이션 강남점 |
+   | 매장 전화 | 02-1234-5678 |
+   | 예약 일시 | 2026-05-20 13:00 |
 
 ⚠️ NEVER use bullet points (•) for order details — always use the 2-column table above.
 ⚠️ NEVER show 배송번호 (delivery number, e.g. D202604080099605) in the response — this is an internal system ID, not useful to users.
 ⚠️ Omit a row entirely if the field value is null/empty (do not show empty rows).
-   Only show: 주문번호, 상품명, 수량, 주문일시, 주문상태, 배송상태, 송장번호, 배송예정일시
+   Only show: 주문번호, 상품명, 수량, 주문일시, 주문상태, 배송상태, 송장번호, 배송예정일시, 예약 매장 (shop_nm from detail), 매장 전화 (tel_no from detail), 예약 일시 (rsv_dtime from detail)
 
 
 ### Flow 8 — Coupons
