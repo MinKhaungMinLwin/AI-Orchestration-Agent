@@ -528,6 +528,7 @@ EXAMPLES (tricky cases):
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
 - "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
 - "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order (check order/logistics state, NOT FAQ)

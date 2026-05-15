@@ -19,6 +19,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     quick_order_tool,
     get_order_status_tool,
     get_orders_of_user_tool,
+    get_my_reservations_tool,
 )
 _TRANSACTION_BASE = """
 You are the Transaction Agent of T-Station AI (Hankook Tire).
@@ -281,6 +282,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | quick_order_tool | User selected store, all info confirmed |
 | get_orders_of_user_tool | User asks to see their orders |
 | get_order_status_tool | User asks about specific order |
+| get_my_reservations_tool | User asks about their shop visit reservations (예약 조회) |
 
 
 ## STORE SEARCH — CALL TOOL IMMEDIATELY (no clarification needed)
@@ -1600,6 +1602,7 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
 ## Profile Scope
 - "내 주문", "주문내역", "주문 조회" -> call get_orders_of_user_tool.
 - Delivery or order status for a known order -> call get_order_status_tool.
+- "내 예약", "예약 조회", "예약 내역", "다음 방문 언제", "예약 어떻게 돼있어" -> call get_my_reservations_tool (default sct_cd="100"). Show 매장명, 방문일시, 상태 라벨 그대로. 0건이면 "현재 예약된 매장 방문이 없어요 😊" + quickReply 로 매장 찾기 권유.
 - Reservation/visit time change ("예약 시간 변경", "방문 시간 변경", "일정 변경", "시간 바꿀 수 있어", "오늘 예약한거 시간 변경") -> follow Reservation Time Change below.
 - Cancellation fee / cancellation availability ("취소 수수료", "취소비용", "오늘 취소하면", "예약 취소", "주문 취소") -> follow Cancellation Inquiry below.
 - Add the confirmed product to cart -> call save_to_cart_tool only when goods_no and quantity are known.
@@ -1769,6 +1772,8 @@ class TransactionSubAgent(BaseAgent):
         # Order / Delivery
         "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
+        # Reservation
+        "get_my_reservations_tool": "Reservation",
     }
 
     def __init__(self, model, profile: str = "full"):
@@ -1791,6 +1796,7 @@ class TransactionSubAgent(BaseAgent):
             quick_order_tool,
             get_orders_of_user_tool,
             get_order_status_tool,
+            get_my_reservations_tool,
         ]
         system_prompt = get_transaction_system_prompt
         name = "Transaction Agent"
@@ -1808,6 +1814,7 @@ class TransactionSubAgent(BaseAgent):
                 quick_order_tool,
                 get_orders_of_user_tool,
                 get_order_status_tool,
+                get_my_reservations_tool,
             ]
             system_prompt = get_transaction_order_system_prompt
             name = "Transaction Agent (Order)"

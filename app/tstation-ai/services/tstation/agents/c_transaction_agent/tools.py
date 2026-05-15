@@ -50,6 +50,9 @@ from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRe
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_orders_api_orders_get import sync_detailed as get_orders
 
+# Reservation AF — 매장 방문 예약 조회
+from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방문_예약_조회.get_reservations_api_reservations_get import sync_detailed as get_reservations
+
 
 def get_client() -> AuthenticatedClient:
     """Get authenticated client for tstation-be API."""
@@ -1229,3 +1232,42 @@ def get_orders_of_user_tool():
     except Exception as e:
         logger.exception("[TOOL][get_orders_of_user_tool] Failed")
         return _error_response(None, str(e), "Failed to retrieve order list")
+
+
+@tool
+def get_my_reservations_tool(sct_cd: str = "100"):
+    """
+    Retrieve authenticated user's shop visit reservations from ET_SHOP_RSV_INFO.
+
+    Args:
+        sct_cd: Reservation category filter (default "100"). Values:
+            - "100": 방문예약 (simple shop visit reservation — default)
+            - "200": 구매후방문예약 (post-purchase visit, has ord_no)
+            - "300": 오프라인예약 (offline reservation)
+            - "all": all categories
+
+    Returns response with `reservations` list. Each item includes:
+        shop_rsv_seq, shop_rsv_no, ord_no, shop_id, shop_nm, tel_no,
+        vst_rsv_dtime (YYYY-MM-DD HH:MI), rsv_req_desc,
+        shop_rsv_sct_cd / shop_rsv_sct_label (방문예약/구매후방문예약/오프라인예약),
+        shop_vst_rsv_sts_cd / shop_vst_rsv_sts_label (예약대기/예약완료/서비스완료/서비스취소).
+
+    Sorted by vst_rsv_dtime DESC.
+
+    Call when user asks about their reservations (예: "내 예약 보여줘", "예약 어떻게 돼있어?",
+    "다음 방문 언제야?", "내 예약 취소된 거 있어?").
+    """
+    logger.debug("[TOOL][get_my_reservations_tool] Called sct_cd=%s", sct_cd)
+
+    try:
+        response = get_reservations(client=get_client(), sct_cd=sct_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve reservations"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_reservations_tool] Failed")
+        return _error_response(None, str(e), "Failed to retrieve reservations")
