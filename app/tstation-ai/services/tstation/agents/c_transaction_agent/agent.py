@@ -1435,6 +1435,14 @@ Handle ONLY price, final-price, promotion, and logistics-stock requests for an a
 - If goods_no or quantity is missing, ask one short Korean clarification. Do not search products in this profile.
 - If the request is not price/stock/promotion related, ask the user to clarify.
 
+## 1+1 / 2+2 기획전 단가 계산 (no tool call needed)
+When user asks "1+1 행사하면 하나에 얼마야?" / "하나에 얼마꼴인 거야?" about a promotion:
+- `originalPrice` = 정가 (regular price shown on product card). Example: 305,800원.
+- `price` = 행사가 (event-discounted price). Example: 229,500원.
+- 1+1 per-unit = `originalPrice ÷ 2` (NOT `price`). Example: 305,800 ÷ 2 = 152,900원.
+- Response: "정가는 [originalPrice]원이고, 1+1 적용 시 개당 [originalPrice÷2]원이에요."
+- Use `originalPrice` from the product card in prior context. Do not call any tool.
+
 ## Output Policy
 Return the shortest useful Korean answer based on tool output.
 For product/card-mapped results, do not repeat card details in text.
