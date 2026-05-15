@@ -244,7 +244,7 @@ class MultiAgentDomain(BaseModel):
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
-            "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status), "
+            "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status/cancellation fee), "
             "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
             "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock/discount-price with specific product name, best-sellers — goods_no NOT yet known). "
             "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT specific product name, or continuation from recommendation cards). "
@@ -315,7 +315,7 @@ Produce 6 outputs:
 
 6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
-   - "transaction_order": order history, order status, cart, quick order
+   - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
@@ -370,7 +370,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation (주문 취소 / 취소하고 싶어 / 취소해줘), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
 - SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -385,12 +385,12 @@ DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
-- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰"
+- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰", "오늘 취소하면 수수료 있나요?"
 
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어"
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
 
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
@@ -501,9 +501,9 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런).
+- SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 RULES:
@@ -516,6 +516,7 @@ RULES:
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 매장/근처/올마이티/All My T → TRANSACTION
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
+- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용 → TRANSACTION, agent_prompt_profile=transaction_order
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
 
@@ -526,6 +527,8 @@ EXAMPLES (tricky cases):
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order (check order/logistics state, NOT FAQ)
+- "예약 취소하면 비용이 발생하나요?" → TRANSACTION, agent_prompt_profile=transaction_order (store visit vs online order must be determined from orders)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
@@ -550,7 +553,7 @@ EXAMPLES (tricky cases):
 Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
 agent_prompt_profile:
 - transaction_coupon: coupon/promotion -> transaction_coupon
-- transaction_order: order/cart/status -> transaction_order
+- transaction_order: order/cart/status/cancellation fee -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
 - discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
@@ -957,6 +960,27 @@ class StreamingMultiAgentCoordinator:
             input_goods_no = tool_input.get("goods_no")
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
+
+        # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
+        # `payment_amount = (extra_fvr_sale_prc + wage_prc) * ord_qty` 로 계산.
+        # template_mapper 의 orderComplete payment_amount 계산식과 동일.
+        # 산출된 슬롯은 다음 턴 LLM 컨텍스트(`[확인된 고객 정보]`)에 "결제금액"으로
+        # 노출되어, 할부 계산 같은 후속 질문에서 LLM 이 단가·수량을 임의로 곱해
+        # 가짜 총액을 만들지 않도록 한다.
+        if tool_name == "get_final_price_tool" and tool_succeeded:
+            price_data = parsed_data.get("data", parsed_data)
+            if isinstance(price_data, dict):
+                final_unit = price_data.get("extra_fvr_sale_prc") or price_data.get("sale_prc")
+                wage = price_data.get("wage_prc") or 0
+                qty = slots.ord_qty
+                if final_unit is not None and qty is not None and qty > 0:
+                    try:
+                        tool_slots["payment_amount"] = int((int(final_unit) + int(wage)) * int(qty))
+                    except (TypeError, ValueError):
+                        logger.debug(
+                            "[SLOTS] payment_amount calc skipped: non-numeric inputs "
+                            f"(final_unit={final_unit!r}, wage={wage!r}, qty={qty!r})"
+                        )
 
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
@@ -1696,8 +1720,18 @@ class StreamingMultiAgentCoordinator:
                     "support": MultiAgentDomain.Domain.SUPPORT,
                 }
                 next_domain = next_domain_map.get(decision.next_domain.lower())
-                if next_domain:
-                    domains = [next_domain] + [d for d in domains if d != next_domain]
+                if next_domain and next_domain not in domains:
+                    # IMPORTANT: in-place mutation only — the enclosing
+                    # `for domain in domains` iterator must see the new
+                    # entry. Rebinding `domains = [...]` (the previous
+                    # implementation) silently leaves the iterator on the
+                    # original list, so a CONTINUE decision after a
+                    # speculative DISCOVERY turn was dropped and the chain
+                    # stalled (e.g. "강남점 예약 가능 시간" → Discovery emits
+                    # `nextAction.continue.transaction` but TRANSACTION never
+                    # runs and the user sees only "이어갈게요" prose).
+                    # `append` matches the P1-D recovery shape (line 1610).
+                    domains.append(next_domain)
 
         # Legacy UI Template Agent path is disabled.
         # Domain agents should emit `data` events directly. If a migrated agent misses a
@@ -1774,6 +1808,45 @@ _TRANSACTION_FAST_RE = re.compile(
     r"매장\s*찾|가까운\s*매장|근처\s*매장|올마이티|all\s*my\s*t",
     re.IGNORECASE,
 )
+
+# ---------------------------------------------------------------------------
+# Regional "cheapest store" fast-path intercept
+# ---------------------------------------------------------------------------
+# "X 도/시/군/구 에서 제일 저렴한 매장" 류 광역 가격 비교 질문은 매장·시기·
+# 상품(쿠폰/기획전/이벤트)에 따라 동적으로 달라지므로 단일 매장으로 일률
+# 안내가 불가능. Transaction agent prompt 가드만으로는 LLM 이 우회할 수
+# 있어 분류기 전 단계에서 결정적으로 차단하고 canned quickReply 응답으로
+# 즉시 종료.
+_REGION_KEYWORDS = (
+    # 도
+    "경상남도", "경상북도", "충청남도", "충청북도", "전라남도", "전라북도",
+    "강원도", "경기도", "제주도", "충청도", "전라도", "경상도", "강원특별자치도",
+    "전북특별자치도", "제주특별자치도",
+    # 특별/광역시
+    "서울특별시", "부산광역시", "대구광역시", "대전광역시", "광주광역시",
+    "울산광역시", "인천광역시", "세종특별자치시",
+    # 약어
+    "서울", "부산", "대구", "대전", "광주", "울산", "인천", "세종", "경기",
+    "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+)
+_REGION_SUFFIX_RE = re.compile(r"[가-힣]{2,5}(?:특별시|광역시|특별자치시|특별자치도|도|시|군|구)")
+_CHEAP_KEYWORDS_RE = re.compile(
+    r"(제일|가장)\s*(저렴|싼|싸|싸게)|"
+    r"가격\s*비교|"
+    r"어디가\s*(제일|가장)|"
+    r"최저\s*가격|최저가",
+    re.IGNORECASE,
+)
+
+
+def _is_regional_cheapest_query(msg: str | None) -> bool:
+    """Return True for '도/시/군/구 + 제일 저렴' style regional price-comparison queries."""
+    if not msg:
+        return False
+    has_region = any(r in msg for r in _REGION_KEYWORDS) or bool(_REGION_SUFFIX_RE.search(msg))
+    if not has_region:
+        return False
+    return bool(_CHEAP_KEYWORDS_RE.search(msg))
 
 
 # Goal-based fast-path routing tables — kept beside _goal_based_classify so the
@@ -2868,6 +2941,33 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
+        # Pre-classifier intercept: "<지역> 제일 저렴한 매장" 류 광역 가격
+        # 비교 질문은 단일 매장으로 안내할 수 없으므로 분류기/agent 호출 없이
+        # 즉시 canned quickReply 응답으로 종료. Transaction agent prompt
+        # 가드는 LLM 우회 가능성이 있어 보조 layer 로만 유지.
+        if _is_regional_cheapest_query(last_user_msg):
+            logger.info(
+                "[CHAT_V2] Regional cheapest-store fast-path intercept: %s",
+                last_user_msg[:80],
+            )
+            _regional_canned_msg = (
+                "매장·시기·상품에 따라 적용되는 프로모션이 달라 '제일 저렴한 매장' 을 "
+                "한 곳으로 안내드리기 어려워요 😊\n\n"
+                "다만 **온라인 구매 시 무료배송 + 무료장착**이고, 원하시는 상품을 선택하시면 "
+                "실시간 할인가를 바로 확인하실 수 있어요."
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_regional_cheapest_response(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=_regional_canned_msg)
+
         # Create parent "chat" span before classify so ALL sub-calls (classify,
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
@@ -3610,6 +3710,36 @@ class TStationChatServiceV2:
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
         yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_regional_cheapest_response():
+        """Stream a canned response for '도/시/군/구 + 제일 저렴한 매장' queries."""
+        msg = (
+            "매장·시기·상품에 따라 적용되는 프로모션이 달라 '제일 저렴한 매장' 을 "
+            "한 곳으로 안내드리기 어려워요 😊\n\n"
+            "다만 **온라인 구매 시 무료배송 + 무료장착**이고, 원하시는 상품을 선택하시면 "
+            "실시간 할인가를 바로 확인하실 수 있어요."
+        )
+        chips = [
+            {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "진행 중인 이벤트", "domain": "DISCOVERY"},
+        ]
+        yield f"data: {json.dumps({'type': 'token', 'content': msg}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': '[LEADING AGENT]'}, ensure_ascii=False)}\n\n"
+        data_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": msg,
+                "quickReplies": chips,
+                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            },
+        }
+        yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"

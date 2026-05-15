@@ -39,6 +39,11 @@ class ConversationSlots(BaseModel):
     shop_name: Optional[str] = None      # e.g. "한남점"
     car_model: Optional[str] = None      # e.g. "쏘나타"
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
+    # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
+    # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면
+    # LLM 이 컨텍스트만으로 단가·수량 곱셈을 추측해 hallucination 하지 않고
+    # 결정적 값을 그대로 인용할 수 있다. (예: 할부 계산 질문)
+    payment_amount: Optional[int] = None
     # Free-form user store-selection criteria captured on the originating turn
     # (e.g. "친절한 직원, 얼라인먼트, 워셔액 무료"). Sticky across slot-fill
     # turns so the agent can re-apply the criteria once the missing slot
@@ -49,11 +54,12 @@ class ConversationSlots(BaseModel):
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
-        "tire_model": ["goods_no"],
-        "tire_size": ["goods_no"],
-        "goods_no": ["tire_model", "tire_size"],
+        "tire_model": ["goods_no", "payment_amount"],
+        "tire_size": ["goods_no", "payment_amount"],
+        "goods_no": ["tire_model", "tire_size", "payment_amount"],
+        "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id"],
-        "car_model": ["tire_size", "goods_no"],
+        "car_model": ["tire_size", "goods_no", "payment_amount"],
         # When the goal flips (e.g. store_finder → product_recommend), drop the
         # store-specific carryovers. region/preferences only make sense within
         # a store-finding goal; preserving them across goal flips would inject
@@ -70,7 +76,9 @@ class ConversationSlots(BaseModel):
         (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d{2})[\s/]?(\d{2})(?!\d)"), "{0}/{1}R{2}"),
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
-    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개")
+    # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
+    # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
+    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
 
     # Intent patterns. Order = priority: first match wins when a single user turn
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
@@ -541,6 +549,7 @@ class ConversationSlots(BaseModel):
             "shop_name": "매장명",
             "car_model": "차량 모델",
             "region": "지역",
+            "payment_amount": "결제금액",
         }
 
         # Map pending_intent enum value → Korean label displayed in the prompt.
@@ -553,7 +562,13 @@ class ConversationSlots(BaseModel):
         entity_lines = []
         for field, label in entity_label_map.items():
             val = getattr(self, field)
-            if val is not None:
+            if val is None:
+                continue
+            if field == "payment_amount":
+                # 천단위 콤마 + 원 단위 명시 — LLM 이 그대로 인용하기 좋은 형식.
+                # 할부 계산 등에서 이 값을 임의로 변형하지 않도록 "이미 산출된 총액" 임을 분명히.
+                entity_lines.append(f"- {label}: {val:,}원 (이미 산출된 총 결제금액 — 단가×수량 재계산 금지)")
+            else:
                 entity_lines.append(f"- {label}: {val}")
 
         blocks: list[str] = []
