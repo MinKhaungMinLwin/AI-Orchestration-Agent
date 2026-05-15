@@ -831,8 +831,10 @@ def get_products_recommendations_tool(
             - "SPORT": 스포츠/퍼포먼스
             - "COMFORT": 편안한 승차감
             - "RUNFLAT": 런플랫
-            ⚠️ 신규(동적) rcmd_type 에만 적용됨.
+            ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
             "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
+            "런플랫 타이어 추천" 단일 의도면 rcmd_type="tstation" + pfm_nm="RUNFLAT" 사용
+              (rcmd_type="family" 는 데이터상 RUNFLAT 결과 0건이므로 사용 금지).
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -857,6 +859,7 @@ def get_products_recommendations_tool(
         - {"rcmd_type": "all_weather", "tire_size": "245/45R18", "sort_by": "price_asc"}  # 가장 저렴한 사계절 타이어
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
         - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
+        - {"rcmd_type": "tstation", "pfm_nm": "RUNFLAT", "limit": 3}  # 런플랫 단독 추천
         - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
         - {"rcmd_type": "value", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 가성비
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이

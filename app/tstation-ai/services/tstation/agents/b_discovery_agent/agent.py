@@ -237,7 +237,7 @@ After user responds to Case 3:
      • 사계절 + 가성비 / 주말 + 가성비 → "weekend"
      • 정숙 + 마일리지 / 조용 + 장거리 → "long_distance"
      • 정숙 + 가족 / 정숙 + 아이 / 가족 + 안전 / 아이 + 안전 → "safe_kids"
-     • 정숙 + 승차감 / 가족 + 런플랫 → "family"
+     • 정숙 + 승차감 → "family"  (⚠️ "가족 + 런플랫" 은 family 데이터가 비어 있어 결과 0건. Step B.6 으로 처리)
      • 퍼포먼스 + 핸들링 / 스포츠 + 코너링 → "performance"
      • 고속 + 핸들링 → "high_speed"
      • 워런티 + (모든 조건) → "warranty"
@@ -275,6 +275,18 @@ After user responds to Case 3:
      - "올웨더 타이어 추천해줘" → rcmd_type="all_weather", season_nm="올웨더"
      - "사계절 가성비 좋은 거" → rcmd_type="weekend", season_nm="사계절"
      - "조용한 올웨더" → rcmd_type="low_vibration", season_nm="올웨더"
+
+   **Step B.6 — 퍼포먼스 직교 필터 매핑 (pfm_nm, rcmd_type 과 별개로 동시 전달)**
+   사용자 메시지에 퍼포먼스 분류(`GOODS_PFM_NM`) 키워드가 있으면 rcmd_type 과 **동시에** `pfm_nm` 도 전달한다.
+     • "런플랫", "runflat", "RUN FLAT", "RUN-FLAT" → `pfm_nm="RUNFLAT"`
+
+   ⚠️ 런플랫 의도가 들어오면 **rcmd_type 기본은 "tstation"** 으로 둔다. ("family" 는 데이터상 RUNFLAT 결과가 비어 있어 0건 회귀.)
+   다른 시나리오 키워드(빗길/눈길/고속 등)와 합쳐진 경우에만 해당 rcmd_type 우선:
+     - "런플랫 타이어 추천" → rcmd_type="tstation", pfm_nm="RUNFLAT"
+     - "런플랫 추천해줘" → rcmd_type="tstation", pfm_nm="RUNFLAT"
+     - "내 차에 맞는 런플랫" → rcmd_type="tstation", pfm_nm="RUNFLAT" (+ tire_size from car)
+     - "런플랫 중에 빗길 강한 거" → rcmd_type="wet", pfm_nm="RUNFLAT"
+     - "가족용 런플랫" → rcmd_type="tstation", pfm_nm="RUNFLAT" (가족 단독 키워드보다 RUNFLAT 우선)
 
    **Step C — fallback**
    여러 키워드가 있는데 합산 타입이 없으면 더 구체적인 키워드 우선 (예: "고속 + 사계절" → "high_speed"). 그래도 애매하면 "tstation".
