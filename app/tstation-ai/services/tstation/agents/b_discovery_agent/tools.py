@@ -412,7 +412,7 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 @tool_cache(ttl=600)
 def search_product_tool(
     keyword: str | None = None,
-    limit: int = 5,
+    limit: int = 10,
     size: str | None = None,
     brand_cd: str = "HK",
     sort_by: str | None = None,
@@ -444,7 +444,7 @@ def search_product_tool(
         keyword (str | None): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX').
             브랜드명만 있는 경우 None 으로 두고 brand_cd 로 필터링한다.
             방어적으로, 브랜드명만 들어오면 자동으로 None 으로 정규화된다.
-        limit (int): 반환할 최대 상품 수 Default: 5.
+        limit (int): 반환할 최대 상품 수 Default: 10.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
         brand_cd (str): 브랜드 코드. Default: HK.
             - HK: Hankook 한국타이어
