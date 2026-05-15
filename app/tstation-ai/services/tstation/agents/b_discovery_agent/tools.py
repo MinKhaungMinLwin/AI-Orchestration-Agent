@@ -817,9 +817,12 @@ def get_products_recommendations_tool(
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 rcmd_type 의 BE 정렬 그대로 유지.
         season_nm (str | None, optional): 계절 직교 필터. rcmd_type 과 직교로 적용된다.
-            - "여름": 여름용 타이어만
-            - "겨울": 겨울용 타이어만
-            - "사계절": 사계절 타이어만
+            - "여름": 여름용 타이어만 (PR_GOODS_BASE.SEASON_NM='여름')
+            - "겨울": 겨울용 타이어만 (PR_GOODS_BASE.SEASON_NM='겨울')
+            - "사계절": 사계절 타이어만 (PR_GOODS_BASE.SEASON_NM='사계절')
+            - "올웨더": 올웨더 패턴만 (PR_PATTERN_BASE.ALLWEATHER_YN='Y')
+              ⚠️ 사용자가 "올웨더 / all-weather / 올시즌 / 전천후" 라고 명시하면
+              `season_nm="올웨더"` 사용. "사계절" 이라고 명시하면 `season_nm="사계절"`.
             ⚠️ 신규(동적) rcmd_type 에만 적용됨 (tstation/discount/value 제외).
             "여름용 타이어 추천" 단일 의도면 rcmd_type="summer" 사용 (필터 불필요).
         pfm_nm (str | None, optional): 성능 등급 직교 필터. rcmd_type 과 직교로 적용된다.

@@ -256,8 +256,22 @@ After user responds to Case 3:
      • "짐 많이", "하중", "적재" → "heavy_load"
      • "주말", "주말 드라이브" → "weekend"
      • "아이", "유아", "어린이", "안전" → "safe_kids"
-     • "사계절", "전천후", "올시즌" → "all_weather"
+     • "사계절", "전천후", "올시즌", "올웨더", "all-weather" → "all_weather"
      • "워런티", "보증" → "warranty"
+
+   **Step B.5 — 시즌 직교 필터 매핑 (season_nm, rcmd_type 과 별개로 동시 전달)**
+   사용자 메시지에 명시적 시즌 키워드가 있으면 rcmd_type 과 **동시에** `season_nm` 도 전달한다.
+   "사계절" 과 "올웨더" 는 데이터상 별개 분류 — 사용자가 쓴 용어 그대로 매핑:
+     • "사계절" (단독 또는 합산) → `season_nm="사계절"` (`PR_GOODS_BASE.SEASON_NM='사계절'`)
+     • "올웨더", "all-weather", "AllWeather", "올시즌", "전천후" → `season_nm="올웨더"` (`PR_PATTERN_BASE.ALLWEATHER_YN='Y'`)
+     • "여름", "여름용", "썸머" → `season_nm="여름"` (단, 단독 의도면 rcmd_type="summer" 만으로 충분)
+     • "겨울", "겨울용" → `season_nm="겨울"` (단, 단독 의도면 rcmd_type="snow" 만으로 충분)
+
+   예시:
+     - "사계절 타이어 추천" → rcmd_type="all_weather", season_nm="사계절"
+     - "올웨더 타이어 추천해줘" → rcmd_type="all_weather", season_nm="올웨더"
+     - "사계절 가성비 좋은 거" → rcmd_type="weekend", season_nm="사계절"
+     - "조용한 올웨더" → rcmd_type="low_vibration", season_nm="올웨더"
 
    **Step C — fallback**
    여러 키워드가 있는데 합산 타입이 없으면 더 구체적인 키워드 우선 (예: "고속 + 사계절" → "high_speed"). 그래도 애매하면 "tstation".
@@ -273,8 +287,8 @@ After user responds to Case 3:
      • 정렬 의도가 없으면 sort_by 생략 (None — BE 의 rcmd_type 정렬 유지)
 
    ⚠️ 정렬 의도가 명확하면 항상 sort_by 를 전달한다. rcmd_type 만으로는 사용자가 원하는 순서가 보장되지 않는다.
-     - 예: "가장 저렴한 올웨더 타이어" → rcmd_type="all_weather" + sort_by="price_asc" (둘 다 전달)
-     - 예: "평점 높은 사계절 타이어" → rcmd_type 합산 매핑(또는 "tstation") + sort_by="rating_desc"
+     - 예: "가장 저렴한 올웨더 타이어" → rcmd_type="all_weather", season_nm="올웨더", sort_by="price_asc"
+     - 예: "평점 높은 사계절 타이어" → rcmd_type="all_weather"(또는 합산/`tstation`), season_nm="사계절", sort_by="rating_desc"
      - 예: "리뷰 많은 빗길용 타이어" → rcmd_type="wet" + sort_by="review_desc"
 
    ⚠️ 단, "가장 저렴한" 의도가 **단독**으로 들어오고 비교 후보 goods_no 가 이미 명확한 경우(이전 product 카드에서 선택 비교 등)는
@@ -1201,8 +1215,17 @@ Override only when the user already gave a scenario:
 - heavy load/SUV load -> heavy_load
 - weekend -> weekend
 - kids/safety -> safe_kids
-- all-season/all-weather -> all_weather
+- all-season -> all_weather, season_nm="사계절"
+- all-weather/올웨더/올시즌/전천후 -> all_weather, season_nm="올웨더"
+- 사계절 -> all_weather, season_nm="사계절"
+- 여름/summer -> summer (or season_nm="여름" if combined with other scenario)
+- 겨울/winter -> snow (or season_nm="겨울" if combined with other scenario)
 - warranty -> warranty
+
+⚠️ season_nm 매핑 (직교 필터, rcmd_type 과 동시 전달):
+- "사계절" (Korean) → season_nm="사계절" (PR_GOODS_BASE.SEASON_NM='사계절')
+- "올웨더 / all-weather / 올시즌 / 전천후" → season_nm="올웨더" (PR_PATTERN_BASE.ALLWEATHER_YN='Y')
+사계절과 올웨더는 데이터상 별개 분류 — 사용자가 쓴 용어 그대로 매핑.
 
 If the user gives a price budget/range, pass min_price/max_price to the recommendation tool.
 If the user asks for cheapest/rating/review order, pass sort_by when supported by the tool.
