@@ -312,11 +312,12 @@ def get_coupon_applicable_products_tool(
     deal_no: List[str] | None = None,
 ):
     """
-    쿠폰(cpn_no) 또는 기획전(deal_no) 에 적용 가능한 상품 목록 조회.
+    쿠폰(cpn_no) 또는 기획전(deal_no) 에 적용 가능한 상품/매장 조회.
 
-    Use when 사용자가 "이 쿠폰 어디에 쓸 수 있어?", "이 쿠폰 적용 상품", "기획전 상품",
-    "기획전에 어떤 상품 있어" 류 질문을 했을 때. cpn_no, deal_no 중 한쪽 또는 양쪽을
-    리스트로 전달한다. 각 최대 10개. 둘 다 비우면 빈 응답.
+    Use when 사용자가 "이 쿠폰 어디에 쓸 수 있어?", "이 쿠폰 적용 상품", "이 쿠폰 어느
+    매장에서 써?", "기획전 상품", "기획전에 어떤 상품 있어" 류 질문을 했을 때.
+    cpn_no, deal_no 중 한쪽 또는 양쪽을 리스트로 전달한다. 각 최대 10개. 둘 다 비우면
+    빈 응답.
 
     Args:
         cpn_no (List[str] | None): 쿠폰 번호 리스트. 예: ["C0000001234"], ["C1","C2"].
@@ -324,14 +325,24 @@ def get_coupon_applicable_products_tool(
 
     Response shape:
         {
-          "total_coupons": int,
+          "total_coupons": int,         # coupons[] 그룹 수
           "total_deals": int,
-          "total_products": int,
+          "total_products": int,        # coupons[].items + deals[].items 합계
+          "total_store_coupons": int,   # stores[] 그룹 수
+          "total_stores": int,          # stores[].items 합계
           "coupons": [{"cpn_no": str, "total": int, "items": [<product>...]}],
-          "deals":   [{"deal_no": str, "total": int, "items": [<product>...]}]
+          "deals":   [{"deal_no": str, "total": int, "items": [<product>...]}],
+          "stores":  [{"cpn_no": str, "total": int, "items": [{shop_id, shop_nm}]}]
         }
-    item 각 항목은 goods_no / goods_nm / sale_prc / extra_fvr_sale_prc / tire_size_1 등
-    상품 정보를 포함한다.
+
+    매핑 타입:
+    - coupons[] / deals[].items: 패턴(PTRN_CD) 기준 상품 — goods_no / goods_nm /
+      sale_prc / extra_fvr_sale_prc / tire_size_1 등 포함.
+    - stores[].items: **매장 한정 쿠폰** — 특정 매장에서만 쓸 수 있는 쿠폰. shop_id +
+      shop_nm 만 포함, 상품 정보 없음.
+
+    하나의 cpn_no 가 상품 매핑과 매장 매핑 둘 다 가질 수도 있다 (드물지만 가능).
+    coupons[] 와 stores[] 양쪽에 동일 cpn_no 가 등장할 수 있다.
     """
     cpn_csv = ",".join(cpn_no) if cpn_no else ""
     deal_csv = ",".join(deal_no) if deal_no else ""

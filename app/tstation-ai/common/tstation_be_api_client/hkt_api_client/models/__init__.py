@@ -15,6 +15,8 @@ from .car_trim_response import CarTrimResponse
 from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
 from .coupon_applicable_products_group import CouponApplicableProductsGroup
+from .coupon_applicable_store_item import CouponApplicableStoreItem
+from .coupon_applicable_stores_group import CouponApplicableStoresGroup
 from .coupon_deal_applicable_products_response import CouponDealApplicableProductsResponse
 from .coupon_issue_response import CouponIssueResponse
 from .coupon_result_item import CouponResultItem
@@ -24,6 +26,12 @@ from .deal_coupon_item import DealCouponItem
 from .deal_item import DealItem
 from .deal_list_response import DealListResponse
 from .deal_with_coupons_item import DealWithCouponsItem
+from .debug_aply_rows_api_coupons_debug_aply_rows_get_response_debug_aply_rows_api_coupons_debug_aply_rows_get import (
+    DebugAplyRowsApiCouponsDebugAplyRowsGetResponseDebugAplyRowsApiCouponsDebugAplyRowsGet,
+)
+from .debug_item_prc_rows_api_coupons_debug_item_prc_rows_get_response_debug_item_prc_rows_api_coupons_debug_item_prc_rows_get import (
+    DebugItemPrcRowsApiCouponsDebugItemPrcRowsGetResponseDebugItemPrcRowsApiCouponsDebugItemPrcRowsGet,
+)
 from .discount_price_item import DiscountPriceItem
 from .discount_price_response import DiscountPriceResponse
 from .escalation_request import EscalationRequest
@@ -100,6 +108,8 @@ __all__ = (
     "ChatHistoryResponse",
     "CompatibilityResponse",
     "CouponApplicableProductsGroup",
+    "CouponApplicableStoreItem",
+    "CouponApplicableStoresGroup",
     "CouponDealApplicableProductsResponse",
     "CouponIssueResponse",
     "CouponResultItem",
@@ -109,6 +119,8 @@ __all__ = (
     "DealItem",
     "DealListResponse",
     "DealWithCouponsItem",
+    "DebugAplyRowsApiCouponsDebugAplyRowsGetResponseDebugAplyRowsApiCouponsDebugAplyRowsGet",
+    "DebugItemPrcRowsApiCouponsDebugItemPrcRowsGetResponseDebugItemPrcRowsApiCouponsDebugItemPrcRowsGet",
     "DiscountPriceItem",
     "DiscountPriceResponse",
     "EscalationRequest",
