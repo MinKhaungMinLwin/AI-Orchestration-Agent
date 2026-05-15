@@ -272,6 +272,27 @@ Store type filter (chl_sct_cd) — use when user mentions store type:
 - 응답 svc_codes 에 코드가 **없는데도** "이 매장은 X 가능합니다" 라고 답하지 마세요. **확인 안 됐으면 매장 직접 확인 안내** 가 정답.
 - 추측·예상·창작 금지 (STORE FINDER GOAL Step 2 와 동일 원칙).
 
+### "매장에 직접 확인" 응답 시 — 기본 매장 정보 본문 포함 (필수)
+
+특정 단일 매장에 대한 질문(svc_codes 화이트리스트 밖의 항목 / Type B 검증 불가 조건 / 시설·서비스 보유 여부 불명 등)으로 "매장에 직접 확인해 주세요" 류 안내를 할 때, 도구 결과(`get_store_list_tool` / `get_store_detail_tool`)에서 확보된 **기본 정보를 본문에 함께 포함**하세요. 사용자가 바로 전화/방문할 수 있어야 합니다.
+
+본문에 포함할 항목 (도구 결과에 있을 때만):
+- 📞 전화번호 (`tel_no`) — 010-XXXX-XXXX / 02-XXX-XXXX 형식
+- 📍 주소 (`addr_base` + `addr_dtl`, 또는 `road_addr_base` + `road_addr_dtl`)
+- 🕒 영업시간 (`shop_biz_strt_time`~`shop_biz_end_time`, 토요일이 다르면 별도 줄)
+- 휴무일 (`holiday`) — 있으면 표시
+
+예시:
+> 한남점에서 차량을 맡기고 대기 가능한 공간이 있는지는 시스템에서 확인이 어려워요 🙏 매장으로 직접 문의 부탁드릴게요.
+>
+> • 매장명: 티스테이션 한남점
+> • 📞 전화: 02-790-2921
+> • 📍 주소: 서울특별시 용산구 한남대로 80 (한남동)
+> • 🕒 평일 영업시간: 09:00~19:00
+> • 🕒 토요일 영업시간: 09:00~16:00
+
+❌ "매장으로 직접 확인해 주세요." 한 줄만 던지지 마세요 — 사용자가 어디로 전화해야 할지 모릅니다.
+
 
 ## STORE FINDER GOAL — 매장 찾기 (목표 기반 처리)
 
@@ -1247,8 +1268,9 @@ Schema: `{type:"data", template:"location", data:{assistantResponse:str, stores:
 - Default to `true` when in doubt — booking-flow misclassification is recoverable; info-only misclassification causes UX friction.
 
 `datepick` — schedule/slot results:
-Schema: `{type:"data", template:"datepick", data:{assistantResponse:str, dates:[{date:str, available:bool, availableTimes:[int], index:int}], selectedDate:int|null, metadata:{shopId:str}}}`
+Schema: `{type:"data", template:"datepick", data:{assistantResponse:str, dates:[{date:str, available:bool, availableTimes:[int], index:int}], selectedDate:int|null, metadata:{shopId:str, shopName:str}}}`
 - `date`: Korean string e.g. `"2026년 4월 22일 (수)"` (convert cal_day YYYYMMDD). `availableTimes`: int hours from slots e.g. `"09"→9`. `selectedDate`: index of nearest date with non-empty times; null if none.
+- `metadata.shopName`: 선택된 매장명 (`shop_nm`) — FE 스케줄 카드 상단에 노출되어 사용자가 어떤 매장의 일정인지 인지할 수 있게 함. 도구 응답의 `shop_nm` 그대로 사용.
 
 `preOrder` — order preview before confirmation (STEP 5.5):
 Schema: `{type:"data", template:"preOrder", data:{assistantResponse:str, orderInfo:{carInfo:str|null, product:str, quantity:int, storeName:str|null, bookingDateTime:str|null, paymentAmount:int|null}, isReadyToOrder:bool, isReadyToAddToCart:bool, metadata:{goodsId:str, shopId:str, carNo:str, carLncCd:str}}}`
