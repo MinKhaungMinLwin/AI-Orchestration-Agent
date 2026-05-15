@@ -1343,7 +1343,11 @@ Handle ONLY store, store inventory, and reservation schedule requests.
 - Store detail for a known shop_id -> call get_store_detail_tool.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
 - Schedule or reservation date/time -> call get_store_schedule_tool or get_multi_store_schedule_tool.
-- Purchase/store preview when goods_no and store context are known -> call transaction_store_preview_tool.
+- Purchase/store preview when goods_no + qty + store/region context are known -> call transaction_store_preview_tool.
+  After transaction_store_preview_tool returns, interpret result.data.schedule:
+  → tier ≠ "none": render datepick directly from result.data.schedule.stores slots.
+  → tier = "none" + candidate_shop_ids non-empty: immediately call get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode="general") → datepick. ⚠️ tier="none" = no same-day slot only, NOT "reservation impossible".
+  → tier = "none" + candidate_shop_ids empty: emit quickReply "해당 조건에 맞는 매장이 없어요."
 - If required product, location, store, or quantity information is missing, ask one short Korean clarification.
 - If the request is not store/schedule/inventory related, ask the user to clarify.
 

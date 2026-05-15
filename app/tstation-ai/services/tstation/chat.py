@@ -316,8 +316,8 @@ Produce 6 outputs:
 6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order
-   - "transaction_store": store search, nearby store, store detail, schedule, store inventory
-   - "transaction_price_stock": price/final price/logistics stock when goods_no is already known
+   - "transaction_store": store search, nearby store, store detail, schedule, store inventory; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
+   - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
@@ -541,6 +541,8 @@ EXAMPLES (tricky cases):
 - "리뷰 영상 찾아줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
 - "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
+- [Prior context: agent showed size options for "오목천점 예약" request] User says "255/45R20" → TRANSACTION, agent_prompt_profile=transaction_store (size selection inside active reservation flow — needs store+schedule, NOT price/stock)
+- [Prior context: agent showed size options for "오목천점 예약" request] User says "255/55R18" → TRANSACTION, agent_prompt_profile=transaction_store (same rule: reservation context overrides price_stock profile)
 
 Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
 agent_prompt_profile:
