@@ -71,6 +71,12 @@ class QuickReplyChip(BaseModel):
         description="Target domain for this chip. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING. "
                     "Set by the emitting agent so the backend can skip the LLM classifier on the next turn.",
     )
+    url: Optional[str] = Field(
+        default=None,
+        description="Optional external URL. When set, the FE opens this URL in a new tab on click "
+                    "instead of sending a chat message. Used for store-detail-page redirects and "
+                    "similar out-of-conversation navigation.",
+    )
 
 
 class QuickReplyTemplate(TemplatePayload):
