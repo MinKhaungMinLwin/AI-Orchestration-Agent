@@ -1785,6 +1785,45 @@ _TRANSACTION_FAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Regional "cheapest store" fast-path intercept
+# ---------------------------------------------------------------------------
+# "X 도/시/군/구 에서 제일 저렴한 매장" 류 광역 가격 비교 질문은 매장·시기·
+# 상품(쿠폰/기획전/이벤트)에 따라 동적으로 달라지므로 단일 매장으로 일률
+# 안내가 불가능. Transaction agent prompt 가드만으로는 LLM 이 우회할 수
+# 있어 분류기 전 단계에서 결정적으로 차단하고 canned quickReply 응답으로
+# 즉시 종료.
+_REGION_KEYWORDS = (
+    # 도
+    "경상남도", "경상북도", "충청남도", "충청북도", "전라남도", "전라북도",
+    "강원도", "경기도", "제주도", "충청도", "전라도", "경상도", "강원특별자치도",
+    "전북특별자치도", "제주특별자치도",
+    # 특별/광역시
+    "서울특별시", "부산광역시", "대구광역시", "대전광역시", "광주광역시",
+    "울산광역시", "인천광역시", "세종특별자치시",
+    # 약어
+    "서울", "부산", "대구", "대전", "광주", "울산", "인천", "세종", "경기",
+    "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+)
+_REGION_SUFFIX_RE = re.compile(r"[가-힣]{2,5}(?:특별시|광역시|특별자치시|특별자치도|도|시|군|구)")
+_CHEAP_KEYWORDS_RE = re.compile(
+    r"(제일|가장)\s*(저렴|싼|싸|싸게)|"
+    r"가격\s*비교|"
+    r"어디가\s*(제일|가장)|"
+    r"최저\s*가격|최저가",
+    re.IGNORECASE,
+)
+
+
+def _is_regional_cheapest_query(msg: str | None) -> bool:
+    """Return True for '도/시/군/구 + 제일 저렴' style regional price-comparison queries."""
+    if not msg:
+        return False
+    has_region = any(r in msg for r in _REGION_KEYWORDS) or bool(_REGION_SUFFIX_RE.search(msg))
+    if not has_region:
+        return False
+    return bool(_CHEAP_KEYWORDS_RE.search(msg))
+
 
 # Goal-based fast-path routing tables — kept beside _goal_based_classify so the
 # classifier code and its decision data stay together. Only goal_types defined
@@ -2878,6 +2917,33 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
+        # Pre-classifier intercept: "<지역> 제일 저렴한 매장" 류 광역 가격
+        # 비교 질문은 단일 매장으로 안내할 수 없으므로 분류기/agent 호출 없이
+        # 즉시 canned quickReply 응답으로 종료. Transaction agent prompt
+        # 가드는 LLM 우회 가능성이 있어 보조 layer 로만 유지.
+        if _is_regional_cheapest_query(last_user_msg):
+            logger.info(
+                "[CHAT_V2] Regional cheapest-store fast-path intercept: %s",
+                last_user_msg[:80],
+            )
+            _regional_canned_msg = (
+                "매장·시기·상품에 따라 적용되는 프로모션이 달라 '제일 저렴한 매장' 을 "
+                "한 곳으로 안내드리기 어려워요 😊\n\n"
+                "다만 **온라인 구매 시 무료배송 + 무료장착**이고, 원하시는 상품을 선택하시면 "
+                "실시간 할인가를 바로 확인하실 수 있어요."
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_regional_cheapest_response(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=_regional_canned_msg)
+
         # Create parent "chat" span before classify so ALL sub-calls (classify,
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
@@ -3620,6 +3686,36 @@ class TStationChatServiceV2:
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
         yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_regional_cheapest_response():
+        """Stream a canned response for '도/시/군/구 + 제일 저렴한 매장' queries."""
+        msg = (
+            "매장·시기·상품에 따라 적용되는 프로모션이 달라 '제일 저렴한 매장' 을 "
+            "한 곳으로 안내드리기 어려워요 😊\n\n"
+            "다만 **온라인 구매 시 무료배송 + 무료장착**이고, 원하시는 상품을 선택하시면 "
+            "실시간 할인가를 바로 확인하실 수 있어요."
+        )
+        chips = [
+            {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "진행 중인 이벤트", "domain": "DISCOVERY"},
+        ]
+        yield f"data: {json.dumps({'type': 'token', 'content': msg}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': '[LEADING AGENT]'}, ensure_ascii=False)}\n\n"
+        data_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": msg,
+                "quickReplies": chips,
+                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            },
+        }
+        yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
