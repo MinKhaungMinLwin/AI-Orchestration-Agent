@@ -321,7 +321,7 @@ Produce 6 outputs:
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
-   - "full": compatibility-only, mixed, ambiguous, or uncertain cases
+   - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -543,6 +543,9 @@ EXAMPLES (tricky cases):
 - "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)
 - [Prior context: agent showed size options for "오목천점 예약" request] User says "255/45R20" → TRANSACTION, agent_prompt_profile=transaction_store (size selection inside active reservation flow — needs store+schedule, NOT price/stock)
 - [Prior context: agent showed size options for "오목천점 예약" request] User says "255/55R18" → TRANSACTION, agent_prompt_profile=transaction_store (same rule: reservation context overrides price_stock profile)
+- "2026년 4월 23일 (목)\n11:00" → TRANSACTION, agent_prompt_profile=full (datepick UI selection — date+newline+time pattern means user picked a slot; full profile needed for preOrder → quick_order flow)
+- "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
+- [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
 Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
 agent_prompt_profile:
