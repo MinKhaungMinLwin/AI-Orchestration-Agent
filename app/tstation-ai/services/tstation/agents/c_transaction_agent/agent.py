@@ -288,10 +288,13 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
   ⚠️ If a specific store name is also in the message, pass store_nm directly to transaction_store_preview_tool — do NOT call get_store_list_tool first or fall into Flow 5 (store info).
   After transaction_store_preview_tool returns, interpret result.data:
   → tier ≠ "none": slots exist in result.data.stores → render datepick directly from those slots.
-  → tier = "none" + candidate_shop_ids non-empty + reservation/booking intent ("예약", "장착", "방문 날짜"):
-    Immediately call get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode="general") in the same turn
-    → datepick. ⚠️ tier="none" means no same-day slot, NOT that reservation is impossible — future
-    slots may still be available. Do NOT stop or respond with "재고 없음 / 확인되지 않음".
+  → tier = "none" + candidate_shop_ids non-empty:
+    ⚠️ 오늘 장착(당일 서비스) 가능 매장이 없음. 자동으로 candidate_shop_ids[0]를 선택하거나 datepick을 바로 표시하는 것은 절대 금지 — 사용자가 매장을 아직 선택하지 않았음.
+    올바른 처리:
+    1. assistantResponse: "[지역]에는 오늘 장착 가능한 매장이 없어요. 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊"
+    2. `location` 템플릿으로 candidate_shop_ids에 해당하는 매장 목록 표시 → STOP.
+    3. 사용자가 매장을 선택한 후 → get_store_schedule_tool(shop_id=<선택된 매장>, mode="general") → datepick.
+    ⚠️ tier="none"은 오늘 당일 슬롯이 없다는 의미이지 예약 자체가 불가능하다는 뜻이 아님. 단, 사용자 선택 없이 먼저 datepick을 내보내면 안 됨.
   → tier = "none" + candidate_shop_ids empty: store not found or not installable →
     emit quickReply: "해당 조건에 맞는 매장이 없어요." + quickReplies ["다른 매장 찾기"]
 - Region name (강남, 부산, 해운대 등) → get_store_list_tool(region_code=...)
