@@ -14,9 +14,12 @@ from .car_trim_item import CarTrimItem
 from .car_trim_response import CarTrimResponse
 from .chat_history_response import ChatHistoryResponse
 from .compatibility_response import CompatibilityResponse
+from .coupon_applicable_products_group import CouponApplicableProductsGroup
+from .coupon_deal_applicable_products_response import CouponDealApplicableProductsResponse
 from .coupon_issue_response import CouponIssueResponse
 from .coupon_result_item import CouponResultItem
 from .cpn_coupon_issue_request import CpnCouponIssueRequest
+from .deal_applicable_products_group import DealApplicableProductsGroup
 from .deal_coupon_item import DealCouponItem
 from .deal_item import DealItem
 from .deal_list_response import DealListResponse
@@ -96,9 +99,12 @@ __all__ = (
     "CarTrimResponse",
     "ChatHistoryResponse",
     "CompatibilityResponse",
+    "CouponApplicableProductsGroup",
+    "CouponDealApplicableProductsResponse",
     "CouponIssueResponse",
     "CouponResultItem",
     "CpnCouponIssueRequest",
+    "DealApplicableProductsGroup",
     "DealCouponItem",
     "DealItem",
     "DealListResponse",

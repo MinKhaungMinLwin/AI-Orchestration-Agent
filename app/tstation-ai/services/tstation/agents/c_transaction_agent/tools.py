@@ -24,9 +24,10 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 # EVENT / DEAL AF — 상품번호 기준 진행 중 기획전+쿠폰 조회
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_by_product_api_events_deals_by_product_get import sync_detailed as get_deals_by_product
 
-# COUPON AF — 쿠폰 발급
+# COUPON AF — 쿠폰 발급 / 적용 상품 조회
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_goods_api_coupons_issue_goods_post import sync_detailed as issue_coupon_by_goods
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_cpn_api_coupons_issue_cpn_post import sync_detailed as issue_coupon_by_cpn
+from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.get_coupon_applicable_products_api_coupons_applicable_products_get import sync_detailed as get_coupon_applicable_products
 from common.tstation_be_api_client.hkt_api_client.models import (
     GoodsCouponIssueRequest,
     CpnCouponIssueRequest,
@@ -303,6 +304,58 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
     except Exception as e:
         logger.exception("[TOOL][issue_coupon_tool] Failed")
         return _error_response(None, str(e), "Failed to issue coupon")
+
+
+@tool
+def get_coupon_applicable_products_tool(
+    cpn_no: List[str] | None = None,
+    deal_no: List[str] | None = None,
+):
+    """
+    쿠폰(cpn_no) 또는 기획전(deal_no) 에 적용 가능한 상품 목록 조회.
+
+    Use when 사용자가 "이 쿠폰 어디에 쓸 수 있어?", "이 쿠폰 적용 상품", "기획전 상품",
+    "기획전에 어떤 상품 있어" 류 질문을 했을 때. cpn_no, deal_no 중 한쪽 또는 양쪽을
+    리스트로 전달한다. 각 최대 10개. 둘 다 비우면 빈 응답.
+
+    Args:
+        cpn_no (List[str] | None): 쿠폰 번호 리스트. 예: ["C0000001234"], ["C1","C2"].
+        deal_no (List[str] | None): 기획전 번호 리스트. 예: ["D0000001234"].
+
+    Response shape:
+        {
+          "total_coupons": int,
+          "total_deals": int,
+          "total_products": int,
+          "coupons": [{"cpn_no": str, "total": int, "items": [<product>...]}],
+          "deals":   [{"deal_no": str, "total": int, "items": [<product>...]}]
+        }
+    item 각 항목은 goods_no / goods_nm / sale_prc / extra_fvr_sale_prc / tire_size_1 등
+    상품 정보를 포함한다.
+    """
+    cpn_csv = ",".join(cpn_no) if cpn_no else ""
+    deal_csv = ",".join(deal_no) if deal_no else ""
+    logger.debug(
+        "[TOOL][get_coupon_applicable_products_tool] Called with: cpn_no=%s deal_no=%s",
+        cpn_csv, deal_csv,
+    )
+
+    try:
+        response = get_coupon_applicable_products(
+            client=get_client(),
+            cpn_no=cpn_csv,
+            deal_no=deal_csv,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get coupon applicable products",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_coupon_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to get coupon applicable products")
 
 
 # =====================================================

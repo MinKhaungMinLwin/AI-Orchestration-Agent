@@ -5,6 +5,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_my_coupons_tool,
     issue_coupon_tool,
+    get_coupon_applicable_products_tool,
     get_product_promotions_tool,
     get_logistics_inventory_tool,
     get_store_inventory_tool,
@@ -1636,6 +1637,16 @@ Handle ONLY coupon and promotion requests.
 - "내 쿠폰", "쿠폰함", "보유 쿠폰", "사용 가능한 쿠폰" -> call get_my_coupons_tool.
 - Product-specific coupon/promotion for a confirmed goods_no -> call get_product_promotions_tool.
 - User wants to download/issue a coupon -> call issue_coupon_tool with the known cpn_no or goods_no.
+- 쿠폰/기획전 → 적용 상품 조회 ("이 쿠폰 어디 쓸 수 있어?", "쿠폰 적용 상품", "기획전 상품",
+  "기획전에 어떤 상품 있어?", "이 쿠폰으로 살 수 있는 타이어") -> call
+  `get_coupon_applicable_products_tool(cpn_no=[...], deal_no=[...])`.
+    - 직전 turn 또는 컨텍스트에서 확보된 cpn_no / deal_no 만 전달한다. 모르면 빈 리스트.
+    - cpn_no, deal_no 둘 다 list[str]. 각 최대 10개.
+    - 둘 다 비어 있으면 호출 금지 — 어떤 쿠폰/기획전인지 quickReply 로 되묻는다.
+    - 응답: `{coupons:[{cpn_no,total,items:[...]}], deals:[{deal_no,total,items:[...]}],
+      total_products}`. items 각 항목은 goods_nm / sale_prc / extra_fvr_sale_prc 등 포함.
+    - 매핑된 상품이 없는 cpn_no/deal_no 는 응답에서 누락됨 → "해당 쿠폰으로 구매 가능한 상품이
+      없어요" 류로 안내.
 - If the request is not coupon/promotion related, answer with a short quickReply asking the user to clarify.
 
 ## Output Policy
@@ -1646,6 +1657,12 @@ In that JSON, `quickReplies` MUST be objects with `label` and `domain`, for exam
 `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"내 주문 조회","domain":"TRANSACTION"}]`.
 다운로드 가능 쿠폰 조회 기능은 제공하지 않으므로, "받을 수 있는 쿠폰 조회" / "다운로드 가능 쿠폰" 류 라벨은 quickReplies 에 절대 포함하지 마라.
 Never emit `quickReplies` as a plain string array.
+
+When get_coupon_applicable_products_tool returns coupons/deals with items, write 1~2 short Korean
+sentences (≤ 60 chars each). Per group (cpn_no/deal_no), list up to 5 unique `goods_nm` as
+text bullets — dedupe duplicate names. If a group has > 5 items, append "외 {n-5}개". Do NOT
+expose cpn_no / deal_no / goods_no in the visible text. If both `coupons` and `deals` arrays
+are empty (no matching products), emit a quickReply telling the user no products are mapped.
 """
 
 
@@ -1812,6 +1829,8 @@ class TransactionSubAgent(BaseAgent):
         "get_product_promotions_tool": "Promotion",
         # Coupon Issue
         "issue_coupon_tool": "Coupon Issue",
+        # Coupon/Deal → applicable products
+        "get_coupon_applicable_products_tool": "Coupon",
         # Inventory
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
@@ -1839,6 +1858,7 @@ class TransactionSubAgent(BaseAgent):
             get_final_price_tool,
             get_my_coupons_tool,
             issue_coupon_tool,
+            get_coupon_applicable_products_tool,
             get_product_promotions_tool,
             get_logistics_inventory_tool,
             get_store_inventory_tool,
@@ -1861,6 +1881,7 @@ class TransactionSubAgent(BaseAgent):
             tools = [
                 get_my_coupons_tool,
                 issue_coupon_tool,
+                get_coupon_applicable_products_tool,
                 get_product_promotions_tool,
             ]
             system_prompt = get_transaction_coupon_system_prompt
