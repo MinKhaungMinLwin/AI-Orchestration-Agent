@@ -49,8 +49,9 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 ## INPUT NORMALIZATION
 ⚠️ search_product_tool — keyword는 **한글로 전달**한다. (BE는 한글 GOODS_NM 기준으로 매칭하며, alias.json으로 한글→영문을 자동 확장한다. 영문→한글 역확장은 없음.)
 - 사용자가 한글로 입력 → 그대로 전달: "벤투스 S2" → "벤투스 S2", "다이나프로 HPX" → "다이나프로 HPX", "키너지 EX" → "키너지 EX"
-- 사용자가 영문/로마자로 입력 → 한글로 변환: "Ventus" → "벤투스", "Kinergy" → "키너지", "Optimo" → "옵티모", "Dynapro" → "다이나프로", "iON" → "아이온"
-- 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지 (한글로 옮기지 않음)
+- 사용자가 영문/로마자로 입력 → 한글로 변환: "Ventus" → "벤투스", "Kinergy" → "키너지", "Optimo" → "옵티모", "Dynapro" → "다이나프로", "iON" → "아이온", "Air" → "에어"
+  예: "Ventus Air S" → "벤투스 에어 S", "Ventus Air S2" → "벤투스 에어 S2"
+- 모델 코드(S1, S2, evo, evo3, HPX, EX, AS 등)는 원형 유지 (한글로 옮기지 않음)
 - ❌ NEVER translate Korean → English (BE의 한글 매칭이 실패해 빈 결과를 반환함)
 - ❌ NEVER put a brand-only word into `keyword` ("브리지스톤", "미쉐린", "피렐리", "콘티넨탈", "굿이어", "라우펜", "한국타이어"). brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않아 keyword 에 넣으면 0건이 된다.
   - 사용자 "브리지스톤 235/55R19" → `search_product_tool(size="235/55R19", brand_cd="BS")` (keyword 생략)
@@ -1278,8 +1279,9 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 ## INPUT NORMALIZATION
 ⚠️ search_product_tool — keyword는 **한글로 전달**한다. (BE는 한글 GOODS_NM 기준으로 매칭하며, alias.json으로 한글→영문을 자동 확장한다. 영문→한글 역확장은 없음.)
 - 사용자가 한글로 입력 → 그대로 전달: "벤투스 S2" → "벤투스 S2", "다이나프로 HPX" → "다이나프로 HPX", "키너지 EX" → "키너지 EX"
-- 사용자가 영문/로마자로 입력 → 한글로 변환: "Ventus" → "벤투스", "Kinergy" → "키너지", "Optimo" → "옵티모", "Dynapro" → "다이나프로", "iON" → "아이온"
-- 모델 코드(S1, S2, evo, evo3, HPX, EX 등)는 원형 유지 (한글로 옮기지 않음)
+- 사용자가 영문/로마자로 입력 → 한글로 변환: "Ventus" → "벤투스", "Kinergy" → "키너지", "Optimo" → "옵티모", "Dynapro" → "다이나프로", "iON" → "아이온", "Air" → "에어"
+  예: "Ventus Air S" → "벤투스 에어 S", "Ventus Air S2" → "벤투스 에어 S2"
+- 모델 코드(S1, S2, evo, evo3, HPX, EX, AS 등)는 원형 유지 (한글로 옮기지 않음)
 - ❌ NEVER translate Korean → English (BE의 한글 매칭이 실패해 빈 결과를 반환함)
 - ❌ NEVER put a brand-only word into `keyword` ("브리지스톤", "미쉐린", "피렐리", "콘티넨탈", "굿이어", "라우펜", "한국타이어"). brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않아 keyword 에 넣으면 0건이 된다.
   - 사용자 "브리지스톤 235/55R19" → `search_product_tool(size="235/55R19", brand_cd="BS")` (keyword 생략)
