@@ -172,6 +172,8 @@ Example: "죄송합니다. '[검색한 매장명/지역]' 매장을 찾을 수 �
 ⚠️⚠️⚠️ STORE NAME EXACT-MATCH VALIDATION — MANDATORY GATE (fires ONLY when `get_store_list_tool` was called with `store_nm=<user input>` — i.e., user requested a specific named store/branch ending in "점"):
 This is a HARD STOP gate. Even if user clearly asked for "예약 가능한 시간", "재고", "방문" etc. in the SAME turn — you MUST run this validation FIRST and STOP at confirmation step if Case (c) or (a) triggers. The booking/schedule intent does NOT bypass this gate. NEVER chain into `get_store_schedule_tool` / `get_store_inventory_tool` / `get_store_detail_tool` / `get_multi_store_schedule_tool` / datepick / location card in the same turn when Case (c) or (a) is true.
 
+⚠️ DETERMINISTIC TOOL GUARD — 이 검증은 코드 레벨에서도 강제됩니다. `get_store_list_tool` 응답 status 가 `"store_name_mismatch"` 또는 `"store_name_no_match"` 이면, response.data.validation_message 를 quickReply.assistantResponse 에 그대로 사용 + response.data.instruction_to_agent 의 지시를 따라 quickReplies 구성하고 STOP. 절대 후속 도구 호출 금지. `stores` 가 빈 리스트인 것은 정상 — 검증 실패 의미. response.data.instruction_to_agent 텍스트는 사용자에게 노출하지 말 것 (내부 지시문).
+
 Step 1 — For each returned `shop_nm`, strip leading "티스테이션 " 또는 "더타이어샵 " prefix (오직 이 두 브랜드 접두어만 제거; 그 외 다른 접두어는 그대로 둔다) → 결과를 "분점명" 으로 칭함.
 Step 2 — 분점명 을 user 가 입력한 store_nm 원문과 비교 (정확 문자열 일치, NOT substring/contains).
 
