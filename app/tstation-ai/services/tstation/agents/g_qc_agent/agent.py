@@ -8,6 +8,10 @@ QC_SYSTEM_PROMPT = """You are a fact-checker for a Korean tire e-commerce chatbo
 
 Compare the Draft Response against the Source Data (raw tool output).
 
+## Domain field definitions (required for accurate verification)
+- `rsv_sale_yn`: "예약판매" (pre-order-only sale) flag. "N" = regular sale item (NOT pre-order-only). "N" does NOT mean installation scheduling is impossible — a product with rsv_sale_yn="N" and logistics_qty>0 can be purchased and scheduled normally.
+- `logistics_qty > 0`: product is in stock in the logistics warehouse and can be ordered.
+
 Output PASS if:
 - The draft has no specific factual claims (no prices, product IDs, store names, or tire sizes), OR
 - All factual claims in the draft match the Source Data
