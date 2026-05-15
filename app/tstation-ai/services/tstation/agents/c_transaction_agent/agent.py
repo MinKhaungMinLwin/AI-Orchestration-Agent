@@ -1665,16 +1665,45 @@ In that JSON, `quickReplies` MUST be objects with `label` and `domain`, for exam
 다운로드 가능 쿠폰 조회 기능은 제공하지 않으므로, "받을 수 있는 쿠폰 조회" / "다운로드 가능 쿠폰" 류 라벨은 quickReplies 에 절대 포함하지 마라.
 Never emit `quickReplies` as a plain string array.
 
-When get_coupon_applicable_products_tool returns items, write 1~2 short Korean sentences
-(≤ 60 chars each).
-- coupons[] / deals[] items: list up to 5 unique `goods_nm` as text bullets (dedupe). If
-  > 5 items in a group, append "외 {n-5}개".
-- stores[] items: list `shop_nm` (콤마 구분, all of them, no cap needed because store list
-  is bounded). Phrase as "다음 매장에서 사용 가능합니다: 방배점, 한남점, ...".
-- 동일 cpn_no 가 coupons + stores 둘 다 등장하면 두 줄 — 상품 라인 + 매장 라인.
+When get_coupon_applicable_products_tool returns items, **GROUP THE OUTPUT BY 쿠폰명 (cpn_nm)**.
+Each coupon gets its OWN section — never merge multiple coupons' products/stores into one
+combined list.
+
+Layout (per coupon section):
+```
+[쿠폰명]
+적용 상품: <goods_nm 1>, <goods_nm 2>, ... (dedupe; up to 5; >5 → 외 {n-5}개)
+적용 매장: <shop_nm 1>, <shop_nm 2>, ... (모두 나열, 캡 없음)
+```
+
+Rules:
+- 쿠폰명 (cpn_nm) 출처: 직전 turn 의 `get_my_coupons_tool` 응답에서 cpn_no→cpn_nm 매핑.
+  prior context 가 없으면 "(쿠폰 #{1,2,3...})" 처럼 익명 라벨 부여.
+- 한 쿠폰에 상품만 매핑됐으면 "적용 상품:" 라인만, 매장만 매핑됐으면 "적용 매장:" 라인만.
+  둘 다 있으면 두 줄.
+- 쿠폰 섹션 사이는 빈 줄로 구분.
+- 매핑이 전혀 없는 쿠폰 (coupons/deals/stores 어디에도 없는 cpn_no) 은 섹션 자체를 만들지
+  말 것 (간결성).
 - coupons/deals/stores 셋 다 빈 응답이면 quickReply 로 "쿠폰 적용 정보를 찾을 수 없어요"
   류 안내.
+- ❌ 절대 금지: 여러 쿠폰의 상품을 한 줄에 합치기 (e.g., "적용 상품: 벤투스 S2 AS,
+  웨더플렉스 GT" 처럼 어떤 쿠폰의 상품인지 안 보이게 출력).
 - 비노출: cpn_no / deal_no / goods_no / shop_id / ptrn_cd / 등 내부 코드.
+
+Example (good — 2 쿠폰 그룹화):
+```
+한국타이어 18% 상품 할인쿠폰(26년)
+적용 상품: 벤투스 S2 AS, 웨더플렉스 GT
+
+서울 우동딜 테스트
+적용 매장: 테스트매장, 서초점, 방배점, 모란점, 한남점
+```
+
+Example (bad — merged):
+```
+적용 상품: 벤투스 S2 AS, 웨더플렉스 GT
+적용 매장: 테스트매장, 서초점, 방배점, 모란점, 한남점
+```
 """
 
 
