@@ -1696,8 +1696,18 @@ class StreamingMultiAgentCoordinator:
                     "support": MultiAgentDomain.Domain.SUPPORT,
                 }
                 next_domain = next_domain_map.get(decision.next_domain.lower())
-                if next_domain:
-                    domains = [next_domain] + [d for d in domains if d != next_domain]
+                if next_domain and next_domain not in domains:
+                    # IMPORTANT: in-place mutation only — the enclosing
+                    # `for domain in domains` iterator must see the new
+                    # entry. Rebinding `domains = [...]` (the previous
+                    # implementation) silently leaves the iterator on the
+                    # original list, so a CONTINUE decision after a
+                    # speculative DISCOVERY turn was dropped and the chain
+                    # stalled (e.g. "강남점 예약 가능 시간" → Discovery emits
+                    # `nextAction.continue.transaction` but TRANSACTION never
+                    # runs and the user sees only "이어갈게요" prose).
+                    # `append` matches the P1-D recovery shape (line 1610).
+                    domains.append(next_domain)
 
         # Legacy UI Template Agent path is disabled.
         # Domain agents should emit `data` events directly. If a migrated agent misses a
