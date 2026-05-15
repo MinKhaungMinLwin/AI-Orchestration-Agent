@@ -1,6 +1,7 @@
 
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
+from services.tstation.agents.b_discovery_agent.tools import search_product_tool
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_my_coupons_tool,
@@ -1635,7 +1636,7 @@ Handle ONLY coupon and promotion requests.
 
 ## Profile Scope
 - "내 쿠폰", "쿠폰함", "보유 쿠폰", "사용 가능한 쿠폰" -> call get_my_coupons_tool.
-- Product-specific coupon/promotion for a confirmed goods_no -> call get_product_promotions_tool.
+- Product-specific coupon/promotion (e.g. "<상품명> 할인쿠폰", "<상품명> 적용 쿠폰", "<상품명> 쿠폰 적용받고 싶어", "이 상품 쿠폰") -> call `get_product_promotions_tool(goods_no=...)`. goods_no 가 컨텍스트에 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것 — 동일 상품군(패턴)의 모든 사이즈에 동일 쿠폰이 매핑되므로 사이즈 입력이 불필요.
 - User wants to download/issue a coupon -> call issue_coupon_tool with the known cpn_no or goods_no.
 - 쿠폰/기획전 → 적용 상품/매장 조회 ("이 쿠폰 어디 쓸 수 있어?", "쿠폰 적용 상품", "기획전 상품",
   "기획전에 어떤 상품 있어?", "이 쿠폰으로 살 수 있는 타이어", "이 쿠폰 어느 매장에서 써?") -> call
@@ -1887,6 +1888,8 @@ class TransactionSubAgent(BaseAgent):
         # Price
         "get_final_price_tool": "Price",
         "get_my_coupons_tool": "Price",
+        # Product Search (transaction_coupon: goods_no resolution for product-level coupons)
+        "search_product_tool": "Product",
         # Promotion (deals + coupons by product)
         "get_product_promotions_tool": "Promotion",
         # Coupon Issue
@@ -1945,6 +1948,7 @@ class TransactionSubAgent(BaseAgent):
                 issue_coupon_tool,
                 get_coupon_applicable_products_tool,
                 get_product_promotions_tool,
+                search_product_tool,
             ]
             system_prompt = get_transaction_coupon_system_prompt
             name = "Transaction Agent (Coupon)"

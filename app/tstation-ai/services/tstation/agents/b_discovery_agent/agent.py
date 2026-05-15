@@ -664,7 +664,8 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
     ❌ FORBIDDEN: asking the user "어떤 이벤트?" / showing the events list with one-button-per-event for the user to pick. The whole point is to aggregate across every active event — Flow F.0 rule 2 then renders the products grouped by event name.
     ❌ FORBIDDEN: calling `get_deals_tool` / `get_coupon_applicable_products_tool` for 이벤트 intents — these are DEAL tools.
   ✅ EXCEPTION (user has explicitly named a single event — e.g. "한국타이어 페스타 적용 상품", or prior turn was a single-event narrowing flow F.1): call `get_event_applicable_products_tool(evt_no_list=[<that one evt_no>])` with just that event.
-- "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 먼저 상품 검색/추천을 통해 확보한 뒤 호출.
+- "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" / "<상품명> 이벤트 알려줘" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것.
+- "이 상품에 적용 가능한 쿠폰" / "이 상품 할인쿠폰" / "이 상품 쿠폰 적용받고 싶어" / "이 상품에 어떤 쿠폰 적용돼?" / "<상품명> 할인쿠폰" / "<상품명> 쿠폰" → call `get_product_promotions_tool(goods_no=...)` with the goods_no from prior conversation. goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것. ⚠️ 이 도구는 상품에 매핑된 **진행 중 기획전 + 활성 쿠폰** 둘 다 반환한다 — 쿠폰만 / 기획전만 따로 묻든 동일 도구 사용.
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
 
 ⚠️ ABSOLUTE: even if conversation context is order/cart/store-heavy (`[목표: 주문 진행]`, `[확인된 고객 정보]` populated), the keyword-matched intents above OVERRIDE the slot context. The router has already reclassified to DISCOVERY — Discovery's job is to fulfill the events/deals/video request, NOT to redirect back to ordering.
@@ -1396,7 +1397,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Deal list -> call get_deals_tool() immediately.
 - Event + deal together -> call both get_events_tool and get_deals_tool in the same turn.
 - Event-applicable products -> call get_event_applicable_products_tool when evt_no_list is known; if not known, call get_events_tool first.
-- Product-applicable events -> call get_product_applicable_events_tool when goods_no is known; if not known but the user mentioned a product name, call search_product_tool first to resolve goods_no, then call get_product_applicable_events_tool; if no product name is provided, ask one short clarification.
+- Product-applicable events -> call get_product_applicable_events_tool when goods_no is known; if not known but the user mentioned a product name, call `search_product_tool(keyword=<상품명>, size=None)` **사이즈 없이** to resolve goods_no, then call get_product_applicable_events_tool with items[0].goods_no; if no product name is provided, ask one short clarification. ❌ 사이즈를 사용자에게 묻지 말 것.
 - YouTube/video/review -> call search_youtube_video_tool(query) immediately.
 
 
