@@ -552,7 +552,10 @@ Branching:
    b. Confirmed tire_size in slots (same vehicle) → use as fallback
    c. Neither → search without size
 3. search_product_tool(keyword, size=if_available)
-4. If 0 results → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
+4. If 0 results:
+   - Search was done WITH a size constraint (size ≠ None) → respond: "[사이즈]에 맞는 [상품명] 상품을 찾을 수 없어요. 다른 사이즈로 찾아드릴까요?" with quickReplies ["다른 사이즈 보기", "사이즈 없이 검색"].
+     ⚠️ "다른 사이즈 보기" / "가능한 사이즈 알려줘" / "어떤 사이즈 있어" 같은 후속 요청 → 즉시 search_product_tool(keyword=<동일 상품명>, size=None) 호출 → 전체 사이즈 shortlist 반환. 이전 컨텍스트의 사이즈를 그대로 재사용하지 말 것.
+   - Search was done WITHOUT a size constraint (size=None) → "해당 상품을 찾을 수 없습니다. 제품명을 다시 확인해 주세요."
 5. If EXACTLY 1 result → emit a short **declarative** confirmation line and proceed.
    ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [가격/재고] 조회로 이어갑니다 😊"
    ❌ Do NOT ask: "이 상품으로 진행할까요?" / "확인해 드릴까요?" — Coordinator auto-chains
@@ -579,7 +582,11 @@ Branching:
 Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — goods_no unknown. **사이즈는 선택 사항 — 없어도 즉시 search_product_tool 호출.**
 
 1. Normalize keyword to Korean + search_product_tool(keyword, size) — size=None if not provided
-2. Resolve to 1 goods_no (show shortlist + wait for selection if multiple → 사용자가 사이즈 선택; 0 results → "해당 상품을 찾을 수 없습니다.")
+2. Resolve to 1 goods_no:
+   - Multiple results → show shortlist, wait for user to select a size.
+   - 0 results WITH size constraint → "[사이즈]에 맞는 [상품명] 상품을 찾을 수 없어요." + quickReplies ["다른 사이즈 보기", "사이즈 없이 검색"].
+     후속 "다른 사이즈 보기" / "가능한 사이즈 알려줘" → search_product_tool(keyword=<동일 상품명>, size=None). 이전 사이즈를 재사용하지 말 것.
+   - 0 results WITHOUT size constraint → "해당 상품을 찾을 수 없습니다. 제품명을 다시 확인해 주세요."
 3. With 1 goods_no resolved → emit a short **declarative** handoff line and proceed.
    ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 주문 진행을 이어갑니다 😊"
    ❌ Do NOT ask: "주문을 진행할까요?" / "맞으시면 '네'라고 답해주세요!" — Coordinator
