@@ -16,17 +16,25 @@ class DealCouponItem:
     """
     Attributes:
         cpn_no (str): 쿠폰 번호
+        cpn_nm (None | str | Unset): 쿠폰명 (CC_CPN_BASE_ML.CPN_NM, lang_cd='ko')
         cpn_knd_cd (None | str | Unset): 쿠폰 종류 코드 (예: C301=기획전쿠폰)
         cpn_prgs_stat_cd (None | str | Unset): 쿠폰 진행 상태 코드 (40=활성)
     """
 
     cpn_no: str
+    cpn_nm: None | str | Unset = UNSET
     cpn_knd_cd: None | str | Unset = UNSET
     cpn_prgs_stat_cd: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         cpn_no = self.cpn_no
+
+        cpn_nm: None | str | Unset
+        if isinstance(self.cpn_nm, Unset):
+            cpn_nm = UNSET
+        else:
+            cpn_nm = self.cpn_nm
 
         cpn_knd_cd: None | str | Unset
         if isinstance(self.cpn_knd_cd, Unset):
@@ -47,6 +55,8 @@ class DealCouponItem:
                 "cpn_no": cpn_no,
             }
         )
+        if cpn_nm is not UNSET:
+            field_dict["cpn_nm"] = cpn_nm
         if cpn_knd_cd is not UNSET:
             field_dict["cpn_knd_cd"] = cpn_knd_cd
         if cpn_prgs_stat_cd is not UNSET:
@@ -58,6 +68,15 @@ class DealCouponItem:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         cpn_no = d.pop("cpn_no")
+
+        def _parse_cpn_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cpn_nm = _parse_cpn_nm(d.pop("cpn_nm", UNSET))
 
         def _parse_cpn_knd_cd(data: object) -> None | str | Unset:
             if data is None:
@@ -79,6 +98,7 @@ class DealCouponItem:
 
         deal_coupon_item = cls(
             cpn_no=cpn_no,
+            cpn_nm=cpn_nm,
             cpn_knd_cd=cpn_knd_cd,
             cpn_prgs_stat_cd=cpn_prgs_stat_cd,
         )
