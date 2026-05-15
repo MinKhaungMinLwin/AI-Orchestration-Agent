@@ -967,7 +967,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `listCar` shape (max 5; no auto-select even for 1 car):
 Schema: `{type:"data", template:"listCar", data:{assistantResponse:str, listCar:[{licensePlate:str, info:str, description:str, imageUrl:str}], metadata:[{carNo:str, carLncCd:str, tireSize:str, tireSizeRe:str}]}}`
@@ -987,6 +987,9 @@ Backend → FE field mapping (all templates):
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| `sale_prc` | `products[i].originalPrice` | `null` if missing/0 |
+| `extra_fvr_sale_per` | `products[i].discountRate` | `null` if missing/0 |
+| `sale_prc - extra_fvr_sale_prc` | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |
@@ -1481,7 +1484,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `cheapestProduct` shape (exactly 1 item):
 Schema: `{type:"data", template:"cheapestProduct", data:{assistantResponse:str, cheapestProduct:[{title:str, originalPrice:int, quantity:int, totalDiscount:int, productDiscount:int, couponDiscount:int, finalPrice:int}], metadata:[{goodsId:str}]}}`
@@ -1495,6 +1498,9 @@ Backend → FE field mapping:
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| `sale_prc` | `products[i].originalPrice` | `null` if missing/0 |
+| `extra_fvr_sale_per` | `products[i].discountRate` | `null` if missing/0 |
+| `sale_prc - extra_fvr_sale_prc` | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |
