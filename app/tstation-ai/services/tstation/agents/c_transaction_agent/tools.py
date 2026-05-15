@@ -565,8 +565,47 @@ def get_nearby_stores_tool(
         return _error_response(None, str(e), "Failed to get nearby stores")
 
 
-@tool
 @tool_cache(ttl=1800)
+def _get_store_list_cached(
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    limit: int = 10,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+) -> dict:
+    """Internal cached BE call. Validation runs in `get_store_list_tool` after this returns."""
+    logger.debug(
+        "[TOOL][_get_store_list_cached] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
+        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
+        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+    )
+    try:
+        response = get_store_list(
+            client=get_client(),
+            region_code=region_code,
+            store_nm=store_nm,
+            limit=limit,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            chl_sct_cd=chl_sct_cd,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get store list"
+            )
+        data = _to_dict(response.parsed)
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][_get_store_list_cached] Failed")
+        return _error_response(None, str(e), "Failed to get store list")
+
+
+@tool
 def get_store_list_tool(
     region_code: str | None = None,
     store_nm: str | None = None,
@@ -621,50 +660,30 @@ def get_store_list_tool(
         - {"region_code": "강남", "svc_codes": ["121"], "limit": 5}  # 강남에서 경정비 가능
         - {"store_nm": "광교신도시", "svc_codes": ["121"]}  # 광교신도시점이 경정비 가능한지 확인
     """
-    # Normalize brand name to Korean equivalent (e.g., "T-Station" → "티스테이션")
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
-    logger.debug(
-        "[TOOL][get_store_list_tool] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
-        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+    result = _get_store_list_cached(
+        region_code=region_code,
+        store_nm=store_nm,
+        limit=limit,
+        svc_codes=svc_codes,
+        all_my_t_only=all_my_t_only,
+        imported_car_only=imported_car_only,
+        chl_sct_cd=chl_sct_cd,
     )
 
-    try:
-        response = get_store_list(
-            client=get_client(),
-            region_code=region_code,
-            store_nm=store_nm,
-            limit=limit,
-            svc_codes=svc_codes,
-            all_my_t_only=all_my_t_only,
-            imported_car_only=imported_car_only,
-            chl_sct_cd=chl_sct_cd,
-        )
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get store list"
+    if store_nm and isinstance(result, dict) and result.get("status") == "success":
+        data = result.get("data") or {}
+        stores = data.get("stores", []) if isinstance(data, dict) else []
+        validation_override = _validate_store_nm_exact_match(user_input=store_nm, stores=stores)
+        if validation_override is not None:
+            logger.info(
+                "[TOOL][get_store_list_tool] store_nm validation override: status=%s, user_input=%s",
+                validation_override.get("status"), store_nm,
             )
-        # logger.debug("[TOOL][get_store_list_tool] Response: %s", response.parsed)
-        data = _to_dict(response.parsed)
-        if store_nm:
-            validation_override = _validate_store_nm_exact_match(
-                user_input=store_nm,
-                stores=data.get("stores", []) if isinstance(data, dict) else [],
-            )
-            if validation_override is not None:
-                logger.info(
-                    "[TOOL][get_store_list_tool] store_nm validation override: status=%s, user_input=%s",
-                    validation_override.get("status"), store_nm,
-                )
-                return validation_override
-        return _success_response(response.status_code, data)
-    except Exception as e:
-        logger.exception("[TOOL][get_store_list_tool] Failed")
-        return _error_response(None, str(e), "Failed to get store list")
+            return validation_override
+    return result
 
 
 @tool
