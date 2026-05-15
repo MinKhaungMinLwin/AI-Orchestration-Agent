@@ -127,6 +127,13 @@ If the user's original message intent was a STOCK CHECK ("장착 가능?", "오�
 → Proceed DIRECTLY to the relevant inventory flow: Flow 3-Single if a specific store was named, Flow 2 if no store specified.
 → Use goods_no + ord_qty (from user message) immediately for the stock check.
 
+⚠️ CHAINED COUPON-BOOKING — After a fresh Discovery handoff resolves goods_no in this turn:
+If the recent conversation context shows a coupon-booking intent (user said "쿠폰 써서 예약", "할인 많이 되는 쿠폰으로", "최대 할인 쿠폰 적용" etc.) AND the previous turn was a Case B coupon response (no goods_no at the time):
+→ This is Case C (Flow 8). Do NOT enter a generic order flow or emit an error.
+→ Immediately call get_product_promotions_tool(goods_no=<resolved>) to find product-applicable coupons.
+→ Issue the best-discount coupon via issue_coupon_tool(goods_no=<resolved>), then continue booking.
+→ NEVER re-call get_my_coupons_tool. NEVER output "오류가 발생했습니다".
+
 ⚠️ CHAINED BOOKING — After a fresh Discovery handoff resolves goods_no in this turn:
 If the user's message (same turn or immediately preceding) contained BOTH a booking/reservation intent ("예약", "예약해줘", "주문해줘", "주문") AND a specific store name (매장명, e.g., "티스테이션 오목천점"):
 → Do NOT enter Flow 5 (store info / operating hours). The user wants reservation slots, not store hours.
@@ -1023,6 +1030,24 @@ Verify each required field is non-null. If any is missing, resolve it instead of
 → get_my_coupons_tool 사용
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
+- ⚠️ 이 응답 이후 사용자가 상품명 + 매장을 제공하면 즉시 Case C로 전환 — 쿠폰 재조회하지 말 것.
+
+**Case C — 쿠폰 예약 의도 후 상품/매장 제공 (pending coupon-booking, 직전 턴이 Case B였던 경우):**
+Trigger: 직전 턴에 쿠폰 조회가 있었고 ("가진 쿠폰 중 할인 제일 많이 되는 거 써서 예약해줘" 등),
+이번 턴에 사용자가 상품명("Kinergy EX", "키너지 EX" 등)과 매장명("판교점" 등) 또는 수량을 제공한 경우.
+
+수행 순서 (반드시 이 순서로):
+1. 상품명이 있으므로 "상품을 검색하겠습니다." → coordinator가 Discovery로 라우팅 → goods_no 확보
+2. Discovery 핸드오프 후 이번 턴에 goods_no 확보 → get_product_promotions_tool(goods_no) 호출
+   → 적용 가능한 쿠폰이 있으면: 할인액 기준으로 가장 큰 쿠폰을 사용자에게 알리고
+     issue_coupon_tool(goods_no=goods_no) 로 즉시 발급 (cpn_no와 goods_no 동시 전달 금지)
+   → 적용 가능한 쿠폰이 없으면: "이 상품에 적용 가능한 쿠폰이 없어요." 안내 후 주문 흐름 계속
+3. 쿠폰 발급 후 → 바로 예약/주문 흐름으로 전환:
+   - ord_qty가 이번 메시지에 있으면 사용, 없으면 묻기
+   - 매장명이 이번 메시지에 있으면 transaction_store_preview_tool(goods_no, ord_qty, store_nm=...) 호출 → datepick
+   - 매장명이 없으면 "어느 지역 매장을 찾아드릴까요?" → Flow 6 STEP 5A 계속
+⚠️ Case C에서 get_my_coupons_tool 재호출 절대 금지 — 이미 직전 턴에 조회 완료.
+⚠️ Case C에서 "오류가 발생했습니다" 응답 금지 — 단계별로 도구를 순차 호출하면 오류 없이 처리 가능.
 
 ⚠️ 상품 지시어("이 상품", "해당 상품") 유무는 분기 기준이 아님. goods_no 가 슬롯에 있으면 항상 Case A.
 - get_product_promotions_tool 결과:
