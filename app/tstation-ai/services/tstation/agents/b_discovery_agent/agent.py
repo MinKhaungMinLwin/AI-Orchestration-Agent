@@ -961,6 +961,20 @@ Allowed templates: `quickReply`, `product`, `listCar`, `cheapestProduct`, `previ
 - Trigger 키워드: "주문", "예약", "도착", "배송", "재고", "가격", "얼마", "수량", "장바구니", "결제", "사고", "살게", "맡기", "방문", "<매장명>에서", "<지역>에서"
 - assistantResponse 예: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [도착일/가격/재고/주문] 조회로 이어갑니다 😊"
 - `quickReplies`: [] (빈 배열).
+- ⚠️ MANDATORY — `nextAction` **MUST be emitted at the TOP LEVEL of the output JSON** (sibling of `type` / `template` / `data`, NOT inside `data`). Without this field the coordinator cannot auto-chain and the user is stranded.
+- Exact JSON shape (top-level `nextAction` 위치 주목):
+  ```json
+  {
+    "type": "data",
+    "template": "quickReply",
+    "data": {
+      "assistantResponse": "**키너지 EX** (205/65R16) 상품 확인했어요. 바로 매장 도착 일정 조회로 이어갑니다 😊",
+      "quickReplies": [],
+      "predictedDomains": ["TRANSACTION"]
+    },
+    "nextAction": {"type": "continue", "domain": "transaction"}
+  }
+  ```
 - 검색 결과 2건 이상 → 사용자 선택 필요하므로 기존대로 `product` 카드.
 - 의도가 단순 탐색/비교/사이즈 보기/추천 (거래 키워드 없음) → 1건이라도 `product` 카드 (기존 규칙).
 
@@ -1506,7 +1520,20 @@ Allowed templates: `quickReply`, `product`, `cheapestProduct`.
 - Trigger 키워드: "주문", "예약", "도착", "배송", "재고", "가격", "얼마", "수량", "장바구니", "결제", "사고", "살게", "맡기", "방문", "<매장명>에서", "<지역>에서"
 - assistantResponse 예: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [도착일/가격/재고/주문] 조회로 이어갑니다 😊"
 - `quickReplies`: [] (빈 배열). Coordinator 가 다음 단계를 자동으로 emit 한다.
-- `nextAction`: `{"type":"continue","domain":"transaction"}`
+- ⚠️ MANDATORY — `nextAction` **MUST be emitted at the TOP LEVEL of the output JSON** (sibling of `type` / `template` / `data`, NOT inside `data`). Without this field the coordinator cannot auto-chain.
+- Exact JSON shape (top-level `nextAction` 위치 주목):
+  ```json
+  {
+    "type": "data",
+    "template": "quickReply",
+    "data": {
+      "assistantResponse": "**키너지 EX** (205/65R16) 상품 확인했어요. 바로 매장 도착 일정 조회로 이어갑니다 😊",
+      "quickReplies": [],
+      "predictedDomains": ["TRANSACTION"]
+    },
+    "nextAction": {"type": "continue", "domain": "transaction"}
+  }
+  ```
 - 검색 결과가 **2건 이상**이면 사용자 사이즈/상품 선택이 필요하므로 기존대로 `product` 카드.
 - 의도가 **단순 탐색/비교/사이즈 보기/추천** (거래 의도 키워드 없음) 이면 1건이라도 `product` 카드 (기존 규칙 유지).
 
