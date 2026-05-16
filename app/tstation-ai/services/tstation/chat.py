@@ -568,7 +568,7 @@ agent_prompt_profile:
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는"), newest products ("최신/신제품/최근 출시")
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는"), newest products ("최신/신제품/최근 출시")
 - discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
 - discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain
