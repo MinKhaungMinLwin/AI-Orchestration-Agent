@@ -100,6 +100,38 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
 
     if not stores:
         region = user_branch[:-1]
+        # 복합 지역명 휴리스틱: stripped 이 4자 이상이면 사용자가 두 지역명을 붙여 입력했을
+        # 가능성이 높다 (예: "분당판교점" → "분당" + "판교"). 한국 주요 지하철/구/동 이름이
+        # 대부분 2글자이므로 2+2 분할을 1순위 후보로 제시. 4자 이상은 단일 동/지명일
+        # 가능성도 있으므로 (예: "광교신도시") "지역명을 다시 입력" chip 으로 안전한 fallback 제공.
+        if len(region) >= 4 and len(region) % 2 == 0:
+            first_half = region[: len(region) // 2]
+            second_half = region[len(region) // 2 :]
+            confirmation_msg = (
+                f"고객님, '{user_input}'으로 검색되는 매장이 없습니다. "
+                f"혹시 '{first_half}' 또는 '{second_half}' 지역 중 어느 매장을 찾으시나요?"
+            )
+            quick_replies_hint = (
+                f'[{{"label":"{first_half} 지역 검색","domain":"TRANSACTION"}}, '
+                f'{{"label":"{second_half} 지역 검색","domain":"TRANSACTION"}}, '
+                f'{{"label":"다른 매장 찾기","domain":"TRANSACTION"}}]'
+            )
+            return {
+                "status": "store_name_no_match",
+                "http_status": 200,
+                "data": {
+                    "user_input": user_input,
+                    "region_candidates": [first_half, second_half],
+                    "stores": [],
+                    "validation_message": confirmation_msg,
+                    "instruction_to_agent": (
+                        f"DETERMINISTIC GUARD: 사용자 입력 '{user_input}' 으로 매장 검색 결과 없음. "
+                        f"복합 지역명 의심 ('{first_half}' + '{second_half}'). "
+                        f"validation_message 를 그대로 emit + quickReplies: {quick_replies_hint}. "
+                        f"이 턴에 다른 store/schedule/inventory 도구 호출 절대 금지. STOP."
+                    ),
+                },
+            }
         confirmation_msg = (
             f"고객님, '{user_input}'으로 검색되는 매장이 없습니다. "
             f"'{region}' 지역으로 검색해 드릴까요?"
@@ -1099,6 +1131,27 @@ def transaction_store_preview_tool(
 
     store_data = _to_dict(store_response.parsed)
     stores = _extract_stores(store_data)
+
+    # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
+    # 이게 없으면 LLM 이 silent "No store candidates found" 만 받고 generic 응답을
+    # 생성하거나 다른 도구를 fan-out 한다 (예: "분당판교점" 같은 복합 지역명 오입력).
+    if store_nm:
+        validation_override = _validate_store_nm_exact_match(user_input=store_nm, stores=stores)
+        if validation_override is not None:
+            logger.info(
+                "[TOOL][transaction_store_preview_tool] store_nm validation override: status=%s, user_input=%s",
+                validation_override.get("status"), store_nm,
+            )
+            payload = dict(validation_override.get("data") or {})
+            payload.setdefault("price", None)
+            payload.setdefault("logistics", None)
+            payload.setdefault("inventory", None)
+            payload.setdefault("schedule", None)
+            return _success_response(
+                validation_override.get("http_status", 200),
+                payload,
+            )
+
     candidates = sorted(
         stores,
         key=lambda s: (
