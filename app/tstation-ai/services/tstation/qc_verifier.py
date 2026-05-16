@@ -18,15 +18,18 @@ Design choices:
   prior-turn cards, computed prices). Set ``AI_QC_STRICT_MODE`` (future) to
   escalate to a fallback message instead.
 
-Scope:
+Scope (v1):
 - Prices: integer won values (₩123,456 or 123,456원). Matches direct quotes
   from source plus simple arithmetic combinations (qty x unit for qty 1..12,
   /2 for 1+1, /4 for 2+2, sum of two source values for "상품가 + 공임비").
 - goods_no: ``G`` + 12 digits, exact set membership.
 - shop_id: ``C`` + 5 digits or ``F`` + 6 digits, exact set membership.
+- tire_size: ``235/55R19`` / ``225/45ZR17`` / ``LT235/85R16`` style.
+  Customer-safety-critical fact; pattern is unambiguous.
 
-Anything else (prose, scope claims, descriptions, formatting) is intentionally
-out of scope — those were the false-positive vectors in the LLM QC.
+Anything else (prose, scope claims, descriptions, free-form names, percentages,
+distances, ratings, dates) is intentionally out of scope — those were the
+false-positive vectors in the LLM QC. Add carefully once log data justifies it.
 """
 from __future__ import annotations
 
@@ -51,6 +54,15 @@ _PRICE_PATTERNS = (
 
 _GOODS_NO_PATTERN = re.compile(r"\bG\d{12}\b")
 _SHOP_ID_PATTERN = re.compile(r"\b(?:C\d{5}|F\d{6})\b")
+
+# Tire-size literals: width / aspect-ratio + optional speed rating (Z) + R + inch.
+# Matches "235/55R19", "225/45ZR17", "LT235/85R16". Load/speed index that often
+# follows ("235/55R19 95H") is intentionally not part of the canonical token —
+# verifier only checks the core size string.
+_TIRE_SIZE_PATTERN = re.compile(
+    r"\b(?:LT)?\d{2,3}/\d{2}Z?R\d{2}\b",
+    re.IGNORECASE,
+)
 
 # Skip integers below this threshold as candidate prices — they are usually
 # quantities, ratings, percentages, or page numbers, not won amounts.
@@ -101,6 +113,9 @@ _PRICE_FIELDS: frozenset[str] = frozenset({
 
 _GOODS_NO_FIELDS: frozenset[str] = frozenset({"goods_no", "goodsNo"})
 _SHOP_ID_FIELDS: frozenset[str] = frozenset({"shop_id", "shopId"})
+# tire_size_1 is the canonical field in source_filter.py; tire_size is a legacy
+# alias still seen in some tool outputs.
+_TIRE_SIZE_FIELDS: frozenset[str] = frozenset({"tire_size_1", "tire_size", "tireSize"})
 
 
 def _walk(obj: Any, found: set, fields: frozenset[str], coerce):
@@ -142,16 +157,37 @@ def collect_source_values(structured_sources: Iterable[tuple[str, Any]]) -> dict
 
     Returns:
         Dict with keys ``"prices"`` (set[int]), ``"goods_no"`` (set[str]),
-        ``"shop_ids"`` (set[str]).
+        ``"shop_ids"`` (set[str]), ``"tire_sizes"`` (set[str], uppercased).
     """
     prices: set[int] = set()
     goods_no: set[str] = set()
     shop_ids: set[str] = set()
+    tire_sizes: set[str] = set()
     for _tool, output in structured_sources:
         _walk(output, prices, _PRICE_FIELDS, _as_positive_int)
         _walk(output, goods_no, _GOODS_NO_FIELDS, _as_pattern_string(_GOODS_NO_PATTERN))
         _walk(output, shop_ids, _SHOP_ID_FIELDS, _as_pattern_string(_SHOP_ID_PATTERN))
-    return {"prices": prices, "goods_no": goods_no, "shop_ids": shop_ids}
+        _walk(output, tire_sizes, _TIRE_SIZE_FIELDS, _as_normalized_tire_size)
+    return {
+        "prices": prices,
+        "goods_no": goods_no,
+        "shop_ids": shop_ids,
+        "tire_sizes": tire_sizes,
+    }
+
+
+def _as_normalized_tire_size(value: Any) -> str | None:
+    """Coerce a source tire-size value to its canonical uppercase form.
+
+    Tolerates lowercase ``r`` and surrounding whitespace so source quirks
+    like "235/55r19" or " 225/45R17 " still match the draft literal.
+    """
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().upper()
+    if _TIRE_SIZE_PATTERN.fullmatch(candidate):
+        return candidate
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -235,6 +271,7 @@ def verify_draft(
     valid_prices: set[int] = values["prices"]
     valid_goods: set[str] = values["goods_no"]
     valid_shops: set[str] = values["shop_ids"]
+    valid_sizes: set[str] = values["tire_sizes"]
 
     mismatches: list[Mismatch] = []
 
@@ -257,6 +294,17 @@ def verify_draft(
             literal = match.group(0)
             if literal not in valid_shops:
                 mismatches.append(Mismatch(field="shop_id", value=literal))
+
+    if valid_sizes:
+        seen_sizes: set[str] = set()
+        for match in _TIRE_SIZE_PATTERN.finditer(draft):
+            literal = match.group(0)
+            normalized = literal.upper()
+            if normalized in seen_sizes:
+                continue
+            seen_sizes.add(normalized)
+            if normalized not in valid_sizes:
+                mismatches.append(Mismatch(field="tire_size", value=literal))
 
     return mismatches
 

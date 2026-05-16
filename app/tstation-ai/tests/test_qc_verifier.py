@@ -196,6 +196,73 @@ def test_correct_and_wrong_mixed(price_source) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Tire-size cases
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def tire_size_source() -> list[tuple[str, dict]]:
+    return [
+        (
+            "search_product_tool",
+            {
+                "data": {
+                    "items": [
+                        {"goods_no": "G000000317727", "tire_size_1": "235/55R19"},
+                        {"goods_no": "G000000317729", "tire_size_1": "225/45ZR17"},
+                    ]
+                }
+            },
+        )
+    ]
+
+
+def test_known_tire_size_passes(tire_size_source) -> None:
+    draft = "이 차량에는 235/55R19 사이즈를 권장해요."
+    assert verify_draft(draft, tire_size_source) == []
+
+
+def test_tire_size_case_insensitive(tire_size_source) -> None:
+    """Source may store '235/55r19'; draft writes '235/55R19'. Same size."""
+    src = [("t", {"data": {"items": [{"tire_size_1": "235/55r19"}]}})]
+    draft = "권장 사이즈: 235/55R19"
+    assert verify_draft(draft, src) == []
+
+
+def test_hallucinated_tire_size_caught(tire_size_source) -> None:
+    """245/40R18 not in source — flag."""
+    draft = "이 차량에는 245/40R18 사이즈를 권장해요."
+    mismatches = verify_draft(draft, tire_size_source)
+    assert mismatches == [Mismatch(field="tire_size", value="245/40R18")]
+
+
+def test_zr_tire_size_passes(tire_size_source) -> None:
+    """ZR (speed-rated) tires must match exactly."""
+    draft = "퍼포먼스용으로 225/45ZR17 추천드려요."
+    assert verify_draft(draft, tire_size_source) == []
+
+
+def test_lt_truck_tire_size_passes() -> None:
+    src = [("t", {"data": {"items": [{"tire_size_1": "LT235/85R16"}]}})]
+    draft = "트럭용 LT235/85R16 권장합니다."
+    assert verify_draft(draft, src) == []
+
+
+def test_duplicate_tire_size_flagged_once(tire_size_source) -> None:
+    """Same hallucinated size mentioned twice should produce one mismatch."""
+    draft = "245/40R18 권장. 245/40R18 재고 확인 가능."
+    mismatches = verify_draft(draft, tire_size_source)
+    assert len(mismatches) == 1
+    assert mismatches[0].field == "tire_size"
+
+
+def test_tire_size_check_skipped_when_source_empty() -> None:
+    """Verifier stays conservative when no source sizes are available."""
+    src = [("t", {"data": {"items": []}})]
+    draft = "245/40R18 권장합니다."
+    assert verify_draft(draft, src) == []
+
+
+# --------------------------------------------------------------------------- #
 #  Edge cases
 # --------------------------------------------------------------------------- #
 
