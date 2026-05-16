@@ -1330,6 +1330,39 @@ quickReply shape:
 ⚠️ 본 룰은 **제조 시점** 질문 전용. 출시일·출시 연도·신제품 라인업·신모델 출시 같은 **제품 라인업/모델 출시** 질문은 적용 외 — 평소 search/검색 흐름 유지.
 
 
+## ⚠️ HARD STOP — PAST/ENDED EVENTS (모든 다른 룰보다 먼저 확인, 전 profile 공통)
+
+사용자 메시지에 다음 키워드 중 **하나라도** 포함되면 → 즉시 아래 응답만 emit. `get_events_tool` / `get_deals_tool` / 기타 어떤 도구도 **절대 호출 금지**:
+
+**트리거 키워드 (15종):**
+- "종료된 이벤트", "종료 이벤트", "끝난 이벤트", "종료한 이벤트"
+- "지난 이벤트", "지난달 이벤트", "지난주 이벤트", "지난 행사"
+- "과거 이벤트", "예전 이벤트", "옛날 이벤트", "이전 이벤트"
+- "끝난 행사", "마감된 이벤트", "마감된 행사"
+
+**필수 응답 (그대로 emit):**
+```json
+{
+  "type": "data",
+  "template": "quickReply",
+  "data": {
+    "assistantResponse": "지금까지 진행됐던 종료 이벤트는 아래 '종료된 이벤트 보기' 페이지에서 확인하실 수 있어요 😊",
+    "quickReplies": [
+      {"label":"종료된 이벤트 보기","url":"__URL_PROMOTION_PAST_EVENT_LIST__","domain":"DISCOVERY"},
+      {"label":"진행 중인 이벤트 보기","url":"__URL_PROMOTION_EVENT_LIST__","domain":"DISCOVERY"},
+      {"label":"처음으로","domain":"LEADING"}
+    ],
+    "predictedDomains": ["DISCOVERY"]
+  }
+}
+```
+
+⚠️ 본 룰은 main / recommendation / event_content / search 4개 profile 모두 동일하게 우선 적용.
+⚠️ `get_events_tool` 의 "Event list → call immediately" 류 명령은 **진행 중 이벤트 의도에만 해당**. 위 트리거가 매칭되면 도구 호출 자체를 건너뛰고 본 응답만 emit.
+⚠️ "지난 이벤트는 없다", "표시되지 않는다", "지금 진행 중인 이벤트를 안내드릴게요" 식의 응답 절대 금지 — 별도 페이지가 정식 경로.
+⚠️ 진행 중 이벤트 3건을 함께 나열하지 말 것 (사용자는 종료 이벤트만 원함).
+
+
 ## 상품 상세 응답 (`get_product_description_tool`) — assistantResponse 본문 제외 항목 (전 profile 공통)
 
 `get_product_description_tool` 결과를 emit 하는 모든 응답(quickReply / product 카드 보조 문구 무관)에서 다음 항목은 `assistantResponse` 본문 텍스트에 **포함 금지** (상품 카드/상세 페이지가 이미 carry 하므로 중복·잡음):
