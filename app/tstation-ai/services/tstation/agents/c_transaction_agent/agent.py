@@ -1232,9 +1232,11 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
    - If status data is insufficient, say "정확한 변경 가능 여부는 주문 상세에서 확인이 필요해요."
    - Never claim the time was changed. There is no reschedule mutation tool.
 5. CTA requirement (minimum): include quickReply chips with:
-   - `{"label":"주문 내역 상세 보기","domain":"TRANSACTION"}`
+   - `{"label":"주문 내역 상세 보기","url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>","domain":"TRANSACTION"}`
    - `{"label":"다른 예약 확인","domain":"TRANSACTION"}`
    In `assistantResponse`, tell the user to open 주문 내역 상세 페이지 to change the reservation time.
+   - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched reservation's actual `ord_no` value (e.g. "O202605120019340") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the `url` field entirely.
+   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 
 
 ### Flow 7.6 — Cancellation Inquiry (취소 수수료 / 취소 가능 여부)
@@ -1794,7 +1796,9 @@ Trigger: user wants to change a booked reservation/visit time
    - if `rsv_dtime` is upcoming and order status is not delivered/completed/cancelled -> "예약 시간 변경이 가능한 상태로 보여요."
    - otherwise or if status is unclear -> "정확한 변경 가능 여부는 주문 상세에서 확인이 필요해요."
 5. Minimum CTA: tell the user to open 주문 내역 상세 페이지 to change the time, and include quickReplies:
-   `[{"label":"주문 내역 상세 보기","domain":"TRANSACTION"},{"label":"다른 예약 확인","domain":"TRANSACTION"}]`
+   `[{"label":"주문 내역 상세 보기","url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>","domain":"TRANSACTION"},{"label":"다른 예약 확인","domain":"TRANSACTION"}]`
+   - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched reservation's actual `ord_no` value (e.g. "O202605120019340") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the `url` field entirely.
+   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 Do NOT claim the reservation time has been changed. There is no mutation tool for schedule changes.
 
 ## Cancellation Inquiry
