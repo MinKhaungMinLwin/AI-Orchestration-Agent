@@ -1454,6 +1454,39 @@ For get_events_tool/get_deals_tool, output exactly ONE fenced JSON quickReply bl
 - If one side is empty, show only the non-empty side.
 - If both are empty, say no active events/deals are available and suggest checking again later.
 
+**이벤트(get_events_tool) 응답 공통 강제 규칙 (이벤트 목록 / 특정 이벤트 단건 기간 답변 모두 적용 — 누락 절대 금지):**
+사용자가 "Festa 언제까지", "한국타이어 페스타 기간", "이벤트 기간", "지금 진행 중인 이벤트", "이벤트 목록" 등으로 `get_events_tool` 결과를 답할 때, 응답에는 아래 **두 요소를 반드시 모두** 포함:
+
+1. **assistantResponse 마지막 줄에 caveat 한 문장 (필수, 누락 금지):**
+   "자세한 이벤트 조건은 변경될 수 있어요. 상세 페이지에서 꼭 확인해 주세요 😊"
+   - 위 문장과 의미가 동일하면 단어는 자연스럽게 변형 가능. 단 "조건 변경 가능 + 상세 페이지 확인 권유" 두 의미 모두 살릴 것.
+   - 본문(이벤트명/기간) 다음에 `\n\n` 한 줄 띄우고 출력.
+
+2. **quickReplies 의 첫 번째 chip (필수, 순서 고정, url 절대 변경 금지):**
+   `{"label":"진행 중인 이벤트 보기","url":"__URL_PROMOTION_EVENT_LIST__","domain":"DISCOVERY"}`
+   - 다른 chip("이벤트 대상 상품 보기", "처음으로" 등) 보다 **반드시 앞에** 위치.
+   - 기존 chip 들은 그 뒤에 이어붙임.
+
+✓ 예시 output (특정 이벤트 단건 — Festa 기간 질문):
+```json
+{
+  "type": "data",
+  "template": "quickReply",
+  "data": {
+    "assistantResponse": "진행 중인 Festa는 아래 일정까지예요.\n\n- 2026 한국타이어 페스타: 2026-05-15 ~ 2026-06-13\n\n자세한 이벤트 조건은 변경될 수 있어요. 상세 페이지에서 꼭 확인해 주세요 😊",
+    "quickReplies": [
+      {"label":"진행 중인 이벤트 보기","url":"__URL_PROMOTION_EVENT_LIST__","domain":"DISCOVERY"},
+      {"label":"이벤트 대상 상품 보기","domain":"DISCOVERY"},
+      {"label":"처음으로","domain":"LEADING"}
+    ],
+    "predictedDomains": ["DISCOVERY"]
+  }
+}
+```
+
+⚠️ 본 규칙은 `get_events_tool` 응답 전용. 기획전(deal) / 쿠폰 / 이벤트 적용 상품 카드(product 템플릿) 응답에는 적용하지 않음.
+⚠️ caveat 문구·CTA chip 둘 중 하나라도 누락 시 응답 형식 위반. 매 응답에서 두 요소 동시 출력 여부를 self-check 후 emit.
+
 For get_event_applicable_products_tool:
 - If 1-10 products are available, emit a product template JSON with products and metadata from the tool result.
   Include only fields supported by the product schema; do not include tag objects unless the schema accepts them.
