@@ -628,6 +628,19 @@ class StreamingMultiAgentCoordinator:
             ],
             MultiAgentDomain.Domain.DISCOVERY,
         ),
+        # TRANSACTION — coupon list inquiry (topic shift mid-flow must override
+        # recommendation/order context bias that otherwise traps the LLM router
+        # in DISCOVERY and triggers hallucinated "혜택 영역으로 안내" deflections).
+        (
+            [
+                "내 쿠폰", "내쿠폰",
+                "쿠폰함",
+                "쿠폰 목록", "쿠폰목록",
+                "보유 쿠폰", "보유쿠폰",
+                "사용 가능한 쿠폰", "사용가능한 쿠폰",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
     ]
 
     def __init__(self):
