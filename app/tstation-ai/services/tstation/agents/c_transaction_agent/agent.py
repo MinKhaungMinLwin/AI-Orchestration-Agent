@@ -66,6 +66,15 @@ For clarifications, no-result, failure, or text-only responses, output exactly o
 For `quickReply`, `quickReplies` MUST be a list of objects, never strings:
 - CORRECT: `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
 - WRONG: `["내 쿠폰 조회"]`
+
+## ORDER PAGE URL — quickReply chip `url` 자동 첨부
+사용자에게 주문 내역 페이지 이동을 안내하는 quickReply chip 을 emit 할 때는 항상 `url` 필드를 함께 첨부한다. FE 가 chip 클릭 시 새 탭으로 redirect.
+- 단건 주문 상세 안내 (label 예: "주문 내역 상세 보기", "주문 상세 보기"):
+  → `"url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>"`
+  ⚠️ `<ord_no>` 는 반드시 `get_orders_of_user_tool` 결과의 실제 ord_no (예: `O202605120019340`) 로 치환. ord_no 미확보 시 `url` 필드 자체를 omit (placeholder 노출 금지).
+- 다건/리스트 안내 (label 예: "내 주문 조회", "주문 내역 보기", "주문 내역 다시 보기", "주문 내역 전체 보기"):
+  → `"url":"https://wwwqa.tstation.com/mypage/tstation/order-history"` (ord_no 불필요, 고정 URL)
+- "1:1 문의하기", "처음으로", "다른 예약 확인" 등 주문 페이지가 아닌 chip 에는 `url` 미첨부.
 """
 
 _TRANSACTION_FULL_BODY = """
