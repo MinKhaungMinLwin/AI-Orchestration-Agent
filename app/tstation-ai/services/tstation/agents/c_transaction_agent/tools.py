@@ -547,6 +547,7 @@ def get_nearby_stores_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
     limit: int = 10,
 ):
     """
@@ -576,6 +577,10 @@ def get_nearby_stores_tool(
         all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
+        sort_by (str | None): 정렬 기준. None(default)=좌표 있으면 거리순 / "rating"=평점순(SHOP_EVAL_CVRT_IDX
+            DESC NULLS LAST) / "review_count"=리뷰 많은 순(서브쿼리 활성) / "distance"=거리순(좌표 필수).
+            사용자가 "근처/가까운"만 표현하면 None, "평점 좋은/별점 높은/친절한"이면 "rating",
+            "리뷰 많은/후기 많은"이면 "review_count".
         limit (int): 반환 매장 수 상한 (1-10). Default 10. 사용자가 "N개"를 명시하면
             그 값을 전달. location 카드 max_length=10 제약 때문에 10 초과 시 10으로 클램핑.
 
@@ -583,8 +588,8 @@ def get_nearby_stores_tool(
     """
     logger.debug(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
-        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
     )
 
     try:
@@ -597,6 +602,7 @@ def get_nearby_stores_tool(
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
+            sort_by=sort_by,
         )
         if response.parsed is None:
             return _error_response(
@@ -642,12 +648,13 @@ def _get_store_list_cached(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
 ) -> dict:
     """Internal cached BE call. Validation runs in `get_store_list_tool` after this returns."""
     logger.debug(
         "[TOOL][_get_store_list_cached] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
-        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
     )
     try:
         response = get_store_list(
@@ -659,6 +666,7 @@ def _get_store_list_cached(
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
+            sort_by=sort_by,
         )
         if response.parsed is None:
             return _error_response(
@@ -682,6 +690,7 @@ def get_store_list_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
 ):
     """
     Get store list by region and/or store name.
@@ -696,6 +705,8 @@ def get_store_list_tool(
     - imported_car_only=True: "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 표현 시. True면 "[수입차 특화점]" 표시.
     - chl_sct_cd: "티스테이션/t'station/티스테" → "F", "더타이어샵/the tire shop/타이어샵" → "S", None=전체.
     - svc_codes: 매장 보유 서비스 코드 (OR 필터 + 응답에 동일 필드 노출). 아래 코드 매핑 참고.
+    - sort_by: 정렬 기준. None=좌표 있으면 거리순, 없으면 SHOP_ID 순(default).
+        "rating"=평점순(친절/평점/별점/추천 표현), "review_count"=리뷰 많은 순(리뷰·후기 많은 표현).
 
     Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점),
     svc_codes (매장이 보유한 서비스 코드 리스트, 예: ["113","121","124"]).
@@ -719,6 +730,7 @@ def get_store_list_tool(
         all_my_t_only (bool): True → all my T 매장만. Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
+        sort_by (str | None): None(default) / "rating" / "review_count" / "distance"(좌표 필수).
 
     Examples:
         - {"region_code": "강남", "store_nm": "티스테", "limit": 5}
@@ -727,6 +739,8 @@ def get_store_list_tool(
         - {"region_code": "강남", "limit": 5, "imported_car_only": True}
         - {"region_code": "강남", "svc_codes": ["121"], "limit": 5}  # 강남에서 경정비 가능
         - {"store_nm": "광교신도시", "svc_codes": ["121"]}  # 광교신도시점이 경정비 가능한지 확인
+        - {"region_code": "강남", "sort_by": "rating", "limit": 5}  # 강남에서 평점 좋은 매장
+        - {"region_code": "서울", "sort_by": "review_count"}  # 서울에서 리뷰 많은 매장
     """
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
@@ -739,6 +753,7 @@ def get_store_list_tool(
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
     )
 
     if store_nm and isinstance(result, dict) and result.get("status") == "success":

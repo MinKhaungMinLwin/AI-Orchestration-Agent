@@ -151,7 +151,7 @@ def sync_detailed(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -229,7 +229,7 @@ def sync(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -302,7 +302,7 @@ async def asyncio_detailed(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -378,7 +378,7 @@ async def asyncio(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
