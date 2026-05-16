@@ -485,12 +485,24 @@ class ConversationSlots(BaseModel):
 
     @classmethod
     def has_recommend_intent(cls, user_text: str) -> bool:
-        """Return True when the user turn explicitly asks for a recommendation.
+        """Return True when the user turn explicitly asks for a product recommendation.
+
+        "Recommend" here is **product-recommend** intent (Discovery). When the
+        same turn also signals a store-finder context ("분당 매장 추천해줘",
+        "근처 지점 추천", "친절한 샵 추천해줘"), the turn is treated as
+        store-finder, not product-recommend — return False so the elif chain in
+        `extract_from_user_text` falls through to `has_store_finder_intent` and
+        the location card is rendered with the store list.
 
         Used by Coordinator to clear any stale transactional `pending_intent`
         when the user is clearly switching back to discovery.
         """
-        return any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS)
+        if not any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS):
+            return False
+        # "매장/지점/샵 추천해줘" → store-finder owns the turn.
+        if cls.has_store_finder_intent(user_text):
+            return False
+        return True
 
     def evaluate_goal_progress(self) -> tuple[list[str], Optional[str]]:
         """Return (done_step_labels, next_step_label) for the current goal.
