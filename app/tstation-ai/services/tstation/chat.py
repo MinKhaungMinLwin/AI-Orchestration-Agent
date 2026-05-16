@@ -371,7 +371,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
 - SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -391,7 +391,7 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
 
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
