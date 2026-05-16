@@ -28,9 +28,8 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
-from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
-from services.tstation.agents.router import QC_LLM
+from services.tstation.source_filter import filter_source_data, filter_for_context
+from services.tstation import qc_verifier
 from services.tstation.classifier_feedback import log_classifier_redirect
 from config.tracing import (
     build_trace_config,
@@ -2220,20 +2219,6 @@ def _should_skip_qc(
     ) is not None
 
 
-def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
-    """Returns (corrected_text, template_json | None)."""
-    if "[Template:" not in qc_result:
-        return qc_result, None
-    parts = qc_result.split("[Template:", 1)
-    corrected_text = parts[0].strip()
-    try:
-        newline_idx = parts[1].index("\n")
-        json_str = parts[1][newline_idx + 1:].strip()
-        return corrected_text, json.loads(json_str)
-    except (ValueError, json.JSONDecodeError):
-        return corrected_text, None
-
-
 # Singleton coordinator instance
 _coordinator = StreamingMultiAgentCoordinator()
 
@@ -2623,7 +2608,7 @@ class TStationChatServiceV2:
         Returns None when no confident match is found.
 
         Expected tool_context entry shape (produced by filter_for_context in
-        g_qc_agent/source_filter.py, which is what gets persisted to Redis):
+        services/tstation/source_filter.py, which is what gets persisted to Redis):
             {"tool": "search_product_tool" | "get_products_recommendations_tool",
              "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
              "input": {...}}
@@ -3809,6 +3794,9 @@ class TStationChatServiceV2:
         draft_response = ""       # text only — used for history/message sync
         draft_for_qc = ""         # text + template payload — passed to QC only
         source_data_chunks = []
+        # Parsed dicts paired with tool name — handed to the deterministic verifier
+        # so it can scan all source values without re-parsing strings.
+        structured_sources: list[tuple[str, dict]] = []
         buffered_data_events: list[dict] = []  # DATA events held until after QC
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
@@ -3954,6 +3942,9 @@ class TStationChatServiceV2:
                     ctx_item = filter_for_context(tool_name, output_data, input_data)
                     if ctx_item:
                         tool_context_items.append(ctx_item)
+                    parsed_for_verifier = qc_verifier.parse_tool_output(output_data)
+                    if parsed_for_verifier is not None:
+                        structured_sources.append((tool_name, parsed_for_verifier))
 
                 continue
 
@@ -4092,20 +4083,20 @@ class TStationChatServiceV2:
 
         _t_agents = time.perf_counter()
 
-        # 2. QC AGENT
-        # Gated by AI_QC_ENABLED. When enabled, fact-checks the draft against
-        # filtered tool source data using AI_MODEL_QC_AGENT (lightweight model).
-        # AI_QC_PARALLEL=true: yield data events before QC so FE renders immediately;
-        # a qc_correction event is emitted afterward only when a correction is needed.
+        # 2. QC VERIFIER (deterministic)
+        # Gated by AI_QC_ENABLED. Scans the draft for prices, goods_no, and
+        # shop_id literals and checks them against the raw tool outputs
+        # collected this turn. Pass-through policy: mismatches are logged and
+        # surfaced in the Langfuse trace, but the draft is NEVER rewritten —
+        # the verifier has no safe replacement value, and rewriting was the
+        # source of the prior LLM QC's false-positive problem.
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
 
-            _qc_passed = True  # default: no correction needed
-            qc_template_corrections: dict | None = None
-            _can_apply_json = False
+            _qc_passed = True
             _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL
 
-            # PARALLEL MODE: yield data events immediately so FE can render before QC completes
+            # PARALLEL MODE: yield data events immediately so FE renders without waiting for QC.
             if _parallel_qc:
                 for buffered_evt in buffered_data_events:
                     _mark_first_visible()
@@ -4113,7 +4104,6 @@ class TStationChatServiceV2:
 
             if _s.AI_QC_ENABLED:
                 _qc_started_at = time.perf_counter()
-                source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
                 qc_skip_reason = _qc_skip_reason(
                     called_tool_names,
                     last_template,
@@ -4131,57 +4121,33 @@ class TStationChatServiceV2:
                             input={
                                 "user_query": user_query,
                                 "draft": draft_for_qc,
-                                "source_data": source_data,
+                                "source_tool_count": len(structured_sources),
                             },
                         ) as _qc_span:
-                            trace_config = build_trace_config(
-                                session_id=session_id,
-                                user_id=user_id,
-                                trace_id=trace_id,
-                                parent_span_id=_qc_span.id or parent_span_id,
-                                tags=["qc"],
-                                prompt_name="qc_agent",
-                                run_name="💭 qc_check",
-                            )
-                            qc_result = await ainvoke_qc(
-                                QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
-                            )
-                            qc_result = qc_result.strip()
-                            _qc_passed = not qc_result or qc_result.upper() == "PASS"
-                            logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
-                            logger.debug(f"[QC_LAYER] Source: {source_data[:500]}")
-                            logger.debug(f"[QC_LAYER] QC result: {qc_result[:500]}")
-                            if not _qc_passed:
-                                corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
-                                draft_response = corrected_text or draft_response
-                                _can_apply_json = qc_template_corrections and last_template in _LLM_WRITTEN_TEMPLATES
-                                logger.debug(
-                                    f"[QC_LAYER] QC corrected the response"
-                                    + (f" (+ {len(qc_template_corrections)} JSON field(s) applied)" if _can_apply_json else " (text only)")
-                                )
-                            else:
-                                logger.debug("[QC_LAYER] QC passed")
-                            # Show verdict + corrected-field count up front so the
-                            # qc node tells the story without expanding.
-                            _qc_corr_count = len(qc_template_corrections) if qc_template_corrections else 0
+                            mismatches = qc_verifier.verify_draft(draft_for_qc, structured_sources)
+                            _qc_passed = not mismatches
                             if _qc_passed:
+                                logger.debug("[QC_VERIFIER] PASS")
                                 _qc_summary = "PASS"
-                            elif _qc_corr_count:
-                                _qc_summary = f"CORRECTED (text + {_qc_corr_count} JSON field)"
                             else:
-                                _qc_summary = "CORRECTED (text)"
+                                logger.warning(
+                                    "[QC_VERIFIER] %d mismatch(es) in draft: %s",
+                                    len(mismatches),
+                                    [m.as_dict() for m in mismatches],
+                                )
+                                _qc_summary = f"MISMATCH ({len(mismatches)})"
                             _qc_span.update(
                                 output=_truncate({
                                     "summary": _qc_summary,
-                                    "verdict": "PASS" if _qc_passed else "CORRECTED",
-                                    "result": qc_result,
+                                    "verdict": "PASS" if _qc_passed else "MISMATCH",
+                                    "mismatches": [m.as_dict() for m in mismatches],
                                 }),
                             )
                     except Exception as e:
-                        logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+                        logger.warning(f"[QC_VERIFIER] Verifier failed, using original draft: {e}")
                 elif called_tool_names:
                     logger.debug(
-                        "[QC_LAYER] Skipped QC: reason=%s template=%s source=%s response_source=%s tools=%s",
+                        "[QC_VERIFIER] Skipped QC: reason=%s template=%s source=%s response_source=%s tools=%s",
                         qc_skip_reason,
                         last_template,
                         last_template_source,
@@ -4190,27 +4156,10 @@ class TStationChatServiceV2:
                     )
                 _lat_qc_ms = (time.perf_counter() - _qc_started_at) * 1000
 
-            if _parallel_qc:
-                # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
-                if not _qc_passed:
-                    correction_evt: dict = {"type": "qc_correction", "assistantResponse": draft_response}
-                    if _can_apply_json:
-                        correction_evt["template"] = last_template
-                        correction_evt["corrections"] = qc_template_corrections
-                    yield f"data: {json.dumps(correction_evt, ensure_ascii=False)}\n\n"
-                    logger.debug("[QC_LAYER] Parallel mode: emitted qc_correction patch")
-            else:
-                # SEQUENTIAL (default): yield buffered DATA events with corrections applied
+            if not _parallel_qc:
+                # SEQUENTIAL (default): data events were buffered; yield them as-is now.
+                # Verifier never rewrites the draft, so no patching is needed.
                 for buffered_evt in buffered_data_events:
-                    if not _qc_passed:
-                        evt_data = buffered_evt.get("data", {})
-                        if isinstance(evt_data, dict):
-                            if "assistantResponse" in evt_data:
-                                evt_data["assistantResponse"] = draft_response
-                            if _can_apply_json:
-                                for k, v in qc_template_corrections.items():
-                                    if k != "assistantResponse" and k in evt_data:
-                                        evt_data[k] = v
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
