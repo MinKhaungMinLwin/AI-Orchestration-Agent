@@ -1305,16 +1305,18 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
 
 
 ### Flow 7.6 — Cancellation Inquiry (취소 수수료 / 취소 가능 여부)
-Trigger: user asks whether there is a cancellation fee, or whether they can cancel an appointment/order
-(e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?").
+Trigger: user asks whether there is a cancellation fee, whether they can cancel an appointment/order, or what happens to a used coupon after cancellation
+(e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "주문 취소하면 쿠폰은 다시 주나요?").
 
 1. Call `get_orders_of_user_tool` FIRST to check the user's active/recent online orders. Do NOT answer from FAQ memory first.
-2. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one order matches, use that order. If multiple still match, show the matching order list and ask which order.
-3. If one order is selected or only one active/recent order exists, inspect its enriched `detail` fields:
+2. If the user asks about coupon restoration during cancellation, briefly explain that used coupons may be restored after cancellation depending on coupon conditions/validity, then continue the cancellation flow. Do NOT stop at coupon guidance.
+3. If the user has not identified a specific order number, order item, or appointment date/time, show the active/recent order list first (주문번호, 상품명, 예약일시 if available, 주문상태) and ask which order they want to cancel. Do NOT auto-select an order only because there is one active/recent order. Do NOT inspect shipping status or direct to 1:1 문의 before the user selects an order.
+4. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one order matches, use that order. If multiple still match, show the matching order list and ask which order.
+5. If one order is selected or exactly one order is matched by the user's explicit order number/item/date/time, inspect its enriched `detail` fields:
    - `ord_prgs_stat_nm` / `ord_prgs_stat_cd`
    - `dlv_prgs_stat_nm` / `dlv_prgs_stat_cd`
    - `rsv_dtime`
-4. Interpret 주문상태 / 배송상태 from the result and respond with EXACTLY ONE of:
+6. Interpret 주문상태 / 배송상태 from the selected/matched order and respond with EXACTLY ONE of:
 
    **A. No active/recent online order found (pure store visit reservation, no online order):**
    → assistantResponse: "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
@@ -1330,10 +1332,11 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
    → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
-   **D. Multiple orders found — cannot determine which one:**
-   → Show order list (주문번호, 상품명, 예약일시 if available, 주문상태) and ask: "어떤 주문에 대해 문의하시는 건가요?"
+   **D. User has not selected a specific order yet:**
+   → Show active/recent order list (주문번호, 상품명, 예약일시 if available, 주문상태) and ask: "어떤 주문을 취소하시겠어요?"
+   → Include the coupon restoration sentence first when the user asked about coupons.
    → quickReplies: [] (wait for user to pick an order)
-   → After user picks, re-evaluate against cases A/B/C above.
+   → After user picks, re-evaluate against cases B/C above.
 
 ⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 주문 상세 페이지 / 1:1 문의, not the store.
 ⚠️ Do NOT say generic "당일 취소 수수료는 없습니다" unless no online order is found.
@@ -1874,16 +1877,18 @@ Trigger: user wants to change a booked reservation/visit time
 Do NOT claim the reservation time has been changed. There is no mutation tool for schedule changes.
 
 ## Cancellation Inquiry
-Trigger: user asks whether there is a cancellation fee, or whether they can cancel an appointment/order
-(e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?").
+Trigger: user asks whether there is a cancellation fee, whether they can cancel an appointment/order, or what happens to a used coupon after cancellation
+(e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "주문 취소하면 쿠폰은 다시 주나요?").
 
 1. Call `get_orders_of_user_tool` FIRST to inspect active/recent online orders. Do NOT answer from FAQ memory first.
-2. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one order matches, use that order. If multiple still match, show the matching order list and ask which order.
-3. If one order is selected or only one active/recent order exists, inspect its enriched `detail` fields:
+2. If the user asks about coupon restoration during cancellation, briefly explain that used coupons may be restored after cancellation depending on coupon conditions/validity, then continue the cancellation flow. Do NOT stop at coupon guidance.
+3. If the user has not identified a specific order number, order item, or appointment date/time, show the active/recent order list first (주문번호, 상품명, 예약일시 if available, 주문상태) and ask which order they want to cancel. Do NOT auto-select an order only because there is one active/recent order. Do NOT inspect shipping status or direct to 1:1 문의 before the user selects an order.
+4. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one order matches, use that order. If multiple still match, show the matching order list and ask which order.
+5. If one order is selected or exactly one order is matched by the user's explicit order number/item/date/time, inspect its enriched `detail` fields:
    - `ord_prgs_stat_nm` / `ord_prgs_stat_cd`
    - `dlv_prgs_stat_nm` / `dlv_prgs_stat_cd`
    - `rsv_dtime`
-4. Respond with EXACTLY ONE of:
+6. Respond with EXACTLY ONE of:
 
    **A. No active/recent online order found (pure store visit reservation, no online order):**
    → assistantResponse: "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
@@ -1899,8 +1904,9 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
    → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
-   **D. Multiple possible orders found — cannot determine which one:**
-   → Show order list (주문번호, 상품명, 예약일시 if available, 주문상태) and ask: "어떤 주문에 대해 문의하시는 건가요?"
+   **D. User has not selected a specific order yet:**
+   → Show active/recent order list (주문번호, 상품명, 예약일시 if available, 주문상태) and ask: "어떤 주문을 취소하시겠어요?"
+   → Include the coupon restoration sentence first when the user asked about coupons.
    → quickReplies: [] (wait for user to pick an order)
    → After user picks, re-evaluate against cases B/C above.
 
