@@ -41,6 +41,7 @@ class CTAUrls:
     ORDER_HISTORY: Final[str] = f"{_PC}/mypage/tstation/order-history"
     STORE_SERVICE_HISTORY: Final[str] = f"{_PC}/mypage/tstation/custservice/carservice-hist"
     PROMOTION_EVENT_LIST: Final[str] = f"{_PC}/promotion/event-list"
+    PROMOTION_PAST_EVENT_LIST: Final[str] = f"{_PC}/promotion/past-event-list"
     MY_COUPON_LIST_PC: Final[str] = f"{_PC}/mypage/tstation/coupon/couponList"
     MY_COUPON_LIST_MOBILE: Final[str] = f"{_MOBILE}/coupon/myCouponList"
     WARRANTY_MAIN: Final[str] = f"{_PC}/mypage/tstation/warranty/main"
@@ -60,6 +61,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_STORE_DETAIL__": CTAUrls.STORE_DETAIL,
     "__URL_STORE_SERVICE_HISTORY__": CTAUrls.STORE_SERVICE_HISTORY,
     "__URL_PROMOTION_EVENT_LIST__": CTAUrls.PROMOTION_EVENT_LIST,
+    "__URL_PROMOTION_PAST_EVENT_LIST__": CTAUrls.PROMOTION_PAST_EVENT_LIST,
     "__URL_MY_COUPON_LIST_PC__": CTAUrls.MY_COUPON_LIST_PC,
     "__URL_MY_COUPON_LIST_MOBILE__": CTAUrls.MY_COUPON_LIST_MOBILE,
     "__URL_WARRANTY_MAIN__": CTAUrls.WARRANTY_MAIN,
