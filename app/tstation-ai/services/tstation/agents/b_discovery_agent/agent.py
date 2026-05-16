@@ -24,6 +24,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_coupon_applicable_products_tool,
     get_product_promotions_tool,
 )
+from services.tstation.common.cta_urls import expand_url_sentinels
 DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Discovery Agent of T-Station AI (Hankook Tire).
 Handle: tire recommendations, vehicle lookup, product search, compatibility, events/deals.
@@ -724,6 +725,17 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
 - ⚠️ Bullet list only — markdown table (`|` separator) 사용 금지. 각 항목은 한 줄로 유지 (FE 마크다운 렌더러가 줄바꿈을 새 list item 으로 처리).
 - 한 쪽만 비면 채워진 쪽만 표시. 둘 다 비면 "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊".
 
+**이벤트 응답 공통 가이드 (이벤트 목록 / 특정 이벤트 기간 질문 모두 적용):**
+사용자가 "Festa 언제까지", "한국타이어 페스타 기간", "이벤트 기간", "지금 하는 이벤트 뭐 있어?" 등 이벤트의 기간·일정·목록을 물어 `get_events_tool` 로 답할 때 — bullet list 또는 개별 이벤트 기간 답변 마지막에 아래 단서 1줄을 **반드시** 덧붙인다.
+- ✅ 단서 문구 (자연스러운 한국어로, 한 줄):
+  "자세한 이벤트 조건은 변경될 수 있어요. 상세 페이지에서 꼭 확인해 주세요 😊"
+- ✅ quickReplies 에 다음 chip 을 **첫 번째** 로 추가 (url 절대 변경 금지 — 그대로 복사):
+  `{"label":"진행 중인 이벤트 보기","url":"__URL_PROMOTION_EVENT_LIST__","domain":"DISCOVERY"}`
+- 기존 chips 가 있으면 그 뒤에 이어붙임. 예:
+  `[{"label":"진행 중인 이벤트 보기","url":"__URL_PROMOTION_EVENT_LIST__","domain":"DISCOVERY"}, {"label":"이벤트 적용 상품 보기","domain":"DISCOVERY"}, {"label":"처음으로","domain":"LEADING"}]`
+- ⚠️ 본 가이드는 **이벤트(event) 응답에만 적용**. 기획전(deal) / 쿠폰 / 상품 카드 응답에는 적용하지 않는다.
+- ⚠️ "이벤트 적용 상품" 카드 응답(Flow F.0) 처럼 product 템플릿으로 답할 때는 본 가이드 미적용 — 어디까지나 이벤트 메타 정보(이름·기간·상태) 답변용.
+
 
 ### Flow F.0 — Rendering `get_event_applicable_products_tool` Result
 
@@ -1267,7 +1279,7 @@ Rules:
 
 
 def get_discovery_system_prompt():
-    return DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE)
 
 
 DISCOVERY_PROFILE_COMMON_PROMPT = """
@@ -1406,7 +1418,7 @@ Allowed templates: quickReply, product, listCar.
 
 
 def get_discovery_recommendation_system_prompt():
-    return DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT_TEMPLATE)
 
 
 DISCOVERY_EVENT_CONTENT_SYSTEM_PROMPT_TEMPLATE = DISCOVERY_PROFILE_COMMON_PROMPT + """
@@ -1458,7 +1470,7 @@ Put ids only in metadata when the schema requires it.
 
 
 def get_discovery_event_content_system_prompt():
-    return DISCOVERY_EVENT_CONTENT_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(DISCOVERY_EVENT_CONTENT_SYSTEM_PROMPT_TEMPLATE)
 
 
 DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE = DISCOVERY_PROFILE_COMMON_PROMPT + """
@@ -1841,7 +1853,7 @@ Rules:
 
 
 def get_discovery_search_system_prompt():
-    return DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE)
 
 
 class DiscoverySubAgent(BaseAgent):
