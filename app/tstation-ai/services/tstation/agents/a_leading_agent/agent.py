@@ -515,6 +515,10 @@ Quick reply guidance by case:
 - Self introduction: recommendation (DISCOVERY), store search (TRANSACTION), price lookup (TRANSACTION)
 - Complaint: support connection (SUPPORT), retry (LEADING)
 - Out of scope: tire recommendation (DISCOVERY), price lookup (TRANSACTION)
+- Purchase completion / return visit: when the user mentions they want to use a branch again,
+  the chip label MUST contain "매장" so the system can identify it as a store search intent.
+  Use "<지역> 매장 다시 이용하기" format, NOT "<지역>점 다시 이용하기".
+  Example: "원주 매장 다시 이용하기" (O) / "원주점 다시 이용하기" (X)
 
 Good quick reply examples:
 - {{"label": "타이어 추천", "domain": "DISCOVERY"}}
@@ -523,6 +527,7 @@ Good quick reply examples:
 - {{"label": "1:1 문의", "domain": "SUPPORT"}}
 - {{"label": "가격 조회", "domain": "TRANSACTION"}}
 - {{"label": "상담사 연결", "domain": "SUPPORT"}}
+- {{"label": "원주 매장 다시 이용하기", "domain": "TRANSACTION"}}
 """
 
 

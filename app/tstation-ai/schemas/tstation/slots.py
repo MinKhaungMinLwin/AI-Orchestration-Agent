@@ -63,11 +63,11 @@ class ConversationSlots(BaseModel):
         "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id"],
         "car_model": ["tire_size", "goods_no", "payment_amount"],
-        # When the goal flips (e.g. store_finder → product_recommend), drop the
-        # store-specific carryovers. region/preferences only make sense within
-        # a store-finding goal; preserving them across goal flips would inject
-        # stale criteria into unrelated turns.
-        "goal_type": ["region", "user_preferences_text"],
+        # When the goal flips, drop free-form store preferences (they are session-specific).
+        # region is intentionally NOT reset here: purchase goals (store_with_stock, place_order)
+        # still need region to filter store results, and a stale region is a better default
+        # than forcing the user to re-state it mid-purchase.
+        "goal_type": ["user_preferences_text"],
     }
 
     # Regex patterns for extracting slots from user messages
