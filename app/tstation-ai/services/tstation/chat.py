@@ -640,6 +640,12 @@ class StreamingMultiAgentCoordinator:
             ],
             MultiAgentDomain.Domain.TRANSACTION,
         ),
+        # TRANSACTION — Smart Pay installment calculation is a price/payment
+        # question. Keep it out of Discovery even when a product name appears.
+        (
+            ["스마트페이", "스마트 페이", "Smart Pay", "smart pay", "SmartPay", "smartpay"],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
     ]
 
     def __init__(self):
