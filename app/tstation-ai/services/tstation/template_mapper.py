@@ -686,8 +686,15 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             )
             if not schedule_empty:
                 continue
-            # candidate_shop_ids non-empty means future slots may exist — let the agent
-            # call get_store_schedule_tool for a datepick instead of dead-ending here.
+            # DETERMINISTIC GUARD on the tool response (region search or
+            # multi-candidate tier=none) — the tool already instructed the
+            # agent to STOP and render `location`. Fall through to the
+            # location render below so the candidate list reaches the FE.
+            if raw.get("instruction_to_agent"):
+                break
+            # candidate_shop_ids non-empty (single named-store case) means future
+            # slots may exist — let the agent call get_store_schedule_tool for a
+            # datepick instead of dead-ending here.
             candidate_ids = schedule.get("candidate_shop_ids") or raw.get("candidate_shop_ids") or []
             if candidate_ids:
                 return None

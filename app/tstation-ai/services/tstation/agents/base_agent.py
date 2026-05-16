@@ -701,6 +701,22 @@ class BaseAgent(ABC):
         has_force_code_mapper_tool = any(
             e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
         )
+        # Deterministic guard override: when a tool response carries
+        # `instruction_to_agent` (e.g. transaction_store_preview_tool tier=none
+        # region/multi-candidate case), the LLM's own template choice may slip
+        # into a generic `quickReply` and bury the candidate list. Force the
+        # code mapper so the structured card (`location`) reaches the FE.
+        if not has_force_code_mapper_tool:
+            for entry in accumulated_tool_data:
+                output = entry.get("output")
+                if isinstance(output, str) and '"instruction_to_agent"' in output:
+                    has_force_code_mapper_tool = True
+                    break
+                if isinstance(output, dict):
+                    data = output.get("data") if isinstance(output.get("data"), dict) else output
+                    if isinstance(data, dict) and data.get("instruction_to_agent"):
+                        has_force_code_mapper_tool = True
+                        break
         if not has_force_code_mapper_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
