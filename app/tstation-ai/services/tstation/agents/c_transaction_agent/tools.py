@@ -1128,14 +1128,29 @@ def transaction_store_preview_tool(
         has_logistics=logistics_qty > 0,
     )
 
-    return _success_response(200, {
+    result_data: dict[str, Any] = {
         "price": results.get("price"),
         "logistics": results.get("logistics"),
         "inventory": results.get("store_inventory"),
         "schedule": schedule.get("data") if isinstance(schedule, dict) else schedule,
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
-    })
+    }
+
+    schedule_data = result_data["schedule"] if isinstance(result_data["schedule"], dict) else {}
+    tier = schedule_data.get("tier")
+    is_single_named_store = bool(store_nm) and len(shop_ids) == 1
+    if tier == "none" and shop_ids and not is_single_named_store:
+        result_data["instruction_to_agent"] = (
+            "DETERMINISTIC GUARD: schedule.tier='none' + candidate_shop_ids 가 비어있지 않음. "
+            "사용자가 매장을 아직 선택하지 않았음 — 자동으로 candidate_shop_ids[0] 를 픽해서 "
+            "get_store_schedule_tool / get_store_inventory_tool / get_store_detail_tool 등 후속 도구를 호출하거나 "
+            "datepick 을 emit 하면 절대 안 됨. 다음 액션: (1) 'stores' 리스트로 `location` 템플릿 emit, "
+            "(2) 동일 턴에 schedule/inventory/detail 도구 호출 금지, (3) STOP and wait for user to pick a store. "
+            "tier='none' 은 오늘 당일 슬롯만 없다는 의미일 뿐 예약 자체가 불가능한 것은 아님."
+        )
+
+    return _success_response(200, result_data)
 
 
 # =====================================================

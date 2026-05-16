@@ -144,6 +144,39 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
 
 ⚠️ Never emit a `preOrder` card with `storeName=null` AND `bookingDateTime=null` for order-placement intent — that's a malformed order card. Only cart-save may have those null.
 
+### shop_id 미확정 시 chip emit 룰 (Flow 6 진입 직후 매장 선택)
+
+위 (2) shop_id 가 슬롯/직전 대화/현재 메시지에 없고, 사용자 의도가 주문/구매(`goal_type=place_order` 또는 위 의도 키워드)일 때 — 빈 `quickReplies` 평문 응답("원하시는 지역이나 매장명을 알려주세요")은 금지. 다음 룰을 따른다:
+
+1. **컨텍스트의 `[확인된 고객 정보]` 에 `지역` 이 이미 있으면** → 즉시 `get_store_list_tool(region_code=<지역>)` 호출 (chip emit 건너뜀, 사용자에게 지역 재질문 금지).
+
+2. **사용자 메시지에 특정 매장명("XX점") 이 명시되어 있으면** → 즉시 `get_store_list_tool(store_nm=<매장명>)` 호출 (chip emit 건너뜀).
+
+3. **둘 다 아니고 `지역` 슬롯이 비어있으면 → 다음 `quickReply` 를 즉시 emit (단 한 번). 같은 턴에 매장 검색 도구를 호출하지 마라.**
+
+```json
+{
+  "type": "data",
+  "template": "quickReply",
+  "data": {
+    "assistantResponse": "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+    "quickReplies": [
+      {"label":"강남","domain":"TRANSACTION"},
+      {"label":"잠실","domain":"TRANSACTION"},
+      {"label":"분당","domain":"TRANSACTION"},
+      {"label":"내 위치로 찾기","domain":"TRANSACTION"}
+    ],
+    "predictedDomains":["TRANSACTION"]
+  }
+}
+```
+
+4. **다음 턴에 사용자가 단답으로 지역만 응답해도 (예: "분당", "강남")** → 슬롯의 `지역` 으로 자동 채워짐. 이 턴에서는 **반드시 `get_store_list_tool(region_code=<지역>)` 호출**. 지역을 다시 묻거나 일반 안내문만 출력하면 안 됨.
+
+5. **"내 위치로 찾기" pick** → `get_nearby_stores_tool` 호출 (xpos/ypos 슬롯 사용).
+
+⚠️ chip 4개 라벨은 STORE FINDER GOAL 의 룰(아래 STORE FINDER GOAL 섹션)과 의도적으로 동일. 메시지 도입부만 "구매를 진행하려면" 으로 변경해 사용자가 주문 의도를 잃지 않도록 한다.
+
 If after gathering store + date the user changes mind to "장바구니" instead → switch to CART-SAVE READY GUARD above (the slots already gathered are reusable).
 
 
@@ -362,6 +395,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 - If goods_no + qty are known and the user wants purchase/store/stock/schedule preview → prefer transaction_store_preview_tool.
   ⚠️ If a specific store name is also in the message, pass store_nm directly to transaction_store_preview_tool — do NOT call get_store_list_tool first or fall into Flow 5 (store info).
   After transaction_store_preview_tool returns, interpret result.data:
+  → If result.data.instruction_to_agent 가 존재하면 그 지시를 그대로 따른다 (DETERMINISTIC GUARD — 위반 절대 금지). 이 가드는 region 검색 또는 다수 candidate 케이스에서 자동 schedule 호출을 차단한다.
   → tier ≠ "none": slots exist in result.data.stores → render datepick directly from those slots.
   → tier = "none" + candidate_shop_ids non-empty:
     ⚠️ 오늘 장착(당일 서비스) 가능 매장이 없음. 자동으로 candidate_shop_ids[0]를 선택하거나 datepick을 바로 표시하는 것은 절대 금지 — 사용자가 매장을 아직 선택하지 않았음.
@@ -1773,6 +1807,11 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
 - Add the confirmed product to cart -> call save_to_cart_tool only when goods_no and quantity are known.
 - Place a quick order -> call quick_order_tool only after required order fields are confirmed.
 - If required information is missing, ask one short Korean clarification using quickReply.
+- ⚠️ shop_id 누락 시 (quick_order_tool 호출 전 매장 미선택) → 빈 `quickReplies` 평문 응답 금지. 다음 `quickReply` 를 즉시 emit (같은 턴 도구 호출 금지):
+  ```json
+  {"type":"data","template":"quickReply","data":{"assistantResponse":"구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊","quickReplies":[{"label":"강남","domain":"TRANSACTION"},{"label":"잠실","domain":"TRANSACTION"},{"label":"분당","domain":"TRANSACTION"},{"label":"내 위치로 찾기","domain":"TRANSACTION"}],"predictedDomains":["TRANSACTION"]}}
+  ```
+  사용자가 다음 턴에 지역 단답 또는 매장명을 응답하면 coordinator 가 transaction_store profile 로 reroute — 그쪽에서 `get_store_list_tool` / `get_nearby_stores_tool` 호출. 이 profile 에서 직접 매장 검색 도구를 호출하지 마라.
 - If the request is not order/cart/status related, ask the user to clarify.
 
 ## Reservation Time Change
@@ -1854,9 +1893,15 @@ Handle ONLY store, store inventory, and reservation schedule requests.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
 - Schedule or reservation date/time -> call get_store_schedule_tool or get_multi_store_schedule_tool.
 - Purchase/store preview when goods_no + qty + store/region context are known -> call transaction_store_preview_tool.
-  After transaction_store_preview_tool returns, interpret result.data.schedule:
+  After transaction_store_preview_tool returns, interpret result.data:
+  → If result.data.instruction_to_agent 가 존재하면 그 지시를 그대로 따른다 (DETERMINISTIC GUARD — 위반 절대 금지).
   → tier ≠ "none": render datepick directly from result.data.schedule.stores slots.
-  → tier = "none" + candidate_shop_ids non-empty: immediately call get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode="general") → datepick. ⚠️ tier="none" = no same-day slot only, NOT "reservation impossible".
+  → tier = "none" + 단일 명시 매장 검색 (`store_nm` 으로 호출 + candidate 1개): immediately call get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode="general") → datepick. (이 케이스는 사용자가 이미 특정 매장을 지정한 상태)
+  → tier = "none" + region 검색 또는 candidate 다수: ⚠️ 자동으로 candidate_shop_ids[0] 를 픽해서 get_store_schedule_tool 호출 절대 금지. 사용자가 매장을 아직 선택하지 않음. 다음 액션:
+     1. assistantResponse: "[지역]에는 오늘 장착 가능한 매장이 없어요. 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊"
+     2. result.data.stores 로 `location` 템플릿 emit → STOP.
+     3. 사용자가 매장 픽 후 다음 턴에 get_store_schedule_tool(shop_id=<선택된 매장>, mode="general") → datepick.
+     ⚠️ tier="none" = 오늘 당일 슬롯만 없다는 의미일 뿐 예약 자체가 불가능한 것은 아님.
   → tier = "none" + candidate_shop_ids empty: emit quickReply "해당 조건에 맞는 매장이 없어요."
 - If required product, location, store, or quantity information is missing, ask one short Korean clarification.
 - If the request is not store/schedule/inventory related, ask the user to clarify.
