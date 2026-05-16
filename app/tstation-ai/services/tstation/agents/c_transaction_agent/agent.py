@@ -1324,16 +1324,20 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 1. Call `get_orders_of_user_tool` FIRST to check the user's active/recent online orders. Do NOT answer from FAQ memory first.
 2. If the user asks only about coupon restoration timing after cancellation (no direct cancellation request in the same turn), answer the restoration guide and offer a `quickReply` with `[{"label":"최근 주문 취소","domain":"TRANSACTION"}, {"label":"처음으로","domain":"LEADING"}]`. Do NOT direct to 1:1 문의 in this turn.
 3. If the user asks about coupon restoration while directly requesting cancellation, briefly explain that used coupons may be restored after cancellation depending on coupon conditions/validity, then continue the cancellation flow. Do NOT stop at coupon guidance.
-4. If the user clicks/sends "최근 주문 취소" or has not identified a specific order number, order item, or appointment date/time in a cancellation request, show the active/recent order list first (주문번호, 상품명, 예약일시 if available, 주문상태) and ask which order they want to cancel. Do NOT auto-select an order only because there is one active/recent order. Do NOT inspect shipping status or direct to 1:1 문의 before the user selects an order.
-5. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one order matches, use that order. If multiple still match, show the matching order list and ask which order.
+4. If the user clicks/sends "최근 주문 취소" or has not identified a specific order number, order item, or appointment date/time in a cancellation request:
+   - If `get_orders_of_user_tool` returns exactly ONE active/recent online order, treat that single order as the selected order and inspect its status. Make it clear in the answer that the guidance is based on the single confirmed online order.
+   - If it returns MULTIPLE active/recent online orders, show the active/recent order list first (주문번호, 상품명, 예약일시 if available, 주문상태) and ask which order they want to cancel. Do NOT inspect shipping status or direct to 1:1 문의 before the user selects an order.
+   - "오늘 취소하면 수수료 있나요?", "당일 취소하면 비용 있어요?", "오늘 못 가면 위약금 있어요?" are generic same-day cancellation questions. They can use the one-order shortcut above only when there is exactly one active/recent online order; otherwise ask which order.
+5. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one online order matches, use that order and respond ONLY with Case B or Case C below. If multiple still match, show the matching order list and ask which order. If no online order matches, use Case A wording only; do NOT say an online order was confirmed.
+   - Follow-up references like "해당 건", "이 경우", "그 예약" must reuse the previously matched/selected order or reservation from conversation context. Do NOT lose that reference and re-answer as if no order was selected.
 6. If one order is selected or exactly one order is matched by the user's explicit order number/item/date/time, inspect its enriched `detail` fields:
    - `ord_prgs_stat_nm` / `ord_prgs_stat_cd`
    - `dlv_prgs_stat_nm` / `dlv_prgs_stat_cd`
    - `rsv_dtime`
 7. Interpret 주문상태 / 배송상태 from the selected/matched order and respond with EXACTLY ONE of:
 
-   **A. No active/recent online order found (pure store visit reservation, no online order):**
-   → assistantResponse: "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
+   **A. No active/recent online order found, or no online order matches the user's explicit appointment date/time (pure store visit reservation possibility):**
+   → assistantResponse: "해당 온라인 주문 내역이 확인되지 않았어요.\n\n매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
@@ -1910,16 +1914,20 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 1. Call `get_orders_of_user_tool` FIRST to inspect active/recent online orders. Do NOT answer from FAQ memory first.
 2. If the user asks only about coupon restoration timing after cancellation (no direct cancellation request in the same turn), answer the restoration guide and offer a `quickReply` with `[{"label":"최근 주문 취소","domain":"TRANSACTION"}, {"label":"처음으로","domain":"LEADING"}]`. Do NOT direct to 1:1 문의 in this turn.
 3. If the user asks about coupon restoration while directly requesting cancellation, briefly explain that used coupons may be restored after cancellation depending on coupon conditions/validity, then continue the cancellation flow. Do NOT stop at coupon guidance.
-4. If the user clicks/sends "최근 주문 취소" or has not identified a specific order number, order item, or appointment date/time in a cancellation request, show the active/recent order list first (주문번호, 상품명, 예약일시 if available, 주문상태) and ask which order they want to cancel. Do NOT auto-select an order only because there is one active/recent order. Do NOT inspect shipping status or direct to 1:1 문의 before the user selects an order.
-5. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one order matches, use that order. If multiple still match, show the matching order list and ask which order.
+4. If the user clicks/sends "최근 주문 취소" or has not identified a specific order number, order item, or appointment date/time in a cancellation request:
+   - If `get_orders_of_user_tool` returns exactly ONE active/recent online order, treat that single order as the selected order and inspect its status. Make it clear in the answer that the guidance is based on the single confirmed online order.
+   - If it returns MULTIPLE active/recent online orders, show the active/recent order list first (주문번호, 상품명, 예약일시 if available, 주문상태) and ask which order they want to cancel. Do NOT inspect shipping status or direct to 1:1 문의 before the user selects an order.
+   - "오늘 취소하면 수수료 있나요?", "당일 취소하면 비용 있어요?", "오늘 못 가면 위약금 있어요?" are generic same-day cancellation questions. They can use the one-order shortcut above only when there is exactly one active/recent online order; otherwise ask which order.
+5. If the user mentioned an appointment date/time (e.g., "오늘 4시", "5월 29일", "16:00"), match it against `detail.rsv_dtime` or any order/detail date fields. If exactly one online order matches, use that order and respond ONLY with Case B or Case C below. If multiple still match, show the matching order list and ask which order. If no online order matches, use Case A wording only; do NOT say an online order was confirmed.
+   - Follow-up references like "해당 건", "이 경우", "그 예약" must reuse the previously matched/selected order or reservation from conversation context. Do NOT lose that reference and re-answer as if no order was selected.
 6. If one order is selected or exactly one order is matched by the user's explicit order number/item/date/time, inspect its enriched `detail` fields:
    - `ord_prgs_stat_nm` / `ord_prgs_stat_cd`
    - `dlv_prgs_stat_nm` / `dlv_prgs_stat_cd`
    - `rsv_dtime`
 7. Respond with EXACTLY ONE of:
 
-   **A. No active/recent online order found (pure store visit reservation, no online order):**
-   → assistantResponse: "매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n\n온라인 주문 내역이 확인되지 않아, 단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
+   **A. No active/recent online order found, or no online order matches the user's explicit appointment date/time (pure store visit reservation possibility):**
+   → assistantResponse: "해당 온라인 주문 내역이 확인되지 않았어요.\n\n매장 방문 예약은 별도 취소 수수료가 발생하지 않아요 😊\n단순 방문 예약 취소라면 1:1 문의로 취소를 요청해 주세요."
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
