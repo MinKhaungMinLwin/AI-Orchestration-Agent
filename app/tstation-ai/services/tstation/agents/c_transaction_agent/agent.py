@@ -398,12 +398,12 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
   → If result.data.instruction_to_agent 가 존재하면 그 지시를 그대로 따른다 (DETERMINISTIC GUARD — 위반 절대 금지). 이 가드는 region 검색 또는 다수 candidate 케이스에서 자동 schedule 호출을 차단한다.
   → tier ≠ "none": slots exist in result.data.stores → render datepick directly from those slots.
   → tier = "none" + candidate_shop_ids non-empty:
-    ⚠️ 오늘 장착(당일 서비스) 가능 매장이 없음. 자동으로 candidate_shop_ids[0]를 선택하거나 datepick을 바로 표시하는 것은 절대 금지 — 사용자가 매장을 아직 선택하지 않았음.
+    ⚠️ 사용자가 매장을 아직 선택하지 않았음 — 자동으로 candidate_shop_ids[0]를 선택하거나 datepick을 바로 표시하는 것은 절대 금지.
+    ⚠️ tier="none" 은 multi_store_schedule cascade(today_only → tna_only → logistics_only) 가 빠른 슬롯을 못 잡았다는 의미일 뿐, **각 매장이 일반 예약 슬롯을 보유할 수 있음**. "오늘 장착 가능한 매장이 없어요" 같은 문구는 거짓이 될 수 있으므로 **절대 사용 금지**.
     올바른 처리:
-    1. assistantResponse: "[지역]에는 오늘 장착 가능한 매장이 없어요. 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊"
+    1. assistantResponse: region 검색이면 "주소에 '[지역]'이/가 포함된 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊" (받침 있으면 '이', 없으면 '가'). 좌표 기반 검색이면 "고객님, [명칭] 주변 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊".
     2. `location` 템플릿으로 candidate_shop_ids에 해당하는 매장 목록 표시 → STOP.
     3. 사용자가 매장을 선택한 후 → get_store_schedule_tool(shop_id=<선택된 매장>, mode="general") → datepick.
-    ⚠️ tier="none"은 오늘 당일 슬롯이 없다는 의미이지 예약 자체가 불가능하다는 뜻이 아님. 단, 사용자 선택 없이 먼저 datepick을 내보내면 안 됨.
   → tier = "none" + candidate_shop_ids empty: store not found or not installable →
     emit quickReply: "해당 조건에 맞는 매장이 없어요." + quickReplies ["다른 매장 찾기"]
 - Region name (강남, 부산, 해운대 등) → get_store_list_tool(region_code=...)
@@ -1897,11 +1897,12 @@ Handle ONLY store, store inventory, and reservation schedule requests.
   → If result.data.instruction_to_agent 가 존재하면 그 지시를 그대로 따른다 (DETERMINISTIC GUARD — 위반 절대 금지).
   → tier ≠ "none": render datepick directly from result.data.schedule.stores slots.
   → tier = "none" + 단일 명시 매장 검색 (`store_nm` 으로 호출 + candidate 1개): immediately call get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode="general") → datepick. (이 케이스는 사용자가 이미 특정 매장을 지정한 상태)
-  → tier = "none" + region 검색 또는 candidate 다수: ⚠️ 자동으로 candidate_shop_ids[0] 를 픽해서 get_store_schedule_tool 호출 절대 금지. 사용자가 매장을 아직 선택하지 않음. 다음 액션:
-     1. assistantResponse: "[지역]에는 오늘 장착 가능한 매장이 없어요. 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊"
+  → tier = "none" + region 검색 또는 candidate 다수: ⚠️ 자동으로 candidate_shop_ids[0] 를 픽해서 get_store_schedule_tool 호출 절대 금지. 사용자가 매장을 아직 선택하지 않음.
+     ⚠️ tier="none" 은 multi_store_schedule cascade 가 빠른 슬롯을 못 잡았다는 의미일 뿐, 각 매장의 일반 예약 슬롯은 존재할 수 있음. "오늘 장착 가능한 매장이 없어요" 같은 문구는 거짓이 될 수 있으므로 **절대 사용 금지**.
+     다음 액션:
+     1. assistantResponse: region 검색이면 "주소에 '[지역]'이/가 포함된 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊" (받침 있으면 '이', 없으면 '가'). 좌표 검색이면 "고객님, [명칭] 주변 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊".
      2. result.data.stores 로 `location` 템플릿 emit → STOP.
      3. 사용자가 매장 픽 후 다음 턴에 get_store_schedule_tool(shop_id=<선택된 매장>, mode="general") → datepick.
-     ⚠️ tier="none" = 오늘 당일 슬롯만 없다는 의미일 뿐 예약 자체가 불가능한 것은 아님.
   → tier = "none" + candidate_shop_ids empty: emit quickReply "해당 조건에 맞는 매장이 없어요."
 - If required product, location, store, or quantity information is missing, ask one short Korean clarification.
 - If the request is not store/schedule/inventory related, ask the user to clarify.

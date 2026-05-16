@@ -1142,12 +1142,19 @@ def transaction_store_preview_tool(
     is_single_named_store = bool(store_nm) and len(shop_ids) == 1
     if tier == "none" and shop_ids and not is_single_named_store:
         result_data["instruction_to_agent"] = (
-            "DETERMINISTIC GUARD: schedule.tier='none' + candidate_shop_ids 가 비어있지 않음. "
-            "사용자가 매장을 아직 선택하지 않았음 — 자동으로 candidate_shop_ids[0] 를 픽해서 "
-            "get_store_schedule_tool / get_store_inventory_tool / get_store_detail_tool 등 후속 도구를 호출하거나 "
-            "datepick 을 emit 하면 절대 안 됨. 다음 액션: (1) 'stores' 리스트로 `location` 템플릿 emit, "
-            "(2) 동일 턴에 schedule/inventory/detail 도구 호출 금지, (3) STOP and wait for user to pick a store. "
-            "tier='none' 은 오늘 당일 슬롯만 없다는 의미일 뿐 예약 자체가 불가능한 것은 아님."
+            "DETERMINISTIC GUARD: 사용자가 매장을 아직 선택하지 않았음 — "
+            "자동으로 candidate_shop_ids[0] 를 픽해서 get_store_schedule_tool / "
+            "get_store_inventory_tool / get_store_detail_tool 등 후속 도구를 호출하거나 "
+            "datepick 을 emit 하면 절대 안 됨. 다음 액션: "
+            "(1) 'stores' 리스트로 `location` 템플릿 emit, "
+            "(2) assistantResponse 는 검색 경로에 맞춰 작성: "
+            "region 검색(region_code 사용)이면 \"주소에 '[지역]'이/가 포함된 매장을 검색했어요. "
+            "원하시는 매장을 선택해 주세요 😊\" (받침 있으면 '이', 없으면 '가'), "
+            "좌표 기반이면 \"고객님, [명칭] 주변 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊\". "
+            "(3) 동일 턴에 schedule/inventory/detail 도구 호출 금지, "
+            "(4) STOP and wait for user to pick a store. "
+            "⚠️ \"오늘 장착 가능한 매장이 없어요\" 류 문구는 거짓이 될 수 있으므로 절대 사용 금지 — "
+            "각 매장의 일반 예약 슬롯은 정상 존재할 수 있음 (schedule.tier 는 빠른 슬롯 cascade 결과일 뿐)."
         )
 
     return _success_response(200, result_data)
