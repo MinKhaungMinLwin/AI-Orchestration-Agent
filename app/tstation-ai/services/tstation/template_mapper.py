@@ -55,6 +55,7 @@ def _is_goal_booking_followup() -> bool:
 _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # product
     "search_product_tool": "product",
+    "get_newest_products_tool": "product",
     "get_products_recommendations_tool": "product",
     "get_best_selling_products_tool": "product",
     # listCar
@@ -272,6 +273,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     for entry in _find_entries(
         tool_data_list,
         "search_product_tool",
+        "get_newest_products_tool",
         "get_products_recommendations_tool",
         "get_best_selling_products_tool",
     ):
@@ -371,6 +373,7 @@ def inject_product_tags_and_sanitize(
     for entry in _find_entries(
         accumulated_tool_data,
         "search_product_tool",
+        "get_newest_products_tool",
         "get_products_recommendations_tool",
         "get_best_selling_products_tool",
     ):
@@ -1446,6 +1449,7 @@ def _summarize_with_source(full_text: str, template: str, item_count: int) -> tu
 
 _MAPPERS: dict[str, Any] = {
     "search_product_tool": _map_product,
+    "get_newest_products_tool": _map_product,
     "get_products_recommendations_tool": _map_product,
     "get_best_selling_products_tool": _map_product,
     "get_my_cars_tool": _map_list_car,
@@ -1501,6 +1505,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         # render a store card instead of the intended time-slot picker.
         ("get_store_detail_tool", _map_datepick),
         ("search_product_tool", _map_product),
+        ("get_newest_products_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
         ("get_best_selling_products_tool", _map_product),
         ("get_my_cars_tool", _map_list_car),
