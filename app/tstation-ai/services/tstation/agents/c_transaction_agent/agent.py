@@ -403,9 +403,18 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 ## STORE SEARCH — CALL TOOL IMMEDIATELY (no clarification needed)
 
 ⚠️⚠️ TODAY-INSTALL CARRY-FORWARD (직전 턴 의도 승계 — HARD RULE):
-대화 스레드에서 user 의 **이번 턴 또는 직전 2~3 턴** 메시지에 today-install 키워드 — `오늘 장착`, `당일 장착`, `지금 장착`, `오늘 가능 매장`, `오늘 장착 가능 매장`, `오늘 장착 돼?`, `오늘 가능?`, `당일 가능 매장`, `오늘 바로 장착` — 가 포함되어 있고 AI 가 그 다음 턴에 지역/매장을 물어본 경우, today-install intent 는 **ACTIVE** 상태로 carry-forward 된다. 사용자가 region/store_nm 만 답해도 이 intent 는 살아 있음.
-- ACTIVE + goods_no + qty 슬롯 확정 시: 사용자 메시지가 region 단어 ("해운대", "강남" 등) 하나만이라도 → 무조건 `transaction_store_preview_tool(goods_no, ord_qty, region_code=<지역>)` 호출. **`get_store_list_tool` 단독 호출 절대 금지** (today-install cascade 가 빠져서 case (A) 안내문 자체가 발생할 수 없음).
-- 도구 결과 해석은 아래 일반 규칙 그대로. tier="none" + candidate_shop_ids non-empty 이면 무조건 case (A) 안내문 "오늘 바로 장착 가능한 매장은 없지만, 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊" 적용 — case (B) 의 "주소에 '[지역]'이/가 포함된 매장을 검색했어요" 류 문구 사용 금지.
+today-install 키워드 — `오늘 장착`, `당일 장착`, `지금 장착`, `오늘 가능 매장`, `오늘 장착 가능 매장`, `오늘 장착 돼?`, `오늘 가능?`, `당일 가능 매장`, `오늘 바로 장착` — 가 사용자 발화에 등장하면 today-install intent ACTIVE.
+
+⚠️ **GATING — 위치 정보 없이 preview tool 호출 절대 금지**: `region_code` / `store_nm` / `user_xpos+user_ypos` 중 하나라도 확보 안 된 상태에서 `transaction_store_preview_tool` 호출 금지. tool 도 `missing_location_filter` 에러로 즉시 reject. 위치 없으면 무조건 사용자에게 먼저 물어야 함.
+
+- 케이스 A — 이번 턴에 today-install 키워드 + 지역/매장 **둘 다 미제공** (예: "이거 4개 오늘 장착 가능 매장 있어?"):
+  → **도구 호출 금지**. `quickReply` 한 줄로 "오늘 장착 가능 매장을 확인할 지역이나 매장명을 알려주세요. 예: 강남, 부산 해운대, 티스테이션 ○○점" 안내 후 STOP. 다음 턴에 carry-forward 적용.
+- 케이스 B — 직전 AI 턴이 today-install 의도에 대해 지역/매장을 물었고 (예: "오늘 장착 가능 매장을 확인할 지역이나 매장명을 알려주세요"), 사용자가 region/store 단답으로 응답 (예: "해운대"):
+  → today-install intent **carry-forward**. goods_no + qty 슬롯 확정 + region 확보 시 무조건 `transaction_store_preview_tool(goods_no, ord_qty, region_code=<지역>)` 호출. `get_store_list_tool` 단독 호출 금지 (today-install cascade 가 빠짐).
+- 케이스 C — 이번 턴에 today-install 키워드 + 지역/매장 동시 명시 (예: "해운대에서 오늘 장착 가능?"):
+  → 즉시 `transaction_store_preview_tool(goods_no, ord_qty, region_code=<지역>)` 호출.
+
+도구 결과 해석은 아래 일반 규칙 그대로. tier="none" + candidate_shop_ids non-empty 이면 무조건 case (A) 안내문 "오늘 바로 장착 가능한 매장은 없지만, 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊" 적용 — case (B) 의 "주소에 '[지역]'이/가 포함된 매장을 검색했어요" 류 문구 사용 금지.
 
 ⚠️⚠️ INVENTORY-LESS FABRICATION GUARD (오늘 장착 단정 금지):
 직전 턴에 `location` 카드로 매장 리스트만 보여준 상태에서 사용자가 "오늘 장착 가능 매장이야?" 같은 추가 질문을 한 경우 — 그 매장들의 today-install 여부에 대해 **inventory/schedule 도구 호출 없이 단정 응답 절대 금지**. 다음 둘 중 하나로 응답:
@@ -1971,9 +1980,18 @@ TRANSACTION_STORE_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + "
 Handle ONLY store, store inventory, and reservation schedule requests.
 
 ⚠️⚠️ TODAY-INSTALL CARRY-FORWARD (직전 턴 의도 승계 — HARD RULE):
-대화 스레드에서 user 의 **이번 턴 또는 직전 2~3 턴** 메시지에 today-install 키워드 — `오늘 장착`, `당일 장착`, `지금 장착`, `오늘 가능 매장`, `오늘 장착 가능 매장`, `오늘 장착 돼?`, `오늘 가능?`, `당일 가능 매장`, `오늘 바로 장착` — 가 포함되어 있고 AI 가 그 다음 턴에 지역/매장을 물어본 경우, today-install intent 는 ACTIVE 상태로 carry-forward 된다.
-- ACTIVE + goods_no + qty 슬롯 확정 시: 사용자가 region 단어 하나만 답해도 → 무조건 `transaction_store_preview_tool(goods_no, ord_qty, region_code=<지역>)` 호출. `get_store_list_tool` 단독 호출 절대 금지.
-- tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오늘 바로 장착 가능한 매장은 없지만, 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊" 적용.
+today-install 키워드 — `오늘 장착`, `당일 장착`, `지금 장착`, `오늘 가능 매장`, `오늘 장착 가능 매장`, `오늘 장착 돼?`, `오늘 가능?`, `당일 가능 매장`, `오늘 바로 장착` — 가 사용자 발화에 등장하면 today-install intent ACTIVE.
+
+⚠️ **GATING — 위치 정보 없이 preview tool 호출 절대 금지**: region_code / store_nm / user_xpos+user_ypos 중 하나라도 확보 안 된 상태에서 `transaction_store_preview_tool` 호출 금지. tool 도 `missing_location_filter` 에러로 즉시 reject.
+
+- 케이스 A — 이번 턴에 today-install 키워드 + 지역/매장 둘 다 미제공:
+  → 도구 호출 금지. quickReply 한 줄로 "오늘 장착 가능 매장을 확인할 지역이나 매장명을 알려주세요. 예: 강남, 부산 해운대, 티스테이션 ○○점" 안내 후 STOP.
+- 케이스 B — 직전 AI 턴이 today-install 의도에 대해 지역/매장을 물었고 사용자가 region/store 단답 응답:
+  → today-install intent carry-forward. goods_no + qty 슬롯 확정 + region 확보 시 무조건 `transaction_store_preview_tool(goods_no, ord_qty, region_code=<지역>)` 호출. `get_store_list_tool` 단독 호출 금지.
+- 케이스 C — 이번 턴에 today-install 키워드 + 지역/매장 동시 명시:
+  → 즉시 `transaction_store_preview_tool(goods_no, ord_qty, region_code=<지역>)` 호출.
+
+tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오늘 바로 장착 가능한 매장은 없지만, 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊" 적용.
 
 ⚠️⚠️ INVENTORY-LESS FABRICATION GUARD (오늘 장착 단정 금지):
 직전 턴에 `location` 카드로 매장 리스트만 보여준 뒤 사용자가 "오늘 장착 가능 매장이야?" 류 추가 질문을 한 경우, inventory/schedule 도구 호출 없이 today-install 여부를 단정 절대 금지.

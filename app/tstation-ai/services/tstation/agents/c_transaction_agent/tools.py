@@ -1053,6 +1053,17 @@ def transaction_store_preview_tool(
     if not goods_no or ord_qty < 1:
         return _error_response(None, "invalid_input", "goods_no and ord_qty are required")
 
+    has_region = bool(region_code and region_code.strip())
+    has_store = bool(store_nm and store_nm.strip())
+    has_coords = user_xpos is not None and user_ypos is not None
+    if not (has_region or has_store or has_coords):
+        return _error_response(
+            None,
+            "missing_location_filter",
+            "region_code, store_nm, or user_xpos/user_ypos is required — "
+            "ask the user for a region/store/landmark before calling this tool",
+        )
+
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
