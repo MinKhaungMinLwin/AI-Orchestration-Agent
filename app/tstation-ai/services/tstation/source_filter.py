@@ -35,6 +35,13 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "wrt_grte_term", "rating_avg",
             # EU 소음 라벨 (정숙성 점수와 별개)
             "label_pnwave", "label_pnwave_nm", "label_pndb",
+            # 신규 BE 확장 필드 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
+            "big_goods_nm", "ptrn_d_nm",
+            "tire_width", "tire_series", "inch",
+            "t_wgt_spd",
+            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+            "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
+            "wage_prc", "wage_today_prc", "free_guarantee_yn",
         },
     },
     "search_product_tool": {
@@ -47,6 +54,16 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "prc_grd_nm",
             # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
             "goods_pfm_nm",
+            # 신규 BE 확장 필드
+            "big_goods_nm", "ptrn_d_nm",
+            "tire_width", "tire_series", "inch",
+            "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
+            "season_nm", "car_knd_nm",
+            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+            "t_comfort", "t_silence", "t_high_perform", "t_handling",
+            "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
+            "rr", "wet",
+            "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
         },
     },
     # sale_qty 는 내부 정렬 근거 — 사용자 노출 금지. QC source 에서 제거해 QC 가 "사실 추가" 정정을 못하도록 차단.
@@ -55,6 +72,16 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "keep": {
             "goods_no", "goods_nm", "tire_size_1",
             "extra_fvr_sale_prc", "extra_fvr_sale_per",
+            # 신규 BE 확장 필드 (베스트셀러도 사용자가 스펙 질문할 수 있음)
+            "big_goods_nm", "ptrn_d_nm",
+            "tire_width", "tire_series", "inch",
+            "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
+            "season_nm", "car_knd_nm", "goods_pfm_nm",
+            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+            "t_comfort", "t_silence", "t_high_perform", "t_handling",
+            "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
+            "rr", "wet", "label_pndb",
+            "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
         },
     },
     "get_faq_tool": {
@@ -111,6 +138,13 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "wrt_grte_term", "rating_avg",
             # EU 소음 라벨 (정숙성 점수와 별개)
             "label_pnwave", "label_pnwave_nm", "label_pndb",
+            # 신규 BE 확장 필드 (후속 턴 참조용 — "방금 본 그 상품 공임비?")
+            "big_goods_nm", "ptrn_d_nm",
+            "tire_width", "tire_series", "inch",
+            "t_wgt_idx_kg", "t_wgt_spd",
+            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+            "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
+            "wage_prc", "wage_today_prc", "free_guarantee_yn",
         },
     },
     "search_product_tool": {
@@ -123,6 +157,16 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "prc_grd_nm",
             # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 후속 턴 답변용
             "goods_pfm_nm",
+            # 신규 BE 확장 필드 (후속 턴 참조용)
+            "big_goods_nm", "ptrn_d_nm",
+            "tire_width", "tire_series", "inch",
+            "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
+            "season_nm", "car_knd_nm",
+            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+            "t_comfort", "t_silence", "t_high_perform", "t_handling",
+            "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
+            "rr", "wet",
+            "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
         },
     },
     "get_nearby_stores_tool": {
@@ -233,10 +277,21 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
     # Single-object tools (price, product description, etc.)
     if tool_name in ("get_final_price_tool", "get_product_description_tool"):
         if isinstance(inner, dict):
-            # Keep key pricing/product fields
+            # Keep key pricing/product fields + 신규 BE 확장 필드 (후속 턴 참조용)
             compact = {}
-            for k in ("goods_no", "goods_nm", "tire_size_1", "sale_prc", "extra_fvr_sale_prc",
-                       "rating_avg", "review_count", "slogan"):
+            keep_keys = (
+                "goods_no", "goods_nm", "tire_size_1", "sale_prc", "extra_fvr_sale_prc",
+                "rating_avg", "review_count", "slogan",
+                # 신규 BE 확장 — description 응답이 가장 풍부하므로 컨텍스트에 핵심만 보존
+                "big_goods_nm", "ptrn_d_nm",
+                "tire_width", "tire_series", "inch",
+                "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
+                "season_nm", "car_knd_nm", "goods_pfm_nm",
+                "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+                "rr", "wet", "label_pndb",
+                "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
+            )
+            for k in keep_keys:
                 if k in inner and inner[k] is not None:
                     compact[k] = inner[k]
             if compact:
