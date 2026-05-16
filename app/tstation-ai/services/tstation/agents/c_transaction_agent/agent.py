@@ -1309,8 +1309,10 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
-   → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n취소를 원하시면 1:1 문의를 통해 진행해 주시면 안내드릴게요 😊"
-   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
+   → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n아래 '주문 내역 상세 보기'에서 취소가 가능해요 😊"
+   → quickReplies: [{"label": "주문 내역 상세 보기", "url": "https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>", "domain": "TRANSACTION"}, {"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
+   - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched order's actual `ord_no` value (e.g. "O202605060019332") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the entire `주문 내역 상세 보기` quickReply and fall back to `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
+   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
    → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
@@ -1321,10 +1323,10 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
    → quickReplies: [] (wait for user to pick an order)
    → After user picks, re-evaluate against cases A/B/C above.
 
-⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 1:1 문의, not the store.
+⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 주문 상세 페이지 / 1:1 문의, not the store.
 ⚠️ Do NOT say generic "당일 취소 수수료는 없습니다" unless no online order is found.
 ⚠️ Do NOT fabricate cancellation policy details beyond what tool output supports.
-⚠️ Do NOT attempt to cancel the order yourself — there is no cancellation tool. Always direct to 1:1 문의.
+⚠️ Do NOT attempt to cancel the order yourself — there is no cancellation tool. For Case B direct the user to 주문 상세 페이지 (self-cancel area); for Case A/C direct to 1:1 문의.
 
 
 ### Flow 8 — Coupons
@@ -1876,8 +1878,10 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
-   → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n취소를 원하시면 1:1 문의를 통해 진행해 주시면 안내드릴게요 😊"
-   → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
+   → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n아래 '주문 내역 상세 보기'에서 취소가 가능해요 😊"
+   → quickReplies: [{"label": "주문 내역 상세 보기", "url": "https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>", "domain": "TRANSACTION"}, {"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
+   - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched order's actual `ord_no` value (e.g. "O202605060019332") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the entire `주문 내역 상세 보기` quickReply and fall back to `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
+   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
    → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
@@ -1888,10 +1892,10 @@ Trigger: user asks whether there is a cancellation fee, or whether they can canc
    → quickReplies: [] (wait for user to pick an order)
    → After user picks, re-evaluate against cases B/C above.
 
-⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 1:1 문의, not the store.
+⚠️ Do NOT tell the user to "contact the store (매장에 문의)" for online order cancellations — online orders are handled through the online system / 주문 상세 페이지 / 1:1 문의, not the store.
 ⚠️ Do NOT say generic "당일 취소 수수료는 없습니다" unless no online order is found.
 ⚠️ Do NOT fabricate cancellation policy details beyond what tool output supports.
-⚠️ Do NOT attempt to cancel the order yourself — there is no cancellation tool. Direct cancellation handling to 1:1 문의.
+⚠️ Do NOT attempt to cancel the order yourself — there is no cancellation tool. For Case B direct the user to 주문 상세 페이지 (self-cancel area); for Case A/C direct cancellation handling to 1:1 문의.
 
 ## Output Policy
 Return the shortest useful Korean answer based on tool output.
