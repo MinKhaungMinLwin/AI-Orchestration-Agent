@@ -2,6 +2,7 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
 from services.tstation.agents.b_discovery_agent.tools import search_product_tool
+from services.tstation.common.cta_urls import expand_url_sentinels
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_my_coupons_tool,
@@ -70,10 +71,10 @@ For `quickReply`, `quickReplies` MUST be a list of objects, never strings:
 ## ORDER PAGE URL — quickReply chip `url` 자동 첨부
 사용자에게 주문 내역 페이지 이동을 안내하는 quickReply chip 을 emit 할 때는 항상 `url` 필드를 함께 첨부한다. FE 가 chip 클릭 시 새 탭으로 redirect.
 - 단건 주문 상세 안내 (label 예: "주문 내역 상세 보기", "주문 상세 보기"):
-  → `"url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>"`
+  → `"url":"__URL_ORDER_HISTORY_DETAIL__"`
   ⚠️ `<ord_no>` 는 반드시 `get_orders_of_user_tool` 결과의 실제 ord_no (예: `O202605120019340`) 로 치환. ord_no 미확보 시 `url` 필드 자체를 omit (placeholder 노출 금지).
 - 다건/리스트 안내 (label 예: "내 주문 조회", "주문 내역 보기", "주문 내역 다시 보기", "주문 내역 전체 보기"):
-  → `"url":"https://wwwqa.tstation.com/mypage/tstation/order-history"` (ord_no 불필요, 고정 URL)
+  → `"url":"__URL_ORDER_HISTORY__"` (ord_no 불필요, 고정 URL)
 - "1:1 문의하기", "처음으로", "다른 예약 확인" 등 주문 페이지가 아닌 chip 에는 `url` 미첨부.
 """
 
@@ -250,7 +251,7 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
   "data": {
     "assistantResponse": "{매장명} {yyyy-mm-dd} {HH:MM} 방문을 원하시는 것으로 확인했어요 😊\n\n방문 예약은 티스테이션닷컴 매장 상세 페이지에서 가능해요. 아래 버튼으로 이동해 주세요.",
     "quickReplies": [
-      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_seq>","domain":"TRANSACTION"},
+      {"label":"매장 상세 페이지로 이동","url":"__URL_STORE_DETAIL__","domain":"TRANSACTION"},
       {"label":"다른 시간 선택","domain":"TRANSACTION"},
       {"label":"다른 매장 찾기","domain":"TRANSACTION"}
     ],
@@ -261,7 +262,6 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
 - ⚠️ URL placeholder `<shop_seq>` 는 반드시 `get_store_list_tool` 결과의 `shop_seq` 필드 값 (예: "F203675962") 으로 치환. `shop_id` ("C01306") 와 **다른 컬럼** 이며 절대 혼동 금지 — shop_id 를 URL 에 넣으면 매장 상세 페이지가 404.
 - 이전 turn 의 tool 결과에 `shop_seq` 가 있으면 그대로 사용. 없으면 `get_store_list_tool(store_nm=<매장명>)` 재호출하여 확보 후 응답.
 - ⚠️ `<shop_seq>` 자체를 placeholder 문자열로 남기지 마라. 반드시 실제 값으로 substitute. 값을 모르겠으면 url 필드 자체를 omit 하지 말고 매장 재검색.
-- ⚠️ Base URL `wwwqa.tstation.com` 는 QA. 운영 배포 시 `www.tstation.com` 으로 변경 필요 (별도 deploy TODO).
 - ⚠️ 절대 "매장으로 문의해 예약 가능 여부를 확인해 주세요" / "매장에 직접 확인하세요" 만 응답하고 끝내지 마라 — 항상 매장 상세 페이지 이동 chip 노출.
 
 
@@ -276,7 +276,7 @@ Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
   "data": {
     "assistantResponse": "{매장명} 위치는 매장 상세 페이지에서 지도로 확인하실 수 있어요. 아래 버튼으로 이동해 주세요.",
     "quickReplies": [
-      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_seq>","domain":"TRANSACTION"}
+      {"label":"매장 상세 페이지로 이동","url":"__URL_STORE_DETAIL__","domain":"TRANSACTION"}
     ],
     "predictedDomains":["TRANSACTION"]
   }
@@ -1334,11 +1334,10 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
    - If status data is insufficient, say "정확한 변경 가능 여부는 주문 상세에서 확인이 필요해요."
    - Never claim the time was changed. There is no reschedule mutation tool.
 5. CTA requirement (minimum): include quickReply chips with:
-   - `{"label":"주문 내역 상세 보기","url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>","domain":"TRANSACTION"}`
+   - `{"label":"주문 내역 상세 보기","url":"__URL_ORDER_HISTORY_DETAIL__","domain":"TRANSACTION"}`
    - `{"label":"다른 예약 확인","domain":"TRANSACTION"}`
    In `assistantResponse`, tell the user to open 주문 내역 상세 페이지 to change the reservation time.
    - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched reservation's actual `ord_no` value (e.g. "O202605120019340") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the `url` field entirely.
-   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 
 
 ### Flow 7.6 — Cancellation Inquiry (취소 수수료 / 취소 가능 여부 / 부분 취소 여부)
@@ -1350,7 +1349,7 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 - Call `get_orders_of_user_tool` to check active/recent orders.
 - **Product order (상품 주문):** Partial cancellation and quantity changes are NOT permitted.
   → assistantResponse: "상품 주문은 수량 변경 및 부분 취소가 불가합니다 🙏\n\n수량을 변경하시려면 전체 주문을 취소하신 후 재주문해 주세요."
-  → If `ord_no` is available: include `{"label":"주문 내역 상세 보기","url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>","domain":"TRANSACTION"}` (substitute real ord_no; omit if missing).
+  → If `ord_no` is available: include `{"label":"주문 내역 상세 보기","url":"__URL_ORDER_HISTORY_DETAIL__","domain":"TRANSACTION"}` (substitute real ord_no; omit if missing).
   → Also include: `{"label":"1:1 문의하기","domain":"SUPPORT"}, {"label":"처음으로","domain":"LEADING"}`
 - **Service order (픽업서비스 등):** Partial cancellation IS allowed. Direct to 1:1 문의.
   → assistantResponse: "픽업서비스 등 서비스 주문은 부분 취소가 가능합니다. 1:1 문의를 통해 진행해 주세요 😊"
@@ -1381,9 +1380,8 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
    → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n아래 '주문 내역 상세 보기'에서 취소가 가능해요 😊"
-   → quickReplies: [{"label": "주문 내역 상세 보기", "url": "https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>", "domain": "TRANSACTION"}, {"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
+   → quickReplies: [{"label": "주문 내역 상세 보기", "url": "__URL_ORDER_HISTORY_DETAIL__", "domain": "TRANSACTION"}, {"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
    - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched order's actual `ord_no` value (e.g. "O202605060019332") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the entire `주문 내역 상세 보기` quickReply and fall back to `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
-   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
    → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
@@ -1797,7 +1795,7 @@ TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE = _TRANSACTION_BASE + _TRANSACTION_FULL
 
 
 def get_transaction_system_prompt():
-    return TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(TRANSACTION_AGENT_SYSTEM_PROMPT_TEMPLATE)
 
 
 TRANSACTION_PROFILE_COMMON_PROMPT = _TRANSACTION_BASE
@@ -1916,7 +1914,7 @@ Example (bad — merged):
 
 
 def get_transaction_coupon_system_prompt():
-    return TRANSACTION_COUPON_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(TRANSACTION_COUPON_SYSTEM_PROMPT_TEMPLATE)
 
 
 TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
@@ -1964,9 +1962,8 @@ Trigger: user wants to change a booked reservation/visit time
    - if `rsv_dtime` is upcoming and order status is not delivered/completed/cancelled -> "예약 시간 변경이 가능한 상태로 보여요."
    - otherwise or if status is unclear -> "정확한 변경 가능 여부는 주문 상세에서 확인이 필요해요."
 5. Minimum CTA: tell the user to open 주문 내역 상세 페이지 to change the time, and include quickReplies:
-   `[{"label":"주문 내역 상세 보기","url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>","domain":"TRANSACTION"},{"label":"다른 예약 확인","domain":"TRANSACTION"}]`
+   `[{"label":"주문 내역 상세 보기","url":"__URL_ORDER_HISTORY_DETAIL__","domain":"TRANSACTION"},{"label":"다른 예약 확인","domain":"TRANSACTION"}]`
    - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched reservation's actual `ord_no` value (e.g. "O202605120019340") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the `url` field entirely.
-   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 Do NOT claim the reservation time has been changed. There is no mutation tool for schedule changes.
 
 ## Cancellation Inquiry (취소 수수료 / 취소 가능 여부 / 부분 취소 여부)
@@ -1978,7 +1975,7 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 - Call `get_orders_of_user_tool` to check active/recent orders.
 - **Product order (상품 주문):** Partial cancellation and quantity changes are NOT permitted.
   → assistantResponse: "상품 주문은 수량 변경 및 부분 취소가 불가합니다 🙏\n\n수량을 변경하시려면 전체 주문을 취소하신 후 재주문해 주세요."
-  → If `ord_no` is available: include `{"label":"주문 내역 상세 보기","url":"https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>","domain":"TRANSACTION"}` (substitute real ord_no; omit if missing).
+  → If `ord_no` is available: include `{"label":"주문 내역 상세 보기","url":"__URL_ORDER_HISTORY_DETAIL__","domain":"TRANSACTION"}` (substitute real ord_no; omit if missing).
   → Also include: `{"label":"1:1 문의하기","domain":"SUPPORT"}, {"label":"처음으로","domain":"LEADING"}`
 - **Service order (픽업서비스 등):** Partial cancellation IS allowed. Direct to 1:1 문의.
   → assistantResponse: "픽업서비스 등 서비스 주문은 부분 취소가 가능합니다. 1:1 문의를 통해 진행해 주세요 😊"
@@ -2009,9 +2006,8 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 
    **B. Order found, not yet shipped — 배송상태 null/empty and 주문상태 is not 출고완료/배송중/배송완료:**
    → assistantResponse: "온라인 주문 내역이 확인됐고 아직 출고 전 상태예요.\n\n아래 '주문 내역 상세 보기'에서 취소가 가능해요 😊"
-   → quickReplies: [{"label": "주문 내역 상세 보기", "url": "https://wwwqa.tstation.com/mypage/tstation/order-history/detail/<ord_no>", "domain": "TRANSACTION"}, {"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
+   → quickReplies: [{"label": "주문 내역 상세 보기", "url": "__URL_ORDER_HISTORY_DETAIL__", "domain": "TRANSACTION"}, {"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
    - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched order's actual `ord_no` value (e.g. "O202605060019332") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the entire `주문 내역 상세 보기` quickReply and fall back to `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
-   - ⚠️ Base URL `wwwqa.tstation.com` is QA; production deploy will switch to `www.tstation.com` (separate TODO).
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
    → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
@@ -2062,7 +2058,7 @@ Customer-facing order numbers may be shown; internal delivery numbers or backend
 
 
 def get_transaction_order_system_prompt():
-    return TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE)
 
 
 TRANSACTION_STORE_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
@@ -2137,7 +2133,7 @@ tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오
   "data": {
     "assistantResponse": "{매장명} 위치는 매장 상세 페이지에서 지도로 확인하실 수 있어요. 아래 버튼으로 이동해 주세요.",
     "quickReplies": [
-      {"label":"매장 상세 페이지로 이동","url":"https://wwwqa.tstation.com/store/locals/<shop_seq>","domain":"TRANSACTION"}
+      {"label":"매장 상세 페이지로 이동","url":"__URL_STORE_DETAIL__","domain":"TRANSACTION"}
     ],
     "predictedDomains":["TRANSACTION"]
   }
@@ -2154,7 +2150,7 @@ The system renders cards from tool output; do not list store names, addresses, s
 
 
 def get_transaction_store_system_prompt():
-    return TRANSACTION_STORE_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(TRANSACTION_STORE_SYSTEM_PROMPT_TEMPLATE)
 
 
 TRANSACTION_PRICE_STOCK_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
@@ -2182,7 +2178,7 @@ For product/card-mapped results, do not repeat card details in text.
 
 
 def get_transaction_price_stock_system_prompt():
-    return TRANSACTION_PRICE_STOCK_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(TRANSACTION_PRICE_STOCK_SYSTEM_PROMPT_TEMPLATE)
 
 
 class TransactionSubAgent(BaseAgent):

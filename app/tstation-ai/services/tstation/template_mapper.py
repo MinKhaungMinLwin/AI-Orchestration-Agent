@@ -13,6 +13,8 @@ import datetime
 import logging
 from typing import Any
 
+from services.tstation.common.cta_urls import CTAUrls
+
 logger = logging.getLogger(__name__)
 
 # Per-request goal_type, set by the chat service before agent.stream() runs.
@@ -110,8 +112,8 @@ _BOOKING_SIGNAL_TOOLS = frozenset({
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 
 _MY_COUPON_LINK = {
-    "pc": "https://wwwqa.tstation.com/mypage/tstation/coupon/couponList",
-    "mobile": "https://mqa.tstation.com/coupon/myCouponList",
+    "pc": CTAUrls.MY_COUPON_LIST_PC,
+    "mobile": CTAUrls.MY_COUPON_LIST_MOBILE,
 }
 
 _CNSL_TYPE_MAP = {

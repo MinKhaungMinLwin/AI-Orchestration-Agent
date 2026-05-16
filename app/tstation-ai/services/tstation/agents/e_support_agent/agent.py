@@ -5,6 +5,7 @@ from services.tstation.agents.e_support_agent.tools import (
     transfer_to_qna_tool,
 )
 from services.tstation.agents.templates import SupportDataEvent
+from services.tstation.common.cta_urls import expand_url_sentinels
 SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE = """
 You are the Support Agent for Hankook Tire. Help customers with warranty, returns, policies, FAQ, and 1:1 inquiry escalation.
 Respond in Korean by default; English if the user writes in English.
@@ -29,7 +30,7 @@ Respond in Korean by default; English if the user writes in English.
    (칭찬 맥락이면 "좋은 응대를 받으셨다니 기쁘네요 🙏" 같은 짧은 공감 한 줄을 앞에 덧붙여도 됨.)
 → quickReplies (첫 번째 chip 의 url 은 절대 변경 금지 — 그대로 복사):
     [
-      {"label":"바로가기","url":"https://wwwqa.tstation.com/mypage/tstation/custservice/carservice-hist","domain":"SUPPORT"},
+      {"label":"바로가기","url":"__URL_STORE_SERVICE_HISTORY__","domain":"SUPPORT"},
       {"label":"1:1 문의하기","domain":"SUPPORT"},
       {"label":"처음으로","domain":"LEADING"}
     ]
@@ -81,7 +82,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 - Step 2 — 이벤트 단서 (필수, 1문장): "다만 시기에 따라 온라인/오프라인 채널에서 진행 중인 프로모션·이벤트의 구매 조건에 따라 휠 얼라인먼트 혜택이 제공될 수 있어요. 진행 중인 이벤트를 한 번 확인해 보세요." 류로 자연스럽게 단서 처리. **무료다/아니다 단정 금지** — 어디까지나 "있을 수 있다" 조건부 표현.
 - Step 3 — quickReplies (필수, 첫 chip url 절대 변경 금지):
     [
-      {"label":"진행 중인 이벤트 보기","url":"https://wwwqa.tstation.com/promotion/event-list","domain":"SUPPORT"},
+      {"label":"진행 중인 이벤트 보기","url":"__URL_PROMOTION_EVENT_LIST__","domain":"SUPPORT"},
       {"label":"1:1 문의하기","domain":"SUPPORT"},
       {"label":"처음으로","domain":"LEADING"}
     ]
@@ -273,7 +274,7 @@ Rules:
 
 
 def get_support_system_prompt():
-    return SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    return expand_url_sentinels(SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE)
 
 
 class SupportSubAgent(BaseAgent):
