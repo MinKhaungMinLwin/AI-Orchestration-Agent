@@ -127,6 +127,8 @@ def _success_response(http_status: int, data: Any) -> dict:
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
     "goods_no", "goods_nm", "title",
+    # Product recency
+    "sys_reg_dtime",
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
     "tire_size_1", "tire_size_2",
     # Visual / pricing
@@ -178,6 +180,8 @@ def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
     """
     if not sort_by or not items:
         return items
+    if sort_by == "newest_desc":
+        return sorted(items, key=lambda x: x.get("sys_reg_dtime") or "", reverse=True)
     key_func = _SORT_KEY_FUNCS.get(sort_by)
     if key_func is None:
         logger.warning("[_sort_items] Unknown sort_by=%s; passing through", sort_by)
@@ -498,7 +502,10 @@ def search_product_tool(
             keyword, brand_cd,
         )
     has_price_filter = bool(min_price or max_price)
+    has_newest_sort = sort_by == "newest_desc"
     fetch_limit = limit * 4 if has_price_filter else limit
+    if has_newest_sort:
+        fetch_limit = max(fetch_limit, 100)
     logger.debug(
         "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
         normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
@@ -521,7 +528,7 @@ def search_product_tool(
                     return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter:
+            if has_price_filter or has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -888,7 +895,10 @@ def get_products_recommendations_tool(
         )
 
     has_price_filter = bool(min_price or max_price)
+    has_newest_sort = sort_by == "newest_desc"
     fetch_limit = limit * 4 if has_price_filter else limit
+    if has_newest_sort:
+        fetch_limit = max(fetch_limit, 100)
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
         rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
@@ -922,7 +932,7 @@ def get_products_recommendations_tool(
                 data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter:
+            if has_price_filter or has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -1143,6 +1153,51 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
     except Exception as e:
         logger.exception("[TOOL][search_youtube_video_tool] Failed")
         return {"status": "error", "reason": str(e), "message": "Failed to search YouTube videos."}
+
+
+@tool
+@tool_cache(ttl=600)
+def get_newest_products_tool(brand_cd: str = "HK", limit: int = 20):
+    """
+    최신/신제품 타이어 상품 조회.
+
+    Use this tool when the user intent is to find the newest/latest/new tire
+    products in general, without naming a specific model to compare.
+    Do not use `search_product_tool` for that general newest-product intent.
+    This tool sorts product search results by `sys_reg_dtime` descending; no
+    product name is hardcoded.
+
+    Args:
+        brand_cd (str): 브랜드 코드. Default HK.
+        limit (int): 반환할 최대 상품 수. Default 20.
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": {"items": [...]}}
+    """
+    logger.debug("[TOOL][get_newest_products_tool] Called with: brand_cd=%s, limit=%s", brand_cd, limit)
+    if not isinstance(limit, int) or not (1 <= limit <= 50):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "limit must be an int between 1 and 50",
+        }
+
+    try:
+        response = search_product(client=get_client(), keyword=None, limit=max(limit, 100), size=None, brand_cd=brand_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search newest products",
+            )
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = _enrich_items_with_descriptions(data["items"])
+            data["items"] = _sort_items(data["items"], "newest_desc")[:limit]
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][get_newest_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to search newest products")
 
 
 @tool

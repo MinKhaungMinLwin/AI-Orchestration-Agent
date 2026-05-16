@@ -13,6 +13,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_product_applicable_events_tool,
     search_car_model_groups_tool,
     get_car_trims_tool,
+    get_newest_products_tool,
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
@@ -284,6 +285,7 @@ After user responds to Case 3:
      • "비싼 순", "비싼 것부터", "고가", "프리미엄 순" → `sort_by="price_desc"`
      • "평점 높은", "평점 좋은", "별점 높은", "별점 좋은", "평점순", "별점 순" → `sort_by="rating_desc"`
      • "리뷰 많은", "후기 많은", "리뷰 순", "후기 순" → `sort_by="review_desc"`
+     • "최신", "신제품", "최근 출시", "제일 최근에 나온" → `sort_by="newest_desc"`
      • 정렬 의도가 없으면 sort_by 생략 (None — BE 의 rcmd_type 정렬 유지)
 
    ⚠️ 정렬 의도가 명확하면 항상 sort_by 를 전달한다. rcmd_type 만으로는 사용자가 원하는 순서가 보장되지 않는다.
@@ -548,13 +550,17 @@ Trigger: User searches by name/keyword
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
+2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
+   - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
+   - Include the registration date when `sys_reg_dtime` is present.
+   - NEVER answer "신제품 정보를 찾지 못했어요" when tool items exist.
 3. **Brand-only 분기**: brand name without model name → `search_product_tool(size=if_provided, brand_cd=detected)`, keyword omitted (per INPUT NORMALIZATION brand-only rule).
 4. **모델명 포함 분기**: 모델명이 함께 들어온 경우만 keyword 사용
    → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
    - 예: "브리지스톤 포텐자 235/55R19" → keyword="포텐자", brand_cd="BS"
    - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2" (한국타이어 디폴트), brand_cd="HK"
 5. search_product_tool 호출 (위 3 또는 4 중 적절한 분기 선택).
-   ⚠️ 사용자 메시지에 정렬 의도 키워드("가장 저렴한", "비싼 순", "평점 높은", "리뷰 많은" 등)가 있으면 RECOMMEND ENGINE Step D 의 매핑 규칙에 따라 `sort_by` 를 함께 전달한다.
+   ⚠️ 사용자 메시지에 정렬 의도 키워드("가장 저렴한", "비싼 순", "평점 높은", "리뷰 많은", "최신", "신제품" 등)가 있으면 RECOMMEND ENGINE Step D 의 매핑 규칙에 따라 `sort_by` 를 함께 전달한다.
      - 예: "가장 저렴한 벤투스 S2 225/45R17" → search_product_tool(keyword="벤투스 S2", size="225/45R17", sort_by="price_asc")
      - 예: "평점 높은 미쉐린 235/55R19" → search_product_tool(size="235/55R19", brand_cd="MC", sort_by="rating_desc")
    ⚠️ 가격 범위가 명시된 경우 RECOMMEND ENGINE Step E 규칙에 따라 min_price / max_price 를 추출하여 함께 전달한다.
@@ -970,7 +976,7 @@ For `quickReply` turns, put the COMPLETE user-facing answer (intro + details + n
 - BUT for general / scenario-only recommendations (Flow A 분기 A3 — "인기 타이어 추천", "전기차용 추천", "사계절 추천", 사이즈/차량 정보 없는 일반 추천): call `get_products_recommendations_tool` directly **without** `tire_size`. Do NOT force vehicle/size confirmation. 결과 카드 title 에 사이즈가 자동 포함됨
 - NEVER ask the user to confirm a search ("검색할까요?", "찾아볼까요?", "확인해 드릴까요?", quickReplies=["상품 검색하기", ...]) when 상품명+사이즈가 이미 들어왔다 — 무조건 즉시 search_product_tool 호출 (ACT-FIRST POLICY 참조)
 - ALWAYS use tools first; only use own knowledge when tools fail or explicitly needed
-- NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요".
+- NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. For a general newest-product question with no product name (e.g. "제일 최근에 나온 타이어 신제품이 뭐야?"), call `get_newest_products_tool(brand_cd="HK", limit=20)`, then answer from the first item. For comparison between named products, answer with "최신 상품은 [name]입니다" and then show each compared registration date. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요" or softer alternatives like "~가 더 최신 상품이에요".
 
 
 ## OUT OF SCOPE
@@ -1334,7 +1340,7 @@ def get_discovery_event_content_system_prompt():
 
 
 DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE = DISCOVERY_PROFILE_COMMON_PROMPT + """
-Handle: product search, price/stock inquiry, order resolution, best-sellers.
+Handle: product search, newest products, price/stock inquiry, order resolution, best-sellers.
 
 
 ## CUSTOMER EXPERIENCE
@@ -1378,7 +1384,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 
 ## ACT-FIRST POLICY (절대 컨펌 묻지 말 것)
-사용자 메시지에 **상품명/모델명**이 등장하면 (사이즈 함께든 단독이든, 의도 동사 유무 무관) — 또는 시스템이 `[목표: 상품 검색]` 을 주입한 경우 — 어떤 의도(가격/재고/주문/매장/도착일/배송/비교/최신상품/추천 등)이든 **즉시 search_product_tool 을 호출**한다. 답변에 상품 정보가 필요하면 사용자에게 묻지 말고 바로 검색해서 답변한다. 컨펌·확인을 묻는 quickReply 를 먼저 띄우지 말 것.
+사용자 메시지에 **상품명/모델명**이 등장하면 (사이즈 함께든 단독이든, 의도 동사 유무 무관) — 또는 시스템이 `[목표: 상품 검색]` 을 주입한 경우 — 어떤 의도(가격/재고/주문/매장/도착일/배송/비교/최신상품/추천 등)이든 **즉시 search_product_tool 을 호출**한다. 단, 상품명/모델명이 없는 일반 최신/신제품 질문은 `get_newest_products_tool` 을 호출한다. 답변에 상품 정보가 필요하면 사용자에게 묻지 말고 바로 도구로 확인해서 답변한다. 컨펌·확인을 묻는 quickReply 를 먼저 띄우지 말 것.
 
 ❌ ANTI-PATTERN (절대 금지):
 - "상품을 검색한 뒤 ~ 확인해 드릴게요 😊" + quickReplies=["상품 검색하기", ...]
@@ -1398,6 +1404,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | Tool | Use when |
 |------|---------|
 | search_product_tool | User searches by product name/keyword (keyword는 한글로 전달; 영문 입력은 한글로 변환) |
+| get_newest_products_tool | User asks for newest/latest/new tire products in general without naming a specific model; returns items sorted by `sys_reg_dtime` descending |
 | get_product_description_tool | Product details after user selects a specific product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only) OR price comparison between multiple products |
 | get_final_price_tool | WAGE_PRC or single canonical price for an order preview only — do NOT call per search card |
@@ -1424,6 +1431,10 @@ Trigger: User searches by name/keyword
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
 2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
+2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
+   - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
+   - Include the registration date when `sys_reg_dtime` is present.
+   - NEVER answer "신제품 정보를 찾지 못했어요" when tool items exist.
 3. **Brand-only 분기**: brand name without model name → `search_product_tool(size=if_provided, brand_cd=detected)`, keyword omitted (per INPUT NORMALIZATION brand-only rule).
 4. **모델명 포함 분기**: 모델명이 함께 들어온 경우만 keyword 사용
    → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
@@ -1524,7 +1535,7 @@ Write the user-facing answer in natural Korean. Be concise but complete:
 ## RESPONSE FORMAT
 
 ⚠️ Discovery turns return ONE of these templates:
-- `product` — when `search_product_tool` or `get_best_selling_products_tool` returned a non-empty list to display as cards.
+- `product` — when `search_product_tool`, `get_newest_products_tool`, or `get_best_selling_products_tool` returned a non-empty list to display as cards.
 - `cheapestProduct` — when `compare_discount_tool` returned a cheapest option.
 - `quickReply` — for every other case (text answers, no-result fallback, description, handoff confirmations).
 
@@ -1540,7 +1551,7 @@ For `quickReply` turns, put the COMPLETE user-facing answer inside `assistantRes
 - NEVER ask the user to confirm a search ("검색할까요?", "찾아볼까요?", quickReplies=["상품 검색하기", ...]) when 상품명+사이즈가 이미 들어왔다 — 무조건 즉시 search_product_tool 호출 (ACT-FIRST POLICY 참조)
 - ALWAYS use tools first; only use own knowledge when tools fail or explicitly needed
 - FIXED quickReplies after `get_product_description_tool` (절대 변경 금지): `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]`
-- NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요".
+- NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. For a general newest-product question with no product name (e.g. "제일 최근에 나온 타이어 신제품이 뭐야?"), call `get_newest_products_tool(brand_cd="HK", limit=20)`, then answer from the first item. For comparison between named products, answer with "최신 상품은 [name]입니다" and then show each compared registration date. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요" or softer alternatives like "~가 더 최신 상품이에요".
 
 
 ## OUT OF SCOPE
@@ -1572,7 +1583,7 @@ Allowed templates: `quickReply`, `product`, `cheapestProduct`.
 
 ⚠️ HARDCODED RULE — READ BEFORE PICKING A TEMPLATE:
 
-`search_product_tool` 응답 `data.items` 가 1개 이상이면 반드시 `product` 템플릿이다 (PROSE MODE).
+`search_product_tool` 또는 `get_newest_products_tool` 응답 `data.items` 가 1개 이상이면 반드시 `product` 템플릿이다 (PROSE MODE).
 `get_best_selling_products_tool` 응답 items 가 1개 이상이면 반드시 `product` 템플릿이다 (JSON MODE — fenced JSON block 출력).
 - Do NOT emit `quickReply` or fallback chips when product items exist, even if scores are 0/null or names repeat.
 - Different `tire_size_1` means different SKU/card.
@@ -1609,7 +1620,7 @@ Template selection rules (apply in order, first match wins):
      In `assistantResponse`: list ALL compared items with their prices/discounts, then conclude which is cheaper and why.
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. **1-result transaction handoff (위 EXCEPTION 케이스)** → `quickReply` declarative. (Rule 3 보다 우선.)
-3. `search_product_tool` or `get_best_selling_products_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 2 의 1-result transaction handoff 는 예외).
+3. `search_product_tool`, `get_newest_products_tool`, or `get_best_selling_products_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 2 의 1-result transaction handoff 는 예외).
 4. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
 
 Hard rules:
@@ -1655,7 +1666,7 @@ Rules:
 
 1. **Output policy by final tool used** — pick exactly ONE mode:
 
-   **PROSE MODE** — When your FINAL tool call was `search_product_tool` (≥1 item returned) or `compare_discount_tool` (≥1 item, cheapest-only intent):
+   **PROSE MODE** — When your FINAL tool call was `search_product_tool` / `get_newest_products_tool` (≥1 item returned) or `compare_discount_tool` (≥1 item, cheapest-only intent):
    → Respond with ONLY 1–2 short, natural Korean sentences. **No fenced JSON. No ```json code fence.** Just plain prose. The system auto-assembles the FE card from the tool result.
    PROSE MODE style: address as "고객님", warm verbs like "찾았어요", "확인해 주세요", end with 😊.
    ⚠️ EXCEPTION — `search_product_tool` 결과가 **정확히 1건** + 사용자 의도가 거래(가격/재고/주문/예약/매장/도착일/배송) → PROSE MODE 사용 금지. 대신 JSON MODE 로 `quickReply` declarative handoff 1줄 emit + `nextAction:{"type":"continue","domain":"transaction"}` (위 HARDCODED RULE EXCEPTION 참조). PROSE MODE 로 응답하면 시스템이 자동으로 `product` 카드를 만들어 사용자 클릭을 강제하므로 절대 금지.
@@ -1697,6 +1708,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_car_trims_tool": "Vehicle & Compatibility",
         # Product Recommendation
         "get_products_recommendations_tool": "Product Recommendation",
+        "get_newest_products_tool": "Product Recommendation",
         "get_best_selling_products_tool": "Product Recommendation",
         # Product Description
         "get_product_description_tool": "Product Description",
@@ -1740,6 +1752,7 @@ class DiscoverySubAgent(BaseAgent):
         if profile == "discovery_search":
             tools = [
                 search_product_tool,
+                get_newest_products_tool,
                 get_product_description_tool,
                 compare_discount_tool,
                 get_final_price_tool,
