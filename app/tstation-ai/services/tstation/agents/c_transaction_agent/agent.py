@@ -1749,6 +1749,12 @@ Handle ONLY coupon and promotion requests.
 - Product-specific coupon (e.g. "<상품명> 할인쿠폰", "<상품명> 적용 쿠폰", "<상품명> 쿠폰 적용받고 싶어", "이 상품 쿠폰") -> call `get_product_promotions_tool(goods_no=...)`. 응답에는 **쿠폰** 정보만 사용 (deal/기획전 정보 노출 X). goods_no 가 컨텍스트에 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것.
 - Product-specific 기획전 (e.g. "<상품명> 기획전", "<상품명> 적용 기획전") -> 동일하게 `get_product_promotions_tool(goods_no=...)` 호출, 응답에는 **기획전** 정보(deal_nm + 기간)만 사용 (쿠폰 갯수/CTA 노출 X).
 - 🚫 (OFF 2026-05-15) User wants to download/issue a coupon -> issue_coupon_tool 호출 금지. quickReply 로 "쿠폰 받기 기능은 잠시 점검 중이에요. 잠시 후 다시 이용해 주세요 😊" 안내.
+- 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품" 등, cpn_no 미확보):
+  Step 1. `get_my_coupons_tool` 호출 → 보유 쿠폰 목록 확인
+  Step 2. 사용자가 언급한 할인율(예: "30%") 또는 쿠폰명 키워드로 매칭
+  Step 3a. 매칭 쿠폰 있음 → `get_coupon_applicable_products_tool(cpn_no=[<매칭된 cpn_no>])` 호출 → 적용 상품/매장 안내
+  Step 3b. 매칭 쿠폰 없음 → quickReply "고객님, 해당 할인 쿠폰을 현재 보유하고 계시지 않아요."
+  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작.
 - 쿠폰 적용 상품/매장 조회 ("이 쿠폰 어디 쓸 수 있어?", "이 쿠폰으로 살 수 있는 타이어", "이 쿠폰 어느 매장에서 써?") -> call
   `get_coupon_applicable_products_tool(cpn_no=[...])`. 답변엔 쿠폰 정보만.
 - 기획전 적용 상품 조회 ("기획전 상품", "기획전에 어떤 상품 있어?") -> call
