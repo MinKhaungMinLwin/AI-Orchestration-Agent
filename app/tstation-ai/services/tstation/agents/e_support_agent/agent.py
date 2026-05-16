@@ -242,10 +242,14 @@ def get_support_system_prompt():
 class SupportSubAgent(BaseAgent):
     OUTPUT_TEMPLATE = SupportDataEvent
 
+    # Conformed to 10 official AFs agreed with client. transfer_to_qna and escalate
+    # are the handoff path → Fallback / Escalation; only DB/RAG-resolved FAQ stays
+    # under FAQ.
     TOOL_TO_AF_MAP = {
         "get_faq_tool": "FAQ",
         "search_faq_rag_tool": "FAQ",
-        "transfer_to_qna_tool": "FAQ",
+        "transfer_to_qna_tool": "Fallback / Escalation",
+        "escalate_tool": "Fallback / Escalation",
     }
 
     def __init__(self, model):

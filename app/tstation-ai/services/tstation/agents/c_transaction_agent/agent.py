@@ -2081,37 +2081,33 @@ def get_transaction_price_stock_system_prompt():
 class TransactionSubAgent(BaseAgent):
     OUTPUT_TEMPLATE = TransactionAgentOutput
 
+    # Conformed to 10 official AFs agreed with client (Store / Price / Inventory /
+    # Order / Delivery / Quick Shopping / Product Compatibility / Product Recommendation /
+    # Product Description / FAQ / Fallback / Escalation). transaction_store_preview maps
+    # to Inventory because it cascades today-install stock to decide 장착 가능 매장.
+    # Cart/Quick Order/Reservation collapse into Quick Shopping (order draft) /
+    # Order / Delivery (post-order lifecycle).
     TOOL_TO_AF_MAP = {
-        # Price
         "get_final_price_tool": "Price",
         "get_my_coupons_tool": "Price",
-        # Product Search (transaction_coupon: goods_no resolution for product-level coupons)
-        "search_product_tool": "Product",
-        # Promotion (deals + coupons by product)
-        "get_product_promotions_tool": "Promotion",
-        # Coupon Issue (OFF 2026-05-15)
-        # "issue_coupon_tool": "Coupon Issue",
-        # Coupon/Deal → applicable products
-        "get_coupon_applicable_products_tool": "Coupon",
-        # Inventory
+        "get_product_promotions_tool": "Price",
+        "get_coupon_applicable_products_tool": "Price",
+        # "issue_coupon_tool": "Price",  # OFF 2026-05-15
+        "search_product_tool": "Product Recommendation",
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
-        "transaction_store_preview_tool": "Store Preview",
-        # Store
+        "transaction_store_preview_tool": "Inventory",
         "search_place_tool": "Store",
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
         "get_store_detail_tool": "Store",
         "get_store_schedule_tool": "Store",
         "get_multi_store_schedule_tool": "Store",
-        # Cart & Order
-        "save_to_cart_tool": "Cart",
-        "quick_order_tool": "Quick Order",
-        # Order / Delivery
+        "save_to_cart_tool": "Quick Shopping",
+        "quick_order_tool": "Quick Shopping",
         "get_orders_of_user_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
-        # Reservation
-        "get_my_reservations_tool": "Reservation",
+        "get_my_reservations_tool": "Order / Delivery",
     }
 
     def __init__(self, model, profile: str = "full"):

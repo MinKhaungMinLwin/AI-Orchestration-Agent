@@ -268,19 +268,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "search_faq_rag_tool": "질문 검색 중...",
     "escalate_tool": "상담사 연결 중...",
     "transfer_to_qna_tool": "1:1 문의 페이지 준비 중...",
-    # UI Template
-    "quick_reply_tool": "응답 생성 중...",
-    "list_car_tool": "차량 목록 준비 중...",
-    "list_product_tool": "상품 목록 준비 중...",
-    "list_voucher_tool": "쿠폰 목록 준비 중...",
-    "list_location_tool": "매장 목록 준비 중...",
-    "list_event_tool": "이벤트 목록 준비 중...",
-    "list_preview_youtube_tool": "영상 목록 준비 중...",
-    "available_dates_tool": "예약 날짜 준비 중...",
-    "preorder_tool": "주문서 준비 중...",
-    "qna_complete_tool": "문의 페이지 준비 중...",
-    "order_complete_tool": "주문 완료 처리 중...",
-    "cheapest_product_tool": "가격 비교 결과 준비 중...",
 }
 
 

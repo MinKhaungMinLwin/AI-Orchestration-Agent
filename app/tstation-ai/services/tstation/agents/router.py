@@ -67,8 +67,10 @@ from services.tstation.agents.e_support_agent.agent import SupportSubAgent
 
 support_subagent = SupportSubAgent(LLM)
 
-# UI Template Agent disabled — template rendering is handled by code mapper.
-# QC Agent disabled — kept out of runtime path.
+# Template rendering is handled by the code-based template_mapper (Path A) or
+# directly by domain agents emitting structured `data` events (Path B). The
+# legacy UI Template Agent has been removed in refactor/af-labels-and-template-cleanup.
+# QC Agent stays out of the runtime path.
 
 
 ## Router
