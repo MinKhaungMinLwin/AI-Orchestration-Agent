@@ -1847,32 +1847,31 @@ def get_discovery_search_system_prompt():
 class DiscoverySubAgent(BaseAgent):
     OUTPUT_TEMPLATE = DiscoveryAgentOutput
 
+    # Conformed to 10 official AFs agreed with client (Store / Price / Inventory /
+    # Order / Delivery / Quick Shopping / Product Compatibility / Product Recommendation /
+    # Product Description / FAQ / Fallback / Escalation). search_youtube_video stays under
+    # Product Description since the official spec folds 특장점·상세 imagery into Description.
     TOOL_TO_AF_MAP = {
-        # Product Compatibility
-        "check_compatibility_tool": "Vehicle & Compatibility",
-        "search_product_tool": "Product Search",
-        "get_user_vehicles_tool": "Vehicle & Compatibility",
-        "get_my_cars_tool": "Vehicle & Compatibility",
-        "search_car_model_tool": "Vehicle & Compatibility",
-        "search_car_model_groups_tool": "Vehicle & Compatibility",
-        "get_car_trims_tool": "Vehicle & Compatibility",
-        # Product Recommendation
+        "check_compatibility_tool": "Product Compatibility",
+        "get_user_vehicles_tool": "Product Compatibility",
+        "get_my_cars_tool": "Product Compatibility",
+        "search_car_model_tool": "Product Compatibility",
+        "search_car_model_groups_tool": "Product Compatibility",
+        "get_car_trims_tool": "Product Compatibility",
+        "search_product_tool": "Product Recommendation",
         "get_products_recommendations_tool": "Product Recommendation",
         "get_newest_products_tool": "Product Recommendation",
         "get_best_selling_products_tool": "Product Recommendation",
-        # Product Description
         "get_product_description_tool": "Product Description",
-        # Product Reviews
-        "search_youtube_video_tool": "Product Reviews",
-        # Event/Deal
+        "search_youtube_video_tool": "Product Description",
         "get_events_tool": "Price",
         "get_deals_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
         "get_coupon_applicable_products_tool": "Price",
         "get_product_promotions_tool": "Price",
-        # Price Comparison
-        "compare_discount_tool": "Price Comparison",
+        "compare_discount_tool": "Price",
+        "get_cheapest_price_tool": "Price",
         "get_final_price_tool": "Price",
     }
 
