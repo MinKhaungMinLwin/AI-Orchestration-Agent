@@ -11,6 +11,7 @@ from textwrap import dedent
 from pydantic import BaseModel, Field
 from enum import Enum
 
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.tstation_be_client import set_tstation_be_token
 from config.env import settings
 from config.prompts import load_client_injection
@@ -1997,6 +1998,48 @@ def _predicted_domain_values_from_event(event: dict) -> list[str]:
 
 def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> bool:
     return bool(domains) and not any(domain in _SPECULATIVE_UNSAFE_DOMAINS for domain in domains)
+
+
+# Tool-name → context-aware fallback chip set. Picked when the LLM emits an
+# empty quickReplies array so the user lands on chips that fit the conversation
+# (e.g., order list → order-history CTA, not the generic "1:1 문의" pair which
+# makes the flow look broken).
+_FALLBACK_GENERIC: list[dict] = [
+    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+_FALLBACK_ORDER_LIST: list[dict] = [
+    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+_FALLBACK_COUPON: list[dict] = [
+    {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+# Order matters: more specific tools first so the dispatch picks the most
+# relevant chip set when multiple tools ran in the same turn.
+_FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
+    ({"get_orders_of_user_tool", "get_order_status_tool"}, _FALLBACK_ORDER_LIST, "order"),
+    ({"get_my_coupons_tool", "get_available_coupons_tool"}, _FALLBACK_COUPON, "coupon"),
+]
+
+
+def _choose_quickreply_fallback(
+    called_tool_names: set[str], source_domain: str | None
+) -> tuple[list[dict], str]:
+    """Pick a context-aware fallback chip set when the LLM emits empty quickReplies.
+
+    Returns (chips, label) where label is a short tag for logging/telemetry.
+    """
+    for tool_set, chips, label in _FALLBACK_DISPATCH:
+        if called_tool_names & tool_set:
+            return chips, label
+    return _FALLBACK_GENERIC, "generic"
 
 
 def _goal_based_classify(
@@ -4016,23 +4059,28 @@ class TStationChatServiceV2:
                             {"label": "처음으로", "domain": "LEADING"},
                         ]
                 # Defensive fallback for quickReply template: if LLM emitted empty quickReplies,
-                # inject minimal navigation chips so the user is never stranded. Skip when the
-                # turn is an auto-chained handoff (nextAction.type == "continue") because the
+                # inject context-aware chips so the user is never stranded. Skip when the turn
+                # is an auto-chained handoff (nextAction.type == "continue") because the
                 # coordinator runs the next agent in the same turn and chips would be noise.
+                # Chip set is selected from called_tool_names so the fallback matches the
+                # conversation context (e.g., order list → order-related chips, not a generic
+                # "1:1 문의" pair which makes the order flow look broken).
                 if last_template == "quickReply" and isinstance(event_data, dict):
                     existing_chips = event_data.get("quickReplies")
                     chips_empty = not isinstance(existing_chips, list) or len(existing_chips) == 0
                     next_action = event.get("nextAction") or {}
                     is_handoff = isinstance(next_action, dict) and next_action.get("type") == "continue"
                     if chips_empty and not is_handoff:
-                        logger.warning(
-                            "[QUICKREPLY_FALLBACK] empty quickReplies detected (domain=%s); injecting fallback chips",
-                            source_domain,
+                        fallback_chips, fallback_label = _choose_quickreply_fallback(
+                            called_tool_names, source_domain
                         )
-                        event_data["quickReplies"] = [
-                            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                            {"label": "처음으로", "domain": "LEADING"},
-                        ]
+                        logger.warning(
+                            "[QUICKREPLY_FALLBACK] empty quickReplies (domain=%s tools=%s) → %s",
+                            source_domain,
+                            sorted(called_tool_names),
+                            fallback_label,
+                        )
+                        event_data["quickReplies"] = fallback_chips
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
