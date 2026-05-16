@@ -4015,6 +4015,24 @@ class TStationChatServiceV2:
                             {"label": "다시 시도", "domain": "TRANSACTION"},
                             {"label": "처음으로", "domain": "LEADING"},
                         ]
+                # Defensive fallback for quickReply template: if LLM emitted empty quickReplies,
+                # inject minimal navigation chips so the user is never stranded. Skip when the
+                # turn is an auto-chained handoff (nextAction.type == "continue") because the
+                # coordinator runs the next agent in the same turn and chips would be noise.
+                if last_template == "quickReply" and isinstance(event_data, dict):
+                    existing_chips = event_data.get("quickReplies")
+                    chips_empty = not isinstance(existing_chips, list) or len(existing_chips) == 0
+                    next_action = event.get("nextAction") or {}
+                    is_handoff = isinstance(next_action, dict) and next_action.get("type") == "continue"
+                    if chips_empty and not is_handoff:
+                        logger.warning(
+                            "[QUICKREPLY_FALLBACK] empty quickReplies detected (domain=%s); injecting fallback chips",
+                            source_domain,
+                        )
+                        event_data["quickReplies"] = [
+                            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                            {"label": "처음으로", "domain": "LEADING"},
+                        ]
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue

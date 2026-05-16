@@ -236,6 +236,8 @@ Style rules for PROSE MODE:
 
 → Output exactly ONE fenced ```json block as documented below. `assistantResponse` must be a real, substantive Korean answer — never a placeholder, never empty. 1–3 sentences.
 
+⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. 도메인별 chip 이 없으면 최소 fallback 2개: `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`. `qnaComplete` / `product` 등 카드형 템플릿은 본 룰 예외.
+
 **quickReply** — FAQ answers, complaint/no-tool turns, text-only responses:
 - FAQ/RAG: read the `answer` field of the most relevant item(s); synthesize key facts (conditions, timelines, steps) into natural Korean. Do NOT say "FAQ를 확인했어요" or acknowledge the search.
 - Complaint: warm empathetic response directly addressing the frustration + clear next step.
