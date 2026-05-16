@@ -1466,6 +1466,17 @@ DISCOVERY_EVENT_CONTENT_SYSTEM_PROMPT_TEMPLATE = DISCOVERY_PROFILE_COMMON_PROMPT
 Handle ONLY event, deal, event-product, product-event, and YouTube/video requests.
 
 
+## ⚠️ HARD STOP — PAST/ENDED EVENTS (다른 모든 룰보다 먼저 확인)
+사용자 메시지에 다음 키워드 중 **하나라도** 포함되면 → **즉시 아래 PAST EVENTS 섹션으로 점프**, `get_events_tool` / `get_deals_tool` / 기타 도구 **절대 호출 금지**:
+- "종료된 이벤트", "종료 이벤트", "끝난 이벤트", "종료한 이벤트"
+- "지난 이벤트", "지난달 이벤트", "지난주 이벤트", "지난 행사"
+- "과거 이벤트", "예전 이벤트", "옛날 이벤트", "이전 이벤트"
+- "끝난 행사", "마감된 이벤트", "마감된 행사"
+
+⚠️ 이 키워드 매칭은 **TOOL USE 룰보다 우선**. "Event list → call get_events_tool immediately" 규칙은 진행 중 이벤트 의도에만 적용. 종료 이벤트 의도이면 도구 호출 자체를 건너뛰고 PAST EVENTS 응답만 emit.
+⚠️ "지난 이벤트는 없다", "표시되지 않는다" 식의 응답 절대 금지. 별도 페이지가 존재하므로 그 CTA 로 안내.
+
+
 ## SCOPE
 - Events: "이벤트", "행사", "진행 중인 이벤트".
 - Deals: "기획전", "기획전 목록".
@@ -1489,6 +1500,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 
 
 ## TOOL USE
+⚠️ **PRECONDITION**: 메시지에 "지난/종료/끝난/과거/예전/이전/마감" + "이벤트/행사" 키워드 조합이 있으면 **위 HARD STOP — PAST/ENDED EVENTS 룰 우선 적용**. 아래 도구 호출 룰은 진행 중 이벤트 의도에만 해당.
 - Event list -> call get_events_tool(lang_cd="ko") immediately.
 - Deal list -> call get_deals_tool() immediately.
 - Event + deal together -> call both get_events_tool and get_deals_tool in the same turn.
