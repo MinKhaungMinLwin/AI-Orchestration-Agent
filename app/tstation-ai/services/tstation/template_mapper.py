@@ -32,6 +32,13 @@ current_pending_intent: contextvars.ContextVar[str | None] = contextvars.Context
     "current_pending_intent", default=None
 )
 
+# True only for turns where the user explicitly asks for normal tire vs run-flat
+# price/additional-cost comparison. Prevents generic cheapest/discount compare
+# turns from being hijacked just because the candidate set contains RUNFLAT.
+current_runflat_comparison: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_runflat_comparison", default=False
+)
+
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
 # routes to /chat (advancing the flow) instead of /append (which only shows
@@ -234,7 +241,7 @@ def _format_phone(s: str) -> str:
 # - primary chip (chatbox-product-tag-primary): prc_grd_nm 화이트리스트만 통과.
 #   BE 가 이미 한글로 저장 (PR_GOODS_BASE.PRC_GRD_NM) → 그대로 노출.
 # - secondary chip (chatbox-product-tag-secondary): goods_pfm_nm 영문 코드를
-#   한글 라벨로 매핑. 매핑되지 않은 코드 (RUNFLAT 등) 는 chip skip.
+#   한글 라벨로 매핑. 매핑되지 않은 코드는 chip skip.
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
 # `프리미엄+` (플래그십)·`프리미엄` (고급) 두 등급은 FE chip 에서 동일하게 "프리미엄" 으로 노출.
 # BE 원본(`prc_grd_nm`)은 그대로 두고 표시 라벨만 통일.
@@ -242,6 +249,7 @@ _PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
 _GOODS_PFM_LABELS: dict[str, str] = {
     "COMFORT": "정숙/승차감",
     "SPORT": "고속/제동성",
+    "RUNFLAT": "런플랫",
 }
 
 
@@ -553,6 +561,131 @@ def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> di
     if not items:
         return None
     return _build_event("cheapestProduct", {"cheapestProduct": items, "metadata": metadata}, assistant_text, len(items))
+
+
+# ── 5.5 run-flat comparison ───────────────────────────────────────────────────
+
+def _is_runflat_product(row: dict) -> bool:
+    pfm = _get_str(row, "goods_pfm_nm").upper()
+    if pfm == "RUNFLAT":
+        return True
+    name = _get_str(row, "goods_nm", "title").lower()
+    return "런플랫" in name or "runflat" in name or "run-flat" in name
+
+
+def _map_runflat_price_comparison(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Build a deterministic quickReply table for normal tire vs run-flat price.
+
+    This owns TC-110-style turns where Discovery first searches by size/model,
+    verifies both product groups really exist, then calls compare_discount_tool.
+    Without this mapper, the generic priority order renders search results as
+    product cards and loses the comparison answer.
+    """
+    if not current_runflat_comparison.get():
+        return None
+
+    compare_entries = _find_entries(tool_data_list, "compare_discount_tool")
+    if not compare_entries:
+        return None
+
+    product_by_goods_no: dict[str, dict] = {}
+    for entry in _find_entries(tool_data_list, "search_product_tool", "get_products_recommendations_tool"):
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            goods_no = _get_str(row, "goods_no")
+            if goods_no:
+                product_by_goods_no[goods_no] = row
+
+    if not product_by_goods_no:
+        return None
+
+    compare_raw = _unwrap(compare_entries[-1])
+    if not isinstance(compare_raw, dict):
+        return None
+    price_rows = compare_raw.get("items", [])
+    if not isinstance(price_rows, list):
+        return None
+
+    rows: list[dict] = []
+    for price_row in price_rows:
+        if not isinstance(price_row, dict):
+            continue
+        goods_no = _get_str(price_row, "goods_no")
+        product_row = product_by_goods_no.get(goods_no)
+        if not product_row:
+            continue
+        final_unit_price = int(_get_num(price_row, "final_unit_price", default=0))
+        if not final_unit_price:
+            continue
+        rows.append({
+            "goods_no": goods_no,
+            "goods_nm": _get_str(product_row, "goods_nm", "title", default=goods_no),
+            "tire_size": _get_str(product_row, "tire_size_1", "tire_size_2"),
+            "is_runflat": _is_runflat_product(product_row),
+            "final_unit_price": final_unit_price,
+        })
+
+    normal_rows = [row for row in rows if not row["is_runflat"]]
+    runflat_rows = [row for row in rows if row["is_runflat"]]
+    if not normal_rows or not runflat_rows:
+        return None
+
+    # Use the lowest normal tire as the visible baseline for "how much more".
+    baseline = min(normal_rows, key=lambda row: row["final_unit_price"])
+    display_rows = sorted(
+        sorted(normal_rows, key=lambda row: row["final_unit_price"])[:2]
+        + sorted(runflat_rows, key=lambda row: row["final_unit_price"])[:2],
+        key=lambda row: (row["is_runflat"], row["final_unit_price"]),
+    )
+
+    lines = [
+        "고객님, 같은 조건에서 일반 타이어와 런플랫 상품이 함께 확인되어 가격을 비교했어요.",
+        "",
+        "| 상품 | 런플랫 | 1개 기준 최종가 | 일반 타이어 대비 |",
+        "|---|---:|---:|---:|",
+    ]
+    for row in display_rows:
+        delta = row["final_unit_price"] - baseline["final_unit_price"]
+        if row["goods_no"] == baseline["goods_no"]:
+            delta_text = "기준"
+        elif delta > 0:
+            delta_text = f"+{delta:,}원"
+        elif delta < 0:
+            delta_text = f"{delta:,}원"
+        else:
+            delta_text = "동일"
+        product = f"{row['goods_nm']} {row['tire_size']}".strip()
+        lines.append(
+            f"| {product} | {'O' if row['is_runflat'] else 'X'} | {row['final_unit_price']:,}원 | {delta_text} |"
+        )
+    lines.extend([
+        "",
+        "런플랫은 보통 일반 타이어보다 비싼 편이지만, 차이는 모델과 사이즈별로 달라요.",
+        "",
+        "현재 조회된 같은 조건 상품 기준의 비교입니다.",
+        "",
+        "온라인 주문 기준 무료 배송/무료 장착 정책은 일반 타이어와 런플랫에 동일하게 적용됩니다. 별도 추가 장착비는 확인된 금액이 있을 때만 안내할 수 있어요.",
+    ])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "런플랫 상품 보기", "domain": "DISCOVERY"},
+                {"label": "일반 타이어 보기", "domain": "DISCOVERY"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "assistant_response_source": "code_mapper",
+    }
 
 
 # ── 6. event ────────────────────────────────────────────────────────────────────
@@ -1473,6 +1606,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     """
     if not accumulated_tool_data:
         return None
+
+    runflat_comparison = _map_runflat_price_comparison(accumulated_tool_data, assistant_text)
+    if runflat_comparison is not None:
+        return runflat_comparison
 
     # When multiple tools are called, pick the most important UI template.
     # Priority order is intentional:
