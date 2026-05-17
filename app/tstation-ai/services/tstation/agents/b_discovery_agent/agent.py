@@ -383,22 +383,12 @@ The question to answer here is NOT "what's the new rcmd_type bucket name" but:
    → "Is the user's current message asking for the SAME scenario family as
      PREV, or a DIFFERENT one?"
 
-**⚠️ SPECIAL CASE — Price-similarity follow-up after product description (check BEFORE rules 0–5):**
-Trigger (ALL must be true):
-  a. User message contains "비슷한 가격대", "이 가격대", "같은 가격대", "이 정도 가격", "비슷한 가격"
-     AND does NOT contain an explicit numeric price range (e.g. "X만원~Y만원", "X만원 이하", "X만원 이상").
-  b. The most recent tool call in conversation history is `get_product_description_tool`
-     (user was just shown a specific product detail page — NOT a product list card).
-→ **Branch P (Price-similarity search)** — skip rules 0–5 entirely.
-Action:
-1. Read the viewed product's sale price from the `get_product_description_tool` result
-   (field `extra_fvr_sale_prc`, or the 최종 금액/온라인 할인가 shown in the detail card).
-2. Derive price band: min_price = floor(price × 0.7 / 10000) × 10000; max_price = ceil(price × 1.5 / 10000) × 10000.
-   Example: 129,600 won → min_price=90,000, max_price=200,000.
-3. Call `search_product_tool(min_price=<min>, max_price=<max>)` — omit `keyword`, `size`, `brand_cd`.
-   ⚠️ NEVER pass `tire_size` here — user is browsing by price band, not by size (TC-047 bug).
-   ⚠️ NEVER ask "어떤 사이즈로 찾아드릴까요?" — size is irrelevant when searching by price range.
-4. Render `product` template with results.
+**⚠️ SPECIAL CASE — Price-similarity follow-up (check BEFORE rules 0–5):**
+If the user message contains "비슷한 가격대", "이 가격대", "같은 가격대", "이 정도 가격", "비슷한 가격"
+AND does NOT contain an explicit numeric price range ("X만원~Y만원", "X만원 이하", "X만원 이상" etc.),
+→ skip rules 0–5 entirely and follow the **PRICE-SIMILARITY FOLLOW-UP** section in the recommendation prompt.
+⚠️ NEVER pass `tire_size` — user is browsing by budget, not by size (TC-047 bug).
+⚠️ NEVER ask "어떤 사이즈로 찾아드릴까요?" — size is irrelevant when searching by price range.
 
 Decision precedence (first match wins):
 0. **Product-name-only / item-pick selection from the previous list**
