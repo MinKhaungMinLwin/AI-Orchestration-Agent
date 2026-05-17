@@ -1,6 +1,7 @@
 import logging
 from common.tool_cache import tool_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from typing import Any, List, Dict
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
@@ -24,9 +25,10 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 # EVENT / DEAL AF — 상품번호 기준 진행 중 기획전+쿠폰 조회
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_by_product_api_events_deals_by_product_get import sync_detailed as get_deals_by_product
 
-# COUPON AF — 쿠폰 발급
+# COUPON AF — 쿠폰 발급 / 적용 상품 조회
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_goods_api_coupons_issue_goods_post import sync_detailed as issue_coupon_by_goods
 from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.issue_coupon_by_cpn_api_coupons_issue_cpn_post import sync_detailed as issue_coupon_by_cpn
+from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.get_coupon_applicable_products_api_coupons_applicable_products_get import sync_detailed as get_coupon_applicable_products
 from common.tstation_be_api_client.hkt_api_client.models import (
     GoodsCouponIssueRequest,
     CpnCouponIssueRequest,
@@ -49,6 +51,9 @@ from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRe
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_orders_api_orders_get import sync_detailed as get_orders
+
+# Reservation AF — 매장 방문 예약 조회
+from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방문_예약_조회.get_reservations_api_reservations_get import sync_detailed as get_reservations
 
 
 def get_client() -> AuthenticatedClient:
@@ -96,6 +101,38 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
 
     if not stores:
         region = user_branch[:-1]
+        # 복합 지역명 휴리스틱: stripped 이 4자 이상이면 사용자가 두 지역명을 붙여 입력했을
+        # 가능성이 높다 (예: "분당판교점" → "분당" + "판교"). 한국 주요 지하철/구/동 이름이
+        # 대부분 2글자이므로 2+2 분할을 1순위 후보로 제시. 4자 이상은 단일 동/지명일
+        # 가능성도 있으므로 (예: "광교신도시") "지역명을 다시 입력" chip 으로 안전한 fallback 제공.
+        if len(region) >= 4 and len(region) % 2 == 0:
+            first_half = region[: len(region) // 2]
+            second_half = region[len(region) // 2 :]
+            confirmation_msg = (
+                f"고객님, '{user_input}'으로 검색되는 매장이 없습니다. "
+                f"혹시 '{first_half}' 또는 '{second_half}' 지역 중 어느 매장을 찾으시나요?"
+            )
+            quick_replies_hint = (
+                f'[{{"label":"{first_half} 지역 검색","domain":"TRANSACTION"}}, '
+                f'{{"label":"{second_half} 지역 검색","domain":"TRANSACTION"}}, '
+                f'{{"label":"다른 매장 찾기","domain":"TRANSACTION"}}]'
+            )
+            return {
+                "status": "store_name_no_match",
+                "http_status": 200,
+                "data": {
+                    "user_input": user_input,
+                    "region_candidates": [first_half, second_half],
+                    "stores": [],
+                    "validation_message": confirmation_msg,
+                    "instruction_to_agent": (
+                        f"DETERMINISTIC GUARD: 사용자 입력 '{user_input}' 으로 매장 검색 결과 없음. "
+                        f"복합 지역명 의심 ('{first_half}' + '{second_half}'). "
+                        f"validation_message 를 그대로 emit + quickReplies: {quick_replies_hint}. "
+                        f"이 턴에 다른 store/schedule/inventory 도구 호출 절대 금지. STOP."
+                    ),
+                },
+            }
         confirmation_msg = (
             f"고객님, '{user_input}'으로 검색되는 매장이 없습니다. "
             f"'{region}' 지역으로 검색해 드릴까요?"
@@ -156,10 +193,10 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
 
 
 
-def _fetch_order_detail(ord_no: str) -> dict:
+def _fetch_order_detail(ord_no: str, client: AuthenticatedClient | None = None) -> dict:
     """Fetch order delivery detail for a single ord_no, return detail dict or empty on failure."""
     try:
-        response = get_order_delivery(client=get_client(), query_no=ord_no)
+        response = get_order_delivery(client=client or get_client(), query_no=ord_no)
         if response.parsed is None:
             return {}
         return _to_dict(response.parsed)
@@ -178,8 +215,9 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
         return orders
 
     detail_map: dict[str, dict] = {}
+    detail_client = get_client()
     with ThreadPoolExecutor(max_workers=min(len(ord_nos), 20)) as executor:
-        futures = {executor.submit(_fetch_order_detail, ono): ono for ono in ord_nos}
+        futures = {executor.submit(_fetch_order_detail, ono, detail_client): ono for ono in ord_nos}
         for future in as_completed(futures):
             ono = futures[future]
             detail_map[ono] = future.result()
@@ -299,6 +337,69 @@ def issue_coupon_tool(goods_no: str | None = None, cpn_no: str | None = None):
     except Exception as e:
         logger.exception("[TOOL][issue_coupon_tool] Failed")
         return _error_response(None, str(e), "Failed to issue coupon")
+
+
+@tool
+def get_coupon_applicable_products_tool(
+    cpn_no: List[str] | None = None,
+    deal_no: List[str] | None = None,
+):
+    """
+    쿠폰(cpn_no) 또는 기획전(deal_no) 에 적용 가능한 상품/매장 조회.
+
+    Use when 사용자가 "이 쿠폰 어디에 쓸 수 있어?", "이 쿠폰 적용 상품", "이 쿠폰 어느
+    매장에서 써?", "기획전 상품", "기획전에 어떤 상품 있어" 류 질문을 했을 때.
+    cpn_no, deal_no 중 한쪽 또는 양쪽을 리스트로 전달한다. 각 최대 10개. 둘 다 비우면
+    빈 응답.
+
+    Args:
+        cpn_no (List[str] | None): 쿠폰 번호 리스트. 예: ["C0000001234"], ["C1","C2"].
+        deal_no (List[str] | None): 기획전 번호 리스트. 예: ["D0000001234"].
+
+    Response shape:
+        {
+          "total_coupons": int,         # coupons[] 그룹 수
+          "total_deals": int,
+          "total_products": int,        # coupons[].items + deals[].items 합계
+          "total_store_coupons": int,   # stores[] 그룹 수
+          "total_stores": int,          # stores[].items 합계
+          "coupons": [{"cpn_no": str, "total": int, "items": [<product>...]}],
+          "deals":   [{"deal_no": str, "total": int, "items": [<product>...]}],
+          "stores":  [{"cpn_no": str, "total": int, "items": [{shop_id, shop_nm}]}]
+        }
+
+    매핑 타입:
+    - coupons[] / deals[].items: 패턴(PTRN_CD) 기준 상품 — goods_no / goods_nm /
+      sale_prc / extra_fvr_sale_prc / tire_size_1 등 포함.
+    - stores[].items: **매장 한정 쿠폰** — 특정 매장에서만 쓸 수 있는 쿠폰. shop_id +
+      shop_nm 만 포함, 상품 정보 없음.
+
+    하나의 cpn_no 가 상품 매핑과 매장 매핑 둘 다 가질 수도 있다 (드물지만 가능).
+    coupons[] 와 stores[] 양쪽에 동일 cpn_no 가 등장할 수 있다.
+    """
+    cpn_csv = ",".join(cpn_no) if cpn_no else ""
+    deal_csv = ",".join(deal_no) if deal_no else ""
+    logger.debug(
+        "[TOOL][get_coupon_applicable_products_tool] Called with: cpn_no=%s deal_no=%s",
+        cpn_csv, deal_csv,
+    )
+
+    try:
+        response = get_coupon_applicable_products(
+            client=get_client(),
+            cpn_no=cpn_csv,
+            deal_no=deal_csv,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get coupon applicable products",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_coupon_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to get coupon applicable products")
 
 
 # =====================================================
@@ -479,6 +580,7 @@ def get_nearby_stores_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
     limit: int = 10,
 ):
     """
@@ -508,6 +610,10 @@ def get_nearby_stores_tool(
         all_my_t_only (bool): True → "all my T" 매장만 (SMART_CARE_SHOP_YN='Y'). Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
+        sort_by (str | None): 정렬 기준. None(default)=좌표 있으면 거리순 / "rating"=평점순(SHOP_EVAL_CVRT_IDX
+            DESC NULLS LAST) / "review_count"=리뷰 많은 순(서브쿼리 활성) / "distance"=거리순(좌표 필수).
+            사용자가 "근처/가까운"만 표현하면 None, "평점 좋은/별점 높은/친절한"이면 "rating",
+            "리뷰 많은/후기 많은"이면 "review_count".
         limit (int): 반환 매장 수 상한 (1-10). Default 10. 사용자가 "N개"를 명시하면
             그 값을 전달. location 카드 max_length=10 제약 때문에 10 초과 시 10으로 클램핑.
 
@@ -515,8 +621,8 @@ def get_nearby_stores_tool(
     """
     logger.debug(
         "[TOOL][get_nearby_stores_tool] Called with: user_xpos=%s, user_ypos=%s, radius_km=%s, svc_codes=%s, "
-        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        user_xpos, user_ypos, radius_km, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
     )
 
     try:
@@ -529,6 +635,7 @@ def get_nearby_stores_tool(
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
+            sort_by=sort_by,
         )
         if response.parsed is None:
             return _error_response(
@@ -574,12 +681,13 @@ def _get_store_list_cached(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
 ) -> dict:
     """Internal cached BE call. Validation runs in `get_store_list_tool` after this returns."""
     logger.debug(
         "[TOOL][_get_store_list_cached] Called with: region_code=%s, store_nm=%s (normalized), limit=%s, "
-        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s",
-        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd,
+        "svc_codes=%s, all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        region_code, store_nm, limit, svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
     )
     try:
         response = get_store_list(
@@ -591,6 +699,7 @@ def _get_store_list_cached(
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
+            sort_by=sort_by,
         )
         if response.parsed is None:
             return _error_response(
@@ -614,6 +723,7 @@ def get_store_list_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
 ):
     """
     Get store list by region and/or store name.
@@ -628,6 +738,8 @@ def get_store_list_tool(
     - imported_car_only=True: "수입차 특화점/전문매장/전문점/매장, 외제차 특화점/전문매장" 표현 시. True면 "[수입차 특화점]" 표시.
     - chl_sct_cd: "티스테이션/t'station/티스테" → "F", "더타이어샵/the tire shop/타이어샵" → "S", None=전체.
     - svc_codes: 매장 보유 서비스 코드 (OR 필터 + 응답에 동일 필드 노출). 아래 코드 매핑 참고.
+    - sort_by: 정렬 기준. None=좌표 있으면 거리순, 없으면 SHOP_ID 순(default).
+        "rating"=평점순(친절/평점/별점/추천 표현), "review_count"=리뷰 많은 순(리뷰·후기 많은 표현).
 
     Store fields: is_installable (온라인 장착 가능), is_imported_car (수입차 특화점),
     svc_codes (매장이 보유한 서비스 코드 리스트, 예: ["113","121","124"]).
@@ -651,6 +763,7 @@ def get_store_list_tool(
         all_my_t_only (bool): True → all my T 매장만. Default False.
         imported_car_only (bool): True → 수입차 특화점만. Default False.
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
+        sort_by (str | None): None(default) / "rating" / "review_count" / "distance"(좌표 필수).
 
     Examples:
         - {"region_code": "강남", "store_nm": "티스테", "limit": 5}
@@ -659,6 +772,8 @@ def get_store_list_tool(
         - {"region_code": "강남", "limit": 5, "imported_car_only": True}
         - {"region_code": "강남", "svc_codes": ["121"], "limit": 5}  # 강남에서 경정비 가능
         - {"store_nm": "광교신도시", "svc_codes": ["121"]}  # 광교신도시점이 경정비 가능한지 확인
+        - {"region_code": "강남", "sort_by": "rating", "limit": 5}  # 강남에서 평점 좋은 매장
+        - {"region_code": "서울", "sort_by": "review_count"}  # 서울에서 리뷰 많은 매장
     """
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
@@ -671,6 +786,7 @@ def get_store_list_tool(
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
     )
 
     if store_nm and isinstance(result, dict) and result.get("status") == "success":
@@ -901,6 +1017,148 @@ def get_multi_store_schedule_tool(
     })
 
 
+@tool
+def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int) -> dict:
+    """
+    Find stores in a region with reservation slots available at or after a given hour (Flow 5.5T).
+
+    Use this tool when the user asks for stores available "N시 이후" / "저녁 N시" / "오후 N시"
+    in a region, without specifying a particular store name or goods_no.
+
+    Fetches a broad store list for the region in parallel with checking today→+2 day reservation
+    slots per store, then returns pre-filtered raw store data for the location mapper.
+
+    Args:
+        region_code (str): Region name (e.g., '인천', '부산', '강남').
+        time_threshold_hour (int): 24-hour integer (0–23). Convert Korean time expressions:
+            "오전 N시" / "새벽 N시" → N          (e.g., "오전 9시"  → 9)
+            "오후 N시"              → 12 + N    (e.g., "오후 3시"  → 15, "오후 6시" → 18)
+            "저녁 N시"              → 12 + N    (e.g., "저녁 6시"  → 18, "저녁 9시" → 21)
+            "밤 N시"                → 12 + N    (e.g., "밤 10시"   → 22)
+            "N시 이후" (no prefix)  → 12 + N if N ≤ 12 and evening context, else N
+
+    Returns:
+        {
+            "stores_available":   [{"shop_id", "shop_nm", "address", "tel", "cal_day", "qualifying_slots"}],
+            "stores_unavailable": [{"shop_id", "shop_nm", "address", "tel", "reason"}],
+            "time_threshold_hour": int,
+            "region_code": str,
+        }
+    """
+    logger.debug(
+        "[TOOL][get_stores_with_time_filter_tool] region_code=%s, time_threshold_hour=%s",
+        region_code, time_threshold_hour,
+    )
+
+    # Fetch more candidates than the UI can render. Filtering happens after schedule checks;
+    # using a small pre-filter limit can hide stores that actually have slots after the threshold.
+    list_result = _get_store_list_cached(region_code=region_code, limit=50)
+    if list_result.get("status") == "error":
+        return list_result
+
+    stores_raw = (list_result.get("data") or {}).get("stores") or []
+    if not stores_raw:
+        return _success_response(200, {
+            "stores_available": [],
+            "stores_unavailable": [],
+            "time_threshold_hour": time_threshold_hour,
+            "region_code": region_code,
+        })
+
+    today = datetime.now()
+    client = get_client()  # obtain in main thread so worker threads inherit the request context
+
+    def _slot_hour(slot: object) -> int | None:
+        """Return the hour part from BE slot shapes like 18, "18", "18:00", or "1800"."""
+        if isinstance(slot, int):
+            return slot
+        if isinstance(slot, str):
+            raw = slot.strip()
+            if not raw:
+                return None
+            head = raw.split(":", 1)[0]
+            if head.isdigit():
+                # "1800" is occasionally used as HHMM; keep "18" as-is.
+                return int(head[:2]) if len(head) == 4 else int(head)
+        return None
+
+    def _check_store(store: dict) -> tuple[bool, dict]:
+        shop_id = store.get("shop_id") or store.get("shop_seq")
+        shop_nm = store.get("shop_nm") or ""
+        # BE 매장 일부는 road_addr_* 가 null. 지번주소(addr_base/addr_dtl)로 폴백.
+        road_full = " ".join(filter(None, [store.get("road_addr_base"), store.get("road_addr_dtl")])).strip()
+        jibun_full = " ".join(filter(None, [store.get("addr_base"), store.get("addr_dtl")])).strip()
+        addr = road_full or jibun_full
+        tel = store.get("tel_no") or ""
+        list_is_all_my_t = bool(store.get("is_all_my_t") or False)
+
+        if not shop_id:
+            return False, {"shop_nm": shop_nm, "address": addr, "tel": tel, "reason": "매장 ID 없음"}
+
+        for delta in range(3):
+            cal_day = (today + timedelta(days=delta)).strftime("%Y%m%d")
+            try:
+                resp = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
+                if resp.parsed is None:
+                    continue
+                detail = _to_dict(resp.parsed)
+                slots = detail.get("available_slots") or []
+                qualifying = [s for s in slots if (_slot_hour(s) is not None and _slot_hour(s) >= time_threshold_hour)]
+                if qualifying:
+                    detail_road = " ".join(filter(None, [detail.get("road_addr_base"), detail.get("road_addr_dtl")])).strip()
+                    detail_jibun = " ".join(filter(None, [detail.get("addr_base"), detail.get("addr_dtl")])).strip()
+                    return True, {
+                        "shop_id": shop_id,
+                        "shop_nm": detail.get("shop_nm") or shop_nm,
+                        "address": detail_road or detail_jibun or addr,
+                        "tel": detail.get("tel_no") or tel,
+                        "cal_day": cal_day,
+                        "qualifying_slots": qualifying,
+                        "is_all_my_t": bool(detail.get("is_all_my_t", list_is_all_my_t)),
+                        "is_tna_delivery": bool(detail.get("is_tna_delivery", False)),
+                    }
+            except Exception:
+                logger.warning(
+                    "[get_stores_with_time_filter_tool] detail failed shop_id=%s day+%d", shop_id, delta,
+                )
+
+        return False, {
+            "shop_id": shop_id,
+            "shop_nm": shop_nm,
+            "address": addr,
+            "tel": tel,
+            "reason": f"{time_threshold_hour}시 이후 예약 가능 슬롯 없음",
+        }
+
+    stores_available: list[dict] = []
+    stores_unavailable: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=min(len(stores_raw), 9)) as executor:
+        futures = {executor.submit(_check_store, store): store for store in stores_raw}
+        for future in as_completed(futures):
+            try:
+                is_avail, result = future.result()
+                if is_avail:
+                    stores_available.append(result)
+                else:
+                    stores_unavailable.append(result)
+            except Exception:
+                logger.warning("[get_stores_with_time_filter_tool] future failed")
+
+    stores_available.sort(key=lambda row: (
+        row.get("cal_day") or "99999999",
+        min((_slot_hour(s) for s in row.get("qualifying_slots", []) if _slot_hour(s) is not None), default=99),
+        row.get("shop_nm") or "",
+    ))
+
+    return _success_response(200, {
+        "stores_available": stores_available,
+        "stores_unavailable": stores_unavailable,
+        "time_threshold_hour": time_threshold_hour,
+        "region_code": region_code,
+    })
+
+
 def _extract_stores(data: Any) -> list[dict]:
     if not isinstance(data, dict):
         return []
@@ -970,6 +1228,17 @@ def transaction_store_preview_tool(
     if not goods_no or ord_qty < 1:
         return _error_response(None, "invalid_input", "goods_no and ord_qty are required")
 
+    has_region = bool(region_code and region_code.strip())
+    has_store = bool(store_nm and store_nm.strip())
+    has_coords = user_xpos is not None and user_ypos is not None
+    if not (has_region or has_store or has_coords):
+        return _error_response(
+            None,
+            "missing_location_filter",
+            "region_code, store_nm, or user_xpos/user_ypos is required — "
+            "ask the user for a region/store/landmark before calling this tool",
+        )
+
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
 
@@ -1005,6 +1274,27 @@ def transaction_store_preview_tool(
 
     store_data = _to_dict(store_response.parsed)
     stores = _extract_stores(store_data)
+
+    # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
+    # 이게 없으면 LLM 이 silent "No store candidates found" 만 받고 generic 응답을
+    # 생성하거나 다른 도구를 fan-out 한다 (예: "분당판교점" 같은 복합 지역명 오입력).
+    if store_nm:
+        validation_override = _validate_store_nm_exact_match(user_input=store_nm, stores=stores)
+        if validation_override is not None:
+            logger.info(
+                "[TOOL][transaction_store_preview_tool] store_nm validation override: status=%s, user_input=%s",
+                validation_override.get("status"), store_nm,
+            )
+            payload = dict(validation_override.get("data") or {})
+            payload.setdefault("price", None)
+            payload.setdefault("logistics", None)
+            payload.setdefault("inventory", None)
+            payload.setdefault("schedule", None)
+            return _success_response(
+                validation_override.get("http_status", 200),
+                payload,
+            )
+
     candidates = sorted(
         stores,
         key=lambda s: (
@@ -1060,14 +1350,55 @@ def transaction_store_preview_tool(
         has_logistics=logistics_qty > 0,
     )
 
-    return _success_response(200, {
+    result_data: dict[str, Any] = {
         "price": results.get("price"),
         "logistics": results.get("logistics"),
         "inventory": results.get("store_inventory"),
         "schedule": schedule.get("data") if isinstance(schedule, dict) else schedule,
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
-    })
+    }
+
+    schedule_data = result_data["schedule"] if isinstance(result_data["schedule"], dict) else {}
+    tier = schedule_data.get("tier")
+    is_single_named_store = bool(store_nm) and len(shop_ids) == 1
+    if tier == "none" and shop_ids:
+        if is_single_named_store:
+            # 사용자가 특정 매장명(예: "판교점") 으로 검색해 단일 매장만 매칭된 경우 —
+            # 매장 확정 상태로 간주. tier="none" 은 빠른 슬롯(오늘/T바로배송) cascade 결과일
+            # 뿐, 일반 예약 슬롯은 정상 존재 가능. agent 가 location 카드로 다시 매장 선택을
+            # 요청하면 사용자에게 무한 루프로 보임 — 즉시 schedule 도구 체이닝 강제.
+            result_data["instruction_to_agent"] = (
+                f"DETERMINISTIC GUARD: 사용자가 특정 매장명(`{store_nm}`)으로 검색해 단일 매장만 "
+                "매칭됨 — 사용자가 이미 매장을 확정한 상태. 다음 액션을 즉시 수행: "
+                "(1) get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode=\"general\") 호출, "
+                "(2) 응답으로 datepick 템플릿 emit. "
+                "⛔ 금지: location 카드 emit, \"원하시는 매장을 선택해 주세요\" / "
+                "\"주문 가능한 매장을 확인했어요\" 류 quickReply emit, fallback chip "
+                "(\"1:1 문의하기\"/\"처음으로\") 으로 종료, schedule 도구 호출 누락. "
+                "사용자는 이미 단일 매장을 지정했으므로 매장 재선택 요청 절대 금지."
+            )
+        else:
+            result_data["instruction_to_agent"] = (
+                "DETERMINISTIC GUARD: 사용자가 매장을 아직 선택하지 않았음 — "
+                "자동으로 candidate_shop_ids[0] 를 픽해서 get_store_schedule_tool / "
+                "get_store_inventory_tool / get_store_detail_tool 등 후속 도구를 호출하거나 "
+                "datepick 을 emit 하면 절대 안 됨. 다음 액션: "
+                "(1) 'stores' 리스트로 `location` 템플릿 emit, "
+                "(2) assistantResponse 는 **사용자의 직전 발화 의도** 와 **검색 경로** 에 맞춰 작성: "
+                "[A] 사용자가 '오늘 장착', '당일 장착', '지금 장착' 등 오늘/당일 장착 의도 명시 시 → "
+                "\"오늘 바로 장착 가능한 매장은 없지만, 일반 예약 가능한 매장 목록입니다. 원하시는 매장을 선택해 주세요 😊\". "
+                "[B] 그 외 (지역명/매장명/근처 등만 언급) — region 검색(region_code 사용)이면 "
+                "\"주소에 '[지역]'이/가 포함된 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊\" "
+                "(받침 있으면 '이', 없으면 '가'), 좌표 기반이면 "
+                "\"고객님, [명칭] 주변 매장을 검색했어요. 원하시는 매장을 선택해 주세요 😊\". "
+                "(3) 동일 턴에 schedule/inventory/detail 도구 호출 금지, "
+                "(4) STOP and wait for user to pick a store. "
+                "⚠️ 케이스 [B] 에서 \"오늘 장착 가능한 매장이 없어요\" 류 문구는 거짓이 될 수 있으므로 절대 사용 금지 — "
+                "각 매장의 일반 예약 슬롯은 정상 존재할 수 있음 (schedule.tier 는 빠른 슬롯 cascade 결과일 뿐)."
+            )
+
+    return _success_response(200, result_data)
 
 
 # =====================================================
@@ -1228,3 +1559,42 @@ def get_orders_of_user_tool():
     except Exception as e:
         logger.exception("[TOOL][get_orders_of_user_tool] Failed")
         return _error_response(None, str(e), "Failed to retrieve order list")
+
+
+@tool
+def get_my_reservations_tool(sct_cd: str = "100"):
+    """
+    Retrieve authenticated user's shop visit reservations from ET_SHOP_RSV_INFO.
+
+    Args:
+        sct_cd: Reservation category filter (default "100"). Values:
+            - "100": 방문예약 (simple shop visit reservation — default)
+            - "200": 구매후방문예약 (post-purchase visit, has ord_no)
+            - "300": 오프라인예약 (offline reservation)
+            - "all": all categories
+
+    Returns response with `reservations` list. Each item includes:
+        shop_rsv_seq, shop_rsv_no, ord_no, shop_id, shop_nm, tel_no,
+        vst_rsv_dtime (YYYY-MM-DD HH:MI), rsv_req_desc,
+        shop_rsv_sct_cd / shop_rsv_sct_label (방문예약/구매후방문예약/오프라인예약),
+        shop_vst_rsv_sts_cd / shop_vst_rsv_sts_label (예약대기/예약완료/서비스완료/서비스취소).
+
+    Sorted by vst_rsv_dtime DESC.
+
+    Call when user asks about their reservations (예: "내 예약 보여줘", "예약 어떻게 돼있어?",
+    "다음 방문 언제야?", "내 예약 취소된 거 있어?").
+    """
+    logger.debug("[TOOL][get_my_reservations_tool] Called sct_cd=%s", sct_cd)
+
+    try:
+        response = get_reservations(client=get_client(), sct_cd=sct_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve reservations"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_reservations_tool] Failed")
+        return _error_response(None, str(e), "Failed to retrieve reservations")

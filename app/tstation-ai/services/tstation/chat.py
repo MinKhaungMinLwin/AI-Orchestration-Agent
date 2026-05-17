@@ -11,6 +11,7 @@ from textwrap import dedent
 from pydantic import BaseModel, Field
 from enum import Enum
 
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.tstation_be_client import set_tstation_be_token
 from config.env import settings
 from config.prompts import load_client_injection
@@ -28,9 +29,8 @@ from common.jwt_utils import get_user_info_from_token
 from common.curr_time import get_current_time
 from services.tstation.common.pii_guardrail import check_pii, GUARDRAIL_RESPONSE
 
-from services.tstation.agents.g_qc_agent.source_filter import filter_source_data, filter_for_context
-from services.tstation.agents.g_qc_agent.agent import ainvoke_qc
-from services.tstation.agents.router import QC_LLM
+from services.tstation.source_filter import filter_source_data, filter_for_context
+from services.tstation import qc_verifier
 from services.tstation.classifier_feedback import log_classifier_redirect
 from config.tracing import (
     build_trace_config,
@@ -246,7 +246,7 @@ class MultiAgentDomain(BaseModel):
             "Prompt profile for the selected domain agent. "
             "Transaction narrow profiles: 'transaction_coupon' (coupon/promotion), 'transaction_order' (order/cart/status/cancellation fee), "
             "'transaction_store' (store search/schedule/inventory), 'transaction_price_stock' (price/stock with known goods_no). "
-            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock/discount-price with specific product name, best-sellers — goods_no NOT yet known). "
+            "Discovery narrow profiles: 'discovery_search' (product search by name/keyword/size, price/stock/discount-price with specific product name, run-flat vs normal price comparison, best-sellers — goods_no NOT yet known). "
             "'discovery_recommendation' (tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT specific product name, or continuation from recommendation cards). "
             "'discovery_event_content' (events, deals, event-applicable products, product events, YouTube/video). "
             "Use 'full' for compatibility-only or any mixed/uncertain case."
@@ -284,7 +284,7 @@ class _SlimMultiAgentDomain(BaseModel):
         description=(
             "Prompt profile for the selected domain agent. "
             "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size, "
-            "price/stock/discount-price with specific product name, or best-sellers (no goods_no in context); "
+            "price/stock/discount-price with specific product name, run-flat vs normal price comparison, or best-sellers (no goods_no in context); "
             "'discovery_recommendation' for tire recommendation by vehicle, tire size, scenario, "
             "discount ranking WITHOUT a specific product name, or continuation from recommendation cards; "
             "'discovery_event_content' for events/deals/video; 'full' for compatibility-only or uncertain cases."
@@ -316,10 +316,11 @@ Produce 6 outputs:
 6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
-   - "transaction_store": store search, nearby store, store detail, schedule, store inventory; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
+   - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
+     ⚠️ "매장에서 예약 받아?" / "X일에 예약 가능한지" / "연휴에도 예약 받아" targeting a STORE → transaction_store (NOT transaction_order — those are for "내 예약" personal lookup)
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
-   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
@@ -346,6 +347,13 @@ the user is requesting a NEW recommendation, NOT filtering the previous list.
 explicit "추천" request like "패밀리 SUV에 잘 맞는 사계절용 추천" after a
 previous "전기차용" recommendation is RE-RECOMMENDATION, not filtering.
 
+⚠️ Price-similarity follow-up is always DISCOVERY, not TRANSACTION:
+If the previous turn showed a product price (via price breakdown, product card, or
+description) and the user now asks to see products at a comparable price level,
+this is a NEW recommendation request — route to DISCOVERY. The user wants to
+browse by price positioning, not to complete a purchase or check stock.
+Example: TRANSACTION showed ₩154,300 price → user asks "비슷한 가격대 타이어 추천" → DISCOVERY.
+
 PREV=CUR escape (do NOT mark as RE-RECOMMENDATION):
   - If the user's scenario word matches the SAME scenario family as PREV
     (e.g. PREV rcmd_type="ev" and user says "이 EV용 중에서 18인치"), this is
@@ -370,7 +378,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
 - SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -380,17 +388,18 @@ DOMAIN ROUTING EXAMPLES
 ====================================================
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
-- "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "이벤트", "리뷰 영상", "추천 가격 비교해줘"
+- "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "런플랫이 얼마나 더 비싸?", "225/45R18 런플랫 가격 차이", "이벤트", "리뷰 영상", "추천 가격 비교해줘"
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
+- 가격 유사성 기반 추천 follow-up: 직전 대화에서 특정 상품의 가격이 표시된 후 그 가격대와 비슷한 다른 타이어를 요청하는 경우 — 이전 도메인이 TRANSACTION(가격 조회)이어도 반드시 DISCOVERY. 사용자 의도는 가격 포지셔닝 기반 새 추천이므로 TRANSACTION이 아님.
 - 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
-- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰/받을수있는 쿠폰", "오늘 취소하면 수수료 있나요?"
+- "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰", "오늘 취소하면 수수료 있나요?"
 
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
 
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
@@ -501,9 +510,9 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용) [⚠️ NOT SUPPORT — must check order/logistics state].
-- DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
+- DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
+- SUPPORT: warranty, returns, refund, maintenance, shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 RULES:
@@ -514,9 +523,14 @@ RULES:
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
+- 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
 - 매장/근처/올마이티/All My T → TRANSACTION
-- 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
-- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용 → TRANSACTION, agent_prompt_profile=transaction_order
+- 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
+- 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
+- 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
+- 온라인 전용 상품 차이/온라인에서만 구매/매장 방문 구매 가능 여부 → SUPPORT
+- 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
+- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
 
@@ -527,19 +541,31 @@ EXAMPLES (tricky cases):
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
+- "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
+- "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
 - "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order (check order/logistics state, NOT FAQ)
 - "예약 취소하면 비용이 발생하나요?" → TRANSACTION, agent_prompt_profile=transaction_order (store visit vs online order must be determined from orders)
+- "단순 변심으로 반품하면 왕복 배송비 얼마야?" → TRANSACTION, agent_prompt_profile=transaction_order (return shipping-fee policy must use order/logistics policy, NOT Support FAQ)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
+- "강남점에서 추석 연휴에도 타이어 교체 예약 받아?" → TRANSACTION, agent_prompt_profile=transaction_store (store holiday availability — 매장 운영/예약 가능 여부 조회, NOT "내 예약" lookup)
+- "티스테이션 강남점에서 2026/06/25에도 타이어 교체 예약받는지 알려줘" → TRANSACTION, agent_prompt_profile=transaction_store (store schedule availability on specific date)
+- "내일 석가탄신일인데 티스테이션 한남점 열어?" → TRANSACTION, agent_prompt_profile=transaction_store (store holiday check)
+- "제주도 매장에서도 온라인 가격이랑 똑같아?" → SUPPORT (Jeju/island shipping-fee and online-vs-store policy FAQ, NOT store search)
+- "서귀포시인데 배송비 더 들어?" → SUPPORT (Seogwipo/Jeju additional shipping-fee policy FAQ)
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
 - "할인율 높은 타이어 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (highest discount applied)
 - "20만원에서 30만원 사이 한국타이어" → DISCOVERY, agent_prompt_profile=discovery_search (product search by price range)
 - "벤투스 S2 225/45R17 가격" → DISCOVERY, agent_prompt_profile=discovery_search
+- "런플랫 타이어는 더 비싸다며? 얼마나 더 내야해?" → DISCOVERY, agent_prompt_profile=discovery_search
+- "225/45R18 런플랫은 일반 타이어보다 얼마나 비싸?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "다이나프로 HPX 할인된 가격이 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product + discount price = search, NOT recommendation)
 - "벤투스 S2 할인가 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product name → search for it, not discount ranking)
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
+- "제일 최근에 나온 타이어 신제품이 뭐야?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "진행 중인 이벤트 보여줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "리뷰 영상 찾아줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
@@ -556,7 +582,7 @@ agent_prompt_profile:
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), best-sellers ("많이 팔린/베스트셀러/잘 팔리는")
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는"), newest products ("최신/신제품/최근 출시")
 - discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
 - discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain
@@ -598,9 +624,63 @@ class StreamingMultiAgentCoordinator:
     _KEYWORD_FORCE_TABLE: ClassVar[
         list[tuple[list[str], "MultiAgentDomain.Domain"]]
     ] = [
+        # TRANSACTION — cancellation/return shipping-fee inquiry (TC-118).
+        # Keep this before the broad SUPPORT "반품" rule so round-trip return-fee
+        # questions check order/logistics policy instead of FAQ hallucinating 5천 원.
+        (
+            [
+                "취소하면 택배비",
+                "택배비 물어내",
+                "왕복 배송비",
+                "반품 비용",
+                "반품수수료",
+                "취소 수수료",
+                "취소비용",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
         # SUPPORT — return / refund / warranty / 1:1
         (
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # SUPPORT — online-only product policy / online vs in-store purchase (TC-028, TC-104).
+        # Keep this narrower than "온라인 전용" so the CTA label "온라인 전용 상품 보기"
+        # can still route to Discovery instead of looping back to FAQ.
+        (
+            [
+                "온전용",
+                "매장 가서 사는",
+                "매장 방문해서도 구매",
+                "매장에서도 구매",
+                "온라인에서만",
+                "온라인에서만 사야",
+                # generic online vs in-store price difference queries
+                "매장에서 구매하는거랑 온라인",
+                "매장 구매랑 온라인",
+                "온라인 주문이랑 매장",
+                "온라인이랑 매장 가격 차이",
+                "매장 가격 온라인 가격",
+                "매장에서 사는 거랑 온라인",
+                "매장 가서 직접 사는 거랑 온라인",
+                "매장 가서 직접 사는",
+                "매장에서 사는거랑 온라인",
+            ],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # SUPPORT — Jeju/island-mountain shipping-fee policy (TC-057).
+        # Policy questions about regional surcharge should use FAQ guidance, not store search.
+        (
+            [
+                "도서산간",
+                "제주도 매장에서도 온라인 가격",
+                "제주 배송비",
+                "제주도 배송비",
+                "서귀포시인데 배송비",
+                "서귀포 배송비",
+                "배송비 더 들어",
+                "추가 배송비",
+            ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
         # DISCOVERY — vehicle lookup / video / event
@@ -615,6 +695,25 @@ class StreamingMultiAgentCoordinator:
                 "이벤트", "기획전",
             ],
             MultiAgentDomain.Domain.DISCOVERY,
+        ),
+        # TRANSACTION — coupon list inquiry (topic shift mid-flow must override
+        # recommendation/order context bias that otherwise traps the LLM router
+        # in DISCOVERY and triggers hallucinated "혜택 영역으로 안내" deflections).
+        (
+            [
+                "내 쿠폰", "내쿠폰",
+                "쿠폰함",
+                "쿠폰 목록", "쿠폰목록",
+                "보유 쿠폰", "보유쿠폰",
+                "사용 가능한 쿠폰", "사용가능한 쿠폰",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
+        # TRANSACTION — Smart Pay installment calculation is a price/payment
+        # question. Keep it out of Discovery even when a product name appears.
+        (
+            ["스마트페이", "스마트 페이", "Smart Pay", "smart pay", "SmartPay", "smartpay"],
+            MultiAgentDomain.Domain.TRANSACTION,
         ),
     ]
 
@@ -713,7 +812,15 @@ class StreamingMultiAgentCoordinator:
                         domains=[domain],
                         execution_plan=[f"Run {domain.value} for the matched current-turn topic"],
                         user_behavior=f"topic shift via keyword '{kw}'",
-                        agent_prompt_profile=AgentPromptProfile.FULL,
+                        agent_prompt_profile=(
+                            AgentPromptProfile.TRANSACTION_ORDER
+                            if domain == MultiAgentDomain.Domain.TRANSACTION
+                            and any(
+                                fee_kw in text
+                                for fee_kw in ("취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료")
+                            )
+                            else AgentPromptProfile.FULL
+                        ),
                         flow="hardcoded keyword routing — bypassed LLM router",
                     )
         return None
@@ -798,6 +905,25 @@ class StreamingMultiAgentCoordinator:
                 )
             else:
                 result = raw_result
+
+            # Deterministic profile override — datepick selection turn must use FULL profile.
+            # FE 가 datepick 슬롯 클릭 시 보내는 메시지 패턴 "YYYY년 M월 D일 (요일)\nHH:MM"
+            # 은 routing prompt L325 의 `full` profile 룰에 명시되어 있지만, 분류 LLM
+            # (gpt-4.1-mini) 이 직전 대화 컨텍스트 (datepick 카드 = store schedule) 에
+            # 가려 `transaction_store` 로 분류하는 회귀가 반복. narrow 프로필은 STEP 5.5
+            # PRE-ORDER PREVIEW 룰을 못 보므로 datepick → preOrder 흐름이 끊기고 dead-end
+            # chip ("1:1 문의하기"/"처음으로") 으로 빠진다. 분류기 출력 무관하게 강제 override.
+            if (
+                last_user_text
+                and _DATEPICK_SELECTION_RE.match(last_user_text)
+                and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
+                and result.agent_prompt_profile != AgentPromptProfile.FULL
+            ):
+                logger.info(
+                    "[MULTI-DOMAIN] Datepick pattern detected — forcing profile %s → FULL",
+                    result.agent_prompt_profile,
+                )
+                result.agent_prompt_profile = AgentPromptProfile.FULL
 
             logger.debug(
                 f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
@@ -960,6 +1086,18 @@ class StreamingMultiAgentCoordinator:
             input_goods_no = tool_input.get("goods_no")
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
+
+        # `get_store_schedule_tool` / `get_store_detail_tool` 은 사용자가 매장을 확정한 뒤
+        # 호출되는 도구다 (datepick / 매장 상세 페이지 진입). list-tool 의 result-count
+        # 가드와 무관하게, agent 가 shop_id 를 input 으로 전달했다는 사실 자체가 그
+        # 매장이 사용자의 확정 선택임을 의미한다. 이 값을 슬롯에 persist 하지 않으면
+        # place_order goal 의 `shop` step 이 풀리지 않아 state header 가 "다음: 매장 선택"
+        # 으로 남고, datepick 이후 "주문 진행하기" chip click 턴에서 agent 가 매장
+        # chip 을 다시 emit 하는 루프가 발생한다.
+        if tool_name in ("get_store_schedule_tool", "get_store_detail_tool") and tool_input:
+            input_shop_id = tool_input.get("shop_id")
+            if input_shop_id:
+                tool_slots["shop_id"] = input_shop_id
 
         # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
         # `payment_amount = (extra_fvr_sale_prc + wage_prc) * ord_qty` 로 계산.
@@ -1849,6 +1987,116 @@ def _is_regional_cheapest_query(msg: str | None) -> bool:
     return bool(_CHEAP_KEYWORDS_RE.search(msg))
 
 
+# ---------------------------------------------------------------------------
+# Service reservation (wiper / battery / alignment / 경정비) datepick redirect
+# ---------------------------------------------------------------------------
+# Non-tire service reservations are not bookable inside the chatbot — the
+# user must complete them on the tstation.com 매장 상세 페이지. The
+# `c_transaction_agent` system prompt has a SERVICE RESERVATION REDIRECT
+# rule for this, but the LLM sometimes ignores it after a datepick
+# selection and emits a vague "필요한 정보를 이어서 입력해 주세요" with
+# dead-end "1:1 문의하기 / 처음으로" chips, leaving the user stuck.
+#
+# Detect the situation deterministically pre-coordinator and short-circuit
+# with a fixed redirect payload, mirroring `_is_regional_cheapest_query`.
+
+_DATEPICK_SELECTION_RE = re.compile(
+    r"^\s*(?P<year>\d{4})년\s*(?P<month>\d{1,2})월\s*(?P<day>\d{1,2})일"
+    r"\s*(?:\([^)]+\))?\s*[\n\s]+\s*(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*$"
+)
+_TIRE_PRODUCT_CONTEXT_RE = re.compile(
+    r"goods_no|G\d{12}|"
+    r"\d{3}\s*/\s*\d{2}\s*R\s*\d{2}|"
+    r"벤투스|키너지|아이온|마일리지|드라이브웨이|다이나프로|라우펜|"
+    r"ventus|kinergy|ion\b|mileage",
+    re.IGNORECASE,
+)
+_SHOP_SEQ_RE = re.compile(r'"shop[_\s]*seq"\s*:\s*"([A-Z]?\d{4,})"', re.IGNORECASE)
+_STORE_NAME_RE = re.compile(r"티스테이션\s*[가-힣A-Za-z0-9]+\s*점")
+
+
+def _scan_recent_messages_for(
+    messages: list[dict], pattern: re.Pattern, *, max_msgs: int = 10
+) -> str | None:
+    """Walk last `max_msgs` messages newest-first; return first regex match."""
+    for msg in reversed(messages[-max_msgs:]):
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, str) or not content:
+            continue
+        match = pattern.search(content)
+        if match:
+            return match.group(1) if match.groups() else match.group(0)
+    return None
+
+
+def _is_service_reservation_redirect(
+    last_user_text: str | None,
+    pending_intent: str | None,
+    messages: list[dict],
+) -> bool:
+    """True when a datepick selection should be routed to the matjang detail page.
+
+    All three conditions must hold:
+      1. The user message is *only* a date + time (FE datepick click payload).
+      2. The conversation has a pending `reservation` intent (set by
+         ConversationSlots.extract when the user said 와이퍼/배터리/경정비/
+         얼라인먼트 + 예약).
+      3. No tire-product context (goods_no / size / model name) appears in
+         the recent history — that signals a tire booking which has its own
+         preOrder flow.
+    """
+    if not last_user_text or pending_intent != "reservation":
+        return False
+    if not _DATEPICK_SELECTION_RE.match(last_user_text):
+        return False
+    if _scan_recent_messages_for(messages, _TIRE_PRODUCT_CONTEXT_RE):
+        return False
+    return True
+
+
+def _build_service_reservation_redirect_payload(
+    last_user_text: str,
+    messages: list[dict],
+) -> dict:
+    """Compose the deterministic redirect text + chips for emit/non-stream paths.
+
+    Best-effort store-name and shop_seq extraction from recent history; if
+    shop_seq is unavailable we omit the URL chip rather than fabricate one.
+    """
+    from services.tstation.common.cta_urls import CTAUrls
+
+    m = _DATEPICK_SELECTION_RE.match(last_user_text)
+    assert m is not None, "caller must guard with _is_service_reservation_redirect"
+    yyyy = m.group("year")
+    mm = m.group("month").zfill(2)
+    dd = m.group("day").zfill(2)
+    hh = m.group("hour").zfill(2)
+    mi = m.group("minute")
+
+    store_name = _scan_recent_messages_for(messages, _STORE_NAME_RE) or "선택하신 매장"
+    shop_seq = _scan_recent_messages_for(messages, _SHOP_SEQ_RE)
+
+    text = (
+        f"{store_name} {yyyy}-{mm}-{dd} {hh}:{mi} 방문을 원하시는 것으로 확인했어요 😊\n\n"
+        "방문 예약은 티스테이션닷컴 매장 상세 페이지에서 가능해요. "
+        "아래 버튼으로 이동해 주세요."
+    )
+
+    chips: list[dict] = []
+    if shop_seq:
+        chips.append({
+            "label": "매장 상세 페이지로 이동",
+            "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", shop_seq),
+            "domain": "TRANSACTION",
+        })
+    chips.extend([
+        {"label": "다른 시간 선택", "domain": "TRANSACTION"},
+        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+    ])
+
+    return {"text": text, "chips": chips, "shop_seq": shop_seq, "store_name": store_name}
+
+
 # Goal-based fast-path routing tables — kept beside _goal_based_classify so the
 # classifier code and its decision data stay together. Only goal_types defined
 # in slots.py's GOAL_PLANS appear here; mismatches simply fall through to the
@@ -1973,6 +2221,64 @@ def _predicted_domain_values_from_event(event: dict) -> list[str]:
 
 def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> bool:
     return bool(domains) and not any(domain in _SPECULATIVE_UNSAFE_DOMAINS for domain in domains)
+
+
+# Tool-name → context-aware fallback chip set. Picked when the LLM emits an
+# empty quickReplies array so the user lands on chips that fit the conversation
+# (e.g., order list → order-history CTA, not the generic "1:1 문의" pair which
+# makes the flow look broken).
+_FALLBACK_GENERIC: list[dict] = [
+    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+_FALLBACK_ORDER_LIST: list[dict] = [
+    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+_FALLBACK_COUPON: list[dict] = [
+    {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+# LEADING 도메인의 fallback 은 진행형(발견 → 구매) chip 으로 시작해야 자연스럽다.
+# "1:1 문의하기" 같은 escalation chip 은 사용자가 인사·일반 문의를 한 직후엔 부적절.
+_FALLBACK_LEADING_PROGRESS: list[dict] = [
+    {"label": "상품 검색", "domain": "DISCOVERY"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+# Order matters: more specific tools first so the dispatch picks the most
+# relevant chip set when multiple tools ran in the same turn.
+_FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
+    ({"get_orders_of_user_tool", "get_order_status_tool"}, _FALLBACK_ORDER_LIST, "order"),
+    ({"get_my_coupons_tool", "get_available_coupons_tool"}, _FALLBACK_COUPON, "coupon"),
+]
+
+
+def _choose_quickreply_fallback(
+    called_tool_names: set[str], source_domain: str | None
+) -> tuple[list[dict], str]:
+    """Pick a context-aware fallback chip set when the LLM emits empty quickReplies.
+
+    Returns (chips, label) where label is a short tag for logging/telemetry.
+
+    Routing priority:
+      1. Tool-based dispatch (order/coupon) — turn ran a tool that needs a specific CTA.
+      2. LEADING domain → 진행형 chip ([상품 검색, 타이어 추천, 처음으로]). 인사/일반
+         문의에서 "1:1 문의" 로 떨어지는 부자연스러운 fallback 을 방지.
+      3. Generic ([1:1 문의하기, 처음으로]) — 마지막 안전망.
+    """
+    for tool_set, chips, label in _FALLBACK_DISPATCH:
+        if called_tool_names & tool_set:
+            return chips, label
+    if source_domain and source_domain.lower() == "leading":
+        return _FALLBACK_LEADING_PROGRESS, "leading_progress"
+    return _FALLBACK_GENERIC, "generic"
 
 
 def _goal_based_classify(
@@ -2193,20 +2499,6 @@ def _should_skip_qc(
         template_source,
         assistant_response_source,
     ) is not None
-
-
-def _parse_qc_output(qc_result: str) -> tuple[str, dict | None]:
-    """Returns (corrected_text, template_json | None)."""
-    if "[Template:" not in qc_result:
-        return qc_result, None
-    parts = qc_result.split("[Template:", 1)
-    corrected_text = parts[0].strip()
-    try:
-        newline_idx = parts[1].index("\n")
-        json_str = parts[1][newline_idx + 1:].strip()
-        return corrected_text, json.loads(json_str)
-    except (ValueError, json.JSONDecodeError):
-        return corrected_text, None
 
 
 # Singleton coordinator instance
@@ -2598,7 +2890,7 @@ class TStationChatServiceV2:
         Returns None when no confident match is found.
 
         Expected tool_context entry shape (produced by filter_for_context in
-        g_qc_agent/source_filter.py, which is what gets persisted to Redis):
+        services/tstation/source_filter.py, which is what gets persisted to Redis):
             {"tool": "search_product_tool" | "get_products_recommendations_tool",
              "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
              "input": {...}}
@@ -3450,6 +3742,10 @@ class TStationChatServiceV2:
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
             and merged_slots.goods_no is not None
             and regex_slots.pending_intent is not None
+            and not (
+                routing_result is not None
+                and routing_result.agent_prompt_profile == AgentPromptProfile.DISCOVERY_RECOMMENDATION
+            )
         ):
             logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
@@ -3514,6 +3810,10 @@ class TStationChatServiceV2:
                 merged_slots.tire_size is not None
                 or merged_slots.tire_model is not None
                 or ConversationSlots.has_product_keyword(last_user_text)
+            )
+            and not (
+                routing_result is not None
+                and routing_result.agent_prompt_profile == AgentPromptProfile.DISCOVERY_RECOMMENDATION
             )
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
@@ -3621,9 +3921,21 @@ class TStationChatServiceV2:
         # through every signature in the agent → mapper chain.
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
-        from services.tstation.template_mapper import current_goal_type, current_pending_intent
+        from services.tstation.template_mapper import (
+            current_goal_type,
+            current_pending_intent,
+            current_runflat_comparison,
+            current_return_visit_store_flow,
+        )
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
+        current_runflat_comparison.set(bool(
+            re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
+            and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
+        ))
+        current_return_visit_store_flow.set(bool(
+            re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
+        ))
 
         _t_prestream = time.perf_counter()
         logger.debug(
@@ -3634,6 +3946,36 @@ class TStationChatServiceV2:
         )
 
         # STREAM MODE
+        # Post-classifier intercept: 비-타이어 방문 예약 (와이퍼/배터리/얼라인먼트/
+        # 경정비 등) 흐름에서 사용자가 datepick 시간 슬롯을 클릭한 turn은 결정적
+        # redirect 으로 처리한다. LLM 의 SERVICE RESERVATION REDIRECT 규칙
+        # 우회로 인한 vague "필요한 정보를 이어서 입력해 주세요" + dead-end chip
+        # 회귀를 차단. pending_intent=="reservation" + datepick 패턴 + 타이어
+        # 컨텍스트 부재 — 세 조건 모두 만족 시에만 발동.
+        if _is_service_reservation_redirect(
+            last_user_text, merged_slots.pending_intent, messages
+        ):
+            redirect_payload = _build_service_reservation_redirect_payload(
+                last_user_text, messages
+            )
+            logger.info(
+                "[CHAT_V2] Service-reservation redirect intercept: store=%r shop_seq=%r user=%r",
+                redirect_payload["store_name"],
+                redirect_payload["shop_seq"],
+                last_user_text[:40],
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_service_reservation_redirect(redirect_payload),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=redirect_payload["text"])
+
         if request.stream:
             return StreamingResponse(
                 TStationChatServiceV2._stream_response_multi(
@@ -3715,6 +4057,33 @@ class TStationChatServiceV2:
         yield "data: [DONE]\n\n"
 
     @staticmethod
+    def _stream_service_reservation_redirect(payload: dict):
+        """Stream the deterministic SERVICE RESERVATION REDIRECT response.
+
+        Emits token + message + data(quickReply) + sub-agent[DONE] + DONE,
+        bypassing the multi-agent pipeline entirely. Used when a user clicks
+        a datepick slot in a wiper/battery/alignment booking flow where the
+        LLM has been observed to ignore the prompt-level redirect rule.
+        """
+        msg = payload["text"]
+        chips = payload["chips"]
+        yield f"data: {json.dumps({'type': 'token', 'content': msg}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+        data_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": msg,
+                "quickReplies": chips,
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
+        yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
     def _stream_regional_cheapest_response():
         """Stream a canned response for '도/시/군/구 + 제일 저렴한 매장' queries."""
         msg = (
@@ -3780,6 +4149,9 @@ class TStationChatServiceV2:
         draft_response = ""       # text only — used for history/message sync
         draft_for_qc = ""         # text + template payload — passed to QC only
         source_data_chunks = []
+        # Parsed dicts paired with tool name — handed to the deterministic verifier
+        # so it can scan all source values without re-parsing strings.
+        structured_sources: list[tuple[str, dict]] = []
         buffered_data_events: list[dict] = []  # DATA events held until after QC
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
@@ -3925,6 +4297,9 @@ class TStationChatServiceV2:
                     ctx_item = filter_for_context(tool_name, output_data, input_data)
                     if ctx_item:
                         tool_context_items.append(ctx_item)
+                    parsed_for_verifier = qc_verifier.parse_tool_output(output_data)
+                    if parsed_for_verifier is not None:
+                        structured_sources.append((tool_name, parsed_for_verifier))
 
                 continue
 
@@ -3995,6 +4370,29 @@ class TStationChatServiceV2:
                             {"label": "다시 시도", "domain": "TRANSACTION"},
                             {"label": "처음으로", "domain": "LEADING"},
                         ]
+                # Defensive fallback for quickReply template: if LLM emitted empty quickReplies,
+                # inject context-aware chips so the user is never stranded. Skip when the turn
+                # is an auto-chained handoff (nextAction.type == "continue") because the
+                # coordinator runs the next agent in the same turn and chips would be noise.
+                # Chip set is selected from called_tool_names so the fallback matches the
+                # conversation context (e.g., order list → order-related chips, not a generic
+                # "1:1 문의" pair which makes the order flow look broken).
+                if last_template == "quickReply" and isinstance(event_data, dict):
+                    existing_chips = event_data.get("quickReplies")
+                    chips_empty = not isinstance(existing_chips, list) or len(existing_chips) == 0
+                    next_action = event.get("nextAction") or {}
+                    is_handoff = isinstance(next_action, dict) and next_action.get("type") == "continue"
+                    if chips_empty and not is_handoff:
+                        fallback_chips, fallback_label = _choose_quickreply_fallback(
+                            called_tool_names, source_domain
+                        )
+                        logger.warning(
+                            "[QUICKREPLY_FALLBACK] empty quickReplies (domain=%s tools=%s) → %s",
+                            source_domain,
+                            sorted(called_tool_names),
+                            fallback_label,
+                        )
+                        event_data["quickReplies"] = fallback_chips
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
@@ -4063,20 +4461,20 @@ class TStationChatServiceV2:
 
         _t_agents = time.perf_counter()
 
-        # 2. QC AGENT
-        # Gated by AI_QC_ENABLED. When enabled, fact-checks the draft against
-        # filtered tool source data using AI_MODEL_QC_AGENT (lightweight model).
-        # AI_QC_PARALLEL=true: yield data events before QC so FE renders immediately;
-        # a qc_correction event is emitted afterward only when a correction is needed.
+        # 2. QC VERIFIER (deterministic)
+        # Gated by AI_QC_ENABLED. Scans the draft for prices, goods_no, and
+        # shop_id literals and checks them against the raw tool outputs
+        # collected this turn. Pass-through policy: mismatches are logged and
+        # surfaced in the Langfuse trace, but the draft is NEVER rewritten —
+        # the verifier has no safe replacement value, and rewriting was the
+        # source of the prior LLM QC's false-positive problem.
         if draft_response.strip():
             draft_response = _sanitize_response(draft_response)
 
-            _qc_passed = True  # default: no correction needed
-            qc_template_corrections: dict | None = None
-            _can_apply_json = False
+            _qc_passed = True
             _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL
 
-            # PARALLEL MODE: yield data events immediately so FE can render before QC completes
+            # PARALLEL MODE: yield data events immediately so FE renders without waiting for QC.
             if _parallel_qc:
                 for buffered_evt in buffered_data_events:
                     _mark_first_visible()
@@ -4084,7 +4482,6 @@ class TStationChatServiceV2:
 
             if _s.AI_QC_ENABLED:
                 _qc_started_at = time.perf_counter()
-                source_data = "\n\n".join(source_data_chunks) if source_data_chunks else "No tool data retrieved"
                 qc_skip_reason = _qc_skip_reason(
                     called_tool_names,
                     last_template,
@@ -4102,57 +4499,33 @@ class TStationChatServiceV2:
                             input={
                                 "user_query": user_query,
                                 "draft": draft_for_qc,
-                                "source_data": source_data,
+                                "source_tool_count": len(structured_sources),
                             },
                         ) as _qc_span:
-                            trace_config = build_trace_config(
-                                session_id=session_id,
-                                user_id=user_id,
-                                trace_id=trace_id,
-                                parent_span_id=_qc_span.id or parent_span_id,
-                                tags=["qc"],
-                                prompt_name="qc_agent",
-                                run_name="💭 qc_check",
-                            )
-                            qc_result = await ainvoke_qc(
-                                QC_LLM, user_query, draft_for_qc, source_data, config=trace_config
-                            )
-                            qc_result = qc_result.strip()
-                            _qc_passed = not qc_result or qc_result.upper() == "PASS"
-                            logger.debug(f"[QC_LAYER] Draft: {draft_for_qc[:500]}")
-                            logger.debug(f"[QC_LAYER] Source: {source_data[:500]}")
-                            logger.debug(f"[QC_LAYER] QC result: {qc_result[:500]}")
-                            if not _qc_passed:
-                                corrected_text, qc_template_corrections = _parse_qc_output(qc_result)
-                                draft_response = corrected_text or draft_response
-                                _can_apply_json = qc_template_corrections and last_template in _LLM_WRITTEN_TEMPLATES
-                                logger.debug(
-                                    f"[QC_LAYER] QC corrected the response"
-                                    + (f" (+ {len(qc_template_corrections)} JSON field(s) applied)" if _can_apply_json else " (text only)")
-                                )
-                            else:
-                                logger.debug("[QC_LAYER] QC passed")
-                            # Show verdict + corrected-field count up front so the
-                            # qc node tells the story without expanding.
-                            _qc_corr_count = len(qc_template_corrections) if qc_template_corrections else 0
+                            mismatches = qc_verifier.verify_draft(draft_for_qc, structured_sources)
+                            _qc_passed = not mismatches
                             if _qc_passed:
+                                logger.debug("[QC_VERIFIER] PASS")
                                 _qc_summary = "PASS"
-                            elif _qc_corr_count:
-                                _qc_summary = f"CORRECTED (text + {_qc_corr_count} JSON field)"
                             else:
-                                _qc_summary = "CORRECTED (text)"
+                                logger.warning(
+                                    "[QC_VERIFIER] %d mismatch(es) in draft: %s",
+                                    len(mismatches),
+                                    [m.as_dict() for m in mismatches],
+                                )
+                                _qc_summary = f"MISMATCH ({len(mismatches)})"
                             _qc_span.update(
                                 output=_truncate({
                                     "summary": _qc_summary,
-                                    "verdict": "PASS" if _qc_passed else "CORRECTED",
-                                    "result": qc_result,
+                                    "verdict": "PASS" if _qc_passed else "MISMATCH",
+                                    "mismatches": [m.as_dict() for m in mismatches],
                                 }),
                             )
                     except Exception as e:
-                        logger.warning(f"[QC_LAYER] QC failed, using original draft: {e}")
+                        logger.warning(f"[QC_VERIFIER] Verifier failed, using original draft: {e}")
                 elif called_tool_names:
                     logger.debug(
-                        "[QC_LAYER] Skipped QC: reason=%s template=%s source=%s response_source=%s tools=%s",
+                        "[QC_VERIFIER] Skipped QC: reason=%s template=%s source=%s response_source=%s tools=%s",
                         qc_skip_reason,
                         last_template,
                         last_template_source,
@@ -4161,27 +4534,10 @@ class TStationChatServiceV2:
                     )
                 _lat_qc_ms = (time.perf_counter() - _qc_started_at) * 1000
 
-            if _parallel_qc:
-                # Emit a correction patch only when QC found issues; FE applies it over the already-rendered response
-                if not _qc_passed:
-                    correction_evt: dict = {"type": "qc_correction", "assistantResponse": draft_response}
-                    if _can_apply_json:
-                        correction_evt["template"] = last_template
-                        correction_evt["corrections"] = qc_template_corrections
-                    yield f"data: {json.dumps(correction_evt, ensure_ascii=False)}\n\n"
-                    logger.debug("[QC_LAYER] Parallel mode: emitted qc_correction patch")
-            else:
-                # SEQUENTIAL (default): yield buffered DATA events with corrections applied
+            if not _parallel_qc:
+                # SEQUENTIAL (default): data events were buffered; yield them as-is now.
+                # Verifier never rewrites the draft, so no patching is needed.
                 for buffered_evt in buffered_data_events:
-                    if not _qc_passed:
-                        evt_data = buffered_evt.get("data", {})
-                        if isinstance(evt_data, dict):
-                            if "assistantResponse" in evt_data:
-                                evt_data["assistantResponse"] = draft_response
-                            if _can_apply_json:
-                                for k, v in qc_template_corrections.items():
-                                    if k != "assistantResponse" and k in evt_data:
-                                        evt_data[k] = v
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 

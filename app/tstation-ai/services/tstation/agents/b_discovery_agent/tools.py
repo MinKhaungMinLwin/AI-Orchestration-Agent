@@ -127,6 +127,8 @@ def _success_response(http_status: int, data: Any) -> dict:
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
     "goods_no", "goods_nm", "title",
+    # Product recency
+    "sys_reg_dtime",
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
     "tire_size_1", "tire_size_2",
     # Visual / pricing
@@ -144,6 +146,18 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
     "rating_avg", "rate", "review_count",
+    # 상품 등록 일시 — used to identify newest product among same-keyword results
+    "sys_reg_dtime",
+    # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
+    "big_goods_nm", "ptrn_d_nm",
+    "tire_width", "tire_series", "inch",
+    "t_wgt_spd",
+    "brand_nm", "certify_brand_nm", "orpl_nm",
+    "t_rls_yearmon",
+    "t_high_perform", "t_handling", "t_dryroad_brk",
+    "rr",
+    "wage_prc", "wage_today_prc",
+    "free_guarantee_yn",
 })
 
 
@@ -178,6 +192,8 @@ def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
     """
     if not sort_by or not items:
         return items
+    if sort_by == "newest_desc":
+        return sorted(items, key=lambda x: x.get("sys_reg_dtime") or "", reverse=True)
     key_func = _SORT_KEY_FUNCS.get(sort_by)
     if key_func is None:
         logger.warning("[_sort_items] Unknown sort_by=%s; passing through", sort_by)
@@ -490,6 +506,14 @@ def search_product_tool(
         dict: {"status": "success", "http_status": ..., "data": ...}
               or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
               or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+
+    Item field hints (사용자 질문 → 참조 필드):
+        - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
+        - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm
+        - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
+        - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
+        - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
     """
     normalized_keyword = _strip_brand_only_keyword(keyword)
     if normalized_keyword != keyword:
@@ -498,7 +522,10 @@ def search_product_tool(
             keyword, brand_cd,
         )
     has_price_filter = bool(min_price or max_price)
+    has_newest_sort = sort_by == "newest_desc"
     fetch_limit = limit * 4 if has_price_filter else limit
+    if has_newest_sort:
+        fetch_limit = max(fetch_limit, 100)
     logger.debug(
         "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
         normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
@@ -521,7 +548,7 @@ def search_product_tool(
                     return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter:
+            if has_price_filter or has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -731,7 +758,20 @@ def get_car_trims_tool(car_model_det: str):
 @tool_cache(ttl=600)
 def get_product_description_tool(goods_no: str):
     """
-    Get detailed product information (features, tech description, slogan, images, rating, reviews).
+    Get detailed product information.
+
+    Response covers (사용자 질문 → 참조 필드):
+        - 마케팅 텍스트: pc_prod_remark_desc (특장점), pc_prod_tech_desc (기술력), slogan
+        - 이미지/리뷰: images, rating, reviews
+        - 식별/표기: goods_nm, big_goods_nm, ptrn_d_nm
+        - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
+        - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm
+        - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
+        - 성능 점수: t_comfort, t_silence, t_high_perform, t_handling, t_life_span,
+          t_snow, t_ice, t_dryroad_brk
+        - EU 라벨: rr, wet, label_pndb
+        - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn, t_rlx_isn_yn
 
     Args:
         goods_no (str): Product number.
@@ -829,8 +869,10 @@ def get_products_recommendations_tool(
             - "SPORT": 스포츠/퍼포먼스
             - "COMFORT": 편안한 승차감
             - "RUNFLAT": 런플랫
-            ⚠️ 신규(동적) rcmd_type 에만 적용됨.
+            ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
             "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
+            "런플랫 타이어 추천" 단일 의도면 rcmd_type="tstation" + pfm_nm="RUNFLAT" 사용
+              (rcmd_type="family" 는 데이터상 RUNFLAT 결과 0건이므로 사용 금지).
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -855,6 +897,7 @@ def get_products_recommendations_tool(
         - {"rcmd_type": "all_weather", "tire_size": "245/45R18", "sort_by": "price_asc"}  # 가장 저렴한 사계절 타이어
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
         - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
+        - {"rcmd_type": "tstation", "pfm_nm": "RUNFLAT", "limit": 3}  # 런플랫 단독 추천
         - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
         - {"rcmd_type": "value", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 가성비
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
@@ -863,6 +906,14 @@ def get_products_recommendations_tool(
         dict: {"status": "success", "http_status": ..., "data": ...}
               or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
               or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+
+    Item field hints (사용자 질문 → 참조 필드, search_product_tool 과 동일):
+        - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
+        - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
+        - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
+        - 추가 성능: t_high_perform, t_handling, t_dryroad_brk
+        - EU 라벨: rr (회전저항), wet, label_pndb (소음 dB)
+        - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn
     """
     # Deterministic guard: if the user named a car_no in this turn and it
     # does not match any registered car, short-circuit before issuing the
@@ -887,8 +938,11 @@ def get_products_recommendations_tool(
             ),
         )
 
+    # Price filtering is now SQL-side on BE — no client-side post-filter.
+    # newest_desc is a client-side sort BE doesn't support → still fetch >limit then re-sort.
     has_price_filter = bool(min_price or max_price)
-    fetch_limit = limit * 4 if has_price_filter else limit
+    has_newest_sort = sort_by == "newest_desc"
+    fetch_limit = max(limit, 100) if has_newest_sort else limit
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
         rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
@@ -904,6 +958,8 @@ def get_products_recommendations_tool(
             tire_size=tire_size,
             season_nm=season_nm,
             pfm_nm=pfm_nm,
+            min_price=min_price,
+            max_price=max_price,
         )
         if response.parsed is None:
             return _error_response(
@@ -914,15 +970,13 @@ def get_products_recommendations_tool(
         # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
-            if has_price_filter:
-                data["items"] = _filter_by_price(data["items"], min_price, max_price)
-                if not data["items"]:
-                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+            if has_price_filter and not data["items"]:
+                return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             if str(rcmd_type) == "discount":
                 data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter:
+            if has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
@@ -1146,6 +1200,51 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
 
 
 @tool
+@tool_cache(ttl=600)
+def get_newest_products_tool(brand_cd: str = "HK", limit: int = 20):
+    """
+    최신/신제품 타이어 상품 조회.
+
+    Use this tool when the user intent is to find the newest/latest/new tire
+    products in general, without naming a specific model to compare.
+    Do not use `search_product_tool` for that general newest-product intent.
+    This tool sorts product search results by `sys_reg_dtime` descending; no
+    product name is hardcoded.
+
+    Args:
+        brand_cd (str): 브랜드 코드. Default HK.
+        limit (int): 반환할 최대 상품 수. Default 20.
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": {"items": [...]}}
+    """
+    logger.debug("[TOOL][get_newest_products_tool] Called with: brand_cd=%s, limit=%s", brand_cd, limit)
+    if not isinstance(limit, int) or not (1 <= limit <= 50):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "limit must be an int between 1 and 50",
+        }
+
+    try:
+        response = search_product(client=get_client(), keyword=None, limit=max(limit, 100), size=None, brand_cd=brand_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search newest products",
+            )
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = _enrich_items_with_descriptions(data["items"])
+            data["items"] = _sort_items(data["items"], "newest_desc")[:limit]
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][get_newest_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to search newest products")
+
+
+@tool
 @tool_cache(ttl=300)
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """Get product final price and discount info.
@@ -1199,6 +1298,12 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
 
     Response: BestSellerResponse — items 의 각 행에 goods_no, goods_nm,
         tire_size_1/2, image_url, extra_fvr_sale_prc, extra_fvr_sale_per, sale_qty.
+        추가로 스펙 필드(big_goods_nm, tire_width/series/inch, t_wgt_idx/_kg/_spd,
+        t_highspd, season_nm, car_knd_nm, goods_pfm_nm, brand_nm, certify_brand_nm,
+        orpl_nm, t_rls_yearmon, t_comfort/silence/high_perform/handling/life_span/
+        snow/ice/dryroad_brk, rr, wet, label_pndb, wage_prc, wage_today_prc,
+        free_guarantee_yn, t_rlx_isn_yn) 도 함께 반환 — 사용자가 베스트셀러 상품의
+        사이즈/계절/브랜드/공임 등을 물으면 동일 응답에서 답변 가능.
 
     Example: {"period": "month", "limit": 5}
     """

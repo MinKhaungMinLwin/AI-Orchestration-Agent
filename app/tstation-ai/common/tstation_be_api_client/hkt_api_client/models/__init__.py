@@ -1,5 +1,6 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .applied_coupon_item import AppliedCouponItem
 from .available_coupon_item import AvailableCouponItem
 from .available_coupon_response import AvailableCouponResponse
 from .best_seller_item import BestSellerItem
@@ -13,14 +14,27 @@ from .car_tire_size_response import CarTireSizeResponse
 from .car_trim_item import CarTrimItem
 from .car_trim_response import CarTrimResponse
 from .chat_history_response import ChatHistoryResponse
+from .cheapest_by_coupon_item import CheapestByCouponItem
+from .cheapest_by_coupon_response import CheapestByCouponResponse
 from .compatibility_response import CompatibilityResponse
+from .coupon_applicable_products_group import CouponApplicableProductsGroup
+from .coupon_applicable_store_item import CouponApplicableStoreItem
+from .coupon_applicable_stores_group import CouponApplicableStoresGroup
+from .coupon_deal_applicable_products_response import CouponDealApplicableProductsResponse
 from .coupon_issue_response import CouponIssueResponse
 from .coupon_result_item import CouponResultItem
 from .cpn_coupon_issue_request import CpnCouponIssueRequest
+from .deal_applicable_products_group import DealApplicableProductsGroup
 from .deal_coupon_item import DealCouponItem
 from .deal_item import DealItem
 from .deal_list_response import DealListResponse
 from .deal_with_coupons_item import DealWithCouponsItem
+from .debug_aply_rows_api_coupons_debug_aply_rows_get_response_debug_aply_rows_api_coupons_debug_aply_rows_get import (
+    DebugAplyRowsApiCouponsDebugAplyRowsGetResponseDebugAplyRowsApiCouponsDebugAplyRowsGet,
+)
+from .debug_item_prc_rows_api_coupons_debug_item_prc_rows_get_response_debug_item_prc_rows_api_coupons_debug_item_prc_rows_get import (
+    DebugItemPrcRowsApiCouponsDebugItemPrcRowsGetResponseDebugItemPrcRowsApiCouponsDebugItemPrcRowsGet,
+)
 from .discount_price_item import DiscountPriceItem
 from .discount_price_response import DiscountPriceResponse
 from .escalation_request import EscalationRequest
@@ -59,6 +73,8 @@ from .product_search_response import ProductSearchResponse
 from .rcmd_goods_item import RcmdGoodsItem
 from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
+from .reservation_list_item import ReservationListItem
+from .reservation_list_response import ReservationListResponse
 from .review_item import ReviewItem
 from .review_rating import ReviewRating
 from .schedule_mode import ScheduleMode
@@ -80,6 +96,7 @@ from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
 
 __all__ = (
+    "AppliedCouponItem",
     "AvailableCouponItem",
     "AvailableCouponResponse",
     "BestSellerItem",
@@ -93,14 +110,23 @@ __all__ = (
     "CarTrimItem",
     "CarTrimResponse",
     "ChatHistoryResponse",
+    "CheapestByCouponItem",
+    "CheapestByCouponResponse",
     "CompatibilityResponse",
+    "CouponApplicableProductsGroup",
+    "CouponApplicableStoreItem",
+    "CouponApplicableStoresGroup",
+    "CouponDealApplicableProductsResponse",
     "CouponIssueResponse",
     "CouponResultItem",
     "CpnCouponIssueRequest",
+    "DealApplicableProductsGroup",
     "DealCouponItem",
     "DealItem",
     "DealListResponse",
     "DealWithCouponsItem",
+    "DebugAplyRowsApiCouponsDebugAplyRowsGetResponseDebugAplyRowsApiCouponsDebugAplyRowsGet",
+    "DebugItemPrcRowsApiCouponsDebugItemPrcRowsGetResponseDebugItemPrcRowsApiCouponsDebugItemPrcRowsGet",
     "DiscountPriceItem",
     "DiscountPriceResponse",
     "EscalationRequest",
@@ -139,6 +165,8 @@ __all__ = (
     "RcmdGoodsItem",
     "RcmdType",
     "RecommendationResponse",
+    "ReservationListItem",
+    "ReservationListResponse",
     "ReviewItem",
     "ReviewRating",
     "ScheduleMode",

@@ -20,6 +20,8 @@ def _get_kwargs(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -58,6 +60,20 @@ def _get_kwargs(
     else:
         json_pfm_nm = pfm_nm
     params["pfm_nm"] = json_pfm_nm
+
+    json_min_price: int | None | Unset
+    if isinstance(min_price, Unset):
+        json_min_price = UNSET
+    else:
+        json_min_price = min_price
+    params["min_price"] = json_min_price
+
+    json_max_price: int | None | Unset
+    if isinstance(max_price, Unset):
+        json_max_price = UNSET
+    else:
+        json_max_price = max_price
+    params["max_price"] = json_max_price
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -110,6 +126,8 @@ def sync_detailed(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -140,6 +158,10 @@ def sync_detailed(
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
+    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -151,7 +173,11 @@ def sync_detailed(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -169,6 +195,8 @@ def sync_detailed(
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        min_price=min_price,
+        max_price=max_price,
     )
 
     response = client.get_httpx_client().request(
@@ -188,6 +216,8 @@ def sync(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -218,6 +248,10 @@ def sync(
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
+    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -229,7 +263,11 @@ def sync(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -248,6 +286,8 @@ def sync(
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        min_price=min_price,
+        max_price=max_price,
     ).parsed
 
 
@@ -261,6 +301,8 @@ async def asyncio_detailed(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -291,6 +333,10 @@ async def asyncio_detailed(
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
+    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -302,7 +348,11 @@ async def asyncio_detailed(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -320,6 +370,8 @@ async def asyncio_detailed(
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        min_price=min_price,
+        max_price=max_price,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -337,6 +389,8 @@ async def asyncio(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -367,6 +421,10 @@ async def asyncio(
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
 
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
+    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -378,7 +436,11 @@ async def asyncio(
             PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
-            에만 적용됨.
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -398,5 +460,7 @@ async def asyncio(
             tire_size=tire_size,
             season_nm=season_nm,
             pfm_nm=pfm_nm,
+            min_price=min_price,
+            max_price=max_price,
         )
     ).parsed

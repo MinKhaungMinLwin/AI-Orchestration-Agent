@@ -11,7 +11,10 @@ a single tool output.
 import contextvars
 import datetime
 import logging
+import re
 from typing import Any
+
+from services.tstation.common.cta_urls import CTAUrls
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,21 @@ current_goal_type: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 # rather than the formal goal checklist (where goal_type would already be set).
 current_pending_intent: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_pending_intent", default=None
+)
+
+# True only for turns where the user explicitly asks for normal tire vs run-flat
+# price/additional-cost comparison. Prevents generic cheapest/discount compare
+# turns from being hijacked just because the candidate set contains RUNFLAT.
+current_runflat_comparison: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_runflat_comparison", default=False
+)
+
+# True when the current turn is triggered by a return-visit CTA chip
+# ("<지역> 매장 다시 이용하기" / "<지역>점 다시 이용하기"). Forces isBookingFlow=True
+# on the resulting location card so the FE click handler routes to /chat (not
+# /append), enabling product/quantity continuation after store selection.
+current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_return_visit_store_flow", default=False
 )
 
 # Goals whose checklist ends in a downstream tool call after a list-pick.
@@ -55,6 +73,7 @@ def _is_goal_booking_followup() -> bool:
 _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # product
     "search_product_tool": "product",
+    "get_newest_products_tool": "product",
     "get_products_recommendations_tool": "product",
     "get_best_selling_products_tool": "product",
     # listCar
@@ -74,6 +93,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_store_list_tool": "location",
     "get_nearby_stores_tool": "location",
     "transaction_store_preview_tool": "location",
+    "get_stores_with_time_filter_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
     # orderComplete (cart-save / quick-order — terminal step in transaction flow)
@@ -102,8 +122,8 @@ _BOOKING_SIGNAL_TOOLS = frozenset({
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 
 _MY_COUPON_LINK = {
-    "pc": "https://wwwqa.tstation.com/mypage/tstation/coupon/couponList",
-    "mobile": "https://mqa.tstation.com/coupon/myCouponList",
+    "pc": CTAUrls.MY_COUPON_LIST_PC,
+    "mobile": CTAUrls.MY_COUPON_LIST_MOBILE,
 }
 
 _CNSL_TYPE_MAP = {
@@ -234,7 +254,7 @@ def _format_phone(s: str) -> str:
 # - primary chip (chatbox-product-tag-primary): prc_grd_nm 화이트리스트만 통과.
 #   BE 가 이미 한글로 저장 (PR_GOODS_BASE.PRC_GRD_NM) → 그대로 노출.
 # - secondary chip (chatbox-product-tag-secondary): goods_pfm_nm 영문 코드를
-#   한글 라벨로 매핑. 매핑되지 않은 코드 (RUNFLAT 등) 는 chip skip.
+#   한글 라벨로 매핑. 매핑되지 않은 코드는 chip skip.
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
 # `프리미엄+` (플래그십)·`프리미엄` (고급) 두 등급은 FE chip 에서 동일하게 "프리미엄" 으로 노출.
 # BE 원본(`prc_grd_nm`)은 그대로 두고 표시 라벨만 통일.
@@ -242,6 +262,7 @@ _PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
 _GOODS_PFM_LABELS: dict[str, str] = {
     "COMFORT": "정숙/승차감",
     "SPORT": "고속/제동성",
+    "RUNFLAT": "런플랫",
 }
 
 
@@ -272,6 +293,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     for entry in _find_entries(
         tool_data_list,
         "search_product_tool",
+        "get_newest_products_tool",
         "get_products_recommendations_tool",
         "get_best_selling_products_tool",
     ):
@@ -371,6 +393,7 @@ def inject_product_tags_and_sanitize(
     for entry in _find_entries(
         accumulated_tool_data,
         "search_product_tool",
+        "get_newest_products_tool",
         "get_products_recommendations_tool",
         "get_best_selling_products_tool",
     ):
@@ -555,6 +578,131 @@ def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> di
     return _build_event("cheapestProduct", {"cheapestProduct": items, "metadata": metadata}, assistant_text, len(items))
 
 
+# ── 5.5 run-flat comparison ───────────────────────────────────────────────────
+
+def _is_runflat_product(row: dict) -> bool:
+    pfm = _get_str(row, "goods_pfm_nm").upper()
+    if pfm == "RUNFLAT":
+        return True
+    name = _get_str(row, "goods_nm", "title").lower()
+    return "런플랫" in name or "runflat" in name or "run-flat" in name
+
+
+def _map_runflat_price_comparison(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Build a deterministic quickReply table for normal tire vs run-flat price.
+
+    This owns TC-110-style turns where Discovery first searches by size/model,
+    verifies both product groups really exist, then calls compare_discount_tool.
+    Without this mapper, the generic priority order renders search results as
+    product cards and loses the comparison answer.
+    """
+    if not current_runflat_comparison.get():
+        return None
+
+    compare_entries = _find_entries(tool_data_list, "compare_discount_tool")
+    if not compare_entries:
+        return None
+
+    product_by_goods_no: dict[str, dict] = {}
+    for entry in _find_entries(tool_data_list, "search_product_tool", "get_products_recommendations_tool"):
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            goods_no = _get_str(row, "goods_no")
+            if goods_no:
+                product_by_goods_no[goods_no] = row
+
+    if not product_by_goods_no:
+        return None
+
+    compare_raw = _unwrap(compare_entries[-1])
+    if not isinstance(compare_raw, dict):
+        return None
+    price_rows = compare_raw.get("items", [])
+    if not isinstance(price_rows, list):
+        return None
+
+    rows: list[dict] = []
+    for price_row in price_rows:
+        if not isinstance(price_row, dict):
+            continue
+        goods_no = _get_str(price_row, "goods_no")
+        product_row = product_by_goods_no.get(goods_no)
+        if not product_row:
+            continue
+        final_unit_price = int(_get_num(price_row, "final_unit_price", default=0))
+        if not final_unit_price:
+            continue
+        rows.append({
+            "goods_no": goods_no,
+            "goods_nm": _get_str(product_row, "goods_nm", "title", default=goods_no),
+            "tire_size": _get_str(product_row, "tire_size_1", "tire_size_2"),
+            "is_runflat": _is_runflat_product(product_row),
+            "final_unit_price": final_unit_price,
+        })
+
+    normal_rows = [row for row in rows if not row["is_runflat"]]
+    runflat_rows = [row for row in rows if row["is_runflat"]]
+    if not normal_rows or not runflat_rows:
+        return None
+
+    # Use the lowest normal tire as the visible baseline for "how much more".
+    baseline = min(normal_rows, key=lambda row: row["final_unit_price"])
+    display_rows = sorted(
+        sorted(normal_rows, key=lambda row: row["final_unit_price"])[:2]
+        + sorted(runflat_rows, key=lambda row: row["final_unit_price"])[:2],
+        key=lambda row: (row["is_runflat"], row["final_unit_price"]),
+    )
+
+    lines = [
+        "고객님, 같은 조건에서 일반 타이어와 런플랫 상품이 함께 확인되어 가격을 비교했어요.",
+        "",
+        "| 상품 | 런플랫 | 1개 기준 최종가 | 일반 타이어 대비 |",
+        "|---|---:|---:|---:|",
+    ]
+    for row in display_rows:
+        delta = row["final_unit_price"] - baseline["final_unit_price"]
+        if row["goods_no"] == baseline["goods_no"]:
+            delta_text = "기준"
+        elif delta > 0:
+            delta_text = f"+{delta:,}원"
+        elif delta < 0:
+            delta_text = f"{delta:,}원"
+        else:
+            delta_text = "동일"
+        product = f"{row['goods_nm']} {row['tire_size']}".strip()
+        lines.append(
+            f"| {product} | {'O' if row['is_runflat'] else 'X'} | {row['final_unit_price']:,}원 | {delta_text} |"
+        )
+    lines.extend([
+        "",
+        "런플랫은 보통 일반 타이어보다 비싼 편이지만, 차이는 모델과 사이즈별로 달라요.",
+        "",
+        "현재 조회된 같은 조건 상품 기준의 비교입니다.",
+        "",
+        "온라인 주문 기준 무료 배송/무료 장착 정책은 일반 타이어와 런플랫에 동일하게 적용됩니다. 별도 추가 장착비는 확인된 금액이 있을 때만 안내할 수 있어요.",
+    ])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "런플랫 상품 보기", "domain": "DISCOVERY"},
+                {"label": "일반 타이어 보기", "domain": "DISCOVERY"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "assistant_response_source": "code_mapper",
+    }
+
+
 # ── 6. event ────────────────────────────────────────────────────────────────────
 
 def _map_event(tool_data_list: list[dict], assistant_text: str) -> dict | None:
@@ -686,8 +834,15 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             )
             if not schedule_empty:
                 continue
-            # candidate_shop_ids non-empty means future slots may exist — let the agent
-            # call get_store_schedule_tool for a datepick instead of dead-ending here.
+            # DETERMINISTIC GUARD on the tool response (region search or
+            # multi-candidate tier=none) — the tool already instructed the
+            # agent to STOP and render `location`. Fall through to the
+            # location render below so the candidate list reaches the FE.
+            if raw.get("instruction_to_agent"):
+                break
+            # candidate_shop_ids non-empty (single named-store case) means future
+            # slots may exist — let the agent call get_store_schedule_tool for a
+            # datepick instead of dead-ending here.
             candidate_ids = schedule.get("candidate_shop_ids") or raw.get("candidate_shop_ids") or []
             if candidate_ids:
                 return None
@@ -724,11 +879,16 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # they were authoritative when the list endpoint simply omits them.
     has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
     is_list_browsing = current_goal_type.get() == "store_finder"
-    # Order/stock flow arrived via casual conversation ("구매한다고", "재고 확인해줘")
-    # rather than the formal goal checklist — goal_type stays None but pending_intent
-    # is set. Treat these as booking context so the location card is rendered.
-    has_order_intent = current_pending_intent.get() in ("주문 진행", "재고 확인")
-    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_order_intent:
+    # Booking-implying intents that arrived via casual conversation ("구매한다고",
+    # "재고 확인해줘", "와이퍼 예약좀") rather than the formal goal checklist.
+    # ⚠️ ContextVar holds the raw `PendingIntent` enum value
+    # ("price"/"stock"/"order"/"reservation"), NOT the Korean prompt labels
+    # ("주문 진행"/"재고 확인"/"방문 예약"). Compare against enum values.
+    # "reservation" is included so 매장 방문 예약 (와이퍼/배터리/얼라인먼트 등 부가
+    # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
+    # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
+    has_booking_intent = current_pending_intent.get() in ("order", "stock", "reservation")
+    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_booking_intent:
         return None
 
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
@@ -799,6 +959,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             # search results always show the phone number.
             tel_no = _get_str(detail, "tel_no") or _get_str(row, "tel_no")
             holiday = _get_str(detail, "holiday")
+            rating = _get_num(detail, "rating_idx") or _get_num(row, "rating_idx")
 
             services: list[str] = []
             if is_all_my_t:
@@ -823,6 +984,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 description_lines.append(f"휴무일: {holiday}")
             if tel_no:
                 description_lines.append(f"전화: {tel_no}")
+            if rating:
+                description_lines.append(f"⭐ {rating:.1f}")
             if services_text:
                 description_lines.append(f"서비스: {services_text}")
             description = "\n ".join(description_lines)
@@ -849,14 +1012,24 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     items, metadata = items[:10], metadata[:10]
 
-    # In order context, when the agent calls get_store_list_tool alone (no
-    # nearby/place search) and gets back exactly 1 store, this is a shop_id
-    # resolution turn — the user already selected a store from a previously
-    # shown list and the agent is resolving the name to an ID before calling
-    # inventory/schedule tools. Rendering the card again creates an infinite
-    # loop because the FE re-sends the store name on each click.
+    # In order context, when the agent calls get_store_list_tool with a
+    # `store_nm` arg (user named a specific branch) and gets back exactly 1
+    # store, this is a shop_id resolution turn — the user already selected a
+    # store from a previously shown list and the agent is resolving the name
+    # to an ID before calling inventory/schedule tools. Rendering the card
+    # again creates an infinite loop because the FE re-sends the store name
+    # on each click. Region-only searches (`region_code=...`) that happen to
+    # yield 1 store do NOT loop — the user hasn't named that store yet, so
+    # we must render the card for selection.
+    called_with_store_nm = False
+    for entry in _find_entries(tool_data_list, "get_store_list_tool"):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        if isinstance(args, dict) and args.get("store_nm"):
+            called_with_store_nm = True
+            break
     is_shopid_resolution = (
-        has_order_intent
+        called_with_store_nm
+        and has_booking_intent
         and len(items) == 1
         and "get_nearby_stores_tool" not in called_tools
         and "search_place_tool" not in called_tools
@@ -875,7 +1048,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
-        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup() or has_order_intent
+        bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+        or _is_goal_booking_followup()
+        or has_booking_intent
+        or current_return_visit_store_flow.get()
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
@@ -890,6 +1066,104 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             "assistantResponse": short,
         },
     }
+
+
+def _format_time_filter_slot(slot: object) -> str:
+    try:
+        return f"{int(slot):02d}:00"
+    except (TypeError, ValueError):
+        return str(slot)
+
+
+def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    for entry in _find_entries(tool_data_list, "get_stores_with_time_filter_tool"):
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+
+        stores = raw.get("stores_available")
+        if not isinstance(stores, list):
+            continue
+
+        region_code = _get_str(raw, "region_code")
+        threshold = raw.get("time_threshold_hour")
+        kst = datetime.timezone(datetime.timedelta(hours=9))
+        today_yyyymmdd = datetime.datetime.now(kst).strftime("%Y%m%d")
+        items, metadata = [], []
+        for row in stores:
+            if not isinstance(row, dict):
+                continue
+            shop_id = _get_str(row, "shop_id")
+            if not shop_id:
+                continue
+
+            slots = row.get("qualifying_slots") if isinstance(row.get("qualifying_slots"), list) else []
+            slot_text = ", ".join(_format_time_filter_slot(s) for s in slots[:5])
+            cal_day_raw = _get_str(row, "cal_day")
+            cal_day = _yyyymmdd_to_korean_date(cal_day_raw)
+            address = _get_str(row, "address")
+            tel = _format_phone(_get_str(row, "tel"))
+            rating = _get_num(row, "rating_idx")
+            is_all_my_t = bool(row.get("is_all_my_t", False))
+            is_tna_delivery = bool(row.get("is_tna_delivery", False))
+            today_install = bool(cal_day_raw == today_yyyymmdd and slots)
+            description_lines: list[str] = []
+            if address:
+                description_lines.append(f"📍 {address}")
+            if cal_day:
+                description_lines.append(f"예약 가능일: {cal_day}")
+            if slot_text:
+                description_lines.append(f"예약 가능 시간: {slot_text}")
+            if tel:
+                description_lines.append(f"전화: {tel}")
+            if rating:
+                description_lines.append(f"⭐ {rating:.1f}")
+
+            items.append({
+                "nameAddress": _get_str(row, "shop_nm", default=shop_id),
+                "distance": "",
+                "detailAddress": address,
+                "isAllMyT": is_all_my_t,
+                "todayInstall": today_install,
+                "tnaDelivery": is_tna_delivery,
+                "description": "\n ".join(description_lines),
+            })
+            metadata.append({"shopId": shop_id})
+
+        if not items:
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper",
+                "data": {
+                    "assistantResponse": f"{region_code}에서 {threshold}시 이후 예약 가능한 매장이 현재 없어요. 다른 시간대나 지역으로 찾아드릴까요?",
+                    "quickReplies": [
+                        {"label": "다른 시간대 찾기", "domain": "TRANSACTION"},
+                        {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                        {"label": "처음으로", "domain": "LEADING"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
+
+        items, metadata = items[:10], metadata[:10]
+        short, response_source = _summarize_with_source(assistant_text, "location", len(items))
+        if not assistant_text.strip():
+            short = f"{region_code}에서 {threshold}시 이후 예약 가능한 매장 {len(items)}곳을 안내드립니다. 원하시는 매장을 선택해 주세요."
+            response_source = "default"
+        return {
+            "type": "data",
+            "template": "location",
+            "assistant_response_source": response_source,
+            "data": {
+                "stores": items,
+                "metadata": metadata,
+                "isBookingFlow": True,
+                "assistantResponse": short,
+            },
+        }
+
+    return None
 
 
 # ── 9. datepick ─────────────────────────────────────────────────────────────────
@@ -1284,15 +1558,14 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
 
     Skip rules:
     - Schedule tools own their own templates (datepick / multi-store).
-    - Booking-signal tools (price, stock, cart, order) own theirs.
-    - ``cal_day`` other than today implies Flow 5.1 (date-specific) — defer to
-      the LLM so it can emit datepick or the "no slots, try another date"
-      apology message for that specific date.
+    - Booking-signal tools (price, stock, cart, order) own theirs — those
+      cases defer to `_map_datepick_from_detail` for the date picker.
 
-    Note: non-empty ``available_slots`` no longer skips info rendering.
-    `_map_datepick_from_detail` already guards on booking-signal tools, so
-    by the time we get here without those signals the user is asking for
-    plain info — slot presence is incidental, not a routing decision.
+    Note: non-empty ``available_slots`` no longer skips info rendering, and
+    a future ``cal_day`` no longer defers to the LLM. When the turn carries
+    no booking-signal tool the user is asking for plain store info (e.g.
+    clicking a card after a Flow 5.5T region/time search) — render the
+    deterministic info card regardless of which cal_day was queried.
     """
     called_tools = {e.get("tool", "") for e in tool_data_list}
     if "get_store_schedule_tool" in called_tools or "get_multi_store_schedule_tool" in called_tools:
@@ -1306,13 +1579,6 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     entry = entries[-1]
     raw = _unwrap(entry)
     if not isinstance(raw, dict):
-        return None
-
-    args = entry.get("args") or {}
-    cal_day = _get_str(args, "cal_day") if isinstance(args, dict) else ""
-    kst = datetime.timezone(datetime.timedelta(hours=9))
-    today = datetime.datetime.now(kst).strftime("%Y%m%d")
-    if cal_day and cal_day != today:
         return None
 
     shop_nm = _get_str(raw, "shop_nm")
@@ -1407,16 +1673,26 @@ def _summarize(full_text: str, template: str, item_count: int) -> str:
     return _summarize_with_source(full_text, template, item_count)[0]
 
 
+_BULLET_PATTERN = re.compile(r"\n-\s+\*\*")
+
+
 def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:
     """Domain Agent 텍스트에서 첫 문장만 추출하거나, 기본 안내를 반환한다.
 
     PROSE MODE 도입 후 LLM이 1–2문장의 짧은 prose("...찾았어요. ...선택해 주세요 😊")를
     내보내는데, 첫 문장에서 자르면 후반부 + 마지막 emoji가 사라진다. 길이가 120자
     이하라면 그대로 유지하고, 그보다 길 때만 첫 문장 컷을 적용한다.
+
+    EXCEPTION — product 템플릿 + bullet 패턴(``\\n- **``) 검출 시 전체 텍스트 유지.
+    추천 응답 (인트로 + 상품당 1줄 bullet 요약) 은 길이가 120자를 넘기지만 전체가
+    의도된 형식이므로 컷 금지. FE 는 markdown bullet 으로 렌더한다.
     """
     text = (full_text or "").strip()
     if not text:
         return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count), "default"
+
+    if template == "product" and _BULLET_PATTERN.search(text):
+        return text, "llm_prose_with_bullets"
 
     if len(text) <= 120:
         return text, "llm_prose"
@@ -1434,6 +1710,7 @@ def _summarize_with_source(full_text: str, template: str, item_count: int) -> tu
 
 _MAPPERS: dict[str, Any] = {
     "search_product_tool": _map_product,
+    "get_newest_products_tool": _map_product,
     "get_products_recommendations_tool": _map_product,
     "get_best_selling_products_tool": _map_product,
     "get_my_cars_tool": _map_list_car,
@@ -1446,6 +1723,7 @@ _MAPPERS: dict[str, Any] = {
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "transaction_store_preview_tool": _map_location,
+    "get_stores_with_time_filter_tool": _map_time_filter_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
     "save_to_cart_tool": _map_order_complete,
@@ -1461,6 +1739,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     """
     if not accumulated_tool_data:
         return None
+
+    runflat_comparison = _map_runflat_price_comparison(accumulated_tool_data, assistant_text)
+    if runflat_comparison is not None:
+        return runflat_comparison
 
     # When multiple tools are called, pick the most important UI template.
     # Priority order is intentional:
@@ -1489,6 +1771,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         # render a store card instead of the intended time-slot picker.
         ("get_store_detail_tool", _map_datepick),
         ("search_product_tool", _map_product),
+        ("get_newest_products_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
         ("get_best_selling_products_tool", _map_product),
         ("get_my_cars_tool", _map_list_car),
@@ -1497,6 +1780,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("compare_discount_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
+        ("get_stores_with_time_filter_tool", _map_time_filter_location),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
         ("transaction_store_preview_tool", _map_location),

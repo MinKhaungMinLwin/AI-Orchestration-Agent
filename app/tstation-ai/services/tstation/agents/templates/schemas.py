@@ -5,11 +5,59 @@ returns the final FE payload in a guaranteed shape.
 """
 
 import logging
+import re
 from typing import Annotated, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+# Deterministic enforcement for qty-question quickReplies.
+# LLM 가 "타이어 수량을 알려주세요" 류 질문을 emit 하면서 chip 에 1개/3개 등을
+# 누락하는 휘발성 버그를 막기 위함. c_transaction_agent prompt 룰(L461 / L1310~)
+# 이 두 번 보강된 뒤에도 재발해서 schema 측에서 결정적으로 차단.
+_QTY_QUESTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"몇\s*개"),
+    re.compile(r"(?:타이어\s*)?수량.{0,15}?(?:알려|말씀|선택|골라|어떻게)"),
+)
+_QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"맞으시"),
+)
+_REQUIRED_QTY_CHIPS: tuple[str, ...] = ("1개", "2개", "3개", "4개")
+
+# Deterministic enforcement for satisfaction / repurchase / greeting quickReplies.
+# LLM 이 사용자 호감/재구매 의도 발화 ("원주점에서 구매해서 너무 만족했어. 다음에도 또…")
+# 또는 단순 인사 ("하이", "안녕") 에 대해 `["다시 시도", "상담사 연결", "처음으로"]`
+# 같은 failure/fallback chip 을 휘발성으로 emit 하는 버그가 a_leading_agent prompt
+# 보강(L577~) 후에도 재발해서 schema 측에서 결정적으로 차단. assistantResponse 가
+# 아래 패턴 중 하나 이상 매칭 + chip 에 FORBIDDEN chip 중 하나 이상 포함될 때만
+# 발동(false-positive 최소화).
+_SATISFACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # 만족 / 재구매 의도
+    re.compile(r"만족하"),
+    re.compile(r"기쁩니다|기쁘네요|기쁘게"),
+    re.compile(r"다음에도\s*(?:이용|구매|찾)"),
+    re.compile(r"또\s*(?:이용|찾아|구매)"),
+    re.compile(r"잘\s*(?:받으셨|받으신|구매하셨)"),
+    # 인사 / 환영 / 일반 도움 안내 (LEADING agent 의 전형 오프닝 멘트)
+    re.compile(r"안녕하세요.*도와드릴"),
+    re.compile(r"반갑습니다.*도와드릴"),
+    re.compile(r"무엇을\s*도와드릴"),
+    re.compile(r"어떻게\s*도와드릴"),
+    re.compile(r"어떤\s*도움.*드릴"),
+    re.compile(r"편하게\s*(?:말씀|도와)"),
+    # 답례 / 감사 표현 (LEADING 의 "고마워" 응답)
+    re.compile(r"감사드립니다|감사합니다"),
+    re.compile(r"별말씀"),
+)
+_FORBIDDEN_SATISFACTION_CHIPS: frozenset[str] = frozenset({
+    "구매하기", "다시 시도", "상담사 연결", "1:1 문의하기",
+})
+_DEFAULT_SATISFACTION_CHIPS: tuple[tuple[str, str], ...] = (
+    ("상품 검색", "DISCOVERY"),
+    ("타이어 추천", "DISCOVERY"),
+    ("처음으로", "LEADING"),
+)
 
 
 class TemplatePayload(BaseModel):
@@ -71,6 +119,12 @@ class QuickReplyChip(BaseModel):
         description="Target domain for this chip. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING. "
                     "Set by the emitting agent so the backend can skip the LLM classifier on the next turn.",
     )
+    url: Optional[str] = Field(
+        default=None,
+        description="Optional external URL. When set, the FE opens this URL in a new tab on click "
+                    "instead of sending a chat message. Used for store-detail-page redirects and "
+                    "similar out-of-conversation navigation.",
+    )
 
 
 class QuickReplyTemplate(TemplatePayload):
@@ -91,6 +145,54 @@ class QuickReplyTemplate(TemplatePayload):
             logger.warning("quickReplies has %d chips, truncating to %d", len(v), cls._MAX_QUICK_REPLIES)
             return v[: cls._MAX_QUICK_REPLIES]
         return v
+
+    @model_validator(mode="after")
+    def enforce_quantity_chips(self) -> "QuickReplyTemplate":
+        text = self.assistantResponse or ""
+        if any(p.search(text) for p in _QTY_CONFIRM_PATTERNS):
+            return self
+        if not any(p.search(text) for p in _QTY_QUESTION_PATTERNS):
+            return self
+        chip_labels = {c.label for c in self.quickReplies}
+        if all(req in chip_labels for req in _REQUIRED_QTY_CHIPS):
+            return self
+        missing = [r for r in _REQUIRED_QTY_CHIPS if r not in chip_labels]
+        logger.warning(
+            "QuickReplyTemplate qty-question auto-fix: original=%s missing=%s; replacing with %s",
+            [c.label for c in self.quickReplies],
+            missing,
+            list(_REQUIRED_QTY_CHIPS),
+        )
+        self.quickReplies = [
+            QuickReplyChip(label=label, domain="TRANSACTION") for label in _REQUIRED_QTY_CHIPS
+        ]
+        return self
+
+    @model_validator(mode="after")
+    def enforce_satisfaction_chips(self) -> "QuickReplyTemplate":
+        """Replace failure/fallback chips with progress chips on satisfaction messages.
+
+        Trigger: assistantResponse 가 만족·기쁨·재구매 응답 패턴 매칭 AND quickReplies 에
+        FORBIDDEN chip(구매하기/다시 시도/상담사 연결/1:1 문의하기) 중 하나 이상 포함.
+        그 경우에만 전체 chip 셋을 `[상품 검색, 타이어 추천, 처음으로]` 디폴트로 교체.
+        FORBIDDEN chip 이 하나도 없으면 그대로 통과(prompt 가 이미 잘 emit 한 경우).
+        """
+        text = self.assistantResponse or ""
+        if not any(p.search(text) for p in _SATISFACTION_PATTERNS):
+            return self
+        existing_labels = {c.label for c in self.quickReplies}
+        if not (existing_labels & _FORBIDDEN_SATISFACTION_CHIPS):
+            return self
+        logger.warning(
+            "QuickReplyTemplate satisfaction auto-fix: original=%s; replacing with %s",
+            [c.label for c in self.quickReplies],
+            [label for label, _ in _DEFAULT_SATISFACTION_CHIPS],
+        )
+        self.quickReplies = [
+            QuickReplyChip(label=label, domain=domain)
+            for label, domain in _DEFAULT_SATISFACTION_CHIPS
+        ]
+        return self
 
 
 class QuickReplyDataEvent(BaseModel):
@@ -419,11 +521,15 @@ class TransactionAgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_transaction_payload(self):
-        TypeAdapter(TransactionDataEvent).validate_python({
+        event = TypeAdapter(TransactionDataEvent).validate_python({
             "type": self.type,
             "template": self.template,
             "data": self.data,
         })
+        # validator 가 mutate 한 결과 (예: QuickReplyTemplate.enforce_quantity_chips
+        # 의 수량 chip 자동 보정) 를 self.data 에 반영. 단순 validate_python 만 호출하면
+        # 보정 결과가 throw away 되어 LLM 휘발성 누락이 wire 로 그대로 새어 나간다.
+        self.data = event.data.model_dump()
         return self
 
 
@@ -651,9 +757,13 @@ class DiscoveryAgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_discovery_payload(self):
-        TypeAdapter(DiscoveryDataEvent).validate_python({
+        event = TypeAdapter(DiscoveryDataEvent).validate_python({
             "type": self.type,
             "template": self.template,
             "data": self.data,
         })
+        # validator 가 mutate 한 결과 (예: QuickReplyTemplate.enforce_quantity_chips
+        # 의 수량 chip 자동 보정) 를 self.data 에 반영. validate_python 만 호출하면
+        # 보정 결과가 throw away 되어 LLM 휘발성 누락이 wire 로 그대로 새어 나간다.
+        self.data = event.data.model_dump()
         return self
