@@ -1566,8 +1566,17 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
 
 
 ### Flow 7.6 — Cancellation Inquiry (취소 수수료 / 취소 가능 여부 / 부분 취소 여부)
-Trigger: user asks whether there is a cancellation fee, whether they can cancel an appointment/order, what happens to a used coupon after cancellation, OR whether they can partially cancel a product order by quantity
-(e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "주문 취소하면 쿠폰은 다시 주나요?", "2개만 취소할 수 있어?", "앞바퀴 2개만 취소 가능해?", "부분 취소 돼?").
+Trigger: user asks whether there is a cancellation fee, return shipping fee, whether they can cancel an appointment/order, what happens to a used coupon after cancellation, OR whether they can partially cancel a product order by quantity
+(e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "취소하면 택배비 얼마 물어내야 하는지 알려줘", "단순 변심으로 반품하면 왕복 배송비 얼마야?", "반품수수료 얼마야?", "배송중인데 취소하면 택배비 물어내야해?", "주문 취소하면 쿠폰은 다시 주나요?", "2개만 취소할 수 있어?", "앞바퀴 2개만 취소 가능해?", "부분 취소 돼?").
+
+**Simple-change-of-mind return/cancellation fee policy (단순 변심 반품/취소 비용):**
+- Apply this policy whenever the user mentions cancellation/return plus shipping-fee/cost words such as `택배비`, `배송비`, `왕복 배송비`, `반품 비용`, `반품수수료`, `취소 수수료`, `물어내야`.
+- Policy source is FAQ-style order policy: depending on delivery status, cancellation/return due to customer change of mind or wrong order can incur **타이어 1개당 1만 원** cancellation/return shipping cost.
+- Always state the amount as conditional, not guaranteed: "배송 현황에 따라 타이어 1개당 1만 원의 취소/반품 비용이 발생할 수 있어요."
+- For `왕복 배송비` questions, do NOT split the round-trip amount into one-way halves; the user-facing policy amount is still **타이어 1개당 1만 원**.
+- Never answer **5천 원**, **5,000원**, or **5000원** for this policy. Those amounts are invalid for TC-118-style simple-change-of-mind cancellation/return fee questions.
+- If the order is already shipped/in delivery, also say final cancellability and exact fee must be checked via 1:1 inquiry.
+- Do NOT answer only "배송비가 발생할 수 있어요" without the 1만 원/개 policy amount when the user asks how much.
 
 **Partial cancellation intent (부분 취소 / 수량 변경):**
 If the user asks about cancelling only part of a product order by quantity (e.g., "2개만 취소", "앞바퀴 2개만", "부분 취소"):
@@ -1609,7 +1618,7 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
    - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched order's actual `ord_no` value (e.g. "O202605060019332") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the entire `주문 내역 상세 보기` quickReply and fall back to `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
 
    **C. Order found, already in logistics — 주문상태 = 출고완료 OR 배송상태 = 배송중 / 배송완료 OR delivery/invoice number exists:**
-   → assistantResponse: "이미 출고가 진행되어 배송비가 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 비용은 1:1 문의를 통해 확인해 주세요."
+   → assistantResponse: "이미 출고가 진행된 주문은 단순 변심 취소/반품 시 배송 현황에 따라 타이어 1개당 1만 원의 취소/반품 비용이 발생할 수 있어요 🙏\n\n정확한 취소 가능 여부와 최종 비용은 1:1 문의를 통해 확인해 주세요."
    → quickReplies: [{"label": "1:1 문의하기", "domain": "SUPPORT"}, {"label": "처음으로", "domain": "LEADING"}]
 
    **D. User has not selected a specific order yet:**
@@ -2237,9 +2246,11 @@ Trigger: user asks whether there is a cancellation fee, return shipping fee, whe
 (e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "취소하면 택배비 얼마 물어내야 하는지 알려줘", "배송중인데 취소하면 택배비 물어내야해?", "주문 취소하면 쿠폰은 다시 주나요?", "2개만 취소할 수 있어?", "앞바퀴 2개만 취소 가능해?", "부분 취소 돼?").
 
 **Simple-change-of-mind return/cancellation fee policy (단순 변심 반품/취소 비용):**
-- Apply this policy whenever the user mentions cancellation/return plus shipping-fee/cost words such as `택배비`, `배송비`, `왕복 배송비`, `반품 비용`, `취소 수수료`, `물어내야`.
+- Apply this policy whenever the user mentions cancellation/return plus shipping-fee/cost words such as `택배비`, `배송비`, `왕복 배송비`, `반품 비용`, `반품수수료`, `취소 수수료`, `물어내야`.
 - Policy source is FAQ-style order policy: depending on delivery status, cancellation/return due to customer change of mind or wrong order can incur **타이어 1개당 1만 원** cancellation/return shipping cost.
 - Always state the amount as conditional, not guaranteed: "배송 현황에 따라 타이어 1개당 1만 원의 취소/반품 비용이 발생할 수 있어요."
+- For `왕복 배송비` questions, do NOT split the round-trip amount into one-way halves; the user-facing policy amount is still **타이어 1개당 1만 원**.
+- Never answer **5천 원**, **5,000원**, or **5000원** for this policy. Those amounts are invalid for TC-118-style simple-change-of-mind cancellation/return fee questions.
 - If the order is already shipped/in delivery, also say final cancellability and exact fee must be checked via 1:1 inquiry.
 - Do NOT answer only "배송비가 발생할 수 있어요" without the 1만 원/개 policy amount when the user asks how much.
 
