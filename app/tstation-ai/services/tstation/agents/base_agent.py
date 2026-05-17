@@ -118,6 +118,33 @@ _VALIDATION_FALLBACK_QUICK_REPLIES = [
     {"label": "처음으로", "domain": "LEADING"},
 ]
 
+
+def _build_validated_quickreply_data(assistant_response: str, chips: list[dict]) -> dict:
+    """Build a quickReply `data` payload through QuickReplyTemplate validation.
+
+    Fallback emit paths (validation failure, prose mode, validation_fallback) bypass
+    pydantic instantiation and yield dicts directly, which means QuickReplyTemplate
+    validators (qty enforcement, satisfaction-chip enforcement) never fire. This
+    helper runs the payload through QuickReplyTemplate so the same deterministic
+    guards apply on the fallback paths.
+
+    Returns the validated `data` dict (assistantResponse + quickReplies). Schema
+    failures fall back to the raw input so we never harden an emit path into a
+    crash — but validators that mutate (e.g., satisfaction auto-fix) take effect.
+    """
+    from services.tstation.agents.templates.schemas import QuickReplyChip, QuickReplyTemplate
+
+    try:
+        chip_objs = [QuickReplyChip(**c) if isinstance(c, dict) else c for c in chips]
+        tpl = QuickReplyTemplate(assistantResponse=assistant_response, quickReplies=chip_objs)
+        return tpl.model_dump()
+    except ValidationError as exc:
+        logger.warning(
+            "[_build_validated_quickreply_data] schema validation failed, falling back to raw: %s",
+            exc.errors(include_url=False),
+        )
+        return {"assistantResponse": assistant_response, "quickReplies": chips}
+
 # 주문 수량을 묻는 quickReply 는 항상 1/2/3/4 4개 chip 을 노출해야 한다.
 # LLM 이 가끔 일부 chip 을 누락 (예: ["4개","2개"]) 하거나 중복 (["2개","2개"]) 시켜
 # UX 가 깨지므로 결정적 후처리로 정규화한다.
@@ -552,10 +579,10 @@ class BaseAgent(ABC):
                         yield {
                             "type": "data",
                             "template": "quickReply",
-                            "data": {
-                                "assistantResponse": response_streamer.streamed_text,
-                                "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
-                            },
+                            "data": _build_validated_quickreply_data(
+                                response_streamer.streamed_text,
+                                list(_VALIDATION_FALLBACK_QUICK_REPLIES),
+                            ),
                             "nextAction": {"type": "stop", "domain": None},
                         }
                     else:
@@ -590,10 +617,7 @@ class BaseAgent(ABC):
                             yield {
                                 "type": "data",
                                 "template": "quickReply",
-                                "data": {
-                                    "assistantResponse": prose_only,
-                                    "quickReplies": chips,
-                                },
+                                "data": _build_validated_quickreply_data(prose_only, chips),
                                 "nextAction": {"type": "stop", "domain": None},
                             }
                         else:
@@ -617,10 +641,9 @@ class BaseAgent(ABC):
         yield {
             "type": "data",
             "template": "quickReply",
-            "data": {
-                "assistantResponse": message,
-                "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
-            },
+            "data": _build_validated_quickreply_data(
+                message, list(_VALIDATION_FALLBACK_QUICK_REPLIES)
+            ),
             "nextAction": {"type": "stop", "domain": None},
         }
 

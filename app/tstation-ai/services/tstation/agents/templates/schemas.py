@@ -44,7 +44,11 @@ _SATISFACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"반갑습니다.*도와드릴"),
     re.compile(r"무엇을\s*도와드릴"),
     re.compile(r"어떻게\s*도와드릴"),
+    re.compile(r"어떤\s*도움.*드릴"),
     re.compile(r"편하게\s*(?:말씀|도와)"),
+    # 답례 / 감사 표현 (LEADING 의 "고마워" 응답)
+    re.compile(r"감사드립니다|감사합니다"),
+    re.compile(r"별말씀"),
 )
 _FORBIDDEN_SATISFACTION_CHIPS: frozenset[str] = frozenset({
     "구매하기", "다시 시도", "상담사 연결", "1:1 문의하기",
