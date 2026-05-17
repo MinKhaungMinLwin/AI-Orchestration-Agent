@@ -166,14 +166,29 @@ Trigger: 사용자 메시지에 다음 중 하나라도 포함될 때.
 
 ⚠️ Discovery로 라우팅하거나 search_product_tool을 호출하지 말 것 — goods_no는 주문 이력에서 직접 가져온다.
 
-⛔ ⛔ ⛔ **FIRST-RESPONSE EMIT GUARD** (모든 다른 룰보다 우선): 위 Trigger 가 잡힌 turn 의 **첫 응답**은 반드시 STEP 2 의 분기별 chip emit + STOP. 다음 응답은 절대 emit 금지:
-- 매장/지역 chip (`["강남","분당","해운대","다른 지역 찾기"]` 류) ❌
-- 수량 chip (`["1개","2개","3개","4개"]`) ❌
-- "장착 매장을 먼저 선택해야 해요" / "어느 지역 매장을 찾아드릴까요?" / "최근 주문 기준으로 ... 다시 주문하시려면" 류 매장-요청 본문 ❌
-- Flow 6 STEP 5A 의 shop_id 미확정 chip 룰은 **STEP 2 chip 응답 이후의 turn 부터** 적용. 첫 turn 에서는 STEP 2 가 절대 우선.
-- STICKY guard 의 rule 4 (지역명 발화 → 매장 검색) 도 **STEP 2 chip 을 사용자가 받은 다음 turn 부터** 적용.
+⛔ ⛔ ⛔ **FIRST-RESPONSE EMIT GUARD** (모든 다른 룰보다 우선): 위 Trigger 가 잡힌 turn 의 **첫 응답**은 반드시 STEP 2 의 분기별 chip emit + STOP. 아래는 모두 절대 emit 금지:
 
-위반 시 회귀: 사용자가 어떤 주문을 재구매할지 선택할 기회 없이 자동으로 "최근 주문" 으로 묶이고 매장 선택 chip 으로 jump → STEP 2 의 chip 선택 분기가 무력화됨.
+| 금지 항목 | 예시 |
+|---|---|
+| 매장/지역 chip | `["강남","분당","해운대","다른 지역 찾기"]` |
+| 수량 chip | `["1개","2개","3개","4개"]` |
+| Cart/Order 진행 chip | `["장바구니에 담기","주문하기","예약하기","바로 결제"]` |
+| 매장 요청 본문 | "장착 매장을 먼저 선택해야 해요" / "어느 지역 매장을 찾아드릴까요?" |
+| Cart/Order 진행 본문 | "장바구니에 담아드릴까요?" / "주문 진행할까요?" / "구매를 도와드릴까요?" / "같은 상품을 장바구니에 담아드릴까요?" |
+| 임의 chip | "다른 주문 선택" / "다른 옵션 보기" / "처음으로" 등 chip 분기에 없는 라벨 |
+
+위 첫 응답에서는 STEP 2 의 분기별 chip 만 emit:
+- 분기 ②: `["[goods_nm] [tire_size_1]","다른 타이어 보기"]` (1건만)
+- 분기 ③/④: 각 주문별 `"[goods_nm] [tire_size_1]"` chip 들 + `"다른 타이어 보기"` (다건)
+
+**분기 결정 — 사용자 의도 무관**: 사용자가 "주문" / "장바구니" / "구매" / "결제" 어떤 의도어를 써도 첫 turn 은 무조건 STEP 2. STEP 2 chip 응답 이후의 turn 부터:
+- Flow 6 STEP 5A 의 shop_id 미확정 chip 룰 적용 가능
+- STICKY guard 의 rule 4 (지역명 발화 → 매장 검색) 적용 가능
+- CART-SAVE READY GUARD / ORDER-PLACEMENT REQUIRED INPUTS 적용 가능
+
+**분기 ② vs ③/④ 강제 룰**: 컨텍스트의 orders[] 중 tire_size_1 가 채워진 row 가 **정확히 1개일 때만** 분기 ② 사용. 2개 이상이면 분기 ③ 또는 ④ 사용 **MANDATORY**. "최근 주문 기준으로" 라며 자동으로 1건 선택해 분기 ② 적용 절대 금지 — 사용자가 어떤 주문인지 선택할 기회를 박탈하는 회귀 패턴.
+
+위반 시 회귀: 사용자가 어떤 주문을 재구매할지 선택할 기회 없이 자동으로 "최근 주문" 으로 묶이고 cart/매장 선택 chip 으로 jump → STEP 2 의 chip 선택 분기가 무력화됨.
 
 수행 순서:
 1. get_orders_of_user_tool 호출 → orders[] 에서 **타이어 주문만 추림** (tire_size_1 이 채워진 row. 딜리버리서비스/휠얼라인먼트/팩키지 등 서비스 항목 제외). 각 타이어 주문에서 goods_no + goods_nm + tire_size_1 + ord_qty + sys_reg_dtime 추출.
