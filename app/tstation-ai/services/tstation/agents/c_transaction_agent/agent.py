@@ -631,8 +631,8 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | Tool | Use when |
 |------|---------|
 | get_final_price_tool | User asks for price or Smart Pay monthly installment amount (goods_no required) |
-| get_my_coupons_tool | User asks "내 쿠폰", "my coupons" |
-| get_product_promotions_tool | goods_no 확보된 상태에서 사용자가 "이 상품에 적용 가능한 쿠폰" 또는 "기획전" 또는 "프로모션/혜택" 을 물을 때. 도구는 deal + coupon 둘 다 반환하지만 답변에는 사용자가 물은 도메인만 사용 (쿠폰 물었으면 쿠폰만, 기획전 물었으면 기획전만) |
+| get_my_coupons_tool | 순수 쿠폰 목록 조회 — goods_no도 상품명도 없는 경우만. 상품명이 있으면 먼저 Discovery로 goods_no 확보 후 get_product_promotions_tool 사용 |
+| get_product_promotions_tool | goods_no 확보된 상태 OR 사용자가 특정 상품 쿠폰 조회 요청 시 — 상품에 매핑된 진행 중 기획전+쿠폰 묶음만 반환. 도구는 deal + coupon 둘 다 반환하지만 답변에는 사용자가 물은 도메인만 사용 (쿠폰 물었으면 쿠폰만, 기획전 물었으면 기획전만) |
 | ~~issue_coupon_tool~~ | 🚫 OFF (2026-05-15) — 발급/다운로드 기능 일시 비활성. 사용자 발급 의도 → quickReply 안내문으로 응답, 도구 호출 금지 |
 | get_logistics_inventory_tool | Check warehouse stock |
 | get_store_inventory_tool | Check stock at specific store(s) |
@@ -1736,8 +1736,14 @@ Trigger: "이 상품 쿠폰 뭐 있어", "이 상품에 적용 가능한 쿠폰"
 ⚠️ 분기 결정: "내가", "내 쿠폰", "가진", "보유", "쓸 수 있는" 등 소유 키워드 → A1. 없으면 → A2.
 🚫 (OFF 2026-05-15) 발급 단계 생략. 적용 가능 쿠폰이 있으면 "쿠폰 받기 기능은 잠시 점검 중이에요" 안내 후 주문 흐름 계속.
 
-**Case B — 순수 쿠폰 조회 (goods_no 없음, 주문 흐름 밖):**
-→ get_my_coupons_tool 사용
+**Case B1 — 특정 상품 쿠폰 조회 (goods_no 없음 + 메시지에 상품명 있음):**
+예: "키너지 EX 쿠폰 있어?", "벤투스 S2 AS에 할인 쿠폰 뭐 있어?", "이 상품 쿠폰 알려줘" (직전 대화에서 상품명 언급됨)
+→ goods_no가 슬롯에 없어도 상품명이 있으면 get_my_coupons_tool 금지.
+→ 대신: "상품을 검색하겠습니다." → Discovery가 goods_no 확보 → Case A 로 진행.
+⚠️ 상품명이 메시지 또는 최근 대화에 있는데 get_my_coupons_tool을 호출하면 상품과 무관한 전체 쿠폰이 표시됨 — 절대 금지.
+
+**Case B — 순수 쿠폰 조회 (goods_no 없음 + 상품명도 없음):**
+→ 순수하게 "내 쿠폰 목록이 뭐가 있어?" 류의 요청일 때만 get_my_coupons_tool 사용.
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
 - ⚠️ 이 응답 이후 사용자가 상품명 + 매장을 제공하면 즉시 Case C로 전환 — 쿠폰 재조회하지 말 것.
