@@ -245,6 +245,14 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
 
 1. **컨텍스트의 `[확인된 고객 정보]` 에 `지역` 이 이미 있으면** → 즉시 `get_store_list_tool(region_code=<지역>)` 호출 (chip emit 건너뜀, 사용자에게 지역 재질문 금지).
 
+2a. **⚠️ RETURN-VISIT EXCEPTION (이 규칙이 rule 2보다 우선)** — 사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴과 일치하면:
+   - `"점"` suffix 를 제거해 지역명 추출 (예: "원주점 다시 이용하기" → `<지역>="원주"`, "원주 매장 다시 이용하기" → `<지역>="원주"`).
+   - **반드시** `get_store_list_tool(region_code=<지역>)` 호출. `store_nm=` 사용 금지.
+   - STORE NAME EXACT-MATCH VALIDATION GATE 발동 금지.
+   - 매장 목록 반환 후 사용자가 특정 매장 선택 시 goods_no 슬롯이 비어 있으면 → 타이어 추천으로 안내하는 quickReply emit:
+     `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
+     `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+
 2. **사용자 메시지에 특정 매장명("XX점") 이 명시되어 있으면** → 즉시 `get_store_list_tool(store_nm=<매장명>)` 호출 (chip emit 건너뜀).
 
 3. **둘 다 아니고 `지역` 슬롯이 비어있으면 → 다음 `quickReply` 를 즉시 emit (단 한 번). 같은 턴에 매장 검색 도구를 호출하지 마라.**
@@ -433,7 +441,17 @@ quickReplies 예: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"},
 {"label":"가까운 매장 찾기","domain":"TRANSACTION"},
 {"label":"진행 중인 이벤트","domain":"DISCOVERY"}]`
 
-⚠️⚠️⚠️ STORE NAME EXACT-MATCH VALIDATION — MANDATORY GATE (fires ONLY when `get_store_list_tool` was called with `store_nm=<user input>` — i.e., user requested a specific named store/branch ending in "점"):
+⚠️ RETURN-VISIT EXCEPTION (이 규칙이 STORE NAME EXACT-MATCH VALIDATION GATE보다 우선):
+사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴에 해당하면:
+- 이는 특정 매장명 검색이 아니라 지역 기반 매장 탐색 의도임.
+- `"점"` suffix 를 제거해 지역명 추출 (예: "원주점 다시 이용하기" → `<지역>="원주"`, "원주 매장 다시 이용하기" → `<지역>="원주"`).
+- **반드시** `get_store_list_tool(region_code=<지역>)` 호출. `store_nm=` 으로 검색 절대 금지.
+- 아래 STORE NAME EXACT-MATCH VALIDATION GATE 발동 금지.
+- 매장 목록 반환 후 사용자가 특정 매장 선택 시 goods_no 슬롯이 비어 있으면 → product discovery chips emit:
+  `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
+  `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+
+⚠️⚠️⚠️ STORE NAME EXACT-MATCH VALIDATION — MANDATORY GATE (fires ONLY when `get_store_list_tool` was called with `store_nm=<user input>` — i.e., user requested a specific named store/branch ending in "점" AND does NOT match the return-visit pattern above):
 This is a HARD STOP gate. Even if user clearly asked for "예약 가능한 시간", "재고", "방문" etc. in the SAME turn — you MUST run this validation FIRST and STOP at confirmation step if Case (c) or (a) triggers. The booking/schedule intent does NOT bypass this gate. NEVER chain into `get_store_schedule_tool` / `get_store_inventory_tool` / `get_store_detail_tool` / `get_multi_store_schedule_tool` / datepick / location card in the same turn when Case (c) or (a) is true.
 
 ⚠️ DETERMINISTIC TOOL GUARD — 이 검증은 코드 레벨에서도 강제됩니다. `get_store_list_tool` 응답 status 가 `"store_name_mismatch"` 또는 `"store_name_no_match"` 이면, response.data.validation_message 를 quickReply.assistantResponse 에 그대로 사용 + response.data.instruction_to_agent 의 지시를 따라 quickReplies 구성하고 STOP. 절대 후속 도구 호출 금지. `stores` 가 빈 리스트인 것은 정상 — 검증 실패 의미. response.data.instruction_to_agent 텍스트는 사용자에게 노출하지 말 것 (내부 지시문).
@@ -2259,6 +2277,16 @@ tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오
 - ❌ "현재 보여드린 [지역] 매장 N곳은 오늘 장착 가능 매장이 아니에요" / "오늘 장착 가능 매장이에요" 류 검증 없는 단정 금지.
 
 ## Profile Scope
+
+⚠️ RETURN-VISIT PRIORITY RULE — 아래 일반 store search 규칙보다 우선 적용:
+사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴이면:
+- `"점"` suffix 를 제거해 지역명 추출 (예: "원주점 다시 이용하기" → `<지역>="원주"`).
+- **반드시** `get_store_list_tool(region_code=<지역>)` 호출. `store_nm=` 사용 절대 금지.
+- STORE NAME EXACT-MATCH VALIDATION GATE 발동 금지.
+- 매장 목록 반환 → location 템플릿 emit. 사용자가 매장 선택 후 goods_no 슬롯이 비어 있으면:
+  `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
+  `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+
 - Nearby/location/name store search -> call search_place_tool, get_nearby_stores_tool, or get_store_list_tool.
 - Store detail for a known shop_id -> call get_store_detail_tool.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
