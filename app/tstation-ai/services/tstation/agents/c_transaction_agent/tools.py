@@ -1025,7 +1025,7 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
     Use this tool when the user asks for stores available "N시 이후" / "저녁 N시" / "오후 N시"
     in a region, without specifying a particular store name or goods_no.
 
-    Fetches the store list for the region in parallel with checking today→+2 day reservation
+    Fetches a broad store list for the region in parallel with checking today→+2 day reservation
     slots per store, then returns pre-filtered raw store data for the location mapper.
 
     Args:
@@ -1050,7 +1050,9 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
         region_code, time_threshold_hour,
     )
 
-    list_result = _get_store_list_cached(region_code=region_code, limit=15)
+    # Fetch more candidates than the UI can render. Filtering happens after schedule checks;
+    # using a small pre-filter limit can hide stores that actually have slots after the threshold.
+    list_result = _get_store_list_cached(region_code=region_code, limit=50)
     if list_result.get("status") == "error":
         return list_result
 
@@ -1065,6 +1067,20 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
 
     today = datetime.now()
     client = get_client()  # obtain in main thread so worker threads inherit the request context
+
+    def _slot_hour(slot: object) -> int | None:
+        """Return the hour part from BE slot shapes like 18, "18", "18:00", or "1800"."""
+        if isinstance(slot, int):
+            return slot
+        if isinstance(slot, str):
+            raw = slot.strip()
+            if not raw:
+                return None
+            head = raw.split(":", 1)[0]
+            if head.isdigit():
+                # "1800" is occasionally used as HHMM; keep "18" as-is.
+                return int(head[:2]) if len(head) == 4 else int(head)
+        return None
 
     def _check_store(store: dict) -> tuple[bool, dict]:
         shop_id = store.get("shop_id") or store.get("shop_seq")
@@ -1087,13 +1103,15 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
                     continue
                 detail = _to_dict(resp.parsed)
                 slots = detail.get("available_slots") or []
-                qualifying = [s for s in slots if int(s) >= time_threshold_hour]
+                qualifying = [s for s in slots if (_slot_hour(s) is not None and _slot_hour(s) >= time_threshold_hour)]
                 if qualifying:
+                    detail_road = " ".join(filter(None, [detail.get("road_addr_base"), detail.get("road_addr_dtl")])).strip()
+                    detail_jibun = " ".join(filter(None, [detail.get("addr_base"), detail.get("addr_dtl")])).strip()
                     return True, {
                         "shop_id": shop_id,
-                        "shop_nm": shop_nm,
-                        "address": addr,
-                        "tel": tel,
+                        "shop_nm": detail.get("shop_nm") or shop_nm,
+                        "address": detail_road or detail_jibun or addr,
+                        "tel": detail.get("tel_no") or tel,
                         "cal_day": cal_day,
                         "qualifying_slots": qualifying,
                         "is_all_my_t": bool(detail.get("is_all_my_t", list_is_all_my_t)),
@@ -1126,6 +1144,12 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
                     stores_unavailable.append(result)
             except Exception:
                 logger.warning("[get_stores_with_time_filter_tool] future failed")
+
+    stores_available.sort(key=lambda row: (
+        row.get("cal_day") or "99999999",
+        min((_slot_hour(s) for s in row.get("qualifying_slots", []) if _slot_hour(s) is not None), default=99),
+        row.get("shop_nm") or "",
+    ))
 
     return _success_response(200, {
         "stores_available": stores_available,
