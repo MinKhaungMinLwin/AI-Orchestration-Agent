@@ -769,6 +769,14 @@ class BaseAgent(ABC):
             "get_user_vehicles_tool",
             "get_store_detail_tool",
             "get_stores_with_time_filter_tool",
+            # Product list tools — items 있으면 product 카드 강제. LLM 이
+            # "비슷한 가격대 더 추천" 같은 follow-up 발화에서 fenced JSON 으로
+            # quickReply 만 emit 하고 product 카드를 건너뛰는 회귀 차단.
+            # items 0 (검색 0건) 케이스는 mapper 가 None 반환 → LLM prose fallback.
+            "search_product_tool",
+            "get_products_recommendations_tool",
+            "get_newest_products_tool",
+            "get_best_selling_products_tool",
         )
         has_force_code_mapper_tool = any(
             e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
