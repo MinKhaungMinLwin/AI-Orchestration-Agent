@@ -1074,6 +1074,8 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
 
         region_code = _get_str(raw, "region_code")
         threshold = raw.get("time_threshold_hour")
+        kst = datetime.timezone(datetime.timedelta(hours=9))
+        today_yyyymmdd = datetime.datetime.now(kst).strftime("%Y%m%d")
         items, metadata = [], []
         for row in stores:
             if not isinstance(row, dict):
@@ -1084,9 +1086,13 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
 
             slots = row.get("qualifying_slots") if isinstance(row.get("qualifying_slots"), list) else []
             slot_text = ", ".join(_format_time_filter_slot(s) for s in slots[:5])
-            cal_day = _yyyymmdd_to_korean_date(_get_str(row, "cal_day"))
+            cal_day_raw = _get_str(row, "cal_day")
+            cal_day = _yyyymmdd_to_korean_date(cal_day_raw)
             address = _get_str(row, "address")
             tel = _format_phone(_get_str(row, "tel"))
+            is_all_my_t = bool(row.get("is_all_my_t", False))
+            is_tna_delivery = bool(row.get("is_tna_delivery", False))
+            today_install = bool(cal_day_raw == today_yyyymmdd and slots)
             description_lines: list[str] = []
             if address:
                 description_lines.append(f"📍 {address}")
@@ -1101,9 +1107,9 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
                 "nameAddress": _get_str(row, "shop_nm", default=shop_id),
                 "distance": "",
                 "detailAddress": address,
-                "isAllMyT": False,
-                "todayInstall": False,
-                "tnaDelivery": False,
+                "isAllMyT": is_all_my_t,
+                "todayInstall": today_install,
+                "tnaDelivery": is_tna_delivery,
                 "description": "\n ".join(description_lines),
             })
             metadata.append({"shopId": shop_id})

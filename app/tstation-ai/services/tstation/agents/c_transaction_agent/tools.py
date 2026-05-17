@@ -1069,8 +1069,12 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
     def _check_store(store: dict) -> tuple[bool, dict]:
         shop_id = store.get("shop_id") or store.get("shop_seq")
         shop_nm = store.get("shop_nm") or ""
-        addr = " ".join(filter(None, [store.get("road_addr_base"), store.get("road_addr_dtl")])).strip()
+        # BE 매장 일부는 road_addr_* 가 null. 지번주소(addr_base/addr_dtl)로 폴백.
+        road_full = " ".join(filter(None, [store.get("road_addr_base"), store.get("road_addr_dtl")])).strip()
+        jibun_full = " ".join(filter(None, [store.get("addr_base"), store.get("addr_dtl")])).strip()
+        addr = road_full or jibun_full
         tel = store.get("tel_no") or ""
+        list_is_all_my_t = bool(store.get("is_all_my_t") or False)
 
         if not shop_id:
             return False, {"shop_nm": shop_nm, "address": addr, "tel": tel, "reason": "매장 ID 없음"}
@@ -1092,6 +1096,8 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
                         "tel": tel,
                         "cal_day": cal_day,
                         "qualifying_slots": qualifying,
+                        "is_all_my_t": bool(detail.get("is_all_my_t", list_is_all_my_t)),
+                        "is_tna_delivery": bool(detail.get("is_tna_delivery", False)),
                     }
             except Exception:
                 logger.warning(
