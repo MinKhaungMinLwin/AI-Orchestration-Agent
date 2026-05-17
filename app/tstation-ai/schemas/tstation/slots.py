@@ -86,7 +86,8 @@ class ConversationSlots(BaseModel):
     # Intent patterns. Order = priority: first match wins when a single user turn
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
     # "order" is listed last because it's the most commitment-heavy and should only
-    # be inferred from strong signals ("주문", "구매", "사고 싶어", "사려고", "살래").
+    # be inferred from strong signals ("주문", "구매", "사고 싶어", "사려고", "살래",
+    # "장착하고 싶어/장착할게/장착해줘" — 타이어 매장 장착은 commit-heavy 구매 의도).
     # Stock pattern covers: 재고/입고 (direct inventory) and 장착 가능 (tire-install
     # availability — implies stock at a store). The `\s*가능` tail is deliberate:
     #   - Narrows "장착" so mixed purchase turns like "주문해서 장착하고 싶어요" fall
@@ -106,7 +107,17 @@ class ConversationSlots(BaseModel):
             "price",
         ),
         (re.compile(r"재고|입고|장착\s*가능"), "stock"),
-        (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
+        # 장착 의도 — 타이어 매장 장착은 commit-heavy 구매 의도다. "장착하고 싶어",
+        # "장착하려고", "장착할래/장착할게", "장착해줘/장착해 주세요" 등 의도 동사
+        # 결합 케이스만 매칭. 단순 "장착비/장착료/장착 공임" (price) 과 "장착 가능"
+        # (stock) 은 위 두 패턴이 우선 매칭하므로 충돌 없음.
+        (
+            re.compile(
+                r"주문|구매|사고\s*싶|사려고|살래|"
+                r"장착하고\s*싶|장착하려|장착할래|장착할게|장착해\s*줘|장착해\s*주세요"
+            ),
+            "order",
+        ),
         # 매장 방문 예약 — 와이퍼/배터리/얼라인먼트/경정비 등 부가 서비스 예약 포함.
         # "주문 예약" 같은 복합 발화는 위의 "order" 패턴이 먼저 매칭되어 reservation 으로
         # 떨어지지 않는다 (first-match-wins). 취소/변경 동사는 downstream 분류기·prompt
