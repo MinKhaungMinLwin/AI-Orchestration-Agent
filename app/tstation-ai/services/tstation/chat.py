@@ -906,6 +906,25 @@ class StreamingMultiAgentCoordinator:
             else:
                 result = raw_result
 
+            # Deterministic profile override — datepick selection turn must use FULL profile.
+            # FE 가 datepick 슬롯 클릭 시 보내는 메시지 패턴 "YYYY년 M월 D일 (요일)\nHH:MM"
+            # 은 routing prompt L325 의 `full` profile 룰에 명시되어 있지만, 분류 LLM
+            # (gpt-4.1-mini) 이 직전 대화 컨텍스트 (datepick 카드 = store schedule) 에
+            # 가려 `transaction_store` 로 분류하는 회귀가 반복. narrow 프로필은 STEP 5.5
+            # PRE-ORDER PREVIEW 룰을 못 보므로 datepick → preOrder 흐름이 끊기고 dead-end
+            # chip ("1:1 문의하기"/"처음으로") 으로 빠진다. 분류기 출력 무관하게 강제 override.
+            if (
+                last_user_text
+                and _DATEPICK_SELECTION_RE.match(last_user_text)
+                and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
+                and result.agent_prompt_profile != AgentPromptProfile.FULL
+            ):
+                logger.info(
+                    "[MULTI-DOMAIN] Datepick pattern detected — forcing profile %s → FULL",
+                    result.agent_prompt_profile,
+                )
+                result.agent_prompt_profile = AgentPromptProfile.FULL
+
             logger.debug(
                 f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
                 f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, "
@@ -1067,6 +1086,18 @@ class StreamingMultiAgentCoordinator:
             input_goods_no = tool_input.get("goods_no")
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
+
+        # `get_store_schedule_tool` / `get_store_detail_tool` 은 사용자가 매장을 확정한 뒤
+        # 호출되는 도구다 (datepick / 매장 상세 페이지 진입). list-tool 의 result-count
+        # 가드와 무관하게, agent 가 shop_id 를 input 으로 전달했다는 사실 자체가 그
+        # 매장이 사용자의 확정 선택임을 의미한다. 이 값을 슬롯에 persist 하지 않으면
+        # place_order goal 의 `shop` step 이 풀리지 않아 state header 가 "다음: 매장 선택"
+        # 으로 남고, datepick 이후 "주문 진행하기" chip click 턴에서 agent 가 매장
+        # chip 을 다시 emit 하는 루프가 발생한다.
+        if tool_name in ("get_store_schedule_tool", "get_store_detail_tool") and tool_input:
+            input_shop_id = tool_input.get("shop_id")
+            if input_shop_id:
+                tool_slots["shop_id"] = input_shop_id
 
         # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
         # `payment_amount = (extra_fvr_sale_prc + wage_prc) * ord_qty` 로 계산.
@@ -1954,6 +1985,116 @@ def _is_regional_cheapest_query(msg: str | None) -> bool:
     if not has_region:
         return False
     return bool(_CHEAP_KEYWORDS_RE.search(msg))
+
+
+# ---------------------------------------------------------------------------
+# Service reservation (wiper / battery / alignment / 경정비) datepick redirect
+# ---------------------------------------------------------------------------
+# Non-tire service reservations are not bookable inside the chatbot — the
+# user must complete them on the tstation.com 매장 상세 페이지. The
+# `c_transaction_agent` system prompt has a SERVICE RESERVATION REDIRECT
+# rule for this, but the LLM sometimes ignores it after a datepick
+# selection and emits a vague "필요한 정보를 이어서 입력해 주세요" with
+# dead-end "1:1 문의하기 / 처음으로" chips, leaving the user stuck.
+#
+# Detect the situation deterministically pre-coordinator and short-circuit
+# with a fixed redirect payload, mirroring `_is_regional_cheapest_query`.
+
+_DATEPICK_SELECTION_RE = re.compile(
+    r"^\s*(?P<year>\d{4})년\s*(?P<month>\d{1,2})월\s*(?P<day>\d{1,2})일"
+    r"\s*(?:\([^)]+\))?\s*[\n\s]+\s*(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*$"
+)
+_TIRE_PRODUCT_CONTEXT_RE = re.compile(
+    r"goods_no|G\d{12}|"
+    r"\d{3}\s*/\s*\d{2}\s*R\s*\d{2}|"
+    r"벤투스|키너지|아이온|마일리지|드라이브웨이|다이나프로|라우펜|"
+    r"ventus|kinergy|ion\b|mileage",
+    re.IGNORECASE,
+)
+_SHOP_SEQ_RE = re.compile(r'"shop[_\s]*seq"\s*:\s*"([A-Z]?\d{4,})"', re.IGNORECASE)
+_STORE_NAME_RE = re.compile(r"티스테이션\s*[가-힣A-Za-z0-9]+\s*점")
+
+
+def _scan_recent_messages_for(
+    messages: list[dict], pattern: re.Pattern, *, max_msgs: int = 10
+) -> str | None:
+    """Walk last `max_msgs` messages newest-first; return first regex match."""
+    for msg in reversed(messages[-max_msgs:]):
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, str) or not content:
+            continue
+        match = pattern.search(content)
+        if match:
+            return match.group(1) if match.groups() else match.group(0)
+    return None
+
+
+def _is_service_reservation_redirect(
+    last_user_text: str | None,
+    pending_intent: str | None,
+    messages: list[dict],
+) -> bool:
+    """True when a datepick selection should be routed to the matjang detail page.
+
+    All three conditions must hold:
+      1. The user message is *only* a date + time (FE datepick click payload).
+      2. The conversation has a pending `reservation` intent (set by
+         ConversationSlots.extract when the user said 와이퍼/배터리/경정비/
+         얼라인먼트 + 예약).
+      3. No tire-product context (goods_no / size / model name) appears in
+         the recent history — that signals a tire booking which has its own
+         preOrder flow.
+    """
+    if not last_user_text or pending_intent != "reservation":
+        return False
+    if not _DATEPICK_SELECTION_RE.match(last_user_text):
+        return False
+    if _scan_recent_messages_for(messages, _TIRE_PRODUCT_CONTEXT_RE):
+        return False
+    return True
+
+
+def _build_service_reservation_redirect_payload(
+    last_user_text: str,
+    messages: list[dict],
+) -> dict:
+    """Compose the deterministic redirect text + chips for emit/non-stream paths.
+
+    Best-effort store-name and shop_seq extraction from recent history; if
+    shop_seq is unavailable we omit the URL chip rather than fabricate one.
+    """
+    from services.tstation.common.cta_urls import CTAUrls
+
+    m = _DATEPICK_SELECTION_RE.match(last_user_text)
+    assert m is not None, "caller must guard with _is_service_reservation_redirect"
+    yyyy = m.group("year")
+    mm = m.group("month").zfill(2)
+    dd = m.group("day").zfill(2)
+    hh = m.group("hour").zfill(2)
+    mi = m.group("minute")
+
+    store_name = _scan_recent_messages_for(messages, _STORE_NAME_RE) or "선택하신 매장"
+    shop_seq = _scan_recent_messages_for(messages, _SHOP_SEQ_RE)
+
+    text = (
+        f"{store_name} {yyyy}-{mm}-{dd} {hh}:{mi} 방문을 원하시는 것으로 확인했어요 😊\n\n"
+        "방문 예약은 티스테이션닷컴 매장 상세 페이지에서 가능해요. "
+        "아래 버튼으로 이동해 주세요."
+    )
+
+    chips: list[dict] = []
+    if shop_seq:
+        chips.append({
+            "label": "매장 상세 페이지로 이동",
+            "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", shop_seq),
+            "domain": "TRANSACTION",
+        })
+    chips.extend([
+        {"label": "다른 시간 선택", "domain": "TRANSACTION"},
+        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+    ])
+
+    return {"text": text, "chips": chips, "shop_seq": shop_seq, "store_name": store_name}
 
 
 # Goal-based fast-path routing tables — kept beside _goal_based_classify so the
@@ -3805,6 +3946,36 @@ class TStationChatServiceV2:
         )
 
         # STREAM MODE
+        # Post-classifier intercept: 비-타이어 방문 예약 (와이퍼/배터리/얼라인먼트/
+        # 경정비 등) 흐름에서 사용자가 datepick 시간 슬롯을 클릭한 turn은 결정적
+        # redirect 으로 처리한다. LLM 의 SERVICE RESERVATION REDIRECT 규칙
+        # 우회로 인한 vague "필요한 정보를 이어서 입력해 주세요" + dead-end chip
+        # 회귀를 차단. pending_intent=="reservation" + datepick 패턴 + 타이어
+        # 컨텍스트 부재 — 세 조건 모두 만족 시에만 발동.
+        if _is_service_reservation_redirect(
+            last_user_text, merged_slots.pending_intent, messages
+        ):
+            redirect_payload = _build_service_reservation_redirect_payload(
+                last_user_text, messages
+            )
+            logger.info(
+                "[CHAT_V2] Service-reservation redirect intercept: store=%r shop_seq=%r user=%r",
+                redirect_payload["store_name"],
+                redirect_payload["shop_seq"],
+                last_user_text[:40],
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_service_reservation_redirect(redirect_payload),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=redirect_payload["text"])
+
         if request.stream:
             return StreamingResponse(
                 TStationChatServiceV2._stream_response_multi(
@@ -3881,6 +4052,33 @@ class TStationChatServiceV2:
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
         yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_service_reservation_redirect(payload: dict):
+        """Stream the deterministic SERVICE RESERVATION REDIRECT response.
+
+        Emits token + message + data(quickReply) + sub-agent[DONE] + DONE,
+        bypassing the multi-agent pipeline entirely. Used when a user clicks
+        a datepick slot in a wiper/battery/alignment booking flow where the
+        LLM has been observed to ignore the prompt-level redirect rule.
+        """
+        msg = payload["text"]
+        chips = payload["chips"]
+        yield f"data: {json.dumps({'type': 'token', 'content': msg}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+        data_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": msg,
+                "quickReplies": chips,
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
+        yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
