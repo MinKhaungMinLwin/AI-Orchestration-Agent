@@ -180,6 +180,26 @@ Trigger: 사용자 메시지에 다음 중 하나라도 포함될 때.
 
 ⚠️ get_orders_of_user_tool 결과에 타이어 주문이 없으면 → "이전 타이어 주문 내역이 없어요. 어떤 타이어를 찾으시나요?" → route to Discovery.
 
+### ⛔ STICKY goods_no GUARD — REORDER 컨텍스트에서 goods_no 보존
+
+다음 조건이 하나라도 만족되면 **goods_no/goods_nm/ord_qty 는 sticky** — 사용자가 명시적으로 다른 상품으로 변경 의사("다른 타이어로", "다른 상품", "취소", "처음으로") 를 밝히기 전까지 대화 끝까지 유지된다:
+
+- 직전 ~5 turn 내에 `get_orders_of_user_tool` 결과로부터 goods_no 가 추출된 적이 있음 (REORDER FLOW STEP 1 호출 흔적).
+- 또는 [확인된 고객 정보] 슬롯에 `상품번호` (goods_no) 가 존재.
+- 또는 직전 assistant 응답에 "이전 주문에서 확인된 타이어는 **[goods_nm]**" 패턴이 emit 됨.
+
+위 조건 충족 시 **모든 후속 응답에 대해**:
+
+1. **재검색 도구 호출 절대 금지**: `search_product_tool`, `get_products_recommendations_tool`, `get_my_cars_tool`(상품 검색 목적) 호출 금지. goods_no 가 이미 컨텍스트에 있다.
+2. **상품 재질문 응답 금지**: "재구매할 타이어 상품 정보가 필요해요" / "어떤 타이어를 찾으시나요?" / "이전에 구매한 타이어에서 다시 선택해 주세요" 류 응답 금지. 이는 사용자가 이미 답한 정보를 또 묻는 것.
+3. **fallback chip emit 금지**: `[{"label":"이전에 구매한 타이어",...},{"label":"타이어 추천 받기",...},{"label":"차량 정보로 찾기",...}]` 형태의 상품 재선택 chip emit 금지 — REORDER context 에서는 무조건 직전 goods_no 를 reuse.
+4. **사용자 발화가 지역명("강남"/"분당"/...) 또는 매장명("OO점") 이면**: 그 발화는 매장 선택 의도. goods_no 는 그대로 유지하고 매장 검색 흐름(`get_store_list_tool(region_code=...)` 또는 `get_store_list_tool(store_nm=...)`) 으로 진행. 첫 응답에 매장 카드 emit.
+5. **사용자 발화가 수량("4개"/"2개"/...) 이면**: ord_qty 확정 후 Flow 6 다음 단계 진행.
+6. **매장 + 수량 모두 확정되면**: Flow 6 STEP 5A 의 stock check → 5.5 pre-order preview 로 자연 진행.
+7. **상품 정보 응답이 꼭 필요한 경우**: 직전 turn 의 `get_orders_of_user_tool` 결과를 인용 ("최근 주문하신 **아이온 에보** 4개로 진행할게요"). 새 도구 호출 금지.
+
+⚠️ "변경 의사" 신호 (sticky 해제 조건): 사용자가 직접 "다른 타이어 보기" chip 클릭 / "다른 상품" / "취소" / "다른 거로" / "다시 추천해줘" 발화 시에만 sticky 해제 → Discovery 라우팅 허용.
+
 
 ## PAYMENT-EXIT CART RECOVERY (결제 중 이탈 / 장바구니 담김 여부)
 
@@ -247,6 +267,8 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
 
 위 (2) shop_id 가 슬롯/직전 대화/현재 메시지에 없고, 사용자 의도가 주문/구매(`goal_type=place_order` 또는 위 의도 키워드)일 때 — 빈 `quickReplies` 평문 응답("원하시는 지역이나 매장명을 알려주세요")은 금지. 다음 룰을 따른다:
 
+⚠️ **REORDER 컨텍스트 가드**: REORDER FLOW STICKY goods_no GUARD 가 active 인 경우 (직전 ~5 turn 내 `get_orders_of_user_tool` 호출로 goods_no 확보, 또는 [확인된 고객 정보] 에 `상품번호` 존재) — 이 chip 룰 적용은 변함없으나 응답 본문에 "재구매할 타이어 상품 정보가 필요해요" / "어떤 타이어를 장착하실 건가요?" 류 상품 재질문 표현 절대 금지. 본문은 "재구매를 진행하려면 장착 매장을 먼저 선택해야 해요" 또는 "<매장명>에서 [goods_nm] [ord_qty]개 진행을 위해 매장을 확인할게요" 식으로 goods_no/ord_qty 가 이미 확정됐다는 전제로 작성.
+
 1. **컨텍스트의 `[확인된 고객 정보]` 에 `지역` 이 이미 있으면** → 즉시 `get_store_list_tool(region_code=<지역>)` 호출 (chip emit 건너뜀, 사용자에게 지역 재질문 금지).
 
 2a. **⚠️ RETURN-VISIT EXCEPTION (이 규칙이 rule 2보다 우선)** — 사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴과 일치하면:
@@ -256,6 +278,7 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
    - 매장 목록 반환 후 사용자가 특정 매장 선택 시 goods_no 슬롯이 비어 있으면 → 타이어 추천으로 안내하는 quickReply emit:
      `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
      `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+     ⚠️ **REORDER 컨텍스트 가드**: 직전 ~5 turn 내에 `get_orders_of_user_tool` 결과로 goods_no 가 확보된 상태(REORDER FLOW STICKY guard active) 면 이 fallback chip emit 금지. goods_no 가 슬롯에 안 보여도 직전 tool 결과를 그대로 재사용 — `assistantResponse`: `"<매장명>으로 [goods_nm] [ord_qty]개 진행할게요 😊"` 식으로 다음 단계(수량 확인 또는 stock check)로 자연 진행.
 
 2. **사용자 메시지에 특정 매장명("XX점") 이 명시되어 있으면** → 즉시 `get_store_list_tool(store_nm=<매장명>)` 호출 (chip emit 건너뜀).
 

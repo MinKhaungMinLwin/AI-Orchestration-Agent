@@ -16,13 +16,19 @@ class OrderListItem:
     """
     Attributes:
         ord_no (str): 주문 번호
+        goods_no (None | str | Unset): 상품 번호 (PR_GOODS_BASE 키)
         goods_nm (None | str | Unset): 상품명
+        tire_size_1 (None | str | Unset): 타이어 사이즈 1 (예: 235/45R18)
+        tire_size_2 (None | str | Unset): 타이어 사이즈 2 (전/후 다른 사이즈인 경우)
         ord_qty (int | None | Unset): 주문 수량
         sys_reg_dtime (None | str | Unset): 시스템 등록 일시
     """
 
     ord_no: str
+    goods_no: None | str | Unset = UNSET
     goods_nm: None | str | Unset = UNSET
+    tire_size_1: None | str | Unset = UNSET
+    tire_size_2: None | str | Unset = UNSET
     ord_qty: int | None | Unset = UNSET
     sys_reg_dtime: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -30,11 +36,29 @@ class OrderListItem:
     def to_dict(self) -> dict[str, Any]:
         ord_no = self.ord_no
 
+        goods_no: None | str | Unset
+        if isinstance(self.goods_no, Unset):
+            goods_no = UNSET
+        else:
+            goods_no = self.goods_no
+
         goods_nm: None | str | Unset
         if isinstance(self.goods_nm, Unset):
             goods_nm = UNSET
         else:
             goods_nm = self.goods_nm
+
+        tire_size_1: None | str | Unset
+        if isinstance(self.tire_size_1, Unset):
+            tire_size_1 = UNSET
+        else:
+            tire_size_1 = self.tire_size_1
+
+        tire_size_2: None | str | Unset
+        if isinstance(self.tire_size_2, Unset):
+            tire_size_2 = UNSET
+        else:
+            tire_size_2 = self.tire_size_2
 
         ord_qty: int | None | Unset
         if isinstance(self.ord_qty, Unset):
@@ -55,8 +79,14 @@ class OrderListItem:
                 "ord_no": ord_no,
             }
         )
+        if goods_no is not UNSET:
+            field_dict["goods_no"] = goods_no
         if goods_nm is not UNSET:
             field_dict["goods_nm"] = goods_nm
+        if tire_size_1 is not UNSET:
+            field_dict["tire_size_1"] = tire_size_1
+        if tire_size_2 is not UNSET:
+            field_dict["tire_size_2"] = tire_size_2
         if ord_qty is not UNSET:
             field_dict["ord_qty"] = ord_qty
         if sys_reg_dtime is not UNSET:
@@ -69,6 +99,15 @@ class OrderListItem:
         d = dict(src_dict)
         ord_no = d.pop("ord_no")
 
+        def _parse_goods_no(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        goods_no = _parse_goods_no(d.pop("goods_no", UNSET))
+
         def _parse_goods_nm(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -77,6 +116,24 @@ class OrderListItem:
             return cast(None | str | Unset, data)
 
         goods_nm = _parse_goods_nm(d.pop("goods_nm", UNSET))
+
+        def _parse_tire_size_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tire_size_1 = _parse_tire_size_1(d.pop("tire_size_1", UNSET))
+
+        def _parse_tire_size_2(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        tire_size_2 = _parse_tire_size_2(d.pop("tire_size_2", UNSET))
 
         def _parse_ord_qty(data: object) -> int | None | Unset:
             if data is None:
@@ -98,7 +155,10 @@ class OrderListItem:
 
         order_list_item = cls(
             ord_no=ord_no,
+            goods_no=goods_no,
             goods_nm=goods_nm,
+            tire_size_1=tire_size_1,
+            tire_size_2=tire_size_2,
             ord_qty=ord_qty,
             sys_reg_dtime=sys_reg_dtime,
         )

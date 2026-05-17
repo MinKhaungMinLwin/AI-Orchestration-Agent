@@ -1,5 +1,6 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .applied_coupon_item import AppliedCouponItem
 from .available_coupon_item import AvailableCouponItem
 from .available_coupon_response import AvailableCouponResponse
 from .best_seller_item import BestSellerItem
@@ -13,6 +14,8 @@ from .car_tire_size_response import CarTireSizeResponse
 from .car_trim_item import CarTrimItem
 from .car_trim_response import CarTrimResponse
 from .chat_history_response import ChatHistoryResponse
+from .cheapest_by_coupon_item import CheapestByCouponItem
+from .cheapest_by_coupon_response import CheapestByCouponResponse
 from .compatibility_response import CompatibilityResponse
 from .coupon_applicable_products_group import CouponApplicableProductsGroup
 from .coupon_applicable_store_item import CouponApplicableStoreItem
@@ -93,6 +96,7 @@ from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
 
 __all__ = (
+    "AppliedCouponItem",
     "AvailableCouponItem",
     "AvailableCouponResponse",
     "BestSellerItem",
@@ -106,6 +110,8 @@ __all__ = (
     "CarTrimItem",
     "CarTrimResponse",
     "ChatHistoryResponse",
+    "CheapestByCouponItem",
+    "CheapestByCouponResponse",
     "CompatibilityResponse",
     "CouponApplicableProductsGroup",
     "CouponApplicableStoreItem",
