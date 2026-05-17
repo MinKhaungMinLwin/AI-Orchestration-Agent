@@ -959,6 +959,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             # search results always show the phone number.
             tel_no = _get_str(detail, "tel_no") or _get_str(row, "tel_no")
             holiday = _get_str(detail, "holiday")
+            rating = _get_num(detail, "rating_idx") or _get_num(row, "rating_idx")
 
             services: list[str] = []
             if is_all_my_t:
@@ -983,6 +984,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 description_lines.append(f"휴무일: {holiday}")
             if tel_no:
                 description_lines.append(f"전화: {tel_no}")
+            if rating:
+                description_lines.append(f"⭐ {rating:.1f}")
             if services_text:
                 description_lines.append(f"서비스: {services_text}")
             description = "\n ".join(description_lines)
@@ -1100,6 +1103,7 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
             cal_day = _yyyymmdd_to_korean_date(cal_day_raw)
             address = _get_str(row, "address")
             tel = _format_phone(_get_str(row, "tel"))
+            rating = _get_num(row, "rating_idx")
             is_all_my_t = bool(row.get("is_all_my_t", False))
             is_tna_delivery = bool(row.get("is_tna_delivery", False))
             today_install = bool(cal_day_raw == today_yyyymmdd and slots)
@@ -1112,6 +1116,8 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
                 description_lines.append(f"예약 가능 시간: {slot_text}")
             if tel:
                 description_lines.append(f"전화: {tel}")
+            if rating:
+                description_lines.append(f"⭐ {rating:.1f}")
 
             items.append({
                 "nameAddress": _get_str(row, "shop_nm", default=shop_id),
