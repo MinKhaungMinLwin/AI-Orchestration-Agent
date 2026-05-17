@@ -347,6 +347,13 @@ the user is requesting a NEW recommendation, NOT filtering the previous list.
 explicit "추천" request like "패밀리 SUV에 잘 맞는 사계절용 추천" after a
 previous "전기차용" recommendation is RE-RECOMMENDATION, not filtering.
 
+⚠️ Price-similarity follow-up is always DISCOVERY, not TRANSACTION:
+If the previous turn showed a product price (via price breakdown, product card, or
+description) and the user now asks to see products at a comparable price level,
+this is a NEW recommendation request — route to DISCOVERY. The user wants to
+browse by price positioning, not to complete a purchase or check stock.
+Example: TRANSACTION showed ₩154,300 price → user asks "비슷한 가격대 타이어 추천" → DISCOVERY.
+
 PREV=CUR escape (do NOT mark as RE-RECOMMENDATION):
   - If the user's scenario word matches the SAME scenario family as PREV
     (e.g. PREV rcmd_type="ev" and user says "이 EV용 중에서 18인치"), this is
@@ -383,6 +390,7 @@ DOMAIN ROUTING EXAMPLES
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "런플랫이 얼마나 더 비싸?", "225/45R18 런플랫 가격 차이", "이벤트", "리뷰 영상", "추천 가격 비교해줘"
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
+- 가격 유사성 기반 추천 follow-up: 직전 대화에서 특정 상품의 가격이 표시된 후 그 가격대와 비슷한 다른 타이어를 요청하는 경우 — 이전 도메인이 TRANSACTION(가격 조회)이어도 반드시 DISCOVERY. 사용자 의도는 가격 포지셔닝 기반 새 추천이므로 TRANSACTION이 아님.
 - 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
