@@ -504,7 +504,7 @@ Classify the user's FIRST message into EXACTLY ONE domain.
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, maintenance, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- SUPPORT: warranty, returns, refund, maintenance, shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 RULES:
@@ -520,6 +520,7 @@ RULES:
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
 - 온라인 전용 상품 차이/온라인에서만 구매/매장 방문 구매 가능 여부 → SUPPORT
+- 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
 - 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용 → TRANSACTION, agent_prompt_profile=transaction_order
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
@@ -540,6 +541,8 @@ EXAMPLES (tricky cases):
 - "강남점에서 추석 연휴에도 타이어 교체 예약 받아?" → TRANSACTION, agent_prompt_profile=transaction_store (store holiday availability — 매장 운영/예약 가능 여부 조회, NOT "내 예약" lookup)
 - "티스테이션 강남점에서 2026/06/25에도 타이어 교체 예약받는지 알려줘" → TRANSACTION, agent_prompt_profile=transaction_store (store schedule availability on specific date)
 - "내일 석가탄신일인데 티스테이션 한남점 열어?" → TRANSACTION, agent_prompt_profile=transaction_store (store holiday check)
+- "제주도 매장에서도 온라인 가격이랑 똑같아?" → SUPPORT (Jeju/island shipping-fee and online-vs-store policy FAQ, NOT store search)
+- "서귀포시인데 배송비 더 들어?" → SUPPORT (Seogwipo/Jeju additional shipping-fee policy FAQ)
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
@@ -627,6 +630,21 @@ class StreamingMultiAgentCoordinator:
                 "매장에서도 구매",
                 "온라인에서만",
                 "온라인에서만 사야",
+            ],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # SUPPORT — Jeju/island-mountain shipping-fee policy (TC-057).
+        # Policy questions about regional surcharge should use FAQ guidance, not store search.
+        (
+            [
+                "도서산간",
+                "제주도 매장에서도 온라인 가격",
+                "제주 배송비",
+                "제주도 배송비",
+                "서귀포시인데 배송비",
+                "서귀포 배송비",
+                "배송비 더 들어",
+                "추가 배송비",
             ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
