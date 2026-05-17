@@ -3680,12 +3680,20 @@ class TStationChatServiceV2:
         # through every signature in the agent → mapper chain.
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
-        from services.tstation.template_mapper import current_goal_type, current_pending_intent, current_runflat_comparison
+        from services.tstation.template_mapper import (
+            current_goal_type,
+            current_pending_intent,
+            current_runflat_comparison,
+            current_return_visit_store_flow,
+        )
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
+        ))
+        current_return_visit_store_flow.set(bool(
+            re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
         ))
 
         _t_prestream = time.perf_counter()

@@ -41,6 +41,14 @@ current_runflat_comparison: contextvars.ContextVar[bool] = contextvars.ContextVa
     "current_runflat_comparison", default=False
 )
 
+# True when the current turn is triggered by a return-visit CTA chip
+# ("<지역> 매장 다시 이용하기" / "<지역>점 다시 이용하기"). Forces isBookingFlow=True
+# on the resulting location card so the FE click handler routes to /chat (not
+# /append), enabling product/quantity continuation after store selection.
+current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_return_visit_store_flow", default=False
+)
+
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
 # routes to /chat (advancing the flow) instead of /append (which only shows
@@ -1025,7 +1033,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
-        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup() or has_booking_intent
+        bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+        or _is_goal_booking_followup()
+        or has_booking_intent
+        or current_return_visit_store_flow.get()
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))

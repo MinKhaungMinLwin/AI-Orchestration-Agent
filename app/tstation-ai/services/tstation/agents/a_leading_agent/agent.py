@@ -574,9 +574,12 @@ Quick reply guidance by case:
 - Self introduction: recommendation (DISCOVERY), store search (TRANSACTION), price lookup (TRANSACTION)
 - Complaint: support connection (SUPPORT), retry (LEADING)
 - Out of scope: tire recommendation (DISCOVERY), price lookup (TRANSACTION)
-- Purchase completion / return visit: when the user mentions they want to use a branch again,
-  the chip label MUST contain "매장" so the system can identify it as a store search intent.
-  Use "<지역> 매장 다시 이용하기" format, NOT "<지역>점 다시 이용하기".
+- Purchase completion / return visit: MANDATORY — when the user expresses satisfaction, mentions a positive
+  past purchase experience, or signals intent to revisit a specific branch (trigger keywords: 만족, 잘 구매,
+  다음에도, 또 이용, 온라인으로 구매, 이용하도록 할게, 다시 이용), you MUST include "<지역> 매장 다시 이용하기"
+  as a chip (domain: TRANSACTION). Do NOT emit [1:1 문의하기, 처음으로] alone for these messages.
+  Extract the region/branch name from context (e.g., "원주점" → "원주", "강남점" → "강남").
+  Chip label MUST use "<지역> 매장 다시 이용하기" format, NOT "<지역>점 다시 이용하기".
   Example: "원주 매장 다시 이용하기" (O) / "원주점 다시 이용하기" (X)
 
 Good quick reply examples:
