@@ -479,64 +479,84 @@ class BaseAgent(ABC):
                     }
                 yield data_event
             else:
-                # _build_data_event_from_text가 이미 error 로그를 남겼다.
-                # 여기서는 빈 \n\n만 보내는 대신 사용자에게 fallback quickReply를
-                # 노출해 silent dead-end UX를 방지한다.
-                if not answering_emitted:
-                    yield {"type": "status", "status": "답변 중..."}
-                    answering_emitted = True
-                if already_streamed:
-                    # prose는 이미 흘러갔으므로 fallback 메시지 중복 송출은 피하고
-                    # 마무리용 quickReply chips만 추가한다.
-                    yield {
-                        "type": "data",
-                        "template": "quickReply",
-                        "data": {
-                            "assistantResponse": response_streamer.streamed_text,
-                            "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
-                        },
-                        "nextAction": {"type": "stop", "domain": None},
-                    }
-                else:
-                    # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
-                    # template_mapper couldn't build a card — e.g., zero-result
-                    # search where the model honored the "prose mode" rule but
-                    # the mapper found no items to render. Treat the raw text
-                    # as the assistant's prose answer rather than showing the
-                    # generic validation-failure apology.
-                    prose_only = accumulated_text.strip()
-                    if prose_only and self._extract_fenced_json(accumulated_text) is None:
-                        # Model emitted plain text instead of fenced JSON. Strip any
-                        # trailing `quickReplies: [...]` annotation and parse chips.
-                        chips: list[dict] = []
-                        m = _INLINE_QUICK_REPLIES_RE.search(prose_only)
-                        if m:
-                            prose_only = prose_only[:m.start()].strip()
-                            try:
-                                raw = json.loads(m.group(1))
-                                chips = [
-                                    {"label": c, "domain": None} if isinstance(c, str) else c
-                                    for c in raw if c
-                                ]
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        yield {"type": "token", "content": prose_only}
-                        yield {
-                            "type": "message",
-                            "content": prose_only,
-                            "agent": self.name,
-                        }
+                # If any tool returned a pre-built output_payload, use it directly
+                # rather than falling through to generic fallback. This handles
+                # reasoning models that consistently emit plain text instead of
+                # the required fenced JSON block.
+                _tool_payload_used = False
+                for _td in reversed(accumulated_tool_data):
+                    _tool_data = _td.get("data") or {}
+                    _payload_str = (_tool_data.get("data") or {}).get("output_payload")
+                    if _payload_str:
+                        try:
+                            _payload = json.loads(_payload_str)
+                            if not answering_emitted:
+                                yield {"type": "status", "status": "답변 중..."}
+                                answering_emitted = True
+                            yield _payload
+                            _tool_payload_used = True
+                        except Exception:
+                            pass
+                        break
+                if not _tool_payload_used:
+                    # _build_data_event_from_text가 이미 error 로그를 남겼다.
+                    # 여기서는 빈 \n\n만 보내는 대신 사용자에게 fallback quickReply를
+                    # 노출해 silent dead-end UX를 방지한다.
+                    if not answering_emitted:
+                        yield {"type": "status", "status": "답변 중..."}
+                        answering_emitted = True
+                    if already_streamed:
+                        # prose는 이미 흘러갔으므로 fallback 메시지 중복 송출은 피하고
+                        # 마무리용 quickReply chips만 추가한다.
                         yield {
                             "type": "data",
                             "template": "quickReply",
                             "data": {
-                                "assistantResponse": prose_only,
-                                "quickReplies": chips,
+                                "assistantResponse": response_streamer.streamed_text,
+                                "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
                             },
                             "nextAction": {"type": "stop", "domain": None},
                         }
                     else:
-                        yield from self._yield_validation_fallback()
+                        # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
+                        # template_mapper couldn't build a card — e.g., zero-result
+                        # search where the model honored the "prose mode" rule but
+                        # the mapper found no items to render. Treat the raw text
+                        # as the assistant's prose answer rather than showing the
+                        # generic validation-failure apology.
+                        prose_only = accumulated_text.strip()
+                        if prose_only and self._extract_fenced_json(accumulated_text) is None:
+                            # Model emitted plain text instead of fenced JSON. Strip any
+                            # trailing `quickReplies: [...]` annotation and parse chips.
+                            chips: list[dict] = []
+                            m = _INLINE_QUICK_REPLIES_RE.search(prose_only)
+                            if m:
+                                prose_only = prose_only[:m.start()].strip()
+                                try:
+                                    raw = json.loads(m.group(1))
+                                    chips = [
+                                        {"label": c, "domain": None} if isinstance(c, str) else c
+                                        for c in raw if c
+                                    ]
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                            yield {"type": "token", "content": prose_only}
+                            yield {
+                                "type": "message",
+                                "content": prose_only,
+                                "agent": self.name,
+                            }
+                            yield {
+                                "type": "data",
+                                "template": "quickReply",
+                                "data": {
+                                    "assistantResponse": prose_only,
+                                    "quickReplies": chips,
+                                },
+                                "nextAction": {"type": "stop", "domain": None},
+                            }
+                        else:
+                            yield from self._yield_validation_fallback()
 
         yield {"type": "token", "content": "\n\n"}
 
