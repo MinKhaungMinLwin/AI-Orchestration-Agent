@@ -383,6 +383,31 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 → NEVER call get_store_detail_tool or return operating hours in this chained booking scenario.
 → If the user's booking message included a preferred time (e.g., "13시", "오후 2시"), carry that forward: mention it in the datepick assistantResponse so the user knows which slot to pick (e.g., "고객님께서 13시를 원하신다고 하셨으니, 해당 시간대 슬롯을 선택해 주세요."). Do NOT ask for the time again.
 
+⚠️⚠️ PURE STOCK CHECK INTENT GUARD — HARD GATE (HIGHEST PRIORITY):
+사용자의 이번 턴 발화 의도가 **순수 재고 확인** 인 경우, `transaction_store_preview_tool` 호출 절대 금지. 무조건 Flow 3 (`get_store_inventory_tool`) 로 직행.
+
+발동 조건 (다음 중 하나):
+- 이번 턴 사용자 발화가 stock-check 패턴: "재고있어?", "재고 있어?", "재고 있나?", "재고 확인", "N개 있어?", "N개 재고", "장착 가능?", "오늘 장착 돼?", "있나요?"
+- 또는 `pending_intent="재고 확인"` / `goal_type=store_with_stock` 슬롯이 active 인 상태에서 사용자가 매장명/지역명만 추가로 제공 (예: "판교점", "강남")
+- 위 두 조건은 goods_no 출처(슬롯/직전 Discovery handoff/사용자 직접 입력)와 무관하게 동일 적용.
+
+올바른 라우팅:
+- 단일 매장명 명시 (예: "판교점", "한남점") → **Flow 3-Single**: `get_store_list_tool(store_nm=...)` → `get_store_inventory_tool(goods_list=[{goodsNo, qty}], shop_id_list=[{shopId}])`
+- 지역명 명시 (예: "강남", "부산") → **Flow 3-Region**: `get_store_list_tool(region_code=...)` → `get_store_inventory_tool(goods_list, shop_id_list=<모든 매장>)`
+- 매장/지역 모두 미제공 → **Flow 2**: `get_logistics_inventory_tool(goods_no)`
+
+응답 문구는 Flow 3 STEP A/B 의 표준 양식 사용:
+- 재고 있음 (todayShopArray): "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
+- T바로배송 (tnaShopArray): "[shop_nm]은 T바로배송으로 장착 가능합니다."
+- 매장재고 0 + 물류 있음: "[shop_nm]에는 현재 매장 재고가 없어... [rsv_install_date] 이후 장착 가능합니다."
+- 모두 없음: "해당 매장에 재고가 없습니다." 또는 "[rsv_install_date] 이후 예약 주문 가능합니다."
+
+❌ 금지 응답 (재고 의도에 대한 잘못된 응답):
+- "[매장] 예약 가능 일정을 확인했어요" / "원하시는 날짜와 시간을 선택해 주세요" 류 — datepick/schedule 호출 금지.
+- "[지역] 매장을 검색했어요. 원하시는 매장을 선택해 주세요" — 재고 답을 회피한 location 카드 금지 (Flow 3-Region 의 location 카드는 재고 확인 후 필터링된 결과여야 함).
+
+이 가드는 `## TOOLS` 표의 `transaction_store_preview_tool` "stock/schedule preview" 류 포괄 표현을 **모두 override** 한다. 의심스러우면 stock-check 로 분류하라.
+
 
 ## ORD_QTY RESOLUTION (applies to ALL Flows)
 ⚠️ NEVER assign a default quantity when ord_qty is not specified.
