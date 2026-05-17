@@ -1,4 +1,3 @@
-import json
 import logging
 from common.tool_cache import tool_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1027,7 +1026,7 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
     in a region, without specifying a particular store name or goods_no.
 
     Fetches the store list for the region in parallel with checking today→+2 day reservation
-    slots per store, then returns pre-filtered results ready for a quickReply table.
+    slots per store, then returns pre-filtered raw store data for the location mapper.
 
     Args:
         region_code (str): Region name (e.g., '인천', '부산', '강남').
@@ -1122,41 +1121,11 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
             except Exception:
                 logger.warning("[get_stores_with_time_filter_tool] future failed")
 
-    if stores_available:
-        lines = "\n".join(f"• {s['shop_nm']} ({s['tel']})" for s in stores_available[:5])
-        assistant_response_text = f"{region_code}에서 {time_threshold_hour}시 이후 예약 가능한 매장이에요.\n\n{lines}"
-        quick_replies = [
-            {"label": "예약하기", "domain": "TRANSACTION"},
-            {"label": "다른 시간대 찾기", "domain": "TRANSACTION"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
-    else:
-        assistant_response_text = f"{region_code}에서 {time_threshold_hour}시 이후 예약 가능한 매장이 현재 없어요. 다른 시간대나 지역으로 찾아드릴까요?"
-        quick_replies = [
-            {"label": "다른 시간대 찾기", "domain": "TRANSACTION"},
-            {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
-
-    output_payload = json.dumps(
-        {
-            "type": "data",
-            "template": "quickReply",
-            "data": {
-                "assistantResponse": assistant_response_text,
-                "quickReplies": quick_replies,
-                "predictedDomains": ["TRANSACTION"],
-            },
-            "nextAction": {"type": "stop", "domain": None},
-        },
-        ensure_ascii=False,
-    )
-
     return _success_response(200, {
+        "stores_available": stores_available,
+        "stores_unavailable": stores_unavailable,
         "time_threshold_hour": time_threshold_hour,
         "region_code": region_code,
-        "stores_count": len(stores_available),
-        "output_payload": output_payload,
     })
 
 

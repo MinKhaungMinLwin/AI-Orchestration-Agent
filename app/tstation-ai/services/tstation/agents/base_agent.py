@@ -704,6 +704,7 @@ class BaseAgent(ABC):
             "get_my_cars_tool",
             "get_user_vehicles_tool",
             "get_store_detail_tool",
+            "get_stores_with_time_filter_tool",
         )
         has_force_code_mapper_tool = any(
             e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
