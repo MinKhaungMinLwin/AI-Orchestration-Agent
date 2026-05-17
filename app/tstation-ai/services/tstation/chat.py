@@ -2070,6 +2070,14 @@ _FALLBACK_COUPON: list[dict] = [
     {"label": "처음으로", "domain": "LEADING"},
 ]
 
+# LEADING 도메인의 fallback 은 진행형(발견 → 구매) chip 으로 시작해야 자연스럽다.
+# "1:1 문의하기" 같은 escalation chip 은 사용자가 인사·일반 문의를 한 직후엔 부적절.
+_FALLBACK_LEADING_PROGRESS: list[dict] = [
+    {"label": "상품 검색", "domain": "DISCOVERY"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
 # Order matters: more specific tools first so the dispatch picks the most
 # relevant chip set when multiple tools ran in the same turn.
 _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
@@ -2084,10 +2092,18 @@ def _choose_quickreply_fallback(
     """Pick a context-aware fallback chip set when the LLM emits empty quickReplies.
 
     Returns (chips, label) where label is a short tag for logging/telemetry.
+
+    Routing priority:
+      1. Tool-based dispatch (order/coupon) — turn ran a tool that needs a specific CTA.
+      2. LEADING domain → 진행형 chip ([상품 검색, 타이어 추천, 처음으로]). 인사/일반
+         문의에서 "1:1 문의" 로 떨어지는 부자연스러운 fallback 을 방지.
+      3. Generic ([1:1 문의하기, 처음으로]) — 마지막 안전망.
     """
     for tool_set, chips, label in _FALLBACK_DISPATCH:
         if called_tool_names & tool_set:
             return chips, label
+    if source_domain and source_domain.lower() == "leading":
+        return _FALLBACK_LEADING_PROGRESS, "leading_progress"
     return _FALLBACK_GENERIC, "generic"
 
 
