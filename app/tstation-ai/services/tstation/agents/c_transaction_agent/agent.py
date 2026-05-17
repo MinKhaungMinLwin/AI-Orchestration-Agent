@@ -2057,11 +2057,18 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
 `get_orders_of_user_tool` 결과 렌더링:
 
 1. 같은 `ord_no` 가 row 여러 개 (상품·서비스 분리)로 옴 → ord_no 기준 그룹핑, `sys_reg_dtime` 최신순 정렬.
-2. 본문에는 최신 **5건** (ord_no 기준) 만 표시. 각 1줄 포맷:
-   `[YYYY-MM-DD] 매장명: 대표상품명 외 N개, 상태`
-   - 같은 ord_no 첫 항목 = 대표상품, 나머지 = "외 N개".
-   - 상태 = `detail.ord_prgs_stat_nm` 그대로 (주문완료 / 장착완료 / 배송완료 등).
-3. 본문 끝에 마무리 안내: "전체 주문 내역은 아래 '주문 내역 보기' 버튼에서 확인하실 수 있어요 😊"
+2. 본문에는 최신 **5건** (ord_no 기준) 만 **마크다운 표** 1개로 렌더링. FE 가 `|col|col|` 패턴을 `<table class="chatbox-md-table">` 로 자동 렌더한다.
+   - 표 헤더 (고정, 그대로 emit): `| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |`
+   - 구분선 다음 줄: `|---|---|---|---|---|`
+   - row 1줄 = ord_no 1개 그룹. 컬럼 매핑:
+     - `주문번호` = `ord_no` (예: `O202605120019340`, 풀 ID 그대로, 축약 금지).
+     - `주문상태` = `detail.ord_prgs_stat_nm` 그대로 (주문완료 / 장착완료 / 배송완료 등).
+     - `상품명` = 그룹 첫 row 의 `goods_nm` 1개. 그룹 row 가 2개 이상이면 끝에 ` 외 N개` 추가 (N = 나머지 row 수). row 1개면 `goods_nm` 만 (`외 0개` 금지).
+     - `수량` = 그룹 내 모든 row 의 `ord_qty` 합 (정수).
+     - `주문날짜` = `sys_reg_dtime` 의 `YYYY-MM-DD` 부분만.
+   - ⚠️ 상품명/매장명에 `|` 포함 시 셀 충돌 방지를 위해 `/` 로 치환.
+   - 표는 최대 5 row. 6건 이상이어도 본문에는 5 row 만 (6번째부터는 '주문 내역 보기' chip 에서 확인).
+3. 표 다음 빈 줄 1개, 마무리 안내: "전체 주문 내역은 아래 '주문 내역 보기' 버튼에서 확인하실 수 있어요 😊"
 4. **quickReplies (필수, 3개 chip 고정)**:
    ```json
    [
