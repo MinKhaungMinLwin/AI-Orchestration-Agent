@@ -25,6 +25,28 @@ _QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 _REQUIRED_QTY_CHIPS: tuple[str, ...] = ("1개", "2개", "3개", "4개")
 
+# Deterministic enforcement for satisfaction/repurchase quickReplies.
+# LLM 이 사용자 호감/재구매 의도 발화 ("원주점에서 구매해서 너무 만족했어. 다음에도 또…")
+# 에 대해 `["다시 시도", "상담사 연결", "처음으로"]` 같은 failure/fallback chip 을
+# 휘발성으로 emit 하는 버그가 a_leading_agent prompt 보강(L577~) 후에도 재발해서
+# schema 측에서 결정적으로 차단. assistantResponse 가 만족 응답 패턴 + chip 에
+# FORBIDDEN chip 중 하나 이상 포함될 때만 발동(false-positive 최소화).
+_SATISFACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"만족하"),
+    re.compile(r"기쁩니다|기쁘네요|기쁘게"),
+    re.compile(r"다음에도\s*(?:이용|구매|찾)"),
+    re.compile(r"또\s*(?:이용|찾아|구매)"),
+    re.compile(r"잘\s*(?:받으셨|받으신|구매하셨)"),
+)
+_FORBIDDEN_SATISFACTION_CHIPS: frozenset[str] = frozenset({
+    "구매하기", "다시 시도", "상담사 연결", "1:1 문의하기",
+})
+_DEFAULT_SATISFACTION_CHIPS: tuple[tuple[str, str], ...] = (
+    ("상품 검색", "DISCOVERY"),
+    ("타이어 추천", "DISCOVERY"),
+    ("처음으로", "LEADING"),
+)
+
 
 class TemplatePayload(BaseModel):
     """Base class for all FE template payloads."""
@@ -131,6 +153,32 @@ class QuickReplyTemplate(TemplatePayload):
         )
         self.quickReplies = [
             QuickReplyChip(label=label, domain="TRANSACTION") for label in _REQUIRED_QTY_CHIPS
+        ]
+        return self
+
+    @model_validator(mode="after")
+    def enforce_satisfaction_chips(self) -> "QuickReplyTemplate":
+        """Replace failure/fallback chips with progress chips on satisfaction messages.
+
+        Trigger: assistantResponse 가 만족·기쁨·재구매 응답 패턴 매칭 AND quickReplies 에
+        FORBIDDEN chip(구매하기/다시 시도/상담사 연결/1:1 문의하기) 중 하나 이상 포함.
+        그 경우에만 전체 chip 셋을 `[상품 검색, 타이어 추천, 처음으로]` 디폴트로 교체.
+        FORBIDDEN chip 이 하나도 없으면 그대로 통과(prompt 가 이미 잘 emit 한 경우).
+        """
+        text = self.assistantResponse or ""
+        if not any(p.search(text) for p in _SATISFACTION_PATTERNS):
+            return self
+        existing_labels = {c.label for c in self.quickReplies}
+        if not (existing_labels & _FORBIDDEN_SATISFACTION_CHIPS):
+            return self
+        logger.warning(
+            "QuickReplyTemplate satisfaction auto-fix: original=%s; replacing with %s",
+            [c.label for c in self.quickReplies],
+            [label for label, _ in _DEFAULT_SATISFACTION_CHIPS],
+        )
+        self.quickReplies = [
+            QuickReplyChip(label=label, domain=domain)
+            for label, domain in _DEFAULT_SATISFACTION_CHIPS
         ]
         return self
 
