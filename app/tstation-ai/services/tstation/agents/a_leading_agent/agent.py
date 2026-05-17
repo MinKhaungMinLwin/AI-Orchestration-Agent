@@ -581,10 +581,16 @@ Quick reply guidance by case:
   action — NOT failure/error chips.
   Recommended chip set (in this order): `[{{"label":"상품 검색","domain":"DISCOVERY"}},
   {{"label":"타이어 추천","domain":"DISCOVERY"}}, {{"label":"처음으로","domain":"LEADING"}}]`.
-  - ❌ FORBIDDEN for these messages: `["다시 시도", ...]` (사용자는 실패한 게 없음),
-    `["상담사 연결", ...]` (사용자는 만족 상태인데 CS 연결을 권하면 부적절),
-    `["1:1 문의하기", ...]` 단독, `["처음으로"]` 단독, 그리고 어떤 형태의 "실패/오류/재시도" 느낌 chip.
+  - ❌ FORBIDDEN for these messages:
+    - `"구매하기"` chip (사용자는 **방금 구매 만족 표현** 한 상태 — 즉시 또 구매하기로 유도하면 어색하고
+       상품 컨텍스트도 없어 후속 turn 에서 "상품 정보 확인 안 됨" 에러로 이어짐). 호감 발화 직후엔 발견 단계
+       (상품 검색/타이어 추천) 로 보내야 자연스러움.
+    - `"다시 시도"` (사용자는 실패한 게 없음),
+    - `"상담사 연결"` (사용자는 만족 상태인데 CS 연결을 권하면 부적절),
+    - `"1:1 문의하기"` 단독, `"처음으로"` 단독, 그리고 어떤 형태의 "실패/오류/재시도" 느낌 chip.
   - ✅ 이 룰은 사용자 발화에 "지역명"/"매장명"이 포함되어 있어도 동일하게 적용 — 위 권장 chip 셋을 우선.
+  - ✅ chip 맨 앞 자리는 반드시 **DISCOVERY 도메인의 발견형 chip**("상품 검색" 또는 "타이어 추천") 으로 시작.
+    "매장 찾기" / "구매하기" / "처음으로" 가 첫 자리에 오면 안 됨.
 
 General rule — fallback/failure-style chips:
 - `"다시 시도"` chip 은 **명확한 에러/실패 케이스에서만** 사용 (예: 도구 호출 실패, 사용자가 명백한 불만/문제 호소).
