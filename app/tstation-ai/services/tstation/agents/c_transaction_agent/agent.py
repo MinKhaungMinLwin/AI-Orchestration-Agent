@@ -18,6 +18,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_store_detail_tool,
     get_store_schedule_tool,
     get_multi_store_schedule_tool,
+    get_stores_with_time_filter_tool,
     save_to_cart_tool,
     quick_order_tool,
     get_order_status_tool,
@@ -654,6 +655,7 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 - 올마이T / 올마이티 → `all_my_t_only=True`
 - 티스테이션 / 더타이어샵 (매장 type) → `chl_sct_cd="F"` 또는 `"S"`
 - 영업시간/요일/공휴일 → get_store_detail_tool
+- **지역 + 시간 조건** ("N시 이후", "저녁 N시", "오후 N시", "N시 넘어서", "N시부터") + 예약 가능 매장 문의 → Flow 5.5T
 - 위치/거리 → 좌표 기반 정렬 (get_nearby_stores_tool)
 - **평점/별점 높은 / 친절한 / 평이 좋은 / 추천 매장** → `sort_by="rating"` (응답 `rating_idx` DESC NULLS LAST)
 - **리뷰 많은 / 후기 많은 / 사람들이 많이 가는** → `sort_by="review_count"` (정상 리뷰 카운트 DESC NULLS LAST)
@@ -699,6 +701,7 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 - 사용자 확인 응답을 받은 다음 턴에만 schedule/detail/inventory 진행.
 
 - General store info (hours, address, phone) → get_store_list_tool → return `location` template with full store info
+- **Time-filtered slot search** (지역 + N시 이후) → Flow 5.5T → get_store_list_tool (intermediate, NO location) + get_store_schedule_tool × N → `quickReply`
 - Specific date hours/holidays/slots → get_store_detail_tool(shop_id, cal_day=YYYYMMDD); full logic in Flow 5.1
   - shop_id: call get_store_list_tool first if unknown (and return `location` from its result before proceeding)
   - cal_day: if not provided, see Flow 5.1
@@ -1065,6 +1068,8 @@ The ONLY acceptable next tools in those cases are `get_store_inventory_tool` + `
 
 ### Flow 5 — Store Hours / Reservation
 
+⚠️ TOP GATE: If user message contains region + "N시 이후"/"저녁 N시"/"오후 N시" + no specific store branch name ("점" suffix) + no `goods_no` → **Flow 5.5T**: call `get_stores_with_time_filter_tool`. Do NOT call `get_store_list_tool` directly. Do NOT ask for a date.
+
 #### General store info (no specific date) — info-only lookup:
 Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION ROUTING above).
 
@@ -1121,14 +1126,23 @@ a named holiday period (even without citing exact dates).
    before the visit date, so the system cannot confirm dates beyond that window.
    Always include store contact block (📞 tel_no, 📍 address, 🕒 operating hours) for direct inquiry.
 
+#### Time-filtered slot search — Flow 5.5T:
+Trigger: region + time threshold ("N시 이후", "저녁 N시", "오후 N시") + no specific store name + no `goods_no`.
+1. Call `get_stores_with_time_filter_tool(region_code=<지역>, time_threshold_hour=<N>)`.
+2. Output `quickReply` (JSON MODE):
+   - Header: "[지역] 지역에서 [N]시 이후 예약 가능한 매장 현황"
+   - Table 1 (stores_available): 매장명 | 주소 | 예약 가능 날짜 | 예약 가능 시간 | 전화
+   - Table 2 (stores_unavailable): 매장명 | 사유
+   - Footer: "다른 지역이나 시간으로도 확인해 드릴까요?"
+
 #### Slot availability check (no date specified) — Flow 5.5:
 Default values (apply silently, no asking): region="한남", date=TODAY
 
 1. get_store_list_tool(region_code, store_nm)
 2. For EACH shop_id, scan TODAY to +3 days IN PARALLEL:
    get_store_detail_tool(shop_id, TODAY), (+1), (+2), (+3)
-3. Per store: find nearest day with available_slots ≠ [] → show only that day
-4. Display:
+3. Per store: find nearest day with available_slots ≠ [] → show only that day.
+4. Display (`quickReply`, JSON MODE):
    - Header: "[지역] 지역 [날짜] 기준 예약 현황"
    - Table 1 (예약 가능): 매장명 | 주소 | 예약 가능 날짜 | 예약 가능 시간 | 전화
    - Table 2 (예약 불가): 매장명 | 사유
@@ -1596,7 +1610,7 @@ Choose the output template based on the tool called:
 | get_my_coupons_tool | `voucher` |
 | get_product_promotions_tool | `quickReply` (사용자가 물은 도메인만: 쿠폰 의도면 쿠폰 갯수, 기획전 의도면 기획전명+기간. 절대 도메인 혼합 X) |
 | ~~issue_coupon_tool~~ | 🚫 OFF — `quickReply` 안내문만 |
-| get_store_list_tool, get_nearby_stores_tool | `location` |
+| get_store_list_tool, get_nearby_stores_tool | `location` — **EXCEPTION: Flow 5.5T** (region + time threshold search): `get_store_list_tool` is an intermediate call only; output is `quickReply` after subsequent `get_store_schedule_tool` calls complete. Never emit `location` in Flow 5.5T. |
 | get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
 | quick_order_tool | `orderComplete` |
 | save_to_cart_tool (success) | `quickReply` with chips `["주문하기", "처음으로"]` (NOT `orderComplete`) |
@@ -2357,6 +2371,7 @@ class TransactionSubAgent(BaseAgent):
         "get_store_detail_tool": "Store",
         "get_store_schedule_tool": "Store",
         "get_multi_store_schedule_tool": "Store",
+        "get_stores_with_time_filter_tool": "Store",
         "save_to_cart_tool": "Quick Shopping",
         "quick_order_tool": "Quick Shopping",
         "get_orders_of_user_tool": "Order / Delivery",
@@ -2381,6 +2396,7 @@ class TransactionSubAgent(BaseAgent):
             get_store_detail_tool,
             get_store_schedule_tool,
             get_multi_store_schedule_tool,
+            get_stores_with_time_filter_tool,
             save_to_cart_tool,
             quick_order_tool,
             get_orders_of_user_tool,
@@ -2419,6 +2435,7 @@ class TransactionSubAgent(BaseAgent):
                 get_store_detail_tool,
                 get_store_schedule_tool,
                 get_multi_store_schedule_tool,
+                get_stores_with_time_filter_tool,
             ]
             system_prompt = get_transaction_store_system_prompt
             name = "Transaction Agent (Store)"
