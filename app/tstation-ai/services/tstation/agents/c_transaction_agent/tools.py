@@ -1,6 +1,7 @@
 import logging
 from common.tool_cache import tool_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from typing import Any, List, Dict
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
@@ -1013,6 +1014,113 @@ def get_multi_store_schedule_tool(
         "tier": "none",
         "stores": [],
         "candidate_shop_ids": candidates,
+    })
+
+
+@tool
+def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int) -> dict:
+    """
+    Find stores in a region with reservation slots available at or after a given hour (Flow 5.5T).
+
+    Use this tool when the user asks for stores available "N시 이후" / "저녁 N시" / "오후 N시"
+    in a region, without specifying a particular store name or goods_no.
+
+    Fetches the store list for the region in parallel with checking today→+2 day reservation
+    slots per store, then returns pre-filtered results ready for a quickReply table.
+
+    Args:
+        region_code (str): Region name (e.g., '인천', '부산', '강남').
+        time_threshold_hour (int): Hour threshold 0–23. E.g., 18 for "6시 이후" / "저녁 6시".
+
+    Returns:
+        {
+            "stores_available":   [{"shop_id", "shop_nm", "address", "tel", "cal_day", "qualifying_slots"}],
+            "stores_unavailable": [{"shop_id", "shop_nm", "address", "tel", "reason"}],
+            "time_threshold_hour": int,
+            "region_code": str,
+        }
+    """
+    logger.debug(
+        "[TOOL][get_stores_with_time_filter_tool] region_code=%s, time_threshold_hour=%s",
+        region_code, time_threshold_hour,
+    )
+
+    list_result = _get_store_list_cached(region_code=region_code, limit=15)
+    if list_result.get("status") == "error":
+        return list_result
+
+    stores_raw = (list_result.get("data") or {}).get("stores") or []
+    if not stores_raw:
+        return _success_response(200, {
+            "stores_available": [],
+            "stores_unavailable": [],
+            "time_threshold_hour": time_threshold_hour,
+            "region_code": region_code,
+        })
+
+    today = datetime.now()
+    client = get_client()  # obtain in main thread so worker threads inherit the request context
+
+    def _check_store(store: dict) -> tuple[bool, dict]:
+        shop_id = store.get("shop_id") or store.get("shop_seq")
+        shop_nm = store.get("shop_nm") or ""
+        addr = " ".join(filter(None, [store.get("road_addr_base"), store.get("road_addr_dtl")])).strip()
+        tel = store.get("tel_no") or ""
+
+        if not shop_id:
+            return False, {"shop_nm": shop_nm, "address": addr, "tel": tel, "reason": "매장 ID 없음"}
+
+        for delta in range(3):
+            cal_day = (today + timedelta(days=delta)).strftime("%Y%m%d")
+            try:
+                resp = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
+                if resp.parsed is None:
+                    continue
+                detail = _to_dict(resp.parsed)
+                slots = detail.get("available_slots") or []
+                qualifying = [s for s in slots if int(s) >= time_threshold_hour]
+                if qualifying:
+                    return True, {
+                        "shop_id": shop_id,
+                        "shop_nm": shop_nm,
+                        "address": addr,
+                        "tel": tel,
+                        "cal_day": cal_day,
+                        "qualifying_slots": qualifying,
+                    }
+            except Exception:
+                logger.warning(
+                    "[get_stores_with_time_filter_tool] detail failed shop_id=%s day+%d", shop_id, delta,
+                )
+
+        return False, {
+            "shop_id": shop_id,
+            "shop_nm": shop_nm,
+            "address": addr,
+            "tel": tel,
+            "reason": f"{time_threshold_hour}시 이후 예약 가능 슬롯 없음",
+        }
+
+    stores_available: list[dict] = []
+    stores_unavailable: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=min(len(stores_raw), 9)) as executor:
+        futures = {executor.submit(_check_store, store): store for store in stores_raw}
+        for future in as_completed(futures):
+            try:
+                is_avail, result = future.result()
+                if is_avail:
+                    stores_available.append(result)
+                else:
+                    stores_unavailable.append(result)
+            except Exception:
+                logger.warning("[get_stores_with_time_filter_tool] future failed")
+
+    return _success_response(200, {
+        "time_threshold_hour": time_threshold_hour,
+        "region_code": region_code,
+        "stores_available": stores_available,
+        "stores_unavailable": stores_unavailable,
     })
 
 
