@@ -47,6 +47,7 @@ class CTAUrls:
     WARRANTY_MAIN: Final[str] = f"{_PC}/mypage/tstation/warranty/main"
     REMINDING_ALARM: Final[str] = f"{_PC}/membership/reminding-alarm"
     TIRE_CHECK_RESULT_LIST: Final[str] = f"{_PC}/mypage/tireTest/tireCheckResultList.do"
+    SMART_PICKUP: Final[str] = f"{_PC}/membership/dashboard/membership_smartPickup"
 
     # Group B — contain LLM placeholders (<ord_no>, <shop_seq>)
     ORDER_HISTORY_DETAIL: Final[str] = f"{_PC}/mypage/tstation/order-history/detail/<ord_no>"
@@ -67,6 +68,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_WARRANTY_MAIN__": CTAUrls.WARRANTY_MAIN,
     "__URL_REMINDING_ALARM__": CTAUrls.REMINDING_ALARM,
     "__URL_TIRE_CHECK_RESULT_LIST__": CTAUrls.TIRE_CHECK_RESULT_LIST,
+    "__URL_SMART_PICKUP__": CTAUrls.SMART_PICKUP,
 }
 
 
