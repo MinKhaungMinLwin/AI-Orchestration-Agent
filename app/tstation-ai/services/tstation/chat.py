@@ -519,6 +519,7 @@ RULES:
 - 매장/근처/올마이티/All My T → TRANSACTION
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
+- 온라인 전용 상품 차이/온라인에서만 구매/매장 방문 구매 가능 여부 → SUPPORT
 - 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용 → TRANSACTION, agent_prompt_profile=transaction_order
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
@@ -613,6 +614,20 @@ class StreamingMultiAgentCoordinator:
         # SUPPORT — return / refund / warranty / 1:1
         (
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # SUPPORT — online-only product policy / online vs in-store purchase (TC-028).
+        # Keep this narrower than "온라인 전용" so the CTA label "온라인 전용 상품 보기"
+        # can still route to Discovery instead of looping back to FAQ.
+        (
+            [
+                "온전용",
+                "매장 가서 사는",
+                "매장 방문해서도 구매",
+                "매장에서도 구매",
+                "온라인에서만",
+                "온라인에서만 사야",
+            ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
         # DISCOVERY — vehicle lookup / video / event
