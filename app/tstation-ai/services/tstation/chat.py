@@ -619,7 +619,7 @@ class StreamingMultiAgentCoordinator:
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
             MultiAgentDomain.Domain.SUPPORT,
         ),
-        # SUPPORT — online-only product policy / online vs in-store purchase (TC-028).
+        # SUPPORT — online-only product policy / online vs in-store purchase (TC-028, TC-104).
         # Keep this narrower than "온라인 전용" so the CTA label "온라인 전용 상품 보기"
         # can still route to Discovery instead of looping back to FAQ.
         (
@@ -630,6 +630,16 @@ class StreamingMultiAgentCoordinator:
                 "매장에서도 구매",
                 "온라인에서만",
                 "온라인에서만 사야",
+                # generic online vs in-store price difference queries
+                "매장에서 구매하는거랑 온라인",
+                "매장 구매랑 온라인",
+                "온라인 주문이랑 매장",
+                "온라인이랑 매장 가격 차이",
+                "매장 가격 온라인 가격",
+                "매장에서 사는 거랑 온라인",
+                "매장 가서 직접 사는 거랑 온라인",
+                "매장 가서 직접 사는",
+                "매장에서 사는거랑 온라인",
             ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
