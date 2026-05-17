@@ -11,6 +11,7 @@ a single tool output.
 import contextvars
 import datetime
 import logging
+import re
 from typing import Any
 
 from services.tstation.common.cta_urls import CTAUrls
@@ -1557,16 +1558,26 @@ def _summarize(full_text: str, template: str, item_count: int) -> str:
     return _summarize_with_source(full_text, template, item_count)[0]
 
 
+_BULLET_PATTERN = re.compile(r"\n-\s+\*\*")
+
+
 def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:
     """Domain Agent 텍스트에서 첫 문장만 추출하거나, 기본 안내를 반환한다.
 
     PROSE MODE 도입 후 LLM이 1–2문장의 짧은 prose("...찾았어요. ...선택해 주세요 😊")를
     내보내는데, 첫 문장에서 자르면 후반부 + 마지막 emoji가 사라진다. 길이가 120자
     이하라면 그대로 유지하고, 그보다 길 때만 첫 문장 컷을 적용한다.
+
+    EXCEPTION — product 템플릿 + bullet 패턴(``\\n- **``) 검출 시 전체 텍스트 유지.
+    추천 응답 (인트로 + 상품당 1줄 bullet 요약) 은 길이가 120자를 넘기지만 전체가
+    의도된 형식이므로 컷 금지. FE 는 markdown bullet 으로 렌더한다.
     """
     text = (full_text or "").strip()
     if not text:
         return _TEMPLATE_DEFAULTS.get(template, "").format(n=item_count), "default"
+
+    if template == "product" and _BULLET_PATTERN.search(text):
+        return text, "llm_prose_with_bullets"
 
     if len(text) <= 120:
         return text, "llm_prose"
