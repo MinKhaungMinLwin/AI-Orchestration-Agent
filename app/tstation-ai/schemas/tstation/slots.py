@@ -98,7 +98,13 @@ class ConversationSlots(BaseModel):
     # Price pattern uses `얼마(?!나)` to avoid matching `얼마나` (degree adverb used in
     # stock/time questions like "재고 얼마나 있어요?" / "얼마나 걸려요?").
     _INTENT_PATTERNS: ClassVar[list[tuple[re.Pattern, "PendingIntent"]]] = [
-        (re.compile(r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가"), "price"),
+        (
+            re.compile(
+                r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가|"
+                r"스마트\s*페이|할부|분할\s*납부|월\s*납부|월\s*결제"
+            ),
+            "price",
+        ),
         (re.compile(r"재고|입고|장착\s*가능"), "stock"),
         (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
         # 매장 방문 예약 — 와이퍼/배터리/얼라인먼트/경정비 등 부가 서비스 예약 포함.
