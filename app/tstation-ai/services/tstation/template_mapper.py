@@ -42,6 +42,14 @@ current_runflat_comparison: contextvars.ContextVar[bool] = contextvars.ContextVa
     "current_runflat_comparison", default=False
 )
 
+# True when the current turn is triggered by a return-visit CTA chip
+# ("<지역> 매장 다시 이용하기" / "<지역>점 다시 이용하기"). Forces isBookingFlow=True
+# on the resulting location card so the FE click handler routes to /chat (not
+# /append), enabling product/quantity continuation after store selection.
+current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_return_visit_store_flow", default=False
+)
+
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
 # routes to /chat (advancing the flow) instead of /append (which only shows
@@ -85,6 +93,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_store_list_tool": "location",
     "get_nearby_stores_tool": "location",
     "transaction_store_preview_tool": "location",
+    "get_stores_with_time_filter_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
     # orderComplete (cart-save / quick-order — terminal step in transaction flow)
@@ -1026,7 +1035,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
-        bool(called_tools & _BOOKING_SIGNAL_TOOLS) or _is_goal_booking_followup() or has_booking_intent
+        bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+        or _is_goal_booking_followup()
+        or has_booking_intent
+        or current_return_visit_store_flow.get()
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
@@ -1041,6 +1053,95 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             "assistantResponse": short,
         },
     }
+
+
+def _format_time_filter_slot(slot: object) -> str:
+    try:
+        return f"{int(slot):02d}:00"
+    except (TypeError, ValueError):
+        return str(slot)
+
+
+def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    for entry in _find_entries(tool_data_list, "get_stores_with_time_filter_tool"):
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+
+        stores = raw.get("stores_available")
+        if not isinstance(stores, list):
+            continue
+
+        region_code = _get_str(raw, "region_code")
+        threshold = raw.get("time_threshold_hour")
+        items, metadata = [], []
+        for row in stores:
+            if not isinstance(row, dict):
+                continue
+            shop_id = _get_str(row, "shop_id")
+            if not shop_id:
+                continue
+
+            slots = row.get("qualifying_slots") if isinstance(row.get("qualifying_slots"), list) else []
+            slot_text = ", ".join(_format_time_filter_slot(s) for s in slots[:5])
+            cal_day = _yyyymmdd_to_korean_date(_get_str(row, "cal_day"))
+            address = _get_str(row, "address")
+            tel = _format_phone(_get_str(row, "tel"))
+            description_lines: list[str] = []
+            if address:
+                description_lines.append(f"📍 {address}")
+            if cal_day:
+                description_lines.append(f"예약 가능일: {cal_day}")
+            if slot_text:
+                description_lines.append(f"예약 가능 시간: {slot_text}")
+            if tel:
+                description_lines.append(f"전화: {tel}")
+
+            items.append({
+                "nameAddress": _get_str(row, "shop_nm", default=shop_id),
+                "distance": "",
+                "detailAddress": address,
+                "isAllMyT": False,
+                "todayInstall": False,
+                "tnaDelivery": False,
+                "description": "\n ".join(description_lines),
+            })
+            metadata.append({"shopId": shop_id})
+
+        if not items:
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper",
+                "data": {
+                    "assistantResponse": f"{region_code}에서 {threshold}시 이후 예약 가능한 매장이 현재 없어요. 다른 시간대나 지역으로 찾아드릴까요?",
+                    "quickReplies": [
+                        {"label": "다른 시간대 찾기", "domain": "TRANSACTION"},
+                        {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                        {"label": "처음으로", "domain": "LEADING"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
+
+        items, metadata = items[:10], metadata[:10]
+        short, response_source = _summarize_with_source(assistant_text, "location", len(items))
+        if not assistant_text.strip():
+            short = f"{region_code}에서 {threshold}시 이후 예약 가능한 매장 {len(items)}곳을 안내드립니다. 원하시는 매장을 선택해 주세요."
+            response_source = "default"
+        return {
+            "type": "data",
+            "template": "location",
+            "assistant_response_source": response_source,
+            "data": {
+                "stores": items,
+                "metadata": metadata,
+                "isBookingFlow": True,
+                "assistantResponse": short,
+            },
+        }
+
+    return None
 
 
 # ── 9. datepick ─────────────────────────────────────────────────────────────────
@@ -1608,6 +1709,7 @@ _MAPPERS: dict[str, Any] = {
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "transaction_store_preview_tool": _map_location,
+    "get_stores_with_time_filter_tool": _map_time_filter_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
     "save_to_cart_tool": _map_order_complete,
@@ -1664,6 +1766,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("compare_discount_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
+        ("get_stores_with_time_filter_tool", _map_time_filter_location),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
         ("transaction_store_preview_tool", _map_location),

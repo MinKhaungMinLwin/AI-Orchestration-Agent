@@ -1026,11 +1026,16 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
     in a region, without specifying a particular store name or goods_no.
 
     Fetches the store list for the region in parallel with checking today→+2 day reservation
-    slots per store, then returns pre-filtered results ready for a quickReply table.
+    slots per store, then returns pre-filtered raw store data for the location mapper.
 
     Args:
         region_code (str): Region name (e.g., '인천', '부산', '강남').
-        time_threshold_hour (int): Hour threshold 0–23. E.g., 18 for "6시 이후" / "저녁 6시".
+        time_threshold_hour (int): 24-hour integer (0–23). Convert Korean time expressions:
+            "오전 N시" / "새벽 N시" → N          (e.g., "오전 9시"  → 9)
+            "오후 N시"              → 12 + N    (e.g., "오후 3시"  → 15, "오후 6시" → 18)
+            "저녁 N시"              → 12 + N    (e.g., "저녁 6시"  → 18, "저녁 9시" → 21)
+            "밤 N시"                → 12 + N    (e.g., "밤 10시"   → 22)
+            "N시 이후" (no prefix)  → 12 + N if N ≤ 12 and evening context, else N
 
     Returns:
         {
@@ -1117,10 +1122,10 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
                 logger.warning("[get_stores_with_time_filter_tool] future failed")
 
     return _success_response(200, {
-        "time_threshold_hour": time_threshold_hour,
-        "region_code": region_code,
         "stores_available": stores_available,
         "stores_unavailable": stores_unavailable,
+        "time_threshold_hour": time_threshold_hour,
+        "region_code": region_code,
     })
 
 

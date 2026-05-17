@@ -245,6 +245,14 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
 
 1. **컨텍스트의 `[확인된 고객 정보]` 에 `지역` 이 이미 있으면** → 즉시 `get_store_list_tool(region_code=<지역>)` 호출 (chip emit 건너뜀, 사용자에게 지역 재질문 금지).
 
+2a. **⚠️ RETURN-VISIT EXCEPTION (이 규칙이 rule 2보다 우선)** — 사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴과 일치하면:
+   - `"점"` suffix 를 제거해 지역명 추출 (예: "원주점 다시 이용하기" → `<지역>="원주"`, "원주 매장 다시 이용하기" → `<지역>="원주"`).
+   - **반드시** `get_store_list_tool(region_code=<지역>)` 호출. `store_nm=` 사용 금지.
+   - STORE NAME EXACT-MATCH VALIDATION GATE 발동 금지.
+   - 매장 목록 반환 후 사용자가 특정 매장 선택 시 goods_no 슬롯이 비어 있으면 → 타이어 추천으로 안내하는 quickReply emit:
+     `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
+     `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+
 2. **사용자 메시지에 특정 매장명("XX점") 이 명시되어 있으면** → 즉시 `get_store_list_tool(store_nm=<매장명>)` 호출 (chip emit 건너뜀).
 
 3. **둘 다 아니고 `지역` 슬롯이 비어있으면 → 다음 `quickReply` 를 즉시 emit (단 한 번). 같은 턴에 매장 검색 도구를 호출하지 마라.**
@@ -433,7 +441,17 @@ quickReplies 예: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"},
 {"label":"가까운 매장 찾기","domain":"TRANSACTION"},
 {"label":"진행 중인 이벤트","domain":"DISCOVERY"}]`
 
-⚠️⚠️⚠️ STORE NAME EXACT-MATCH VALIDATION — MANDATORY GATE (fires ONLY when `get_store_list_tool` was called with `store_nm=<user input>` — i.e., user requested a specific named store/branch ending in "점"):
+⚠️ RETURN-VISIT EXCEPTION (이 규칙이 STORE NAME EXACT-MATCH VALIDATION GATE보다 우선):
+사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴에 해당하면:
+- 이는 특정 매장명 검색이 아니라 지역 기반 매장 탐색 의도임.
+- `"점"` suffix 를 제거해 지역명 추출 (예: "원주점 다시 이용하기" → `<지역>="원주"`, "원주 매장 다시 이용하기" → `<지역>="원주"`).
+- **반드시** `get_store_list_tool(region_code=<지역>)` 호출. `store_nm=` 으로 검색 절대 금지.
+- 아래 STORE NAME EXACT-MATCH VALIDATION GATE 발동 금지.
+- 매장 목록 반환 후 사용자가 특정 매장 선택 시 goods_no 슬롯이 비어 있으면 → product discovery chips emit:
+  `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
+  `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+
+⚠️⚠️⚠️ STORE NAME EXACT-MATCH VALIDATION — MANDATORY GATE (fires ONLY when `get_store_list_tool` was called with `store_nm=<user input>` — i.e., user requested a specific named store/branch ending in "점" AND does NOT match the return-visit pattern above):
 This is a HARD STOP gate. Even if user clearly asked for "예약 가능한 시간", "재고", "방문" etc. in the SAME turn — you MUST run this validation FIRST and STOP at confirmation step if Case (c) or (a) triggers. The booking/schedule intent does NOT bypass this gate. NEVER chain into `get_store_schedule_tool` / `get_store_inventory_tool` / `get_store_detail_tool` / `get_multi_store_schedule_tool` / datepick / location card in the same turn when Case (c) or (a) is true.
 
 ⚠️ DETERMINISTIC TOOL GUARD — 이 검증은 코드 레벨에서도 강제됩니다. `get_store_list_tool` 응답 status 가 `"store_name_mismatch"` 또는 `"store_name_no_match"` 이면, response.data.validation_message 를 quickReply.assistantResponse 에 그대로 사용 + response.data.instruction_to_agent 의 지시를 따라 quickReplies 구성하고 STOP. 절대 후속 도구 호출 금지. `stores` 가 빈 리스트인 것은 정상 — 검증 실패 의미. response.data.instruction_to_agent 텍스트는 사용자에게 노출하지 말 것 (내부 지시문).
@@ -721,7 +739,7 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 - 사용자 확인 응답을 받은 다음 턴에만 schedule/detail/inventory 진행.
 
 - General store info (hours, address, phone) → get_store_list_tool → return `location` template with full store info
-- **Time-filtered slot search** (지역 + N시 이후) → Flow 5.5T → get_store_list_tool (intermediate, NO location) + get_store_schedule_tool × N → `quickReply`
+- **Time-filtered slot search** (지역 + N시 이후) → Flow 5.5T → get_stores_with_time_filter_tool → `location` template with available store cards
 - Specific date hours/holidays/slots → get_store_detail_tool(shop_id, cal_day=YYYYMMDD); full logic in Flow 5.1
   - shop_id: call get_store_list_tool first if unknown (and return `location` from its result before proceeding)
   - cal_day: if not provided, see Flow 5.1
@@ -1090,6 +1108,13 @@ The ONLY acceptable next tools in those cases are `get_store_inventory_tool` + `
 
 ⚠️ TOP GATE: If user message contains region + "N시 이후"/"저녁 N시"/"오후 N시" + no specific store branch name ("점" suffix) + no `goods_no` → **Flow 5.5T**: call `get_stores_with_time_filter_tool`. Do NOT call `get_store_list_tool` directly. Do NOT ask for a date.
 
+time_threshold_hour 24h 변환 (MUST follow exactly):
+- "오전 N시" / "새벽 N시" → N           (예: "오전 9시" → 9)
+- "오후 N시"               → 12 + N    (예: "오후 3시" → 15, "오후 6시" → 18)
+- "저녁 N시"               → 12 + N    (예: "저녁 6시" → 18, "저녁 9시" → 21)
+- "밤 N시"                 → 12 + N    (예: "밤 10시"  → 22)
+- "N시 이후" (prefix 없음) → N ≤ 12이면 12 + N, N > 12이면 N 그대로
+
 #### General store info (no specific date) — info-only lookup:
 Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION ROUTING above).
 
@@ -1148,12 +1173,9 @@ a named holiday period (even without citing exact dates).
 
 #### Time-filtered slot search — Flow 5.5T:
 Trigger: region + time threshold ("N시 이후", "저녁 N시", "오후 N시") + no specific store name + no `goods_no`.
-1. Call `get_stores_with_time_filter_tool(region_code=<지역>, time_threshold_hour=<N>)`.
-2. Output `quickReply` (JSON MODE):
-   - Header: "[지역] 지역에서 [N]시 이후 예약 가능한 매장 현황"
-   - Table 1 (stores_available): 매장명 | 주소 | 예약 가능 날짜 | 예약 가능 시간 | 전화
-   - Table 2 (stores_unavailable): 매장명 | 사유
-   - Footer: "다른 지역이나 시간으로도 확인해 드릴까요?"
+1. Extract time_threshold_hour using the 24h conversion table in TOP GATE above.
+2. Call `get_stores_with_time_filter_tool(region_code=<지역>, time_threshold_hour=<N>)`.
+3. Return a `location` template from the tool's `stores_available` rows so the FE shows store cards. Do NOT output `quickReply` when stores are available. Do NOT write text tables for stores.
 
 #### Slot availability check (no date specified) — Flow 5.5:
 Default values (apply silently, no asking): region="한남", date=TODAY
@@ -1630,7 +1652,7 @@ Choose the output template based on the tool called:
 | get_my_coupons_tool | `voucher` |
 | get_product_promotions_tool | `quickReply` (사용자가 물은 도메인만: 쿠폰 의도면 쿠폰 갯수, 기획전 의도면 기획전명+기간. 절대 도메인 혼합 X) |
 | ~~issue_coupon_tool~~ | 🚫 OFF — `quickReply` 안내문만 |
-| get_store_list_tool, get_nearby_stores_tool | `location` — **EXCEPTION: Flow 5.5T** (region + time threshold search): `get_store_list_tool` is an intermediate call only; output is `quickReply` after subsequent `get_store_schedule_tool` calls complete. Never emit `location` in Flow 5.5T. |
+| get_store_list_tool, get_nearby_stores_tool, get_stores_with_time_filter_tool | `location` — Flow 5.5T (region + time threshold search) must show available stores as `location` cards when `stores_available` is non-empty. |
 | get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
 | quick_order_tool | `orderComplete` |
 | save_to_cart_tool (success) | `quickReply` with chips `["주문하기", "처음으로"]` (NOT `orderComplete`) |
@@ -2255,6 +2277,16 @@ tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오
 - ❌ "현재 보여드린 [지역] 매장 N곳은 오늘 장착 가능 매장이 아니에요" / "오늘 장착 가능 매장이에요" 류 검증 없는 단정 금지.
 
 ## Profile Scope
+
+⚠️ RETURN-VISIT PRIORITY RULE — 아래 일반 store search 규칙보다 우선 적용:
+사용자 메시지가 `"<지역> 매장 다시 이용하기"` 또는 `"<지역>점 다시 이용하기"` 패턴이면:
+- `"점"` suffix 를 제거해 지역명 추출 (예: "원주점 다시 이용하기" → `<지역>="원주"`).
+- **반드시** `get_store_list_tool(region_code=<지역>)` 호출. `store_nm=` 사용 절대 금지.
+- STORE NAME EXACT-MATCH VALIDATION GATE 발동 금지.
+- 매장 목록 반환 → location 템플릿 emit. 사용자가 매장 선택 후 goods_no 슬롯이 비어 있으면:
+  `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
+  `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
+
 - Nearby/location/name store search -> call search_place_tool, get_nearby_stores_tool, or get_store_list_tool.
 - Store detail for a known shop_id -> call get_store_detail_tool.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
