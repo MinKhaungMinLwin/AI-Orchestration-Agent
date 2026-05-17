@@ -938,11 +938,11 @@ def get_products_recommendations_tool(
             ),
         )
 
+    # Price filtering is now SQL-side on BE — no client-side post-filter.
+    # newest_desc is a client-side sort BE doesn't support → still fetch >limit then re-sort.
     has_price_filter = bool(min_price or max_price)
     has_newest_sort = sort_by == "newest_desc"
-    fetch_limit = limit * 4 if has_price_filter else limit
-    if has_newest_sort:
-        fetch_limit = max(fetch_limit, 100)
+    fetch_limit = max(limit, 100) if has_newest_sort else limit
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
         rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
@@ -958,6 +958,8 @@ def get_products_recommendations_tool(
             tire_size=tire_size,
             season_nm=season_nm,
             pfm_nm=pfm_nm,
+            min_price=min_price,
+            max_price=max_price,
         )
         if response.parsed is None:
             return _error_response(
@@ -968,15 +970,13 @@ def get_products_recommendations_tool(
         # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
-            if has_price_filter:
-                data["items"] = _filter_by_price(data["items"], min_price, max_price)
-                if not data["items"]:
-                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+            if has_price_filter and not data["items"]:
+                return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
             if str(rcmd_type) == "discount":
                 data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter or has_newest_sort:
+            if has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
     except Exception as e:
