@@ -1009,14 +1009,24 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     items, metadata = items[:10], metadata[:10]
 
-    # In order context, when the agent calls get_store_list_tool alone (no
-    # nearby/place search) and gets back exactly 1 store, this is a shop_id
-    # resolution turn — the user already selected a store from a previously
-    # shown list and the agent is resolving the name to an ID before calling
-    # inventory/schedule tools. Rendering the card again creates an infinite
-    # loop because the FE re-sends the store name on each click.
+    # In order context, when the agent calls get_store_list_tool with a
+    # `store_nm` arg (user named a specific branch) and gets back exactly 1
+    # store, this is a shop_id resolution turn — the user already selected a
+    # store from a previously shown list and the agent is resolving the name
+    # to an ID before calling inventory/schedule tools. Rendering the card
+    # again creates an infinite loop because the FE re-sends the store name
+    # on each click. Region-only searches (`region_code=...`) that happen to
+    # yield 1 store do NOT loop — the user hasn't named that store yet, so
+    # we must render the card for selection.
+    called_with_store_nm = False
+    for entry in _find_entries(tool_data_list, "get_store_list_tool"):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        if isinstance(args, dict) and args.get("store_nm"):
+            called_with_store_nm = True
+            break
     is_shopid_resolution = (
-        has_booking_intent
+        called_with_store_nm
+        and has_booking_intent
         and len(items) == 1
         and "get_nearby_stores_tool" not in called_tools
         and "search_place_tool" not in called_tools
