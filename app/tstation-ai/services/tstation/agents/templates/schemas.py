@@ -5,11 +5,25 @@ returns the final FE payload in a guaranteed shape.
 """
 
 import logging
+import re
 from typing import Annotated, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+# Deterministic enforcement for qty-question quickReplies.
+# LLM 가 "타이어 수량을 알려주세요" 류 질문을 emit 하면서 chip 에 1개/3개 등을
+# 누락하는 휘발성 버그를 막기 위함. c_transaction_agent prompt 룰(L461 / L1310~)
+# 이 두 번 보강된 뒤에도 재발해서 schema 측에서 결정적으로 차단.
+_QTY_QUESTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"몇\s*개"),
+    re.compile(r"(?:타이어\s*)?수량.{0,15}?(?:알려|말씀|선택|골라|어떻게)"),
+)
+_QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"맞으시"),
+)
+_REQUIRED_QTY_CHIPS: tuple[str, ...] = ("1개", "2개", "3개", "4개")
 
 
 class TemplatePayload(BaseModel):
@@ -97,6 +111,28 @@ class QuickReplyTemplate(TemplatePayload):
             logger.warning("quickReplies has %d chips, truncating to %d", len(v), cls._MAX_QUICK_REPLIES)
             return v[: cls._MAX_QUICK_REPLIES]
         return v
+
+    @model_validator(mode="after")
+    def enforce_quantity_chips(self) -> "QuickReplyTemplate":
+        text = self.assistantResponse or ""
+        if any(p.search(text) for p in _QTY_CONFIRM_PATTERNS):
+            return self
+        if not any(p.search(text) for p in _QTY_QUESTION_PATTERNS):
+            return self
+        chip_labels = {c.label for c in self.quickReplies}
+        if all(req in chip_labels for req in _REQUIRED_QTY_CHIPS):
+            return self
+        missing = [r for r in _REQUIRED_QTY_CHIPS if r not in chip_labels]
+        logger.warning(
+            "QuickReplyTemplate qty-question auto-fix: original=%s missing=%s; replacing with %s",
+            [c.label for c in self.quickReplies],
+            missing,
+            list(_REQUIRED_QTY_CHIPS),
+        )
+        self.quickReplies = [
+            QuickReplyChip(label=label, domain="TRANSACTION") for label in _REQUIRED_QTY_CHIPS
+        ]
+        return self
 
 
 class QuickReplyDataEvent(BaseModel):
