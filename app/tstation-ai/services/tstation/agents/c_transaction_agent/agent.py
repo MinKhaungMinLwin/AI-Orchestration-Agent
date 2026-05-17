@@ -167,18 +167,37 @@ Trigger: 사용자 메시지에 다음 중 하나라도 포함될 때.
 ⚠️ Discovery로 라우팅하거나 search_product_tool을 호출하지 말 것 — goods_no는 주문 이력에서 직접 가져온다.
 
 수행 순서:
-1. get_orders_of_user_tool 호출 → 가장 최근 타이어 주문에서 goods_no + goods_nm + tire_size_1 추출.
-2. 확인 메시지 emit (quickReply):
-   assistantResponse: "이전 주문에서 확인된 타이어는 **[goods_nm]** ([tire_size_1])입니다. 같은 상품으로 재구매를 진행할까요? 😊"
-   quickReplies: [{"label": "[goods_nm]로 진행", "domain": "TRANSACTION"}, {"label": "다른 타이어 보기", "domain": "DISCOVERY"}]
-   ⚠️ chip label 의 `[goods_nm]` 는 반드시 실제 상품명(예: "아이온 에보")으로 치환. placeholder 그대로 emit 금지. 상품명이 너무 길어 chip 이 어색하면 모델 핵심명만 사용 (예: "벤투스 에어 S로 진행").
-   → STOP and wait. (Discovery 핸드오프가 아니라 사용자 확인을 기다리는 것)
-3. 사용자가 chip "[goods_nm]로 진행" 클릭 또는 "네", "진행해줘" 등 확인 발화 → goods_no 확보 완료. Flow 6 STEP 2(수량 확인)로 바로 진행.
-   ⚠️ 사이즈 카드(product 템플릿) 절대 미출력 — goods_no가 이미 확보됐으므로 사이즈 선택 단계 불필요.
-   ⚠️ 사용자 재진입 메시지가 chip 의 실제 치환된 제품명(예: "아이온 에보로 진행") 또는 단순 제품명("아이온 에보")일 때도 search_product_tool 호출 금지 — 직전 turn 의 goods_no 를 그대로 사용.
-4. 사용자가 수량도 이미 말했으면 (e.g., "4개") → STEP 2 qty 확인 후 바로 STEP 3으로.
+1. get_orders_of_user_tool 호출 → orders[] 에서 **타이어 주문만 추림** (tire_size_1 이 채워진 row. 딜리버리서비스/휠얼라인먼트/팩키지 등 서비스 항목 제외). 각 타이어 주문에서 goods_no + goods_nm + tire_size_1 + ord_qty + sys_reg_dtime 추출.
 
-⚠️ get_orders_of_user_tool 결과에 타이어 주문이 없으면 → "이전 타이어 주문 내역이 없어요. 어떤 타이어를 찾으시나요?" → route to Discovery.
+2. 타이어 주문 개수에 따라 분기:
+
+   **① 0건**: "이전 타이어 주문 내역이 없어요. 어떤 타이어를 찾으시나요?" → DISCOVERY chip 으로 route.
+
+   **② 1건**: 단일 확인 quickReply.
+      assistantResponse: "이전 주문에서 확인된 타이어는 **[goods_nm] [tire_size_1]** 입니다. 같은 상품으로 재구매를 진행할까요? 😊"
+      quickReplies: `[{"label":"[goods_nm] [tire_size_1]","domain":"TRANSACTION"}, {"label":"다른 타이어 보기","domain":"DISCOVERY"}]`
+
+   **③ 2~3건**: 어떤 주문 재구매할지 chip 선택 제공.
+      assistantResponse: "이전 타이어 주문이 여러 건 있어요. 어떤 타이어를 재구매하시겠어요? 😊"
+      quickReplies: 각 타이어 주문마다 1개 chip `{"label":"[goods_nm] [tire_size_1]","domain":"TRANSACTION"}` (sys_reg_dtime 내림차순) + 마지막에 `{"label":"다른 타이어 보기","domain":"DISCOVERY"}`
+
+   **④ 4건 이상**: 최신 3건만 chip + "다른 타이어 보기" (총 chip 4개).
+      assistantResponse: "이전 타이어 주문이 여러 건 있어요. 최근 3건 중에서 선택하시겠어요? 😊"
+      quickReplies: 최신 3건 chip (sys_reg_dtime 내림차순) + `{"label":"다른 타이어 보기","domain":"DISCOVERY"}`
+
+   ⚠️ chip label 의 `[goods_nm]`/`[tire_size_1]` 는 반드시 실제 값(예: `"아이온 에보 235/35R20"`)으로 치환. placeholder 그대로 emit 금지.
+   ⚠️ chip 라벨 형식 고정: `"[goods_nm] [tire_size_1]"` (모델명 + 공백 1개 + 사이즈). 괄호/대시/날짜/수량 추가 금지.
+   → STOP and wait. (Discovery 핸드오프가 아니라 사용자 선택을 기다리는 것)
+
+3. 사용자가 chip 라벨 (예: "아이온 에보 235/35R20") 또는 단순 제품명 ("아이온 에보") 으로 응답 → 컨텍스트의 orders[] 에서 해당 chip 의 goods_no / ord_qty 매칭 → Flow 6 STEP 2(수량 확인)로 바로 진행.
+   ⚠️ 매칭 룰:
+     - 사용자 발화에 사이즈 포함 → 정확 매칭 (goods_nm + tire_size_1 둘 다 일치하는 row).
+     - 사용자 발화에 사이즈 없음 → 같은 goods_nm 중 sys_reg_dtime 최신 row 선택.
+     - ord_qty 는 매칭된 주문의 값을 default 로 사용. 사용자가 다른 수량 명시하면 우선 적용.
+   ⚠️ 사이즈 카드(product 템플릿) 절대 미출력 — goods_no가 이미 확보됐으므로 사이즈 선택 단계 불필요.
+   ⚠️ search_product_tool 호출 금지 — 컨텍스트의 orders[] 에 이미 goods_no 존재.
+
+4. 사용자가 수량도 이미 말했으면 (e.g., "4개") → STEP 2 qty 확인 후 바로 STEP 3으로.
 
 ### ⛔ STICKY goods_no GUARD — REORDER 컨텍스트에서 goods_no 보존
 
