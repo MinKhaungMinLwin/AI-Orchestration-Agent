@@ -510,7 +510,7 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용) [⚠️ NOT SUPPORT — must check order/logistics state].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
 - SUPPORT: warranty, returns, refund, maintenance, shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
@@ -526,10 +526,11 @@ RULES:
 - 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
 - 매장/근처/올마이티/All My T → TRANSACTION
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
-- 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT
+- 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
+- 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
 - 온라인 전용 상품 차이/온라인에서만 구매/매장 방문 구매 가능 여부 → SUPPORT
 - 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
-- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용 → TRANSACTION, agent_prompt_profile=transaction_order
+- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order
 - Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
 - Greeting only (안녕/hi/hello) → LEADING
 
@@ -545,6 +546,7 @@ EXAMPLES (tricky cases):
 - "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
 - "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order (check order/logistics state, NOT FAQ)
 - "예약 취소하면 비용이 발생하나요?" → TRANSACTION, agent_prompt_profile=transaction_order (store visit vs online order must be determined from orders)
+- "단순 변심으로 반품하면 왕복 배송비 얼마야?" → TRANSACTION, agent_prompt_profile=transaction_order (return shipping-fee policy must use order/logistics policy, NOT Support FAQ)
 - "강남역 근처 매장 찾아줘" → TRANSACTION, agent_prompt_profile=transaction_store
 - "강남점에서 추석 연휴에도 타이어 교체 예약 받아?" → TRANSACTION, agent_prompt_profile=transaction_store (store holiday availability — 매장 운영/예약 가능 여부 조회, NOT "내 예약" lookup)
 - "티스테이션 강남점에서 2026/06/25에도 타이어 교체 예약받는지 알려줘" → TRANSACTION, agent_prompt_profile=transaction_store (store schedule availability on specific date)
@@ -622,6 +624,21 @@ class StreamingMultiAgentCoordinator:
     _KEYWORD_FORCE_TABLE: ClassVar[
         list[tuple[list[str], "MultiAgentDomain.Domain"]]
     ] = [
+        # TRANSACTION — cancellation/return shipping-fee inquiry (TC-118).
+        # Keep this before the broad SUPPORT "반품" rule so round-trip return-fee
+        # questions check order/logistics policy instead of FAQ hallucinating 5천 원.
+        (
+            [
+                "취소하면 택배비",
+                "택배비 물어내",
+                "왕복 배송비",
+                "반품 비용",
+                "반품수수료",
+                "취소 수수료",
+                "취소비용",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
         # SUPPORT — return / refund / warranty / 1:1
         (
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
@@ -795,7 +812,15 @@ class StreamingMultiAgentCoordinator:
                         domains=[domain],
                         execution_plan=[f"Run {domain.value} for the matched current-turn topic"],
                         user_behavior=f"topic shift via keyword '{kw}'",
-                        agent_prompt_profile=AgentPromptProfile.FULL,
+                        agent_prompt_profile=(
+                            AgentPromptProfile.TRANSACTION_ORDER
+                            if domain == MultiAgentDomain.Domain.TRANSACTION
+                            and any(
+                                fee_kw in text
+                                for fee_kw in ("취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료")
+                            )
+                            else AgentPromptProfile.FULL
+                        ),
                         flow="hardcoded keyword routing — bypassed LLM router",
                     )
         return None
