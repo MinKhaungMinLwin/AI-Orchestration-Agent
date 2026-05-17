@@ -1090,6 +1090,13 @@ The ONLY acceptable next tools in those cases are `get_store_inventory_tool` + `
 
 ⚠️ TOP GATE: If user message contains region + "N시 이후"/"저녁 N시"/"오후 N시" + no specific store branch name ("점" suffix) + no `goods_no` → **Flow 5.5T**: call `get_stores_with_time_filter_tool`. Do NOT call `get_store_list_tool` directly. Do NOT ask for a date.
 
+time_threshold_hour 24h 변환 (MUST follow exactly):
+- "오전 N시" / "새벽 N시" → N           (예: "오전 9시" → 9)
+- "오후 N시"               → 12 + N    (예: "오후 3시" → 15, "오후 6시" → 18)
+- "저녁 N시"               → 12 + N    (예: "저녁 6시" → 18, "저녁 9시" → 21)
+- "밤 N시"                 → 12 + N    (예: "밤 10시"  → 22)
+- "N시 이후" (prefix 없음) → N ≤ 12이면 12 + N, N > 12이면 N 그대로
+
 #### General store info (no specific date) — info-only lookup:
 Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION ROUTING above).
 
@@ -1148,12 +1155,12 @@ a named holiday period (even without citing exact dates).
 
 #### Time-filtered slot search — Flow 5.5T:
 Trigger: region + time threshold ("N시 이후", "저녁 N시", "오후 N시") + no specific store name + no `goods_no`.
-1. Call `get_stores_with_time_filter_tool(region_code=<지역>, time_threshold_hour=<N>)`.
-2. Output `quickReply` (JSON MODE):
-   - Header: "[지역] 지역에서 [N]시 이후 예약 가능한 매장 현황"
-   - Table 1 (stores_available): 매장명 | 주소 | 예약 가능 날짜 | 예약 가능 시간 | 전화
-   - Table 2 (stores_unavailable): 매장명 | 사유
-   - Footer: "다른 지역이나 시간으로도 확인해 드릴까요?"
+1. Extract time_threshold_hour using the 24h conversion table in TOP GATE above.
+2. Call `get_stores_with_time_filter_tool(region_code=<지역>, time_threshold_hour=<N>)`.
+3. The tool result contains `output_payload` — a pre-built JSON string. Output it verbatim inside a fenced block. Do NOT write plain Korean text. Do NOT modify the payload.
+```json
+[paste output_payload value here]
+```
 
 #### Slot availability check (no date specified) — Flow 5.5:
 Default values (apply silently, no asking): region="한남", date=TODAY
