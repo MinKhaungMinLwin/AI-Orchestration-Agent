@@ -90,7 +90,7 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
     },
     "get_orders_of_user_tool": {
         "list_key": "orders",
-        "keep": {"ord_no", "goods_nm", "ord_qty", "sys_reg_dtime"},
+        "keep": {"ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "sys_reg_dtime"},
     },
 }
 
@@ -183,7 +183,7 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     },
     "get_orders_of_user_tool": {
         "list_key": "orders",
-        "keep": {"ord_no", "goods_nm", "ord_qty", "ord_stat_nm", "sys_reg_dtime"},
+        "keep": {"ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "ord_stat_nm", "sys_reg_dtime"},
     },
     "check_compatibility_tool": {
         "list_key": "tire_sizes",
