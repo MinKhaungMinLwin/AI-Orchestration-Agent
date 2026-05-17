@@ -21,6 +21,7 @@ def _get_kwargs(
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -77,6 +78,13 @@ def _get_kwargs(
         json_chl_sct_cd = chl_sct_cd
     params["chl_sct_cd"] = json_chl_sct_cd
 
+    json_sort_by: None | str | Unset
+    if isinstance(sort_by, Unset):
+        json_sort_by = UNSET
+    else:
+        json_sort_by = sort_by
+    params["sort_by"] = json_sort_by
+
     params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
@@ -132,6 +140,7 @@ def sync_detailed(
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
@@ -149,6 +158,9 @@ def sync_detailed(
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -169,6 +181,7 @@ def sync_detailed(
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
         limit=limit,
     )
 
@@ -191,6 +204,7 @@ def sync(
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
@@ -208,6 +222,9 @@ def sync(
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -229,6 +246,7 @@ def sync(
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
         limit=limit,
     ).parsed
 
@@ -245,6 +263,7 @@ async def asyncio_detailed(
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
@@ -262,6 +281,9 @@ async def asyncio_detailed(
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -282,6 +304,7 @@ async def asyncio_detailed(
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
         limit=limit,
     )
 
@@ -302,6 +325,7 @@ async def asyncio(
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
@@ -319,6 +343,9 @@ async def asyncio(
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -341,6 +368,7 @@ async def asyncio(
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
             chl_sct_cd=chl_sct_cd,
+            sort_by=sort_by,
             limit=limit,
         )
     ).parsed

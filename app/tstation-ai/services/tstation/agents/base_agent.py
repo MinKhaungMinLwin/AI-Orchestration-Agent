@@ -56,6 +56,47 @@ def _emit_tool_summary_span(
 T = TypeVar("T")
 
 
+# Keys stripped from the SSE `tool` event's `output` payload before it reaches
+# the FE / dev tools. These are *internal-only* directives meant for the LLM's
+# deterministic guard logic (e.g. `transaction_store_preview_tool` instructing
+# the agent to STOP at the location card). The LLM still sees them in the
+# original `ToolMessage` content held by LangGraph state; only the SSE-visible
+# copy is sanitized so analysts / browser dev tools / log streams never expose
+# the raw guard text.
+_SSE_TOOL_OUTPUT_STRIPPED_KEYS: frozenset[str] = frozenset({"instruction_to_agent"})
+
+
+def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
+    if isinstance(node, dict):
+        for k in list(node.keys()):
+            if k in keys:
+                del node[k]
+            else:
+                _strip_keys_in_place(node[k], keys)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_keys_in_place(item, keys)
+
+
+def _sanitize_tool_output_for_sse(content: Any) -> Any:
+    """Return a copy of the tool result with internal-only keys removed.
+
+    Falls back to the original value on parse error so SSE delivery never
+    breaks even if a tool emits malformed JSON.
+    """
+    if not isinstance(content, str):
+        return content
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+    _strip_keys_in_place(parsed, _SSE_TOOL_OUTPUT_STRIPPED_KEYS)
+    try:
+        return json.dumps(parsed, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return content
+
+
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 # Matches trailing `quickReplies: [...]` that the model sometimes appends when it fails
 # to emit a proper fenced JSON block (plain-text fallback path in stream()).
@@ -76,6 +117,33 @@ _VALIDATION_FALLBACK_QUICK_REPLIES = [
     {"label": "상담사 연결", "domain": "SUPPORT"},
     {"label": "처음으로", "domain": "LEADING"},
 ]
+
+
+def _build_validated_quickreply_data(assistant_response: str, chips: list[dict]) -> dict:
+    """Build a quickReply `data` payload through QuickReplyTemplate validation.
+
+    Fallback emit paths (validation failure, prose mode, validation_fallback) bypass
+    pydantic instantiation and yield dicts directly, which means QuickReplyTemplate
+    validators (qty enforcement, satisfaction-chip enforcement) never fire. This
+    helper runs the payload through QuickReplyTemplate so the same deterministic
+    guards apply on the fallback paths.
+
+    Returns the validated `data` dict (assistantResponse + quickReplies). Schema
+    failures fall back to the raw input so we never harden an emit path into a
+    crash — but validators that mutate (e.g., satisfaction auto-fix) take effect.
+    """
+    from services.tstation.agents.templates.schemas import QuickReplyChip, QuickReplyTemplate
+
+    try:
+        chip_objs = [QuickReplyChip(**c) if isinstance(c, dict) else c for c in chips]
+        tpl = QuickReplyTemplate(assistantResponse=assistant_response, quickReplies=chip_objs)
+        return tpl.model_dump()
+    except ValidationError as exc:
+        logger.warning(
+            "[_build_validated_quickreply_data] schema validation failed, falling back to raw: %s",
+            exc.errors(include_url=False),
+        )
+        return {"assistantResponse": assistant_response, "quickReplies": chips}
 
 # 주문 수량을 묻는 quickReply 는 항상 1/2/3/4 4개 chip 을 노출해야 한다.
 # LLM 이 가끔 일부 chip 을 누락 (예: ["4개","2개"]) 하거나 중복 (["2개","2개"]) 시켜
@@ -268,19 +336,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "search_faq_rag_tool": "질문 검색 중...",
     "escalate_tool": "상담사 연결 중...",
     "transfer_to_qna_tool": "1:1 문의 페이지 준비 중...",
-    # UI Template
-    "quick_reply_tool": "응답 생성 중...",
-    "list_car_tool": "차량 목록 준비 중...",
-    "list_product_tool": "상품 목록 준비 중...",
-    "list_voucher_tool": "쿠폰 목록 준비 중...",
-    "list_location_tool": "매장 목록 준비 중...",
-    "list_event_tool": "이벤트 목록 준비 중...",
-    "list_preview_youtube_tool": "영상 목록 준비 중...",
-    "available_dates_tool": "예약 날짜 준비 중...",
-    "preorder_tool": "주문서 준비 중...",
-    "qna_complete_tool": "문의 페이지 준비 중...",
-    "order_complete_tool": "주문 완료 처리 중...",
-    "cheapest_product_tool": "가격 비교 결과 준비 중...",
 }
 
 
@@ -439,7 +494,7 @@ class BaseAgent(ABC):
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
-                            "output": message.content,
+                            "output": _sanitize_tool_output_for_sse(message.content),
                             "node": node,
                             "tool": message.name,
                         }
@@ -492,64 +547,81 @@ class BaseAgent(ABC):
                     }
                 yield data_event
             else:
-                # _build_data_event_from_text가 이미 error 로그를 남겼다.
-                # 여기서는 빈 \n\n만 보내는 대신 사용자에게 fallback quickReply를
-                # 노출해 silent dead-end UX를 방지한다.
-                if not answering_emitted:
-                    yield {"type": "status", "status": "답변 중..."}
-                    answering_emitted = True
-                if already_streamed:
-                    # prose는 이미 흘러갔으므로 fallback 메시지 중복 송출은 피하고
-                    # 마무리용 quickReply chips만 추가한다.
-                    yield {
-                        "type": "data",
-                        "template": "quickReply",
-                        "data": {
-                            "assistantResponse": response_streamer.streamed_text,
-                            "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
-                        },
-                        "nextAction": {"type": "stop", "domain": None},
-                    }
-                else:
-                    # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
-                    # template_mapper couldn't build a card — e.g., zero-result
-                    # search where the model honored the "prose mode" rule but
-                    # the mapper found no items to render. Treat the raw text
-                    # as the assistant's prose answer rather than showing the
-                    # generic validation-failure apology.
-                    prose_only = accumulated_text.strip()
-                    if prose_only and self._extract_fenced_json(accumulated_text) is None:
-                        # Model emitted plain text instead of fenced JSON. Strip any
-                        # trailing `quickReplies: [...]` annotation and parse chips.
-                        chips: list[dict] = []
-                        m = _INLINE_QUICK_REPLIES_RE.search(prose_only)
-                        if m:
-                            prose_only = prose_only[:m.start()].strip()
-                            try:
-                                raw = json.loads(m.group(1))
-                                chips = [
-                                    {"label": c, "domain": None} if isinstance(c, str) else c
-                                    for c in raw if c
-                                ]
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        yield {"type": "token", "content": prose_only}
-                        yield {
-                            "type": "message",
-                            "content": prose_only,
-                            "agent": self.name,
-                        }
+                # If any tool returned a pre-built output_payload, use it directly
+                # rather than falling through to generic fallback. This handles
+                # reasoning models that consistently emit plain text instead of
+                # the required fenced JSON block.
+                _tool_payload_used = False
+                for _td in reversed(accumulated_tool_data):
+                    _tool_data = _td.get("data") or {}
+                    _payload_str = (_tool_data.get("data") or {}).get("output_payload")
+                    if _payload_str:
+                        try:
+                            _payload = json.loads(_payload_str)
+                            if not answering_emitted:
+                                yield {"type": "status", "status": "답변 중..."}
+                                answering_emitted = True
+                            yield _payload
+                            _tool_payload_used = True
+                        except Exception:
+                            pass
+                        break
+                if not _tool_payload_used:
+                    # _build_data_event_from_text가 이미 error 로그를 남겼다.
+                    # 여기서는 빈 \n\n만 보내는 대신 사용자에게 fallback quickReply를
+                    # 노출해 silent dead-end UX를 방지한다.
+                    if not answering_emitted:
+                        yield {"type": "status", "status": "답변 중..."}
+                        answering_emitted = True
+                    if already_streamed:
+                        # prose는 이미 흘러갔으므로 fallback 메시지 중복 송출은 피하고
+                        # 마무리용 quickReply chips만 추가한다.
                         yield {
                             "type": "data",
                             "template": "quickReply",
-                            "data": {
-                                "assistantResponse": prose_only,
-                                "quickReplies": chips,
-                            },
+                            "data": _build_validated_quickreply_data(
+                                response_streamer.streamed_text,
+                                list(_VALIDATION_FALLBACK_QUICK_REPLIES),
+                            ),
                             "nextAction": {"type": "stop", "domain": None},
                         }
                     else:
-                        yield from self._yield_validation_fallback()
+                        # Phase 2B: LLM may have emitted plain prose (PROSE MODE) when
+                        # template_mapper couldn't build a card — e.g., zero-result
+                        # search where the model honored the "prose mode" rule but
+                        # the mapper found no items to render. Treat the raw text
+                        # as the assistant's prose answer rather than showing the
+                        # generic validation-failure apology.
+                        prose_only = accumulated_text.strip()
+                        if prose_only and self._extract_fenced_json(accumulated_text) is None:
+                            # Model emitted plain text instead of fenced JSON. Strip any
+                            # trailing `quickReplies: [...]` annotation and parse chips.
+                            chips: list[dict] = []
+                            m = _INLINE_QUICK_REPLIES_RE.search(prose_only)
+                            if m:
+                                prose_only = prose_only[:m.start()].strip()
+                                try:
+                                    raw = json.loads(m.group(1))
+                                    chips = [
+                                        {"label": c, "domain": None} if isinstance(c, str) else c
+                                        for c in raw if c
+                                    ]
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                            yield {"type": "token", "content": prose_only}
+                            yield {
+                                "type": "message",
+                                "content": prose_only,
+                                "agent": self.name,
+                            }
+                            yield {
+                                "type": "data",
+                                "template": "quickReply",
+                                "data": _build_validated_quickreply_data(prose_only, chips),
+                                "nextAction": {"type": "stop", "domain": None},
+                            }
+                        else:
+                            yield from self._yield_validation_fallback()
 
         yield {"type": "token", "content": "\n\n"}
 
@@ -569,10 +641,9 @@ class BaseAgent(ABC):
         yield {
             "type": "data",
             "template": "quickReply",
-            "data": {
-                "assistantResponse": message,
-                "quickReplies": list(_VALIDATION_FALLBACK_QUICK_REPLIES),
-            },
+            "data": _build_validated_quickreply_data(
+                message, list(_VALIDATION_FALLBACK_QUICK_REPLIES)
+            ),
             "nextAction": {"type": "stop", "domain": None},
         }
 
@@ -697,10 +768,35 @@ class BaseAgent(ABC):
             "get_my_cars_tool",
             "get_user_vehicles_tool",
             "get_store_detail_tool",
+            "get_stores_with_time_filter_tool",
+            # Product list tools — items 있으면 product 카드 강제. LLM 이
+            # "비슷한 가격대 더 추천" 같은 follow-up 발화에서 fenced JSON 으로
+            # quickReply 만 emit 하고 product 카드를 건너뛰는 회귀 차단.
+            # items 0 (검색 0건) 케이스는 mapper 가 None 반환 → LLM prose fallback.
+            "search_product_tool",
+            "get_products_recommendations_tool",
+            "get_newest_products_tool",
+            "get_best_selling_products_tool",
         )
         has_force_code_mapper_tool = any(
             e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
         )
+        # Deterministic guard override: when a tool response carries
+        # `instruction_to_agent` (e.g. transaction_store_preview_tool tier=none
+        # region/multi-candidate case), the LLM's own template choice may slip
+        # into a generic `quickReply` and bury the candidate list. Force the
+        # code mapper so the structured card (`location`) reaches the FE.
+        if not has_force_code_mapper_tool:
+            for entry in accumulated_tool_data:
+                output = entry.get("output")
+                if isinstance(output, str) and '"instruction_to_agent"' in output:
+                    has_force_code_mapper_tool = True
+                    break
+                if isinstance(output, dict):
+                    data = output.get("data") if isinstance(output.get("data"), dict) else output
+                    if isinstance(data, dict) and data.get("instruction_to_agent"):
+                        has_force_code_mapper_tool = True
+                        break
         if not has_force_code_mapper_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template

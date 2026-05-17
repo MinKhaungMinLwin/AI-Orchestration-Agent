@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 # Unfulfilled user intent carried across turns until explicitly fulfilled by a matching tool call.
 # "recommend" is the default/implicit intent and is intentionally NOT stored as a pending intent —
 # only actionable transactional intents are tracked here.
-PendingIntent = Literal["price", "stock", "order"]
+# "reservation" covers 매장 방문 예약 (타이어 장착 외에 와이퍼/배터리/얼라인먼트/경정비 등
+# 부가 서비스 예약 포함). Distinguished from "order" — "예약" 단독 발화는 서비스 방문이지
+# 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
+PendingIntent = Literal["price", "stock", "order", "reservation"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -39,6 +42,11 @@ class ConversationSlots(BaseModel):
     shop_name: Optional[str] = None      # e.g. "한남점"
     car_model: Optional[str] = None      # e.g. "쏘나타"
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
+    # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
+    # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면
+    # LLM 이 컨텍스트만으로 단가·수량 곱셈을 추측해 hallucination 하지 않고
+    # 결정적 값을 그대로 인용할 수 있다. (예: 할부 계산 질문)
+    payment_amount: Optional[int] = None
     # Free-form user store-selection criteria captured on the originating turn
     # (e.g. "친절한 직원, 얼라인먼트, 워셔액 무료"). Sticky across slot-fill
     # turns so the agent can re-apply the criteria once the missing slot
@@ -49,16 +57,17 @@ class ConversationSlots(BaseModel):
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
-        "tire_model": ["goods_no"],
-        "tire_size": ["goods_no"],
-        "goods_no": ["tire_model", "tire_size"],
+        "tire_model": ["goods_no", "payment_amount"],
+        "tire_size": ["goods_no", "payment_amount"],
+        "goods_no": ["tire_model", "tire_size", "payment_amount"],
+        "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id"],
-        "car_model": ["tire_size", "goods_no"],
-        # When the goal flips (e.g. store_finder → product_recommend), drop the
-        # store-specific carryovers. region/preferences only make sense within
-        # a store-finding goal; preserving them across goal flips would inject
-        # stale criteria into unrelated turns.
-        "goal_type": ["region", "user_preferences_text"],
+        "car_model": ["tire_size", "goods_no", "payment_amount"],
+        # When the goal flips, drop free-form store preferences (they are session-specific).
+        # region is intentionally NOT reset here: purchase goals (store_with_stock, place_order)
+        # still need region to filter store results, and a stale region is a better default
+        # than forcing the user to re-state it mid-purchase.
+        "goal_type": ["user_preferences_text"],
     }
 
     # Regex patterns for extracting slots from user messages
@@ -70,7 +79,9 @@ class ConversationSlots(BaseModel):
         (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d{2})[\s/]?(\d{2})(?!\d)"), "{0}/{1}R{2}"),
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
-    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개")
+    # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
+    # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
+    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
 
     # Intent patterns. Order = priority: first match wins when a single user turn
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
@@ -87,9 +98,20 @@ class ConversationSlots(BaseModel):
     # Price pattern uses `얼마(?!나)` to avoid matching `얼마나` (degree adverb used in
     # stock/time questions like "재고 얼마나 있어요?" / "얼마나 걸려요?").
     _INTENT_PATTERNS: ClassVar[list[tuple[re.Pattern, "PendingIntent"]]] = [
-        (re.compile(r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가"), "price"),
+        (
+            re.compile(
+                r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가|"
+                r"스마트\s*페이|할부|분할\s*납부|월\s*납부|월\s*결제"
+            ),
+            "price",
+        ),
         (re.compile(r"재고|입고|장착\s*가능"), "stock"),
         (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
+        # 매장 방문 예약 — 와이퍼/배터리/얼라인먼트/경정비 등 부가 서비스 예약 포함.
+        # "주문 예약" 같은 복합 발화는 위의 "order" 패턴이 먼저 매칭되어 reservation 으로
+        # 떨어지지 않는다 (first-match-wins). 취소/변경 동사는 downstream 분류기·prompt
+        # 가 별도 처리하므로 여기서는 broad match 로 두고 컨텍스트만 표시.
+        (re.compile(r"예약"), "reservation"),
     ]
 
     # Recommend patterns — when the user asks for a fresh recommendation,
@@ -397,6 +419,11 @@ class ConversationSlots(BaseModel):
             slots.goal_type = "price_inquiry"
         elif slots.pending_intent == "order":
             slots.goal_type = "place_order"
+        elif slots.pending_intent == "reservation":
+            # 서비스 방문 예약 — region 슬롯 채우기가 1차 미션이므로 store_finder
+            # 체크리스트 재사용. 매장 선택 후 일정 잡기(datepick)는 prompt 측에서
+            # chain 처리. 별도 reservation goal_type 신설은 follow-up 과제.
+            slots.goal_type = "store_finder"
         elif cls.has_store_finder_intent(user_text):
             # Pure store search: no stock/price/order intent, but the user is
             # explicitly asking for a store. Routes through goal-router so the
@@ -423,6 +450,7 @@ class ConversationSlots(BaseModel):
             len(text_stripped) <= 8
             or cls.has_store_finder_intent(user_text)
             or slots.pending_intent == "stock"
+            or slots.pending_intent == "reservation"
         )
         if should_extract_region:
             region_match = cls._REGION_PATTERN.search(user_text)
@@ -436,6 +464,7 @@ class ConversationSlots(BaseModel):
         is_store_related = (
             cls.has_store_finder_intent(user_text)
             or slots.pending_intent == "stock"
+            or slots.pending_intent == "reservation"
         )
         if is_store_related and cls._has_preference_hints(user_text):
             slots.user_preferences_text = user_text.strip()
@@ -462,12 +491,24 @@ class ConversationSlots(BaseModel):
 
     @classmethod
     def has_recommend_intent(cls, user_text: str) -> bool:
-        """Return True when the user turn explicitly asks for a recommendation.
+        """Return True when the user turn explicitly asks for a product recommendation.
+
+        "Recommend" here is **product-recommend** intent (Discovery). When the
+        same turn also signals a store-finder context ("분당 매장 추천해줘",
+        "근처 지점 추천", "친절한 샵 추천해줘"), the turn is treated as
+        store-finder, not product-recommend — return False so the elif chain in
+        `extract_from_user_text` falls through to `has_store_finder_intent` and
+        the location card is rendered with the store list.
 
         Used by Coordinator to clear any stale transactional `pending_intent`
         when the user is clearly switching back to discovery.
         """
-        return any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS)
+        if not any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS):
+            return False
+        # "매장/지점/샵 추천해줘" → store-finder owns the turn.
+        if cls.has_store_finder_intent(user_text):
+            return False
+        return True
 
     def evaluate_goal_progress(self) -> tuple[list[str], Optional[str]]:
         """Return (done_step_labels, next_step_label) for the current goal.
@@ -541,6 +582,7 @@ class ConversationSlots(BaseModel):
             "shop_name": "매장명",
             "car_model": "차량 모델",
             "region": "지역",
+            "payment_amount": "결제금액",
         }
 
         # Map pending_intent enum value → Korean label displayed in the prompt.
@@ -548,12 +590,19 @@ class ConversationSlots(BaseModel):
             "price": "가격 조회",
             "stock": "재고 확인",
             "order": "주문 진행",
+            "reservation": "방문 예약",
         }
 
         entity_lines = []
         for field, label in entity_label_map.items():
             val = getattr(self, field)
-            if val is not None:
+            if val is None:
+                continue
+            if field == "payment_amount":
+                # 천단위 콤마 + 원 단위 명시 — LLM 이 그대로 인용하기 좋은 형식.
+                # 할부 계산 등에서 이 값을 임의로 변형하지 않도록 "이미 산출된 총액" 임을 분명히.
+                entity_lines.append(f"- {label}: {val:,}원 (이미 산출된 총 결제금액 — 단가×수량 재계산 금지)")
+            else:
                 entity_lines.append(f"- {label}: {val}")
 
         blocks: list[str] = []

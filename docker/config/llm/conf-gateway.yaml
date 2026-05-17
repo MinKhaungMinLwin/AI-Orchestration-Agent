@@ -341,6 +341,9 @@ litellm_settings:
   num_retries: 3
   retry_after: 2
   request_timeout: 180
+  # Langfuse is already captured by the app callback handler. Keeping LiteLLM's
+  # extra Langfuse callback on local MinIO creates unsafe object keys from
+  # provider response ids, which Langfuse rejects during S3 event upload.
   callbacks: ["otel"]
   max_internal_user_budget: 20.0        # $20/month default cap for every user
   default_max_internal_user_budget: 20.0

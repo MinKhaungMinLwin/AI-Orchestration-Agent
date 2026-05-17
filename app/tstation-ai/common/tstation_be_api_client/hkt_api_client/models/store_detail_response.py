@@ -15,6 +15,8 @@ T = TypeVar("T", bound="StoreDetailResponse")
 class StoreDetailResponse:
     """
     Attributes:
+        shop_seq (None | str | Unset): 매장 순번 (VW_ET_SHOP_INFO.SHOP_SEQ, 예: 'F203675962'). tstation.com 매장 상세 페이지 URL
+            path 값 — '/store/locals/{shop_seq}'. shop_id 와 다름.
         shop_nm (None | str | Unset): 매장명
         tel_no (None | str | Unset): 전화번호
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
@@ -35,8 +37,11 @@ class StoreDetailResponse:
         shop_sat_strt_time (None | str | Unset): 토요일 영업 시작 시간
         shop_sat_end_time (None | str | Unset): 토요일 영업 종료 시간
         available_slots (list[str] | Unset): 예약 가능 시간 슬롯 목록 (예: ['09','10','11'])
+        rating_idx (float | None | Unset): 매장 평점 환산 지수 (ET_SHOP_SCR_INFO.SHOP_EVAL_CVRT_IDX). 평점 없으면 None.
+        review_count (int | Unset): 정상 리뷰 수 (ET_SHOP_REV_INFO.SHOP_REV_STAT_SCT_CD = '100' 카운트). Default: 0.
     """
 
+    shop_seq: None | str | Unset = UNSET
     shop_nm: None | str | Unset = UNSET
     tel_no: None | str | Unset = UNSET
     is_all_my_t: bool | Unset = False
@@ -52,9 +57,17 @@ class StoreDetailResponse:
     shop_sat_strt_time: None | str | Unset = UNSET
     shop_sat_end_time: None | str | Unset = UNSET
     available_slots: list[str] | Unset = UNSET
+    rating_idx: float | None | Unset = UNSET
+    review_count: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        shop_seq: None | str | Unset
+        if isinstance(self.shop_seq, Unset):
+            shop_seq = UNSET
+        else:
+            shop_seq = self.shop_seq
+
         shop_nm: None | str | Unset
         if isinstance(self.shop_nm, Unset):
             shop_nm = UNSET
@@ -130,9 +143,19 @@ class StoreDetailResponse:
         if not isinstance(self.available_slots, Unset):
             available_slots = self.available_slots
 
+        rating_idx: float | None | Unset
+        if isinstance(self.rating_idx, Unset):
+            rating_idx = UNSET
+        else:
+            rating_idx = self.rating_idx
+
+        review_count = self.review_count
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if shop_seq is not UNSET:
+            field_dict["shop_seq"] = shop_seq
         if shop_nm is not UNSET:
             field_dict["shop_nm"] = shop_nm
         if tel_no is not UNSET:
@@ -163,12 +186,25 @@ class StoreDetailResponse:
             field_dict["shop_sat_end_time"] = shop_sat_end_time
         if available_slots is not UNSET:
             field_dict["available_slots"] = available_slots
+        if rating_idx is not UNSET:
+            field_dict["rating_idx"] = rating_idx
+        if review_count is not UNSET:
+            field_dict["review_count"] = review_count
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+
+        def _parse_shop_seq(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_seq = _parse_shop_seq(d.pop("shop_seq", UNSET))
 
         def _parse_shop_nm(data: object) -> None | str | Unset:
             if data is None:
@@ -278,7 +314,19 @@ class StoreDetailResponse:
 
         available_slots = cast(list[str], d.pop("available_slots", UNSET))
 
+        def _parse_rating_idx(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        rating_idx = _parse_rating_idx(d.pop("rating_idx", UNSET))
+
+        review_count = d.pop("review_count", UNSET)
+
         store_detail_response = cls(
+            shop_seq=shop_seq,
             shop_nm=shop_nm,
             tel_no=tel_no,
             is_all_my_t=is_all_my_t,
@@ -294,6 +342,8 @@ class StoreDetailResponse:
             shop_sat_strt_time=shop_sat_strt_time,
             shop_sat_end_time=shop_sat_end_time,
             available_slots=available_slots,
+            rating_idx=rating_idx,
+            review_count=review_count,
         )
 
         store_detail_response.additional_properties = d

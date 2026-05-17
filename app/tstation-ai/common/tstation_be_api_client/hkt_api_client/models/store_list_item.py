@@ -15,7 +15,9 @@ T = TypeVar("T", bound="StoreListItem")
 class StoreListItem:
     """
     Attributes:
-        shop_id (str): 매장 ID
+        shop_id (str): 매장 ID (예: 'C01306'). 매장 식별/조회용 비즈니스 키.
+        shop_seq (None | str | Unset): 매장 순번 (VW_ET_SHOP_INFO.SHOP_SEQ, 예: 'F203675962'). tstation.com 매장 상세 페이지 URL
+            path 값으로 사용 — '/store/locals/{shop_seq}'. shop_id 와는 다른 값이므로 URL 생성 시 반드시 shop_seq 사용.
         shop_nm (None | str | Unset): 매장명
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
         is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
@@ -38,9 +40,13 @@ class StoreListItem:
         shop_sat_strt_time (None | str | Unset): 토요일 영업 시작 시간
         shop_sat_end_time (None | str | Unset): 토요일 영업 종료 시간
         distance_km (float | None | Unset): 좌표 기준 거리 (km), 좌표 검색 시에만 반환
+        rating_idx (float | None | Unset): 매장 평점 환산 지수 (ET_SHOP_SCR_INFO.SHOP_EVAL_CVRT_IDX). 평점 없으면 None.
+        review_count (int | None | Unset): 정상 리뷰 수 (ET_SHOP_REV_INFO.SHOP_REV_STAT_SCT_CD = '100').
+            sort_by='review_count' 정렬 시에만 계산되어 채워짐. 그 외에는 None.
     """
 
     shop_id: str
+    shop_seq: None | str | Unset = UNSET
     shop_nm: None | str | Unset = UNSET
     is_all_my_t: bool | Unset = False
     is_installable: bool | Unset = False
@@ -58,10 +64,18 @@ class StoreListItem:
     shop_sat_strt_time: None | str | Unset = UNSET
     shop_sat_end_time: None | str | Unset = UNSET
     distance_km: float | None | Unset = UNSET
+    rating_idx: float | None | Unset = UNSET
+    review_count: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         shop_id = self.shop_id
+
+        shop_seq: None | str | Unset
+        if isinstance(self.shop_seq, Unset):
+            shop_seq = UNSET
+        else:
+            shop_seq = self.shop_seq
 
         shop_nm: None | str | Unset
         if isinstance(self.shop_nm, Unset):
@@ -156,6 +170,18 @@ class StoreListItem:
         else:
             distance_km = self.distance_km
 
+        rating_idx: float | None | Unset
+        if isinstance(self.rating_idx, Unset):
+            rating_idx = UNSET
+        else:
+            rating_idx = self.rating_idx
+
+        review_count: int | None | Unset
+        if isinstance(self.review_count, Unset):
+            review_count = UNSET
+        else:
+            review_count = self.review_count
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -163,6 +189,8 @@ class StoreListItem:
                 "shop_id": shop_id,
             }
         )
+        if shop_seq is not UNSET:
+            field_dict["shop_seq"] = shop_seq
         if shop_nm is not UNSET:
             field_dict["shop_nm"] = shop_nm
         if is_all_my_t is not UNSET:
@@ -197,6 +225,10 @@ class StoreListItem:
             field_dict["shop_sat_end_time"] = shop_sat_end_time
         if distance_km is not UNSET:
             field_dict["distance_km"] = distance_km
+        if rating_idx is not UNSET:
+            field_dict["rating_idx"] = rating_idx
+        if review_count is not UNSET:
+            field_dict["review_count"] = review_count
 
         return field_dict
 
@@ -204,6 +236,15 @@ class StoreListItem:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         shop_id = d.pop("shop_id")
+
+        def _parse_shop_seq(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_seq = _parse_shop_seq(d.pop("shop_seq", UNSET))
 
         def _parse_shop_nm(data: object) -> None | str | Unset:
             if data is None:
@@ -345,8 +386,27 @@ class StoreListItem:
 
         distance_km = _parse_distance_km(d.pop("distance_km", UNSET))
 
+        def _parse_rating_idx(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        rating_idx = _parse_rating_idx(d.pop("rating_idx", UNSET))
+
+        def _parse_review_count(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        review_count = _parse_review_count(d.pop("review_count", UNSET))
+
         store_list_item = cls(
             shop_id=shop_id,
+            shop_seq=shop_seq,
             shop_nm=shop_nm,
             is_all_my_t=is_all_my_t,
             is_installable=is_installable,
@@ -364,6 +424,8 @@ class StoreListItem:
             shop_sat_strt_time=shop_sat_strt_time,
             shop_sat_end_time=shop_sat_end_time,
             distance_km=distance_km,
+            rating_idx=rating_idx,
+            review_count=review_count,
         )
 
         store_list_item.additional_properties = d

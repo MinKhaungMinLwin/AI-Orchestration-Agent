@@ -8,27 +8,33 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="DealCouponItem")
+T = TypeVar("T", bound="AppliedCouponItem")
 
 
 @_attrs_define
-class DealCouponItem:
+class AppliedCouponItem:
     """
     Attributes:
+        stage (str): 적용 단계: product|payment|plus
         cpn_no (str): 쿠폰 번호
-        cpn_nm (None | str | Unset): 쿠폰명 (CC_CPN_BASE_ML.CPN_NM, lang_cd='ko')
-        cpn_knd_cd (None | str | Unset): 쿠폰 종류 코드 (예: C301=기획전쿠폰)
-        cpn_prgs_stat_cd (None | str | Unset): 쿠폰 진행 상태 코드 (40=활성)
+        discount_amt (int): 해당 단계 할인 금액 (단가 기준)
+        cpn_nm (None | str | Unset): 쿠폰명
+        dup_use_yn (None | str | Unset): CC_CPN_BASE.CPN_DUP_USE_YN (product 단계만 의미). N이면 결제쿠폰 단계 스킵.
     """
 
+    stage: str
     cpn_no: str
+    discount_amt: int
     cpn_nm: None | str | Unset = UNSET
-    cpn_knd_cd: None | str | Unset = UNSET
-    cpn_prgs_stat_cd: None | str | Unset = UNSET
+    dup_use_yn: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        stage = self.stage
+
         cpn_no = self.cpn_no
+
+        discount_amt = self.discount_amt
 
         cpn_nm: None | str | Unset
         if isinstance(self.cpn_nm, Unset):
@@ -36,38 +42,36 @@ class DealCouponItem:
         else:
             cpn_nm = self.cpn_nm
 
-        cpn_knd_cd: None | str | Unset
-        if isinstance(self.cpn_knd_cd, Unset):
-            cpn_knd_cd = UNSET
+        dup_use_yn: None | str | Unset
+        if isinstance(self.dup_use_yn, Unset):
+            dup_use_yn = UNSET
         else:
-            cpn_knd_cd = self.cpn_knd_cd
-
-        cpn_prgs_stat_cd: None | str | Unset
-        if isinstance(self.cpn_prgs_stat_cd, Unset):
-            cpn_prgs_stat_cd = UNSET
-        else:
-            cpn_prgs_stat_cd = self.cpn_prgs_stat_cd
+            dup_use_yn = self.dup_use_yn
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "stage": stage,
                 "cpn_no": cpn_no,
+                "discount_amt": discount_amt,
             }
         )
         if cpn_nm is not UNSET:
             field_dict["cpn_nm"] = cpn_nm
-        if cpn_knd_cd is not UNSET:
-            field_dict["cpn_knd_cd"] = cpn_knd_cd
-        if cpn_prgs_stat_cd is not UNSET:
-            field_dict["cpn_prgs_stat_cd"] = cpn_prgs_stat_cd
+        if dup_use_yn is not UNSET:
+            field_dict["dup_use_yn"] = dup_use_yn
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        stage = d.pop("stage")
+
         cpn_no = d.pop("cpn_no")
+
+        discount_amt = d.pop("discount_amt")
 
         def _parse_cpn_nm(data: object) -> None | str | Unset:
             if data is None:
@@ -78,33 +82,25 @@ class DealCouponItem:
 
         cpn_nm = _parse_cpn_nm(d.pop("cpn_nm", UNSET))
 
-        def _parse_cpn_knd_cd(data: object) -> None | str | Unset:
+        def _parse_dup_use_yn(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(None | str | Unset, data)
 
-        cpn_knd_cd = _parse_cpn_knd_cd(d.pop("cpn_knd_cd", UNSET))
+        dup_use_yn = _parse_dup_use_yn(d.pop("dup_use_yn", UNSET))
 
-        def _parse_cpn_prgs_stat_cd(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        cpn_prgs_stat_cd = _parse_cpn_prgs_stat_cd(d.pop("cpn_prgs_stat_cd", UNSET))
-
-        deal_coupon_item = cls(
+        applied_coupon_item = cls(
+            stage=stage,
             cpn_no=cpn_no,
+            discount_amt=discount_amt,
             cpn_nm=cpn_nm,
-            cpn_knd_cd=cpn_knd_cd,
-            cpn_prgs_stat_cd=cpn_prgs_stat_cd,
+            dup_use_yn=dup_use_yn,
         )
 
-        deal_coupon_item.additional_properties = d
-        return deal_coupon_item
+        applied_coupon_item.additional_properties = d
+        return applied_coupon_item
 
     @property
     def additional_keys(self) -> list[str]:
