@@ -3576,6 +3576,10 @@ class TStationChatServiceV2:
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
             and merged_slots.goods_no is not None
             and regex_slots.pending_intent is not None
+            and not (
+                routing_result is not None
+                and routing_result.agent_prompt_profile == AgentPromptProfile.DISCOVERY_RECOMMENDATION
+            )
         ):
             logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
@@ -3640,6 +3644,10 @@ class TStationChatServiceV2:
                 merged_slots.tire_size is not None
                 or merged_slots.tire_model is not None
                 or ConversationSlots.has_product_keyword(last_user_text)
+            )
+            and not (
+                routing_result is not None
+                and routing_result.agent_prompt_profile == AgentPromptProfile.DISCOVERY_RECOMMENDATION
             )
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
