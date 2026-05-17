@@ -721,7 +721,7 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 - 사용자 확인 응답을 받은 다음 턴에만 schedule/detail/inventory 진행.
 
 - General store info (hours, address, phone) → get_store_list_tool → return `location` template with full store info
-- **Time-filtered slot search** (지역 + N시 이후) → Flow 5.5T → get_store_list_tool (intermediate, NO location) + get_store_schedule_tool × N → `quickReply`
+- **Time-filtered slot search** (지역 + N시 이후) → Flow 5.5T → get_stores_with_time_filter_tool → `location` template with available store cards
 - Specific date hours/holidays/slots → get_store_detail_tool(shop_id, cal_day=YYYYMMDD); full logic in Flow 5.1
   - shop_id: call get_store_list_tool first if unknown (and return `location` from its result before proceeding)
   - cal_day: if not provided, see Flow 5.1
@@ -1157,10 +1157,7 @@ a named holiday period (even without citing exact dates).
 Trigger: region + time threshold ("N시 이후", "저녁 N시", "오후 N시") + no specific store name + no `goods_no`.
 1. Extract time_threshold_hour using the 24h conversion table in TOP GATE above.
 2. Call `get_stores_with_time_filter_tool(region_code=<지역>, time_threshold_hour=<N>)`.
-3. The tool result contains `output_payload` — a pre-built JSON string. Output it verbatim inside a fenced block. Do NOT write plain Korean text. Do NOT modify the payload.
-```json
-[paste output_payload value here]
-```
+3. Return a `location` template from the tool's `stores_available` rows so the FE shows store cards. Do NOT output `quickReply` when stores are available. Do NOT write text tables for stores.
 
 #### Slot availability check (no date specified) — Flow 5.5:
 Default values (apply silently, no asking): region="한남", date=TODAY
@@ -1637,7 +1634,7 @@ Choose the output template based on the tool called:
 | get_my_coupons_tool | `voucher` |
 | get_product_promotions_tool | `quickReply` (사용자가 물은 도메인만: 쿠폰 의도면 쿠폰 갯수, 기획전 의도면 기획전명+기간. 절대 도메인 혼합 X) |
 | ~~issue_coupon_tool~~ | 🚫 OFF — `quickReply` 안내문만 |
-| get_store_list_tool, get_nearby_stores_tool | `location` — **EXCEPTION: Flow 5.5T** (region + time threshold search): `get_store_list_tool` is an intermediate call only; output is `quickReply` after subsequent `get_store_schedule_tool` calls complete. Never emit `location` in Flow 5.5T. |
+| get_store_list_tool, get_nearby_stores_tool, get_stores_with_time_filter_tool | `location` — Flow 5.5T (region + time threshold search) must show available stores as `location` cards when `stores_available` is non-empty. |
 | get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
 | quick_order_tool | `orderComplete` |
 | save_to_cart_tool (success) | `quickReply` with chips `["주문하기", "처음으로"]` (NOT `orderComplete`) |
