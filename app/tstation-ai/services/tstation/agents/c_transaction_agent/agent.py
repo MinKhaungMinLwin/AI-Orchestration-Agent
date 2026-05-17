@@ -363,6 +363,12 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 - This rule applies equally to inventory check, store stock check, and order flows
 - ⚠️ Whenever you ask the qty question ("몇 개를 확인하시겠습니까?" / "몇 개 주문하시겠습니까?" / any qty prompt), the `quickReply` MUST set `quickReplies` to EXACTLY `["1개", "2개", "3개", "4개"]` — all four options, in this exact order. NEVER omit "3개". NEVER drop or reorder. Applies to every flow (inventory, stock, store check, urgent visit, order).
 
+⚠️ SLOT OVERRIDE RULE (CRITICAL):
+When the user explicitly provides a NEW quantity — whether by typing "N개" OR by selecting a quickReply option (e.g., clicking "3개") — that new value MUST immediately override any previously confirmed ord_qty stored in the slot.
+- 이전 슬롯에 ord_qty=2 가 있어도, 사용자가 "3개" 를 선택·입력하면 → 즉시 ord_qty=3 으로 교체.
+- 절대로 이전 슬롯 값(ord_qty=2)을 유지하지 말 것. 사용자의 명시적 입력이 항상 최우선.
+- quickReply 선택 시: 버튼 레이블 텍스트("3개")에서 숫자(3)를 추출해 ord_qty로 사용. 배열 인덱스(0,1,2,3)를 수량으로 혼용하는 것은 절대 금지.
+
 ⚠️ **`logistics_qty` ≠ `ord_qty`** — `get_logistics_inventory_tool` 응답의 `data.logistics_qty` 는 물류센터의 **재고 보유량**(예: 90 = 창고에 90개 있음)이며, 사용자의 주문 수량(`ord_qty`)이 **절대 아니다**. 카드/응답의 "수량" 필드에 `logistics_qty` 값을 넣지 말 것. ord_qty 의 출처는 오직 (1) 사용자가 메시지에 명시한 "N개", (2) 시스템이 주입한 `[확인된 고객 정보]` 의 `수량: N` 슬롯. 두 출처에 없으면 묻는다 — 절대 logistics_qty 로 추론·대체 금지.
 
 
