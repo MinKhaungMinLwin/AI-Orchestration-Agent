@@ -1542,15 +1542,14 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
 
     Skip rules:
     - Schedule tools own their own templates (datepick / multi-store).
-    - Booking-signal tools (price, stock, cart, order) own theirs.
-    - ``cal_day`` other than today implies Flow 5.1 (date-specific) — defer to
-      the LLM so it can emit datepick or the "no slots, try another date"
-      apology message for that specific date.
+    - Booking-signal tools (price, stock, cart, order) own theirs — those
+      cases defer to `_map_datepick_from_detail` for the date picker.
 
-    Note: non-empty ``available_slots`` no longer skips info rendering.
-    `_map_datepick_from_detail` already guards on booking-signal tools, so
-    by the time we get here without those signals the user is asking for
-    plain info — slot presence is incidental, not a routing decision.
+    Note: non-empty ``available_slots`` no longer skips info rendering, and
+    a future ``cal_day`` no longer defers to the LLM. When the turn carries
+    no booking-signal tool the user is asking for plain store info (e.g.
+    clicking a card after a Flow 5.5T region/time search) — render the
+    deterministic info card regardless of which cal_day was queried.
     """
     called_tools = {e.get("tool", "") for e in tool_data_list}
     if "get_store_schedule_tool" in called_tools or "get_multi_store_schedule_tool" in called_tools:
@@ -1564,13 +1563,6 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     entry = entries[-1]
     raw = _unwrap(entry)
     if not isinstance(raw, dict):
-        return None
-
-    args = entry.get("args") or {}
-    cal_day = _get_str(args, "cal_day") if isinstance(args, dict) else ""
-    kst = datetime.timezone(datetime.timedelta(hours=9))
-    today = datetime.datetime.now(kst).strftime("%Y%m%d")
-    if cal_day and cal_day != today:
         return None
 
     shop_nm = _get_str(raw, "shop_nm")
