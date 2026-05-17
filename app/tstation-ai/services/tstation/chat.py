@@ -1068,6 +1068,18 @@ class StreamingMultiAgentCoordinator:
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
 
+        # `get_store_schedule_tool` / `get_store_detail_tool` 은 사용자가 매장을 확정한 뒤
+        # 호출되는 도구다 (datepick / 매장 상세 페이지 진입). list-tool 의 result-count
+        # 가드와 무관하게, agent 가 shop_id 를 input 으로 전달했다는 사실 자체가 그
+        # 매장이 사용자의 확정 선택임을 의미한다. 이 값을 슬롯에 persist 하지 않으면
+        # place_order goal 의 `shop` step 이 풀리지 않아 state header 가 "다음: 매장 선택"
+        # 으로 남고, datepick 이후 "주문 진행하기" chip click 턴에서 agent 가 매장
+        # chip 을 다시 emit 하는 루프가 발생한다.
+        if tool_name in ("get_store_schedule_tool", "get_store_detail_tool") and tool_input:
+            input_shop_id = tool_input.get("shop_id")
+            if input_shop_id:
+                tool_slots["shop_id"] = input_shop_id
+
         # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
         # `payment_amount = (extra_fvr_sale_prc + wage_prc) * ord_qty` 로 계산.
         # template_mapper 의 orderComplete payment_amount 계산식과 동일.

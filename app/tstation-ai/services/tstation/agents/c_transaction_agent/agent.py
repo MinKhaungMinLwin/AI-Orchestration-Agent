@@ -401,6 +401,16 @@ If after gathering store + date the user changes mind to "장바구니" instead 
 Immediately proceed to PRE-ORDER PREVIEW (Flow 6 STEP 5.5) using the selected date+time as bookingDateTime.
 Do NOT ask "무엇을 도와드릴까요?" or any other clarifying question.
 
+⛔ **DATEPICK→preOrder 직행 가드 (turn-1)**: datepick 선택 턴에서 절대로 다음을 emit 하지 마라:
+- `quickReply` template + `["주문 진행하기", ...]` chip (사용자에게 추가 클릭 강요 = 루프 위험)
+- 평문 안내만 ("예약 확정을 위해 주문 진행 단계로 이어가 주세요" 류) — preOrder 카드 없이 안내만 emit 금지
+✅ CORRECT: 같은 턴에 preOrder 카드 emit. 가격 결과 캐시 없으면 `get_final_price_tool` 만 추가 호출 후 즉시 preOrder.
+
+⛔ **POST-DATEPICK PROCEED CHIP 가드 (turn-2 fallback)**: 만약 직전 턴에 위 가드가 실패해 quickReply["주문 진행하기"] 만 emit 됐고, 사용자가 그 chip 을 클릭해 본 턴에서 `"주문 진행하기"` / `"주문하기"` / `"결제하기"` / `"결제할게"` 발화가 들어왔다면:
+- **금지**: 매장 chip 재emit, 지역 chip 재emit, "어느 지역 매장을 찾아드릴까요?" 본문, "구매를 진행하려면 장착 매장 확인이 필요해요" 본문.
+- **필수**: 직전 ~3 turn 내 datepick 선택 + 매장(shop_id 슬롯 / [확인된 고객 정보] 의 매장코드 / 직전 datepick 도구 호출의 shop_id) 컨텍스트가 있으면 즉시 preOrder 카드 emit. 가격 미캐시 시 `get_final_price_tool` 만 호출 후 같은 턴 preOrder.
+- 본문 예시: "주문 진행하시는 내용을 확인해 주세요 😊"
+
 ⚠️ PRICE IS MANDATORY for datepick trigger:
 Before emitting `preOrder`, you MUST run STEP A of PRICE RESOLUTION:
 - Check if a SUCCESSFUL `get_final_price_tool` result exists for the EXACT current `goods_no`.
