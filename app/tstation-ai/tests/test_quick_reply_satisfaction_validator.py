@@ -50,6 +50,13 @@ def _domains(tpl: QuickReplyTemplate) -> list[str | None]:
         "또 이용해 주시면 더욱 노력하겠습니다.",
         "잘 받으셨다니 다행입니다.",
         "또 구매해 주셔서 감사합니다.",
+        # 인사 / 환영 / 일반 도움 안내 (확장 패턴)
+        "고객님, 안녕하세요! 😊 타이어 추천, 차량 호환성 확인까지 편하게 도와드릴게요. 무엇을 도와드릴까요?",
+        "안녕하세요, 무엇을 도와드릴까요?",
+        "고객님, 어떻게 도와드릴까요?",
+        "고객님, 별말씀을요! 언제든지 도움이 필요하시면 편하게 말씀해 주세요 😊",
+        "편하게 말씀해 주세요.",
+        "반갑습니다. 무엇을 도와드릴까요?",
     ],
 )
 def test_satisfaction_with_forbidden_chips_is_replaced(prompt: str) -> None:
@@ -172,3 +179,27 @@ def test_satisfaction_pattern_partial_match_in_unrelated_response() -> None:
         ],
     )
     assert _labels(tpl) == ["타이어 추천", "매장 찾기"]
+
+
+def test_greeting_without_forbidden_chip_passes_through() -> None:
+    """인사 매칭 + chip 에 FORBIDDEN 없으면 통과 (prompt 가 잘 emit 한 경우)."""
+    tpl = QuickReplyTemplate(
+        assistantResponse="안녕하세요! 무엇을 도와드릴까요?",
+        quickReplies=[
+            QuickReplyChip(label="타이어 추천", domain="DISCOVERY"),
+            QuickReplyChip(label="매장 찾기", domain="TRANSACTION"),
+            QuickReplyChip(label="주문 조회", domain="TRANSACTION"),
+        ],
+    )
+    assert _labels(tpl) == ["타이어 추천", "매장 찾기", "주문 조회"]
+
+
+def test_plain_안녕하세요_without_도와드릴_does_not_trigger() -> None:
+    """단순 '안녕하세요' 만 있고 '도와드릴' 표현 없으면 매칭 안 됨 (false-positive 방지)."""
+    tpl = QuickReplyTemplate(
+        assistantResponse="안녕하세요 고객님. 주문번호를 알려주세요.",
+        quickReplies=[
+            QuickReplyChip(label="1:1 문의하기", domain="SUPPORT"),
+        ],
+    )
+    assert _labels(tpl) == ["1:1 문의하기"]

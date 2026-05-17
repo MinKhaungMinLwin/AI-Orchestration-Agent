@@ -25,18 +25,26 @@ _QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 _REQUIRED_QTY_CHIPS: tuple[str, ...] = ("1개", "2개", "3개", "4개")
 
-# Deterministic enforcement for satisfaction/repurchase quickReplies.
+# Deterministic enforcement for satisfaction / repurchase / greeting quickReplies.
 # LLM 이 사용자 호감/재구매 의도 발화 ("원주점에서 구매해서 너무 만족했어. 다음에도 또…")
-# 에 대해 `["다시 시도", "상담사 연결", "처음으로"]` 같은 failure/fallback chip 을
-# 휘발성으로 emit 하는 버그가 a_leading_agent prompt 보강(L577~) 후에도 재발해서
-# schema 측에서 결정적으로 차단. assistantResponse 가 만족 응답 패턴 + chip 에
-# FORBIDDEN chip 중 하나 이상 포함될 때만 발동(false-positive 최소화).
+# 또는 단순 인사 ("하이", "안녕") 에 대해 `["다시 시도", "상담사 연결", "처음으로"]`
+# 같은 failure/fallback chip 을 휘발성으로 emit 하는 버그가 a_leading_agent prompt
+# 보강(L577~) 후에도 재발해서 schema 측에서 결정적으로 차단. assistantResponse 가
+# 아래 패턴 중 하나 이상 매칭 + chip 에 FORBIDDEN chip 중 하나 이상 포함될 때만
+# 발동(false-positive 최소화).
 _SATISFACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # 만족 / 재구매 의도
     re.compile(r"만족하"),
     re.compile(r"기쁩니다|기쁘네요|기쁘게"),
     re.compile(r"다음에도\s*(?:이용|구매|찾)"),
     re.compile(r"또\s*(?:이용|찾아|구매)"),
     re.compile(r"잘\s*(?:받으셨|받으신|구매하셨)"),
+    # 인사 / 환영 / 일반 도움 안내 (LEADING agent 의 전형 오프닝 멘트)
+    re.compile(r"안녕하세요.*도와드릴"),
+    re.compile(r"반갑습니다.*도와드릴"),
+    re.compile(r"무엇을\s*도와드릴"),
+    re.compile(r"어떻게\s*도와드릴"),
+    re.compile(r"편하게\s*(?:말씀|도와)"),
 )
 _FORBIDDEN_SATISFACTION_CHIPS: frozenset[str] = frozenset({
     "구매하기", "다시 시도", "상담사 연결", "1:1 문의하기",
