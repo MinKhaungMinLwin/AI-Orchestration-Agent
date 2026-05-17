@@ -461,11 +461,15 @@ class TransactionAgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_transaction_payload(self):
-        TypeAdapter(TransactionDataEvent).validate_python({
+        event = TypeAdapter(TransactionDataEvent).validate_python({
             "type": self.type,
             "template": self.template,
             "data": self.data,
         })
+        # validator 가 mutate 한 결과 (예: QuickReplyTemplate.enforce_quantity_chips
+        # 의 수량 chip 자동 보정) 를 self.data 에 반영. 단순 validate_python 만 호출하면
+        # 보정 결과가 throw away 되어 LLM 휘발성 누락이 wire 로 그대로 새어 나간다.
+        self.data = event.data.model_dump()
         return self
 
 
@@ -693,9 +697,13 @@ class DiscoveryAgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_discovery_payload(self):
-        TypeAdapter(DiscoveryDataEvent).validate_python({
+        event = TypeAdapter(DiscoveryDataEvent).validate_python({
             "type": self.type,
             "template": self.template,
             "data": self.data,
         })
+        # validator 가 mutate 한 결과 (예: QuickReplyTemplate.enforce_quantity_chips
+        # 의 수량 chip 자동 보정) 를 self.data 에 반영. validate_python 만 호출하면
+        # 보정 결과가 throw away 되어 LLM 휘발성 누락이 wire 로 그대로 새어 나간다.
+        self.data = event.data.model_dump()
         return self

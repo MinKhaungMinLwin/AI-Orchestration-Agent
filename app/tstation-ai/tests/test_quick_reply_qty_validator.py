@@ -14,8 +14,10 @@ from __future__ import annotations
 import pytest
 
 from services.tstation.agents.templates.schemas import (
+    DiscoveryAgentOutput,
     QuickReplyChip,
     QuickReplyTemplate,
+    TransactionAgentOutput,
 )
 
 
@@ -130,6 +132,61 @@ def test_statement_mentioning_qty_does_not_trigger() -> None:
 # --------------------------------------------------------------------------- #
 #  Interaction with existing truncate field_validator
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+#  TransactionAgentOutput / DiscoveryAgentOutput integration
+#  — agent OUTPUT_TEMPLATE 이 dict-wrapper 인 두 경로에서도 보정 결과가
+#    self.data 로 wire-through 되는지 확인.
+# --------------------------------------------------------------------------- #
+
+
+def _qty_question_raw_dict(chips: list[str]) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "장착할 타이어 수량을 알려주세요. 예: 2개, 4개 😊",
+            "quickReplies": [{"label": lbl, "domain": "TRANSACTION"} for lbl in chips],
+            "predictedDomains": [],
+        },
+    }
+
+
+def test_transaction_agent_output_propagates_qty_autofix() -> None:
+    """LLM 이 ['2개','4개','처음으로'] 만 emit 해도 self.data 가 4개 chip 으로 wire-through."""
+    payload = _qty_question_raw_dict(["2개", "4개", "처음으로"])
+    out = TransactionAgentOutput.model_validate(payload)
+    assert [c["label"] for c in out.data["quickReplies"]] == _QTY_CHIPS
+    assert all(c["domain"] == "TRANSACTION" for c in out.data["quickReplies"])
+
+
+def test_transaction_agent_output_preserves_full_qty_chips() -> None:
+    payload = _qty_question_raw_dict(_QTY_CHIPS)
+    out = TransactionAgentOutput.model_validate(payload)
+    assert [c["label"] for c in out.data["quickReplies"]] == _QTY_CHIPS
+
+
+def test_discovery_agent_output_propagates_qty_autofix() -> None:
+    """Discovery 도 동일 dict-wrapper 패턴이라 같은 경로 보장."""
+    payload = _qty_question_raw_dict(["2개", "4개"])
+    out = DiscoveryAgentOutput.model_validate(payload)
+    assert [c["label"] for c in out.data["quickReplies"]] == _QTY_CHIPS
+
+
+def test_transaction_agent_output_keeps_non_quickreply_unchanged() -> None:
+    """quickReply 외 template 은 일반 dump 만, validator 영향 없음."""
+    payload = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "원하시는 지역을 알려주세요.",
+            "quickReplies": [{"label": "한남"}, {"label": "분당"}],
+            "predictedDomains": [],
+        },
+    }
+    out = TransactionAgentOutput.model_validate(payload)
+    assert [c["label"] for c in out.data["quickReplies"]] == ["한남", "분당"]
 
 
 def test_truncate_happens_before_qty_check_then_autofills() -> None:
