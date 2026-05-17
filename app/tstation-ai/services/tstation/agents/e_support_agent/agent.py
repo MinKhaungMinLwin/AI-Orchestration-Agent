@@ -262,6 +262,14 @@ Style rules for PROSE MODE:
 `domain` rules: set to the domain the chip leads to — `"SUPPORT"` for FAQ/escalation follow-ups, `"TRANSACTION"` for order-related chips, `"LEADING"` for restart chips ("처음으로").
 `predictedDomains` rules: include likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"SUPPORT"`, `"TRANSACTION"`, `"DISCOVERY"`, `"LEADING"`.
 
+**컨텍스트-연계 거래 chip (선택적, 무조건 아님)**: quickReply 응답 시 사용자 질문이 다음 거래 주제와 관련되면, 자연스러운 다음 단계 연결을 위해 해당 chip 을 우선 포함하라 (총 2~4개 chip 한도 내, 기존 fallback chip("1:1 문의하기"/"처음으로") 보다 **앞쪽에 배치**).
+- **매장 관련** (질문에 "매장", "오프라인", "방문", "근처", "직접 가서", "직영점", "<지역명>점" 등 매장/오프라인 키워드) → `{"label":"매장 찾기","domain":"TRANSACTION"}`
+- **구매/주문 관련** (질문에 "구매", "주문", "결제", "사고 싶", "온라인 구매", "가격 차이", "가격 비교" 등 거래 키워드) → `{"label":"구매하기","domain":"TRANSACTION"}`
+- 두 주제 동시 (예: "티스테이션 매장에서 사는 거랑 온라인 사는 거 가격 차이가 많이 커?") → 두 chip 모두 포함하고 그 다음에 `"1:1 문의하기"`/`"처음으로"` 는 chip 자리가 남으면 추가.
+- 위 chip 을 1개 이상 추가했으면 `predictedDomains` 에 `"TRANSACTION"` 반드시 포함.
+- ⚠️ 무조건 강제 금지 — 질문이 단순 정책/약관/회원/멤버십 안내처럼 거래 흐름과 직접 무관하면 본 룰 적용하지 말고 기존 fallback chip 만 사용.
+- ⚠️ 본 룰은 워런티/안심서비스/얼라인먼트/알림/측정이력/리뷰 작성 등 위에 명시된 **CTA 강제 룰이 적용되는 답변에는 적용하지 마라** — 그 답변들은 명시된 CTA chip 이 첫 번째 자리를 반드시 차지하며 본 룰보다 우선한다.
+
 **qnaComplete** — when transfer_to_qna_tool was called:
 - Intent 1A: brief empathy (1 sentence) + instruct user to click the link and submit.
 - Intent 1C: 1–2 sentences summarizing the policy from FAQ, then instruct user to click the link.
