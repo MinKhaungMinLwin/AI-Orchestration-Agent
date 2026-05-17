@@ -574,22 +574,35 @@ Quick reply guidance by case:
 - Self introduction: recommendation (DISCOVERY), store search (TRANSACTION), price lookup (TRANSACTION)
 - Complaint: support connection (SUPPORT), retry (LEADING)
 - Out of scope: tire recommendation (DISCOVERY), price lookup (TRANSACTION)
-- Purchase completion / return visit: MANDATORY — when the user expresses satisfaction, mentions a positive
-  past purchase experience, or signals intent to revisit a specific branch (trigger keywords: 만족, 잘 구매,
-  다음에도, 또 이용, 온라인으로 구매, 이용하도록 할게, 다시 이용), you MUST include "<지역> 매장 다시 이용하기"
-  as a chip (domain: TRANSACTION). Do NOT emit [1:1 문의하기, 처음으로] alone for these messages.
-  Extract the region/branch name from context (e.g., "원주점" → "원주", "강남점" → "강남").
-  Chip label MUST use "<지역> 매장 다시 이용하기" format, NOT "<지역>점 다시 이용하기".
-  Example: "원주 매장 다시 이용하기" (O) / "원주점 다시 이용하기" (X)
+- Purchase completion / return visit / satisfaction: MANDATORY — when the user expresses satisfaction,
+  mentions a positive past purchase experience, gives thanks, or signals intent to revisit/repurchase
+  (trigger keywords: 만족, 잘 구매, 다음에도, 또 이용, 또 구매, 온라인으로 구매, 이용하도록 할게, 다시 이용,
+  감사해, 고마워, 잘 받았어, 좋았어), you MUST emit **progress-oriented chips** that invite the user's next
+  action — NOT failure/error chips.
+  Recommended chip set (in this order): `[{{"label":"상품 검색","domain":"DISCOVERY"}},
+  {{"label":"타이어 추천","domain":"DISCOVERY"}}, {{"label":"처음으로","domain":"LEADING"}}]`.
+  - ❌ FORBIDDEN for these messages: `["다시 시도", ...]` (사용자는 실패한 게 없음),
+    `["상담사 연결", ...]` (사용자는 만족 상태인데 CS 연결을 권하면 부적절),
+    `["1:1 문의하기", ...]` 단독, `["처음으로"]` 단독, 그리고 어떤 형태의 "실패/오류/재시도" 느낌 chip.
+  - ✅ 이 룰은 사용자 발화에 "지역명"/"매장명"이 포함되어 있어도 동일하게 적용 — 위 권장 chip 셋을 우선.
+
+General rule — fallback/failure-style chips:
+- `"다시 시도"` chip 은 **명확한 에러/실패 케이스에서만** 사용 (예: 도구 호출 실패, 사용자가 명백한 불만/문제 호소).
+  단순 인사·호감 표현·일반 문의에는 절대 emit 금지.
+- `"상담사 연결"` chip 도 마찬가지로 **명백한 불만/escalation 요청 케이스에서만** 사용. 사용자가 만족이나
+  중립적 표현일 때 emit 하면 UX 가 부정적으로 느껴짐.
+- 모든 quickReply 의 디폴트는 **사용자가 다음에 할 수 있는 긍정·진행 액션**(상품 검색, 타이어 추천, 매장 찾기,
+  주문 조회, 가격 조회 등).
 
 Good quick reply examples:
+- {{"label": "상품 검색", "domain": "DISCOVERY"}}
 - {{"label": "타이어 추천", "domain": "DISCOVERY"}}
 - {{"label": "매장 찾기", "domain": "TRANSACTION"}}
 - {{"label": "주문 조회", "domain": "TRANSACTION"}}
-- {{"label": "1:1 문의", "domain": "SUPPORT"}}
 - {{"label": "가격 조회", "domain": "TRANSACTION"}}
-- {{"label": "상담사 연결", "domain": "SUPPORT"}}
-- {{"label": "원주 매장 다시 이용하기", "domain": "TRANSACTION"}}
+- {{"label": "1:1 문의", "domain": "SUPPORT"}}  # 사용자가 직접 문의 의도 표현 시에만
+- {{"label": "상담사 연결", "domain": "SUPPORT"}}  # 명백한 불만/escalation 시에만
+- {{"label": "처음으로", "domain": "LEADING"}}
 """
 
 
