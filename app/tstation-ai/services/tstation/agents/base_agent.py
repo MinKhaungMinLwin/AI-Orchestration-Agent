@@ -56,6 +56,47 @@ def _emit_tool_summary_span(
 T = TypeVar("T")
 
 
+# Keys stripped from the SSE `tool` event's `output` payload before it reaches
+# the FE / dev tools. These are *internal-only* directives meant for the LLM's
+# deterministic guard logic (e.g. `transaction_store_preview_tool` instructing
+# the agent to STOP at the location card). The LLM still sees them in the
+# original `ToolMessage` content held by LangGraph state; only the SSE-visible
+# copy is sanitized so analysts / browser dev tools / log streams never expose
+# the raw guard text.
+_SSE_TOOL_OUTPUT_STRIPPED_KEYS: frozenset[str] = frozenset({"instruction_to_agent"})
+
+
+def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
+    if isinstance(node, dict):
+        for k in list(node.keys()):
+            if k in keys:
+                del node[k]
+            else:
+                _strip_keys_in_place(node[k], keys)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_keys_in_place(item, keys)
+
+
+def _sanitize_tool_output_for_sse(content: Any) -> Any:
+    """Return a copy of the tool result with internal-only keys removed.
+
+    Falls back to the original value on parse error so SSE delivery never
+    breaks even if a tool emits malformed JSON.
+    """
+    if not isinstance(content, str):
+        return content
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+    _strip_keys_in_place(parsed, _SSE_TOOL_OUTPUT_STRIPPED_KEYS)
+    try:
+        return json.dumps(parsed, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return content
+
+
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 # Matches trailing `quickReplies: [...]` that the model sometimes appends when it fails
 # to emit a proper fenced JSON block (plain-text fallback path in stream()).
@@ -426,7 +467,7 @@ class BaseAgent(ABC):
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
-                            "output": message.content,
+                            "output": _sanitize_tool_output_for_sse(message.content),
                             "node": node,
                             "tool": message.name,
                         }
