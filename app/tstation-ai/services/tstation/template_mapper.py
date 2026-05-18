@@ -95,6 +95,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_nearby_stores_tool": "location",
     "transaction_store_preview_tool": "location",
     "get_stores_with_time_filter_tool": "location",
+    "get_favorite_stores_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
     # orderComplete (cart-save / quick-order — terminal step in transaction flow)
@@ -936,7 +937,17 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
     # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
     has_booking_intent = current_pending_intent.get() in ("order", "stock", "reservation")
-    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_booking_intent:
+    # 단골매장 조회는 사용자가 직접 발화로 요청한 명시적 컨텍스트 — booking signal/
+    # intent 가 없어도 항상 카드 노출 (info-only guard 우회). 1건이라도 사용자가
+    # 클릭으로 선택해야 다음 단계로 진행됨.
+    has_favorite_stores = "get_favorite_stores_tool" in called_tools
+    if (
+        not has_booking_signal
+        and not _is_goal_booking_followup()
+        and not is_list_browsing
+        and not has_booking_intent
+        and not has_favorite_stores
+    ):
         return None
 
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
@@ -956,7 +967,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             detail_by_shop_id[shop_id] = raw
 
     items, metadata = [], []
-    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool"):
+    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue

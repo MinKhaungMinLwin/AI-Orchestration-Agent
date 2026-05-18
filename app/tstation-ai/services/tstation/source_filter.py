@@ -22,6 +22,10 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "list_key": "stores",
         "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
     },
+    "get_favorite_stores_tool": {
+        "list_key": "stores",
+        "keep": {"shop_id", "shop_seq", "shop_nm", "addr_base", "addr_dtl", "tel_no", "favored_at"},
+    },
     "get_products_recommendations_tool": {
         "list_key": "items",
         "keep": {
@@ -180,6 +184,10 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     "get_store_list_tool": {
         "list_key": "stores",
         "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
+    },
+    "get_favorite_stores_tool": {
+        "list_key": "stores",
+        "keep": {"shop_id", "shop_seq", "shop_nm", "addr_base", "addr_dtl", "tel_no", "favored_at"},
     },
     "get_store_inventory_tool": {
         "list_key": "items",

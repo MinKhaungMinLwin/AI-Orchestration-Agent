@@ -45,6 +45,8 @@ from .event_item import EventItem
 from .event_list_response import EventListResponse
 from .faq_item import FaqItem
 from .faq_list_response import FaqListResponse
+from .favorite_store_item import FavoriteStoreItem
+from .favorite_store_list_response import FavoriteStoreListResponse
 from .goods_coupon_issue_request import GoodsCouponIssueRequest
 from .goods_item import GoodsItem
 from .http_validation_error import HTTPValidationError
@@ -137,6 +139,8 @@ __all__ = (
     "EventListResponse",
     "FaqItem",
     "FaqListResponse",
+    "FavoriteStoreItem",
+    "FavoriteStoreListResponse",
     "GoodsCouponIssueRequest",
     "GoodsItem",
     "HTTPValidationError",

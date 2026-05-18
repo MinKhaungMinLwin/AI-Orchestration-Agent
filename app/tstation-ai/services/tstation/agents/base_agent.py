@@ -328,6 +328,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_nearby_stores_tool": "주변 매장 검색 중...",
     "get_store_list_tool": "매장 목록 조회 중...",
     "get_store_detail_tool": "매장 상세 정보 조회 중...",
+    "get_favorite_stores_tool": "단골매장 조회 중...",
     "save_to_cart_tool": "장바구니에 담는 중...",
     "quick_order_tool": "주문서 작성 중...",
     "get_order_status_tool": "주문 현황 조회 중...",

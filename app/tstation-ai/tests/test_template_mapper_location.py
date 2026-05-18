@@ -149,3 +149,59 @@ def test_no_booking_intent_defers_to_llm() -> None:
     )
     result = _map_location([entry], "")
     assert result is None
+
+
+# --------------------------------------------------------------------------- #
+#  Favorite stores: always render, even without booking intent
+# --------------------------------------------------------------------------- #
+
+
+def _favorite_stores_entry(stores: list[dict]) -> dict:
+    """Build a `get_favorite_stores_tool` tool_data entry."""
+    return {
+        "tool": "get_favorite_stores_tool",
+        "args": {},
+        "data": {"status": "success", "http_status": 200, "data": {"stores": stores}},
+    }
+
+
+def test_favorite_stores_renders_without_booking_intent() -> None:
+    """Pure 단골매장 조회 ("내 단골매장 보여줘") has no booking intent / goal,
+    but the user explicitly asked for the list — the card MUST render so
+    they can click to select."""
+    # pending_intent stays None via autouse fixture — confirms bypass works
+    entry = _favorite_stores_entry([
+        _stub_store("F07782", "티스테이션 한남점"),
+        _stub_store("F00721", "티스테이션 판교점"),
+    ])
+    result = _map_location([entry], "단골매장이에요. 원하시는 매장을 선택해 주세요 😊")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert len(result["data"]["stores"]) == 2
+    # No booking signal/intent — card stays in info mode (FE just shows
+    # description on click, doesn't advance flow).
+    assert result["data"]["isBookingFlow"] is False
+
+
+def test_favorite_stores_single_result_still_renders_card() -> None:
+    """단골 1개 보유 회원도 자동 선택하지 않고 카드를 보여줘 사용자 클릭을 기다린다."""
+    entry = _favorite_stores_entry([_stub_store("F03077", "티스테이션 모란점")])
+    result = _map_location([entry], "단골매장이에요. 매장을 선택해 주세요 😊")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert len(result["data"]["stores"]) == 1
+    assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 모란점"
+
+
+def test_favorite_stores_with_booking_intent_sets_booking_flow() -> None:
+    """주문 의도 컨텍스트에서 사용자가 단골을 골랐을 때는 isBookingFlow=True 로
+    카드 클릭이 /chat 라우팅 (다음 단계로 진행)."""
+    current_pending_intent.set("order")
+    entry = _favorite_stores_entry([_stub_store("F03077", "티스테이션 모란점")])
+    result = _map_location([entry], "단골 매장으로 주문 진행할게요 😊")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is True
