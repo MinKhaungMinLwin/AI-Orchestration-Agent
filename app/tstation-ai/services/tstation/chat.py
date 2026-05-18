@@ -3433,10 +3433,19 @@ class TStationChatServiceV2:
             # listing tool, fired because the user said e.g. "벤투스 가격") are
             # intentionally left untouched so the auto-chain still runs once
             # goods_no resolves — that's the design behind the P0 gate.
+            #
+            # `goods_no is None` guard: when the user has already committed to a
+            # specific product (slots.goods_no inherited from a prior pick), they
+            # have moved past pure recommendation browsing into the order/store
+            # selection phase. Clearing pending_intent here would emit downstream
+            # store cards with `isBookingFlow=false`, dead-ending the FE click
+            # (description-only `/append` short path). Only fire when goods_no is
+            # still unresolved (true browsing state, e.g. bare list pick "1. 벤투스").
             if (
                 merged_slots.pending_intent is not None
                 and not turn_has_new_transactional
                 and prev_tool_data
+                and merged_slots.goods_no is None
             ):
                 most_recent_listing_tool: str | None = None
                 for entry in reversed(prev_tool_data):
