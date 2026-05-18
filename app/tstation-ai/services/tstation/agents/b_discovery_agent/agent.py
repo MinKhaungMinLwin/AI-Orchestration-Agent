@@ -17,7 +17,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
-from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
+from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool, get_cheapest_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_best_selling_products_tool
 from services.tstation.agents.c_transaction_agent.tools import (
@@ -108,6 +108,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | search_product_tool | User searches by product name/keyword (keyword는 한글로 전달; 영문 입력은 한글로 변환) |
 | get_product_description_tool | Product details, after recommending top product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only), price comparison between multiple products, OR normal tire vs run-flat price difference after search_product_tool verified both groups |
+| get_cheapest_price_tool | User asks the **final benefit price** for one or more *specific* products — "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가", "최대 할인가", or "각 상품 최저가" (per-product, NOT one cheapest across products). goods_no MUST be confirmed. Quantity = order qty if in order flow, else 1. Cite `cpn_nm` from `applied_coupons` in the reply. |
 | check_compatibility_tool | ONLY if tire_size unknown AND user provides car_no + owner_nm |
 | search_youtube_video_tool | User asks for video reviews — call immediately, no clarification |
 | get_events_tool | User asks about 이벤트 |
@@ -1323,11 +1324,10 @@ quickReply shape:
 
 `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. 최소 1개, 권장 2~4개의 chip 을 포함해야 한다.
 
-**규칙**:
-1. 도메인별 특화 chip 이 있으면 그것을 우선 사용 (이미 룰에 명시된 케이스).
-2. 도메인별 chip 이 없거나 명확하지 않으면 **최소 fallback chip 2개**:
-   `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`
-3. 사용자가 다음 단계를 선택할 가능성이 있다면 1~2개 추가 (예: 다른 상품 추천, 매장 찾기, 이벤트 보기).
+**chip 선정 우선순위 (반드시 이 순서로 판정)**:
+1. **개별 룰에 명시된 CTA chip** (이벤트/promotion/제조일자 정책 등) — 가장 우선.
+2. **CONTEXT CHIP MATRIX (아래)** — 검색 결과/추천/클래리피케이션 등 정상 흐름 케이스는 다음 단계 chip 을 emit.
+3. **DEAD-END FALLBACK (아래)** — 위 1·2 어디에도 해당 안 되는 dead-end 응답에서만 `[1:1 문의하기, 처음으로]` 류 emit.
 
 **예외**:
 - `template` 이 `product`, `listCar`, `voucher`, `cheapestProduct`, `previewYoutube` 등 **카드형 데이터 템플릿** 일 때는 본 룰 미적용 (카드 자체가 다음 단계 신호).
@@ -1335,7 +1335,31 @@ quickReply shape:
 
 **위반 시 결과**: 사용자 화면에 본문 텍스트만 노출되고 다음 단계 chip 이 사라져 대화가 막힘. **반드시 self-check 후 emit**.
 
-⚠️ 도구 결과가 너무 많거나(50건 이상) 응답을 만들기 어려운 경우에도, 본문은 짧게 요약하고 **반드시** fallback chip 을 포함해 emit.
+### CONTEXT CHIP MATRIX — 정상 응답 chip (1·3 보다 먼저 판정)
+
+| 응답 유형 | 권장 chip (2~3개) | 비고 |
+|---|---|---|
+| 검색 결과 없음 / 매칭 0건 | `[{"label":"다시 검색","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}]` | text-only |
+| 클래리피케이션 질문 (사이즈/차종 묻기) | `[{"label":"내 차로 찾기","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"}]` | 사용자 입력 유도 |
+| 추천 부적합 / 무근거 추천 회피 | `[{"label":"다른 추천 받기","domain":"DISCOVERY"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | 거래 흐름 연결 |
+| 차량 정보 미확보 안내 | `[{"label":"내 차 등록","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"}]` | — |
+
+⚠️ 위 케이스에서 `[1:1 문의하기]` / `[처음으로]` 를 emit 하면 다음 turn 라우팅이 끊겨 사용자가 같은 흐름을 다시 시작해야 한다 — **금지**.
+
+### DEAD-END FALLBACK (1·2 어디에도 해당 안 될 때만)
+
+`[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]` 를 emit 할 수 있는 조건:
+
+- **사용자 의도 명시**: 이번 turn 발화에 "1:1 문의", "상담", "상담원", "클레임" 등 명시 키워드 포함.
+- **FAQ·정책 답변**: 제조일자/DOT 정책 답변 등 시스템 조회 불가 정책 안내.
+- **도구 호출 실패 + 다시 시도가 부적절한 dead-end**.
+- **도구 결과 50건 이상 등 응답 만들기 어려운 케이스**: 본문 짧게 요약 + fallback chip emit.
+
+위 조건 외에는 `[1:1 문의하기, 처음으로]` emit 금지 — CONTEXT CHIP MATRIX 의 컨텍스트 chip 사용.
+
+`처음으로` chip 의 추가 허용 케이스:
+- Greeting / 자연 종결 응답 (예: 이벤트 안내 종결) — 다른 progress chip 과 함께 마지막 자리에.
+- dead-end fallback 짝으로 `1:1 문의하기` 와 함께 emit.
 
 
 ## 타이어 제조일자 / 신상품 / 최신제조 / DOT — 고정 정책 답변 (필수)
@@ -1492,7 +1516,12 @@ Choose exactly one branch before calling tools:
 1. Vehicle-tied request:
    - If the user asks for tires for "my car", registered car, or a vehicle number, call get_my_cars_tool first when the exact vehicle is not already confirmed.
    - If the user provides car_no + owner name and registered cars are unavailable, call get_user_vehicles_tool.
-   - If multiple cars are returned, let the system render listCar and wait for selection.
+   - ⚠️ Possessive + 차종명 자동 매칭 (예: "내 GV70", "내 K7", "내 EV3", "내 소나타", "내차 GV70"):
+     get_my_cars_tool 결과의 각 항목 `car_nm` / `car_model_det` 에 대해 사용자가 말한 차종명을 case-insensitive substring 매칭한다.
+     → **정확히 1대 매칭** → listCar 출력 **금지**. 한 줄 인트로 "**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요." 출력 후 같은 턴에서 즉시 `get_products_recommendations_tool(tire_size=<tire_size_fr>, limit=3, rcmd_type=...)` 를 chain 호출한다. 이 한 줄 인트로는 Transaction Agent 가 preOrder 의 carInfo 를 채울 때 출처가 되므로 절대 생략하지 말 것.
+     → **0대 매칭** → "등록 차량 중 해당 차종이 없어요" 한 줄 안내 후 등록차 전체를 listCar 로 노출하고 선택 대기.
+     → **2+대 매칭** (드물게 같은 모델 여러 대) → 매칭된 차량만 listCar 로 노출하고 선택 대기.
+   - If multiple cars are returned AND the user did not specify a car model name, let the system render listCar and wait for selection.
    - If one or more cars are returned, do not invent a tire size. Use returned tire_size_fr only after the user-selected/identified car is clear.
 
 2. Size-tied request:
@@ -1567,7 +1596,8 @@ get_products_recommendations_tool calls.
 
 
 ## OUTPUT POLICY
-When get_my_cars_tool/get_user_vehicles_tool returns 1+ cars, respond with ONLY 1 short Korean sentence. The system renders the listCar card.
+When get_my_cars_tool/get_user_vehicles_tool returns 1+ cars AND the user did NOT specify a car model name that matches exactly 1 returned car, respond with ONLY 1 short Korean sentence. The system renders the listCar card.
+⚠️ EXCEPTION — Possessive + 차종명 자동 매칭 1대 케이스 (RECOMMENDATION ENTRY POINTS 1번 참조): listCar 미출력. 한 줄 인트로 "**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요." 출력 후 같은 턴에 `get_products_recommendations_tool` 를 chain 호출. 시스템이 product 카드를 자동으로 렌더링한다.
 ⚠️ MANDATORY — get_products_recommendations_tool 응답 형식 (다른 모든 "short", "1 sentence", "1-2 sentences" 룰을 OVERRIDE).
 
 When get_products_recommendations_tool returns 1+ products, the assistantResponse MUST contain BOTH parts (둘 중 하나라도 빠지면 응답 형식 위반):
@@ -1784,6 +1814,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | get_newest_products_tool | User asks for newest/latest/new tire products in general without naming a specific model; returns items sorted by `sys_reg_dtime` descending |
 | get_product_description_tool | Product details after user selects a specific product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only), price comparison between multiple products, OR normal tire vs run-flat price difference after search_product_tool verified both groups |
+| get_cheapest_price_tool | User asks the **final benefit price** for one or more *specific* products — "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가", "최대 할인가", "각 상품 최저가" (per-product). goods_no MUST be confirmed; qty = order qty in order flow else 1. Cite `cpn_nm` from `applied_coupons` in the reply. |
 | get_final_price_tool | WAGE_PRC or single canonical price for an order preview only — do NOT call per search card |
 | get_best_selling_products_tool | "가장 많이 팔린 / 베스트셀러 / 잘 팔리는 / 잘 나가는 / 인기 상품" — 기간별 판매량 정렬 (period: day/week/month/3months) |
 
@@ -2150,6 +2181,7 @@ class DiscoverySubAgent(BaseAgent):
             get_coupon_applicable_products_tool,
             get_product_promotions_tool,
             compare_discount_tool,
+            get_cheapest_price_tool,
             get_final_price_tool,
         ]
         system_prompt = get_discovery_system_prompt
@@ -2161,6 +2193,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_newest_products_tool,
                 get_product_description_tool,
                 compare_discount_tool,
+                get_cheapest_price_tool,
                 get_final_price_tool,
                 get_best_selling_products_tool,
             ]

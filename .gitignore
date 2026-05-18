@@ -51,5 +51,6 @@ docker/qdrant_storage/collections/
 /qdrant_storage/
 example/
 /docs/test-questions/
+/docs/inventory-and-reservation-flow.md
 
 /eval/results/

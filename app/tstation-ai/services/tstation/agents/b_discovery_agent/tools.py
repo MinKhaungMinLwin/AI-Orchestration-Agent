@@ -40,6 +40,7 @@ from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_�
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_cheapest_by_coupon_api_prices_cheapest_by_coupon_get import sync_detailed as get_cheapest_by_coupon
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
 
 # Member Car Info
@@ -158,6 +159,10 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "rr",
     "wage_prc", "wage_today_prc",
     "free_guarantee_yn",
+    # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후).
+    # LLM 이 "쿠폰 적용하면 OO원" / "최저 OO원" 인용할 때 사용. null 인 회원이면
+    # 자동으로 dict 에서 빠짐 (BE 응답에 null 값으로 들어와도 sale_prc 만 인용).
+    "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
 })
 
 
@@ -772,6 +777,18 @@ def get_product_description_tool(goods_no: str):
           t_snow, t_ice, t_dryroad_brk
         - EU 라벨: rr, wet, label_pndb
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn, t_rlx_isn_yn
+        - 가격 / 회원 쿠폰 최저가:
+            * sale_prc — 정가
+            * cheapest_final_prc — 회원 보유 쿠폰을 상품→결제→플러스 그리디 적용한
+              최저가 (회원이 미사용 쿠폰을 보유한 경우만 채워짐, 없으면 null)
+            * cheapest_total_discount — sale_prc - cheapest_final_prc
+            * cheapest_applied_coupons[] — 단계별 적용 쿠폰 {stage, cpn_no, cpn_nm,
+              discount_amt}. 자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품
+              할인쿠폰 적용 시 …").
+
+    If `cheapest_final_prc` is non-null, prefer phrasing like
+    "정가 {sale_prc:,}원 → 최종 혜택가 {cheapest_final_prc:,}원" with the
+    applied coupon names. If null, fall back to sale_prc only.
 
     Args:
         goods_no (str): Product number.
@@ -914,6 +931,17 @@ def get_products_recommendations_tool(
         - 추가 성능: t_high_perform, t_handling, t_dryroad_brk
         - EU 라벨: rr (회전저항), wet, label_pndb (소음 dB)
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn
+        - 회원 쿠폰 최저가 (BE 측 enrich):
+            * cheapest_final_prc — 회원 보유 쿠폰 3-stage 그리디 적용 후 최저가
+              (null 이면 회원이 미사용 쿠폰을 보유하지 않은 상태이므로 sale_prc 만 사용)
+            * cheapest_total_discount — sale_prc - cheapest_final_prc
+            * cheapest_applied_coupons[] — {stage, cpn_no, cpn_nm, discount_amt}.
+              자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품 할인쿠폰
+              적용 시 최종 {final:,}원").
+        Tip: 사용자에게 가격을 안내할 때 cheapest_final_prc 가 채워진 상품은 그것을,
+        없으면 sale_prc 를 인용한다. extra_fvr_sale_prc 는 사이트 노출가(모든 쿠폰
+        적용 가정) 이고 회원이 실제 적용 가능한 가격이 아닐 수 있으므로, 회원 컨텍스트
+        에서는 cheapest_final_prc 를 우선한다.
     """
     # Deterministic guard: if the user named a car_no in this turn and it
     # does not match any registered car, short-circuit before issuing the
@@ -1129,6 +1157,66 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     except Exception as e:
         logger.exception("[TOOL][compare_discount_tool] Failed")
         return _error_response(None, str(e), "Failed to compare discount prices")
+
+
+@tool
+def get_cheapest_price_tool(
+    goods_no_list: list[str],
+    quantity: int = 1,
+    shop_id: str | None = None,
+    channel: str = "web",
+):
+    """회원 보유 쿠폰을 상품→결제→플러스 순으로 자동 적용한 **상품별** 최저 혜택가.
+
+    Use when the user asks the **final benefit price** for one or more
+    *specific* products — e.g. "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가",
+    "최대 할인가", "최저가" (single-product or per-product, NOT "여러 개 중 가장 싼").
+    Different from `compare_discount_tool` which picks one cheapest item across
+    products; this tool returns one simulation row per `goods_no`.
+
+    각 단계마다 회원 보유 쿠폰 중 할인금액이 가장 큰 1장을 자동 선택해 적용.
+    상품쿠폰 CPN_DUP_USE_YN='N' 이면 결제쿠폰 단계는 건너뜀. 플러스쿠폰은 항상 적용.
+
+    Returns per-item: `sale_prc`, `final_prc`, `total_discount`, and
+    `applied_coupons[]` describing `{stage, cpn_no, cpn_nm, discount_amt}`.
+    **Cite `cpn_nm` in the natural-language reply** so the user knows which
+    coupons were used. FE renders only `sale_prc`/`final_prc` via the
+    `cheapestProduct` card.
+
+    Args:
+        goods_no_list (list[str]): 1+ product numbers. **goods_no MUST be
+            confirmed** before calling — if the user has not chosen a product
+            yet, do NOT call this tool.
+        quantity (int): Order-stage → user-selected quantity; simple
+            cheapest-price inquiry → 1 (default).
+        shop_id (str | None): Pass when the store is confirmed (matters for
+            store-scoped coupons). Otherwise omit.
+        channel (str): "web" (default) or "app".
+
+    Example: {"goods_no_list": ["G000000319449"], "quantity": 1}
+    """
+    logger.debug(
+        "[TOOL][get_cheapest_price_tool] Called with: goods_no_list=%s, quantity=%s, shop_id=%s, channel=%s",
+        goods_no_list, quantity, shop_id, channel,
+    )
+    try:
+        response = get_cheapest_by_coupon(
+            client=get_client(),
+            goods_no_list=goods_no_list,
+            quantity=quantity,
+            shop_id=shop_id,
+            channel=channel,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get cheapest price",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_cheapest_price_tool] Failed")
+        return _error_response(None, str(e), "Failed to get cheapest price")
 
 
 # Add this new tool for YouTube video search related to hankook tire and tstation tv. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.

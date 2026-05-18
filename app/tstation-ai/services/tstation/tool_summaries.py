@@ -76,7 +76,7 @@ def summarize_tool(name: str, result: Any) -> str:
         qty = d.get("availableQty") or d.get("available_qty") or d.get("qty")
         return f"qty={qty}" if qty is not None else f"status={_status(result)}"
 
-    if name in ("get_nearby_stores_tool", "get_store_list_tool"):
+    if name in ("get_nearby_stores_tool", "get_store_list_tool", "get_favorite_stores_tool"):
         items = _items(result)
         return f"{len(items)} stores"
 
@@ -100,6 +100,16 @@ def summarize_tool(name: str, result: Any) -> str:
             price = cheapest.get("finalPrice") or cheapest.get("final_price")
             if price is not None:
                 return f"cheapest={_won(price)}"
+        return f"status={_status(result)}"
+
+    if name == "get_cheapest_price_tool":
+        d = _data(result)
+        items = d.get("items") or []
+        if isinstance(items, list) and items:
+            prices = [it.get("final_prc") for it in items if isinstance(it, dict)]
+            valid = [p for p in prices if p is not None]
+            if valid:
+                return f"{len(items)} items, min={_won(min(valid))}"
         return f"status={_status(result)}"
 
     if name == "get_product_description_tool":

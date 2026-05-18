@@ -85,6 +85,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "transfer_to_qna_tool": "qnaComplete",
     # cheapestProduct
     "compare_discount_tool": "cheapestProduct",
+    "get_cheapest_price_tool": "cheapestProduct",
     # event — FE에 event 렌더러 없음, LLM fallback
     # "get_events_tool": "event",
     # previewYoutube
@@ -94,6 +95,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "get_nearby_stores_tool": "location",
     "transaction_store_preview_tool": "location",
     "get_stores_with_time_filter_tool": "location",
+    "get_favorite_stores_tool": "location",
     # datepick
     "get_store_schedule_tool": "datepick",
     # orderComplete (cart-save / quick-order — terminal step in transaction flow)
@@ -267,10 +269,15 @@ _GOODS_PFM_LABELS: dict[str, str] = {
 
 
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
-    # Build goods_no → 할인가(extra_fvr_sale_prc) lookup from any get_final_price_tool
-    # calls in this turn. Discovery's Flow B/C invokes get_final_price_tool in
-    # parallel for each search result; pairing by `input.goods_no` is the only
-    # robust way (parallel completion order is non-deterministic).
+    # Build goods_no → 회원 결제가 lookup from any get_final_price_tool calls in
+    # this turn. Discovery's Flow B/C invokes get_final_price_tool in parallel
+    # for each search result; pairing by `input.goods_no` is the only robust
+    # way (parallel completion order is non-deterministic).
+    #
+    # Price priority: cheapest_final_prc (회원 보유 쿠폰 적용 후 최저가, 사이트
+    # 결제 페이지와 일치) → extra_fvr_sale_prc (사이트 일반 노출 혜택가, "모든
+    # 쿠폰 적용 가정") → sale_prc (정가). cheapest_final_prc 가 non-null 이면
+    # 무조건 그것을 써야 결제 카드 paymentAmount 가 사이트와 일치한다.
     price_map: dict[str, int] = {}
     for entry in _find_entries(tool_data_list, "get_final_price_tool"):
         # base_agent.py populates `args` (line 319); chat.py path uses `input`.
@@ -281,15 +288,17 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         price_data = _unwrap(entry)
         if not isinstance(price_data, dict):
             continue
-        # Prefer extra_fvr_sale_prc (사용자 실결제 할인가); fall back to sale_prc (정가)
-        # only if discount price missing/0.
-        price = int(_get_num(price_data, "extra_fvr_sale_prc", default=0))
+        price = int(_get_num(price_data, "cheapest_final_prc", default=0))
+        if not price:
+            price = int(_get_num(price_data, "extra_fvr_sale_prc", default=0))
         if not price:
             price = int(_get_num(price_data, "sale_prc", default=0))
         if price:
             price_map[goods_no] = price
 
     items, metadata = [], []
+    # 회원 보유 쿠폰이 적용된 상품이 1건이라도 있으면 응답 말미에 안내 추가.
+    has_cheapest_applied = False
     for entry in _find_entries(
         tool_data_list,
         "search_product_tool",
@@ -304,12 +313,22 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            applied_coupons = row.get("cheapest_applied_coupons")
+            if isinstance(applied_coupons, list) and applied_coupons:
+                has_cheapest_applied = True
             goods_no = _get_str(row, "goods_no")
             goods_nm = _get_str(row, "goods_nm", "title")
             tire_size = _get_str(row, "tire_size_1", "tire_size_2")
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
-            # Price priority: matched get_final_price_tool result > inline row field.
-            price = price_map.get(goods_no) or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            # Price priority: matched get_final_price_tool result > inline row
+            # field (cheapest_final_prc > price/extra_fvr_sale_prc fallback).
+            # cheapest_final_prc 는 BE 가 enrich 한 회원 보유 쿠폰 적용 후 최저가 —
+            # 사이트 결제 페이지와 일치한다. 없으면 사이트 노출가로 fallback.
+            price = (
+                price_map.get(goods_no)
+                or int(_get_num(row, "cheapest_final_prc", default=0))
+                or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
+            )
             original_price = int(_get_num(row, "sale_prc", default=0)) or None
             discount_rate = float(_get_num(row, "extra_fvr_sale_per", default=0.0)) or None
             discount_amount = (
@@ -348,21 +367,31 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     if not items:
         return None
     items, metadata = items[:10], metadata[:10]
+
     # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
     # product cards don't co-occur with the inventory/schedule signal tools.
     # When the active goal is checklist-driven (stock/order/price), a click on
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
-    return _build_event(
-        "product",
-        {
+    short, response_source = _summarize_with_source(assistant_text, "product", len(items))
+
+    # 회원 보유 쿠폰 적용된 상품이 1건 이상이면 결정적으로 안내 문구 추가.
+    # _summarize_with_source 의 첫 문장 컷팅 뒤에 붙여서 truncation 회피.
+    _COUPON_FOOTNOTE = "*해당 혜택가는 현재 보유 쿠폰 기준으로 적용된 가격입니다."
+    if has_cheapest_applied and _COUPON_FOOTNOTE not in short:
+        short = f"{short.rstrip()}\n\n{_COUPON_FOOTNOTE}" if short else _COUPON_FOOTNOTE
+
+    return {
+        "type": "data",
+        "template": "product",
+        "data": {
             "products": items,
             "metadata": metadata,
             "isBookingFlow": _is_goal_booking_followup(),
+            "assistantResponse": short,
         },
-        assistant_text,
-        len(items),
-    )
+        "assistant_response_source": response_source,
+    }
 
 
 def inject_product_tags_and_sanitize(
@@ -540,7 +569,9 @@ def _map_qna_complete(tool_data_list: list[dict], assistant_text: str) -> dict |
 # ── 5. cheapestProduct ──────────────────────────────────────────────────────────
 
 def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
-    entries = _find_entries(tool_data_list, "compare_discount_tool")
+    # 두 도구를 모두 처리: compare_discount_tool (기존: cheapest_goods_no 1건) +
+    # get_cheapest_price_tool (신규: 회원 보유 쿠폰 3-stage 시뮬레이션, 상품별 1건).
+    entries = _find_entries(tool_data_list, "compare_discount_tool", "get_cheapest_price_tool")
     if not entries:
         return None
     raw = _unwrap(entries[-1])
@@ -559,17 +590,35 @@ def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> di
         if not isinstance(row, dict):
             continue
         goods_no = _get_str(row, "goods_no")
-        # cheapest_goods_no가 있으면 그것만
+        # cheapest_goods_no가 있으면 그것만 (compare_discount_tool 경로)
         if cheapest_no and goods_no != cheapest_no:
             continue
+
+        # get_cheapest_price_tool: applied_coupons 에서 stage별 합산
+        applied = row.get("applied_coupons")
+        if isinstance(applied, list) and applied:
+            product_discount = sum(
+                int(c.get("discount_amt", 0)) for c in applied
+                if isinstance(c, dict) and c.get("stage") == "product"
+            )
+            coupon_discount = sum(
+                int(c.get("discount_amt", 0)) for c in applied
+                if isinstance(c, dict) and c.get("stage") in ("payment", "plus")
+            )
+            final_price = int(_get_num(row, "final_prc", "final_unit_price", default=0))
+        else:
+            product_discount = int(_get_num(row, "product_discount", default=0))
+            coupon_discount = int(_get_num(row, "coupon_discount", default=0))
+            final_price = int(_get_num(row, "final_unit_price", "final_prc", default=0))
+
         items.append({
             "title": _get_str(row, "goods_nm", "title", default=goods_no),
             "originalPrice": int(_get_num(row, "sale_prc", default=0)),
             "quantity": quantity,
             "totalDiscount": int(_get_num(row, "total_discount", default=0)),
-            "productDiscount": int(_get_num(row, "product_discount", default=0)),
-            "couponDiscount": int(_get_num(row, "coupon_discount", default=0)),
-            "finalPrice": int(_get_num(row, "final_unit_price", default=0)),
+            "productDiscount": product_discount,
+            "couponDiscount": coupon_discount,
+            "finalPrice": final_price,
         })
         metadata.append({"goodsId": goods_no})
 
@@ -888,7 +937,17 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
     # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
     has_booking_intent = current_pending_intent.get() in ("order", "stock", "reservation")
-    if not has_booking_signal and not _is_goal_booking_followup() and not is_list_browsing and not has_booking_intent:
+    # 단골매장 조회는 사용자가 직접 발화로 요청한 명시적 컨텍스트 — booking signal/
+    # intent 가 없어도 항상 카드 노출 (info-only guard 우회). 1건이라도 사용자가
+    # 클릭으로 선택해야 다음 단계로 진행됨.
+    has_favorite_stores = "get_favorite_stores_tool" in called_tools
+    if (
+        not has_booking_signal
+        and not _is_goal_booking_followup()
+        and not is_list_browsing
+        and not has_booking_intent
+        and not has_favorite_stores
+    ):
         return None
 
     # Build shop_id → detail map from same-turn `get_store_detail_tool` calls.
@@ -908,7 +967,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             detail_by_shop_id[shop_id] = raw
 
     items, metadata = [], []
-    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool"):
+    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -1718,11 +1777,13 @@ _MAPPERS: dict[str, Any] = {
     "get_my_coupons_tool": _map_voucher,
     "transfer_to_qna_tool": _map_qna_complete,
     "compare_discount_tool": _map_cheapest_product,
+    "get_cheapest_price_tool": _map_cheapest_product,
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "transaction_store_preview_tool": _map_location,
+    "get_favorite_stores_tool": _map_location,
     "get_stores_with_time_filter_tool": _map_time_filter_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
@@ -1778,12 +1839,14 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_user_vehicles_tool", _map_list_car),
         ("get_my_coupons_tool", _map_voucher),
         ("compare_discount_tool", _map_cheapest_product),
+        ("get_cheapest_price_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_stores_with_time_filter_tool", _map_time_filter_location),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
         ("transaction_store_preview_tool", _map_location),
+        ("get_favorite_stores_tool", _map_location),
         # Lowest priority — only fires when neither the location card path
         # (info-only `_map_location` returns None) nor any higher-priority
         # template applies. Owns the Flow 5 General single-store info answer.
@@ -1792,8 +1855,14 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
 
     called_tools = {e.get("tool", "") for e in accumulated_tool_data}
 
+    # In product-specific coupon queries both sibling tools serve as data sources,
+    # not renderers — let the LLM's quickReply fenced JSON win instead.
+    _product_coupon_query = "get_product_promotions_tool" in called_tools
+
     for tool_name, mapper in _PRIORITY:
         if tool_name in called_tools:
+            if _product_coupon_query and tool_name in {"search_product_tool", "get_my_coupons_tool"}:
+                continue
             result = mapper(accumulated_tool_data, assistant_text)
             if result:
                 logger.debug(

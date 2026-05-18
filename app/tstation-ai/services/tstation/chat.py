@@ -2415,6 +2415,7 @@ _QC_REQUIRED_TOOLS = frozenset({
     # Price, discount, promotion, coupon
     "get_final_price_tool",
     "compare_discount_tool",
+    "get_cheapest_price_tool",
     "get_my_coupons_tool",
     "issue_coupon_tool",
     "get_product_promotions_tool",
@@ -2680,6 +2681,7 @@ class TStationChatServiceV2:
             "check_compatibility_tool": "호환 사이즈 조회",
             "get_final_price_tool": "가격 조회",
             "compare_discount_tool": "할인 가격 비교",
+            "get_cheapest_price_tool": "최저 혜택가",
             "get_product_description_tool": "상품 상세",
         }
 
@@ -3431,10 +3433,19 @@ class TStationChatServiceV2:
             # listing tool, fired because the user said e.g. "벤투스 가격") are
             # intentionally left untouched so the auto-chain still runs once
             # goods_no resolves — that's the design behind the P0 gate.
+            #
+            # `goods_no is None` guard: when the user has already committed to a
+            # specific product (slots.goods_no inherited from a prior pick), they
+            # have moved past pure recommendation browsing into the order/store
+            # selection phase. Clearing pending_intent here would emit downstream
+            # store cards with `isBookingFlow=false`, dead-ending the FE click
+            # (description-only `/append` short path). Only fire when goods_no is
+            # still unresolved (true browsing state, e.g. bare list pick "1. 벤투스").
             if (
                 merged_slots.pending_intent is not None
                 and not turn_has_new_transactional
                 and prev_tool_data
+                and merged_slots.goods_no is None
             ):
                 most_recent_listing_tool: str | None = None
                 for entry in reversed(prev_tool_data):
@@ -3870,6 +3881,15 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            # P0b assumes the user intends to buy/order — Discovery resolves
+            # goods_no first. Favorite-store queries ("내 단골매장 / 단골 가게 /
+            # 자주 가는 매장 / 마이샵 / 단골점") are info-only Transaction calls
+            # that have nothing to do with product selection. Skip the redirect
+            # so the favorite-stores tool fires under the transaction profile.
+            and not re.search(
+                r"단골\s*매장|단골\s*가게|단골점|마이샵|자주\s*가는\s*매장",
+                last_user_text,
+            )
             and (
                 # Original case: no goods_no in slots + any product hint
                 (
@@ -3913,6 +3933,35 @@ class TStationChatServiceV2:
                     "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
                 },
             )
+
+        # P0d profile upgrade: classifier picked [TRANSACTION] + transaction_price_stock,
+        # but the user is mid-order (pending_intent=order + goods_no resolved). The
+        # narrow price_stock profile lacks order-flow CTA guidance — its Output Policy
+        # ("Return the shortest useful Korean answer") emits a generic fallback chip
+        # set ("1:1 문의하기 / 처음으로") after price+stock confirmation, dead-ending
+        # the order continuation. Upgrade to FULL so the agent loads the full
+        # transaction prompt incl. order-flow chips (주문하기 / 장바구니 / 매장 찾기).
+        #
+        # Narrow trigger so unrelated flows aren't disturbed:
+        #   - domains must be EXACTLY [TRANSACTION] (multi-domain chains skip this)
+        #   - profile must be transaction_price_stock (transaction_order /
+        #     transaction_store / transaction_coupon already carry their own CTAs)
+        #   - pending_intent must be "order" AND goods_no resolved (user has
+        #     committed to a specific product in the buy flow)
+        if (
+            routing_result is not None
+            and len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_PRICE_STOCK
+            and merged_slots.pending_intent == "order"
+            and merged_slots.goods_no is not None
+        ):
+            logger.info(
+                "[COORDINATOR] P0d profile upgrade: transaction_price_stock → full "
+                f"(pending_intent=order, goods_no={merged_slots.goods_no!r}, "
+                f"session_id={request.session_id})"
+            )
+            routing_result.agent_prompt_profile = AgentPromptProfile.FULL
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set

@@ -55,6 +55,9 @@ from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_�
 # Reservation AF — 매장 방문 예약 조회
 from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방문_예약_조회.get_reservations_api_reservations_get import sync_detailed as get_reservations
 
+# Member AF — 회원 단골매장 조회
+from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_favorite_stores_api_member_favorite_stores_get import sync_detailed as get_favorite_stores
+
 
 def get_client() -> AuthenticatedClient:
     """Get authenticated client for tstation-be API."""
@@ -234,6 +237,24 @@ def _enrich_orders_with_detail(orders: list[dict]) -> list[dict]:
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """
     Get product price and discount (base price, promotion, coupon, labor cost).
+
+    Response fields:
+        - sale_prc: 정가 (PR_ITEM_PRC_INFO.SALE_PRC)
+        - extra_fvr_sale_prc / extra_fvr_sale_per: 사이트 일반 노출 혜택가
+          (PR_GOODS_DSCNT_PRC_INFO.EXTRA_FVR_SALE_PRC). "모든 쿠폰 적용 가정" 의
+          기대 가격 — 회원이 실제 보유한 쿠폰과 일치하지 않을 수 있다.
+        - wage_prc / wage_today_prc: 공임비
+        - cheapest_final_prc: **회원 보유 쿠폰 3-stage 그리디 적용 후 최저가**.
+          사이트 결제 페이지가 표시하는 paymentAmount 와 일치한다. 사용 시 이 값을
+          우선하라.
+        - cheapest_total_discount: sale_prc - cheapest_final_prc
+        - cheapest_applied_coupons[]: 단계별 적용 쿠폰 {stage, cpn_no, cpn_nm,
+          discount_amt}. 자연어 답변에 cpn_nm 인용 권장.
+
+    paymentAmount 우선순위 (preOrder / orderComplete 카드 채울 때):
+        cheapest_final_prc → extra_fvr_sale_prc → sale_prc (fallback 순서).
+        cheapest_final_prc 가 non-null 이면 무조건 그것을 써라 — 사이트 결제
+        금액과 일치하는 유일한 값이다.
 
     Args:
         goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
@@ -1598,3 +1619,46 @@ def get_my_reservations_tool(sct_cd: str = "100"):
     except Exception as e:
         logger.exception("[TOOL][get_my_reservations_tool] Failed")
         return _error_response(None, str(e), "Failed to retrieve reservations")
+
+
+@tool
+@tool_cache(ttl=300)
+def get_favorite_stores_tool():
+    """
+    회원 단골매장 목록 조회.
+
+    Call ONLY when the user explicitly references their favorite/regular store —
+    e.g. "내 단골매장", "단골 가게 보여줘", "자주 가는 매장", "마이샵", "단골점".
+    DO NOT call as a generic store search fallback. For "근처 매장"/"강남 매장"
+    use `get_store_list_tool` or `get_nearby_stores_tool` instead.
+
+    Auth: 회원번호는 JWT 토큰에서 자동 추출. 인자 없음.
+
+    Response (success):
+      {"status": "success", "data": {"stores": [FavoriteStoreItem, ...]}}
+      각 FavoriteStoreItem 은 매장 검색 결과(`get_store_list_tool`) 와 동일한
+      StoreListItem shape 에 단골 등록 일시(`favored_at`) 가 추가된 형태:
+        shop_id, shop_seq, shop_nm, addr_base, addr_dtl, road_addr_base,
+        road_addr_dtl, tel_no, shop_biz_strt_time/end_time,
+        shop_biz_strt_wday/end_wday, shop_sat_strt_time/end_time,
+        is_all_my_t, is_installable, rating_idx, favored_at.
+      매장명 가나다 순 정렬. 폐점/비활성 매장은 자동 제외됨.
+
+    Empty result handling:
+      `stores: []` 일 때 — 사용자에게 "등록된 단골매장이 없어요" 안내 + quickReply
+      ["매장 검색", "처음으로"] emit. 다른 store 도구로 자동 전환 금지.
+    """
+    logger.debug("[TOOL][get_favorite_stores_tool] Called")
+
+    try:
+        response = get_favorite_stores(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get favorite stores"
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_favorite_stores_tool] Failed")
+        return _error_response(None, str(e), "Failed to get favorite stores")
