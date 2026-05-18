@@ -1783,6 +1783,7 @@ _MAPPERS: dict[str, Any] = {
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "transaction_store_preview_tool": _map_location,
+    "get_favorite_stores_tool": _map_location,
     "get_stores_with_time_filter_tool": _map_time_filter_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
@@ -1845,6 +1846,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
         ("transaction_store_preview_tool", _map_location),
+        ("get_favorite_stores_tool", _map_location),
         # Lowest priority — only fires when neither the location card path
         # (info-only `_map_location` returns None) nor any higher-priority
         # template applies. Owns the Flow 5 General single-store info answer.

@@ -20,6 +20,7 @@ import pytest
 from services.tstation.template_mapper import (
     _map_location,
     current_pending_intent,
+    try_build_template,
 )
 
 
@@ -205,3 +206,22 @@ def test_favorite_stores_with_booking_intent_sets_booking_flow() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert result["data"]["isBookingFlow"] is True
+
+
+def test_favorite_stores_dispatched_via_try_build_template() -> None:
+    """Dispatch regression test — `try_build_template` (called by chat.py)
+    must route `get_favorite_stores_tool` to `_map_location` via the
+    `_MAPPERS` / `_PRIORITY` tables. Earlier the tool was wired into the
+    info-only guard bypass and `_TOOL_TEMPLATE_MAP` but not into the
+    dispatch tables, so live chat fell through to the LLM and emitted a
+    dead-end quickReply instead of the location card."""
+    entry = _favorite_stores_entry([_stub_store("F00721", "티스테이션 판교점")])
+    result = try_build_template([entry], "등록된 단골매장을 확인했어요.")
+
+    assert result is not None, (
+        "try_build_template returned None — favorite-stores tool is not "
+        "registered in _MAPPERS / _PRIORITY dispatch tables"
+    )
+    assert result["template"] == "location"
+    assert len(result["data"]["stores"]) == 1
+    assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 판교점"
