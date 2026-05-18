@@ -355,27 +355,30 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         return None
     items, metadata = items[:10], metadata[:10]
 
-    # 회원 보유 쿠폰 적용된 상품이 있으면 결정적으로 안내 문구 추가 (LLM 누락 방지).
-    # 중복 append 방지차원에서 이미 동일 문구가 들어 있으면 건너뜀.
-    _COUPON_FOOTNOTE = "*해당 혜택가는 현재 보유 쿠폰 기준으로 적용된 가격입니다."
-    if has_cheapest_applied and _COUPON_FOOTNOTE not in (assistant_text or ""):
-        assistant_text = f"{assistant_text.rstrip()}\n\n{_COUPON_FOOTNOTE}" if assistant_text else _COUPON_FOOTNOTE
-
     # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
     # product cards don't co-occur with the inventory/schedule signal tools.
     # When the active goal is checklist-driven (stock/order/price), a click on
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
-    return _build_event(
-        "product",
-        {
+    short, response_source = _summarize_with_source(assistant_text, "product", len(items))
+
+    # 회원 보유 쿠폰 적용된 상품이 1건 이상이면 결정적으로 안내 문구 추가.
+    # _summarize_with_source 의 첫 문장 컷팅 뒤에 붙여서 truncation 회피.
+    _COUPON_FOOTNOTE = "*해당 혜택가는 현재 보유 쿠폰 기준으로 적용된 가격입니다."
+    if has_cheapest_applied and _COUPON_FOOTNOTE not in short:
+        short = f"{short.rstrip()}\n\n{_COUPON_FOOTNOTE}" if short else _COUPON_FOOTNOTE
+
+    return {
+        "type": "data",
+        "template": "product",
+        "data": {
             "products": items,
             "metadata": metadata,
             "isBookingFlow": _is_goal_booking_followup(),
+            "assistantResponse": short,
         },
-        assistant_text,
-        len(items),
-    )
+        "assistant_response_source": response_source,
+    }
 
 
 def inject_product_tags_and_sanitize(
