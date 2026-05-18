@@ -1815,8 +1815,14 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
 
     called_tools = {e.get("tool", "") for e in accumulated_tool_data}
 
+    # In product-specific coupon queries both sibling tools serve as data sources,
+    # not renderers — let the LLM's quickReply fenced JSON win instead.
+    _product_coupon_query = "get_product_promotions_tool" in called_tools
+
     for tool_name, mapper in _PRIORITY:
         if tool_name in called_tools:
+            if _product_coupon_query and tool_name in {"search_product_tool", "get_my_coupons_tool"}:
+                continue
             result = mapper(accumulated_tool_data, assistant_text)
             if result:
                 logger.debug(
