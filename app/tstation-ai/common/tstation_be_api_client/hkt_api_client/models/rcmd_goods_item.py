@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.applied_coupon_item import AppliedCouponItem
+
 
 T = TypeVar("T", bound="RcmdGoodsItem")
 
@@ -77,6 +81,9 @@ class RcmdGoodsItem:
         price (int | None | Unset):
         rate (float | None | Unset):
         comfort (float | None | Unset):
+        cheapest_final_prc (int | None | Unset): 회원 보유 쿠폰 3-stage 그리디 적용 후 최저가 (회원·상품 매칭 실패 시 null)
+        cheapest_total_discount (int | None | Unset): cheapest 시뮬레이션의 총 할인 금액 (sale_prc - cheapest_final_prc)
+        cheapest_applied_coupons (list[AppliedCouponItem] | None | Unset): cheapest 시뮬레이션에서 단계별로 적용된 쿠폰 목록
     """
 
     goods_no: str
@@ -136,6 +143,9 @@ class RcmdGoodsItem:
     price: int | None | Unset = UNSET
     rate: float | None | Unset = UNSET
     comfort: float | None | Unset = UNSET
+    cheapest_final_prc: int | None | Unset = UNSET
+    cheapest_total_discount: int | None | Unset = UNSET
+    cheapest_applied_coupons: list[AppliedCouponItem] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -477,6 +487,30 @@ class RcmdGoodsItem:
         else:
             comfort = self.comfort
 
+        cheapest_final_prc: int | None | Unset
+        if isinstance(self.cheapest_final_prc, Unset):
+            cheapest_final_prc = UNSET
+        else:
+            cheapest_final_prc = self.cheapest_final_prc
+
+        cheapest_total_discount: int | None | Unset
+        if isinstance(self.cheapest_total_discount, Unset):
+            cheapest_total_discount = UNSET
+        else:
+            cheapest_total_discount = self.cheapest_total_discount
+
+        cheapest_applied_coupons: list[dict[str, Any]] | None | Unset
+        if isinstance(self.cheapest_applied_coupons, Unset):
+            cheapest_applied_coupons = UNSET
+        elif isinstance(self.cheapest_applied_coupons, list):
+            cheapest_applied_coupons = []
+            for cheapest_applied_coupons_type_0_item_data in self.cheapest_applied_coupons:
+                cheapest_applied_coupons_type_0_item = cheapest_applied_coupons_type_0_item_data.to_dict()
+                cheapest_applied_coupons.append(cheapest_applied_coupons_type_0_item)
+
+        else:
+            cheapest_applied_coupons = self.cheapest_applied_coupons
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -596,11 +630,19 @@ class RcmdGoodsItem:
             field_dict["rate"] = rate
         if comfort is not UNSET:
             field_dict["comfort"] = comfort
+        if cheapest_final_prc is not UNSET:
+            field_dict["cheapest_final_prc"] = cheapest_final_prc
+        if cheapest_total_discount is not UNSET:
+            field_dict["cheapest_total_discount"] = cheapest_total_discount
+        if cheapest_applied_coupons is not UNSET:
+            field_dict["cheapest_applied_coupons"] = cheapest_applied_coupons
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.applied_coupon_item import AppliedCouponItem
+
         d = dict(src_dict)
         goods_no = d.pop("goods_no")
 
@@ -1108,6 +1150,48 @@ class RcmdGoodsItem:
 
         comfort = _parse_comfort(d.pop("comfort", UNSET))
 
+        def _parse_cheapest_final_prc(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        cheapest_final_prc = _parse_cheapest_final_prc(d.pop("cheapest_final_prc", UNSET))
+
+        def _parse_cheapest_total_discount(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        cheapest_total_discount = _parse_cheapest_total_discount(d.pop("cheapest_total_discount", UNSET))
+
+        def _parse_cheapest_applied_coupons(data: object) -> list[AppliedCouponItem] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                cheapest_applied_coupons_type_0 = []
+                _cheapest_applied_coupons_type_0 = data
+                for cheapest_applied_coupons_type_0_item_data in _cheapest_applied_coupons_type_0:
+                    cheapest_applied_coupons_type_0_item = AppliedCouponItem.from_dict(
+                        cheapest_applied_coupons_type_0_item_data
+                    )
+
+                    cheapest_applied_coupons_type_0.append(cheapest_applied_coupons_type_0_item)
+
+                return cheapest_applied_coupons_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(list[AppliedCouponItem] | None | Unset, data)
+
+        cheapest_applied_coupons = _parse_cheapest_applied_coupons(d.pop("cheapest_applied_coupons", UNSET))
+
         rcmd_goods_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
@@ -1166,6 +1250,9 @@ class RcmdGoodsItem:
             price=price,
             rate=rate,
             comfort=comfort,
+            cheapest_final_prc=cheapest_final_prc,
+            cheapest_total_discount=cheapest_total_discount,
+            cheapest_applied_coupons=cheapest_applied_coupons,
         )
 
         rcmd_goods_item.additional_properties = d
