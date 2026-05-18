@@ -3934,6 +3934,35 @@ class TStationChatServiceV2:
                 },
             )
 
+        # P0d profile upgrade: classifier picked [TRANSACTION] + transaction_price_stock,
+        # but the user is mid-order (pending_intent=order + goods_no resolved). The
+        # narrow price_stock profile lacks order-flow CTA guidance — its Output Policy
+        # ("Return the shortest useful Korean answer") emits a generic fallback chip
+        # set ("1:1 문의하기 / 처음으로") after price+stock confirmation, dead-ending
+        # the order continuation. Upgrade to FULL so the agent loads the full
+        # transaction prompt incl. order-flow chips (주문하기 / 장바구니 / 매장 찾기).
+        #
+        # Narrow trigger so unrelated flows aren't disturbed:
+        #   - domains must be EXACTLY [TRANSACTION] (multi-domain chains skip this)
+        #   - profile must be transaction_price_stock (transaction_order /
+        #     transaction_store / transaction_coupon already carry their own CTAs)
+        #   - pending_intent must be "order" AND goods_no resolved (user has
+        #     committed to a specific product in the buy flow)
+        if (
+            routing_result is not None
+            and len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_PRICE_STOCK
+            and merged_slots.pending_intent == "order"
+            and merged_slots.goods_no is not None
+        ):
+            logger.info(
+                "[COORDINATOR] P0d profile upgrade: transaction_price_stock → full "
+                f"(pending_intent=order, goods_no={merged_slots.goods_no!r}, "
+                f"session_id={request.session_id})"
+            )
+            routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set
         # isBookingFlow=True when a downstream tool call (inventory / price /
