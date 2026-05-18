@@ -291,6 +291,8 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             price_map[goods_no] = price
 
     items, metadata = [], []
+    # 회원 보유 쿠폰이 적용된 상품이 1건이라도 있으면 응답 말미에 안내 추가.
+    has_cheapest_applied = False
     for entry in _find_entries(
         tool_data_list,
         "search_product_tool",
@@ -305,6 +307,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            applied_coupons = row.get("cheapest_applied_coupons")
+            if isinstance(applied_coupons, list) and applied_coupons:
+                has_cheapest_applied = True
             goods_no = _get_str(row, "goods_no")
             goods_nm = _get_str(row, "goods_nm", "title")
             tire_size = _get_str(row, "tire_size_1", "tire_size_2")
@@ -349,6 +354,13 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     if not items:
         return None
     items, metadata = items[:10], metadata[:10]
+
+    # 회원 보유 쿠폰 적용된 상품이 있으면 결정적으로 안내 문구 추가 (LLM 누락 방지).
+    # 중복 append 방지차원에서 이미 동일 문구가 들어 있으면 건너뜀.
+    _COUPON_FOOTNOTE = "*해당 혜택가는 현재 보유 쿠폰 기준으로 적용된 가격입니다."
+    if has_cheapest_applied and _COUPON_FOOTNOTE not in (assistant_text or ""):
+        assistant_text = f"{assistant_text.rstrip()}\n\n{_COUPON_FOOTNOTE}" if assistant_text else _COUPON_FOOTNOTE
+
     # Mirror LocationTemplate.isBookingFlow — driven purely by goal_type since
     # product cards don't co-occur with the inventory/schedule signal tools.
     # When the active goal is checklist-driven (stock/order/price), a click on
