@@ -773,6 +773,18 @@ def get_product_description_tool(goods_no: str):
           t_snow, t_ice, t_dryroad_brk
         - EU 라벨: rr, wet, label_pndb
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn, t_rlx_isn_yn
+        - 가격 / 회원 쿠폰 최저가:
+            * sale_prc — 정가
+            * cheapest_final_prc — 회원 보유 쿠폰을 상품→결제→플러스 그리디 적용한
+              최저가 (회원이 미사용 쿠폰을 보유한 경우만 채워짐, 없으면 null)
+            * cheapest_total_discount — sale_prc - cheapest_final_prc
+            * cheapest_applied_coupons[] — 단계별 적용 쿠폰 {stage, cpn_no, cpn_nm,
+              discount_amt}. 자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품
+              할인쿠폰 적용 시 …").
+
+    If `cheapest_final_prc` is non-null, prefer phrasing like
+    "정가 {sale_prc:,}원 → 최종 혜택가 {cheapest_final_prc:,}원" with the
+    applied coupon names. If null, fall back to sale_prc only.
 
     Args:
         goods_no (str): Product number.
@@ -915,6 +927,17 @@ def get_products_recommendations_tool(
         - 추가 성능: t_high_perform, t_handling, t_dryroad_brk
         - EU 라벨: rr (회전저항), wet, label_pndb (소음 dB)
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn
+        - 회원 쿠폰 최저가 (BE 측 enrich):
+            * cheapest_final_prc — 회원 보유 쿠폰 3-stage 그리디 적용 후 최저가
+              (null 이면 회원이 미사용 쿠폰을 보유하지 않은 상태이므로 sale_prc 만 사용)
+            * cheapest_total_discount — sale_prc - cheapest_final_prc
+            * cheapest_applied_coupons[] — {stage, cpn_no, cpn_nm, discount_amt}.
+              자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품 할인쿠폰
+              적용 시 최종 {final:,}원").
+        Tip: 사용자에게 가격을 안내할 때 cheapest_final_prc 가 채워진 상품은 그것을,
+        없으면 sale_prc 를 인용한다. extra_fvr_sale_prc 는 사이트 노출가(모든 쿠폰
+        적용 가정) 이고 회원이 실제 적용 가능한 가격이 아닐 수 있으므로, 회원 컨텍스트
+        에서는 cheapest_final_prc 를 우선한다.
     """
     # Deterministic guard: if the user named a car_no in this turn and it
     # does not match any registered car, short-circuit before issuing the
