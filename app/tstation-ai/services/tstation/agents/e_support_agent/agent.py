@@ -299,7 +299,18 @@ Style rules for PROSE MODE:
 
 → Output exactly ONE fenced ```json block as documented below. `assistantResponse` must be a real, substantive Korean answer — never a placeholder, never empty. 1–3 sentences.
 
-⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. 도메인별 chip 이 없으면 최소 fallback 2개: `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`. `qnaComplete` / `product` 등 카드형 템플릿은 본 룰 예외.
+⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. chip 선정은 아래 우선순위로 판정:
+1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림 등) — 가장 우선.
+2. **컨텍스트-연계 거래 chip** (아래 별도 단락 — 매장/구매 키워드 매칭 시 `매장 찾기`/`구매하기`).
+3. **DEAD-END FALLBACK** — 위 1·2 어디에도 해당 안 될 때만 `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
+
+**DEAD-END FALLBACK 허용 조건** (Support 도메인 특성상 FAQ/정책 답변은 대부분 fallback 정당):
+- 사용자 의도 명시 (문의/상담/클레임/환불·교환 신청 등)
+- 환불·취소 정책상 불가 안내
+- FAQ·정책 답변 (시스템 조회 불가, FAQ 결과 out-of-scope, complaint 응답 등)
+- 도구 실패 dead-end
+
+`qnaComplete` / `product` 등 카드형 템플릿은 본 룰 예외.
 
 **quickReply** — FAQ answers, complaint/no-tool turns, text-only responses:
 - FAQ/RAG: read the `answer` field of the most relevant item(s); synthesize key facts (conditions, timelines, steps) into natural Korean. Do NOT say "FAQ를 확인했어요" or acknowledge the search.

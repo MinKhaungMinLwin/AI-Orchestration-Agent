@@ -1324,11 +1324,10 @@ quickReply shape:
 
 `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. 최소 1개, 권장 2~4개의 chip 을 포함해야 한다.
 
-**규칙**:
-1. 도메인별 특화 chip 이 있으면 그것을 우선 사용 (이미 룰에 명시된 케이스).
-2. 도메인별 chip 이 없거나 명확하지 않으면 **최소 fallback chip 2개**:
-   `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`
-3. 사용자가 다음 단계를 선택할 가능성이 있다면 1~2개 추가 (예: 다른 상품 추천, 매장 찾기, 이벤트 보기).
+**chip 선정 우선순위 (반드시 이 순서로 판정)**:
+1. **개별 룰에 명시된 CTA chip** (이벤트/promotion/제조일자 정책 등) — 가장 우선.
+2. **CONTEXT CHIP MATRIX (아래)** — 검색 결과/추천/클래리피케이션 등 정상 흐름 케이스는 다음 단계 chip 을 emit.
+3. **DEAD-END FALLBACK (아래)** — 위 1·2 어디에도 해당 안 되는 dead-end 응답에서만 `[1:1 문의하기, 처음으로]` 류 emit.
 
 **예외**:
 - `template` 이 `product`, `listCar`, `voucher`, `cheapestProduct`, `previewYoutube` 등 **카드형 데이터 템플릿** 일 때는 본 룰 미적용 (카드 자체가 다음 단계 신호).
@@ -1336,7 +1335,31 @@ quickReply shape:
 
 **위반 시 결과**: 사용자 화면에 본문 텍스트만 노출되고 다음 단계 chip 이 사라져 대화가 막힘. **반드시 self-check 후 emit**.
 
-⚠️ 도구 결과가 너무 많거나(50건 이상) 응답을 만들기 어려운 경우에도, 본문은 짧게 요약하고 **반드시** fallback chip 을 포함해 emit.
+### CONTEXT CHIP MATRIX — 정상 응답 chip (1·3 보다 먼저 판정)
+
+| 응답 유형 | 권장 chip (2~3개) | 비고 |
+|---|---|---|
+| 검색 결과 없음 / 매칭 0건 | `[{"label":"다시 검색","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}]` | text-only |
+| 클래리피케이션 질문 (사이즈/차종 묻기) | `[{"label":"내 차로 찾기","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"}]` | 사용자 입력 유도 |
+| 추천 부적합 / 무근거 추천 회피 | `[{"label":"다른 추천 받기","domain":"DISCOVERY"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | 거래 흐름 연결 |
+| 차량 정보 미확보 안내 | `[{"label":"내 차 등록","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"}]` | — |
+
+⚠️ 위 케이스에서 `[1:1 문의하기]` / `[처음으로]` 를 emit 하면 다음 turn 라우팅이 끊겨 사용자가 같은 흐름을 다시 시작해야 한다 — **금지**.
+
+### DEAD-END FALLBACK (1·2 어디에도 해당 안 될 때만)
+
+`[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]` 를 emit 할 수 있는 조건:
+
+- **사용자 의도 명시**: 이번 turn 발화에 "1:1 문의", "상담", "상담원", "클레임" 등 명시 키워드 포함.
+- **FAQ·정책 답변**: 제조일자/DOT 정책 답변 등 시스템 조회 불가 정책 안내.
+- **도구 호출 실패 + 다시 시도가 부적절한 dead-end**.
+- **도구 결과 50건 이상 등 응답 만들기 어려운 케이스**: 본문 짧게 요약 + fallback chip emit.
+
+위 조건 외에는 `[1:1 문의하기, 처음으로]` emit 금지 — CONTEXT CHIP MATRIX 의 컨텍스트 chip 사용.
+
+`처음으로` chip 의 추가 허용 케이스:
+- Greeting / 자연 종결 응답 (예: 이벤트 안내 종결) — 다른 progress chip 과 함께 마지막 자리에.
+- dead-end fallback 짝으로 `1:1 문의하기` 와 함께 emit.
 
 
 ## 타이어 제조일자 / 신상품 / 최신제조 / DOT — 고정 정책 답변 (필수)
