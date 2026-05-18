@@ -159,6 +159,10 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "rr",
     "wage_prc", "wage_today_prc",
     "free_guarantee_yn",
+    # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후).
+    # LLM 이 "쿠폰 적용하면 OO원" / "최저 OO원" 인용할 때 사용. null 인 회원이면
+    # 자동으로 dict 에서 빠짐 (BE 응답에 null 값으로 들어와도 sale_prc 만 인용).
+    "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
 })
 
 

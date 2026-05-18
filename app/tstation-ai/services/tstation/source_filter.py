@@ -42,6 +42,8 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
             "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
             "wage_prc", "wage_today_prc", "free_guarantee_yn",
+            # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후)
+            "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
         },
     },
     "search_product_tool": {
@@ -145,6 +147,8 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
             "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
             "wage_prc", "wage_today_prc", "free_guarantee_yn",
+            # 회원 보유 쿠폰 기반 최저가 (후속 턴 "그 중 최저가는?" 등 인용)
+            "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
         },
     },
     "search_product_tool": {
