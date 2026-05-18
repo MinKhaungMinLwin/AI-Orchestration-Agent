@@ -3872,6 +3872,15 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            # P0b assumes the user intends to buy/order — Discovery resolves
+            # goods_no first. Favorite-store queries ("내 단골매장 / 단골 가게 /
+            # 자주 가는 매장 / 마이샵 / 단골점") are info-only Transaction calls
+            # that have nothing to do with product selection. Skip the redirect
+            # so the favorite-stores tool fires under the transaction profile.
+            and not re.search(
+                r"단골\s*매장|단골\s*가게|단골점|마이샵|자주\s*가는\s*매장",
+                last_user_text,
+            )
             and (
                 # Original case: no goods_no in slots + any product hint
                 (
