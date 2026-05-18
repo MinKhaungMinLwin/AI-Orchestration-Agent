@@ -134,6 +134,19 @@ For `quickReply`, `quickReplies` MUST be a list of objects, never strings:
 - 컨텍스트 슬롯에 이미 정보가 있는 경우 — 그 정보로 즉시 답변.
 
 ⚠️ 이 룰은 **응답 스타일 패턴**이며, "언제 안내할지"는 LLM 판단. "어떻게 표현할지"만 강제.
+
+
+## FAVORITE STORES — DIRECT-MENTION ONLY (모든 transaction profile 공통)
+
+⚠️ 단골매장 도구(`get_favorite_stores_tool`) 호출 조건 — 사용자가 "단골", "단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점" 등 단골 키워드를 **명시적으로 발화**한 경우.
+
+- 단골 키워드 명시 시 — profile 이 store / order / price_stock / coupon 중 어디든 **`get_favorite_stores_tool()` 호출이 1순위**. 인자 없음. mbr_no 는 JWT 에서 자동 추출. 도구가 보이지 않는다는 응답("조회가 어려워요" 등) 절대 금지.
+- 일반 매장 검색("강남 매장", "근처 매장")이나 region/store_nm 명시 발화에는 호출 금지 — `get_store_list_tool` / `get_nearby_stores_tool` 흐름 그대로.
+- 주문/예약 흐름에서 매장 정보가 비어있다고 자동으로 단골 도구로 fallback 하지 마라. 매장 정보가 필요하면 사용자에게 지역/매장명을 묻는 기존 룰을 따른다.
+
+응답 처리:
+- `stores: []` (단골 0건) → quickReply 1줄: "등록된 단골매장이 없어요. 매장 검색으로 안내해 드릴까요? 😊" + chip `["네, 매장 찾기","처음으로"]`. 다른 store/inventory 도구 자동 호출 금지.
+- `stores: [...]` (1건 이상) → location 카드로 emit (코드 매퍼가 자동 처리). 1건이라도 자동 선택 금지 — 사용자가 카드를 클릭해야 진행. assistantResponse 는 "단골매장이에요. 원하시는 매장을 선택해 주세요 😊" 류 한 줄.
 """
 
 _TRANSACTION_FULL_BODY = """
@@ -649,19 +662,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | get_orders_of_user_tool | User asks to see their orders |
 | get_order_status_tool | User asks about specific order |
 | get_my_reservations_tool | User asks about their shop visit reservations (예약 조회) |
-| get_favorite_stores_tool | User explicitly references their favorite/regular store ("내 단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점"). NO arguments — mbr_no taken from JWT. |
-
-
-## FAVORITE STORES — DIRECT-MENTION ONLY
-
-⚠️ 단골매장 도구(`get_favorite_stores_tool`) 호출 조건 — 사용자가 "단골", "단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점" 등 단골 키워드를 **명시적으로 발화**한 경우에만.
-
-- 일반 매장 검색("강남 매장", "근처 매장")이나 region/store_nm 명시 발화에는 호출 금지 — 그 케이스는 기존 `get_store_list_tool` / `get_nearby_stores_tool` 흐름 그대로.
-- 주문/예약 흐름에서 매장 정보가 비어있다고 자동으로 단골 도구로 fallback 하지 마라. 매장 정보가 필요하면 사용자에게 지역/매장명을 묻는 기존 룰을 따른다.
-
-응답 처리:
-- `stores: []` (단골 0건) → quickReply 1줄: "등록된 단골매장이 없어요. 매장 검색으로 안내해 드릴까요? 😊" + chip `["네, 매장 찾기","처음으로"]`. 다른 store/inventory 도구 자동 호출 금지.
-- `stores: [...]` (1건 이상) → location 카드로 emit (코드 매퍼가 자동 처리). 1건이라도 자동 선택 금지 — 사용자가 카드를 클릭해야 진행. assistantResponse 는 "단골매장이에요. 원하시는 매장을 선택해 주세요 😊" 류 한 줄.
+| get_favorite_stores_tool | User explicitly references their favorite/regular store ("내 단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점"). NO arguments — mbr_no taken from JWT. See `FAVORITE STORES — DIRECT-MENTION ONLY` section in BASE prompt for handling rules. |
 
 
 ## STORE SEARCH — CALL TOOL IMMEDIATELY (no clarification needed)
@@ -2705,6 +2706,7 @@ class TransactionSubAgent(BaseAgent):
                 get_coupon_applicable_products_tool,
                 get_product_promotions_tool,
                 search_product_tool,
+                get_favorite_stores_tool,
             ]
             system_prompt = get_transaction_coupon_system_prompt
             name = "Transaction Agent (Coupon)"
@@ -2715,6 +2717,7 @@ class TransactionSubAgent(BaseAgent):
                 get_orders_of_user_tool,
                 get_order_status_tool,
                 get_my_reservations_tool,
+                get_favorite_stores_tool,
             ]
             system_prompt = get_transaction_order_system_prompt
             name = "Transaction Agent (Order)"
@@ -2738,6 +2741,7 @@ class TransactionSubAgent(BaseAgent):
                 get_final_price_tool,
                 get_product_promotions_tool,
                 get_logistics_inventory_tool,
+                get_favorite_stores_tool,
             ]
             system_prompt = get_transaction_price_stock_system_prompt
             name = "Transaction Agent (Price/Stock)"
