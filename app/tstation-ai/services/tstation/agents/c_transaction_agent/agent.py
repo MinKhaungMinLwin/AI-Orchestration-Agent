@@ -1460,20 +1460,27 @@ STEP A — fetch price (if not already present for THIS exact goods_no):
 STEP B — identify the required integer fields from the tool output:
   Let:
     SP    = tool.data.sale_prc              // 판매가 / 정가 (per-unit, integer, KRW)
-    FINAL = tool.data.extra_fvr_sale_prc    // 할인 적용된 최종 단가 (per-unit, integer, KRW; may be null/0)
+    CHEAP = tool.data.cheapest_final_prc    // 회원 보유 쿠폰 적용 후 최저가 (per-unit, integer, KRW; may be null/0)
+    EXTRA = tool.data.extra_fvr_sale_prc    // 사이트 일반 노출 혜택가 (per-unit, integer, KRW; may be null/0)
+    FINAL = CHEAP if CHEAP not null/0 else EXTRA   // 결제 단가 — 회원 결제 금액 우선
     DSC   = SP - FINAL                      // 실제 할인 금액 (per-unit, computed; clamp to 0 if negative)
     QTY   = orderInfo.quantity              // integer from the confirmed STEP 2 ord_qty
 
   ⚠️ FIELD MEANING (CRITICAL — common source of inverted price/discount bugs):
-  • `extra_fvr_sale_prc` is NOT the discount amount. It is the FINAL DISCOUNTED PRICE
-    that the customer actually pays per tire (사용자 실결제가).
-  • The actual discount AMOUNT is `sale_prc - extra_fvr_sale_prc` — never read it
-    directly from a backend field.
-  • Worked example: `{"sale_prc": 62425, "extra_fvr_sale_prc": 47450}` →
-    SP=62425, FINAL=47450, DSC=14975. NEVER swap these.
+  • `cheapest_final_prc` 는 회원 보유 쿠폰 기반 최저가. 사이트 결제 페이지의
+    paymentAmount 와 일치한다. 있으면 무조건 그것을 써라.
+  • `extra_fvr_sale_prc` 는 사이트 일반 노출 혜택가 ("모든 쿠폰 적용 가정"). 회원이
+    실제 받을 수 있는 가격과 다를 수 있다. cheapest_final_prc 가 null 일 때만 쓴다.
+  • 둘 다 NOT the discount amount. 둘 다 FINAL DISCOUNTED PRICE (per-unit).
+  • The actual discount AMOUNT is `SP - FINAL` — never read it directly.
+  • Worked example A (cheapest != extra): `{"sale_prc": 686400, "extra_fvr_sale_prc": 528200,
+    "cheapest_final_prc": 652100}` → SP=686400, CHEAP=652100, EXTRA=528200, FINAL=652100
+    (CHEAP 우선), DSC=34300. **EXTRA 528200 사용 금지** — 사이트 결제 금액과 불일치.
+  • Worked example B (cheapest == extra): `{"sale_prc": 155100, "extra_fvr_sale_prc": 120800,
+    "cheapest_final_prc": 120800}` → FINAL=120800.
 
   Rules for reading fields:
-  • Treat null/missing FINAL as equal to SP (no discount → DSC=0).
+  • Prefer CHEAP. Treat null/missing CHEAP → use EXTRA. Both null/missing → FINAL=SP, DSC=0.
   • If SP is null / missing / 0 → go to STEP D (fallback).
   • If FINAL > SP (data anomaly) → treat FINAL as SP and DSC=0; do NOT invert.
   • NEVER use `extra_fvr_sale_per` (percent) for arithmetic. It is display-only.
@@ -1486,8 +1493,9 @@ STEP C — compute paymentAmount with the EXACT formula:
     paymentAmount = unit_final * QTY         // 총 결제금액 (integer)
 
   Arithmetic rules (STRICT — violation is a critical error):
-  • Use ONLY this formula. paymentAmount = extra_fvr_sale_prc × QTY. No other combination of fields.
-  • Do NOT compute `paymentAmount = (SP - extra_fvr_sale_prc) * QTY` — that gives the
+  • Use ONLY this formula. paymentAmount = FINAL × QTY (FINAL = cheapest_final_prc
+    우선, fallback extra_fvr_sale_prc). No other combination of fields.
+  • Do NOT compute `paymentAmount = (SP - FINAL) * QTY` — that gives the
     discount total, not the payment amount. This is the exact bug that swaps
     "할인" and "최종 금액" in the price table.
   • All operands are plain integers in KRW. Do NOT convert to 만원/천원.

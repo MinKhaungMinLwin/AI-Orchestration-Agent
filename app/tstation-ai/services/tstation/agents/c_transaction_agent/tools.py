@@ -235,6 +235,24 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """
     Get product price and discount (base price, promotion, coupon, labor cost).
 
+    Response fields:
+        - sale_prc: 정가 (PR_ITEM_PRC_INFO.SALE_PRC)
+        - extra_fvr_sale_prc / extra_fvr_sale_per: 사이트 일반 노출 혜택가
+          (PR_GOODS_DSCNT_PRC_INFO.EXTRA_FVR_SALE_PRC). "모든 쿠폰 적용 가정" 의
+          기대 가격 — 회원이 실제 보유한 쿠폰과 일치하지 않을 수 있다.
+        - wage_prc / wage_today_prc: 공임비
+        - cheapest_final_prc: **회원 보유 쿠폰 3-stage 그리디 적용 후 최저가**.
+          사이트 결제 페이지가 표시하는 paymentAmount 와 일치한다. 사용 시 이 값을
+          우선하라.
+        - cheapest_total_discount: sale_prc - cheapest_final_prc
+        - cheapest_applied_coupons[]: 단계별 적용 쿠폰 {stage, cpn_no, cpn_nm,
+          discount_amt}. 자연어 답변에 cpn_nm 인용 권장.
+
+    paymentAmount 우선순위 (preOrder / orderComplete 카드 채울 때):
+        cheapest_final_prc → extra_fvr_sale_prc → sale_prc (fallback 순서).
+        cheapest_final_prc 가 non-null 이면 무조건 그것을 써라 — 사이트 결제
+        금액과 일치하는 유일한 값이다.
+
     Args:
         goods_no (str): Product number (e.g., GXXXXXXXXXXXX).
         member_type (str | None): Member type (e.g., 'general', 'PARTNER').
