@@ -102,6 +102,16 @@ def summarize_tool(name: str, result: Any) -> str:
                 return f"cheapest={_won(price)}"
         return f"status={_status(result)}"
 
+    if name == "get_cheapest_price_tool":
+        d = _data(result)
+        items = d.get("items") or []
+        if isinstance(items, list) and items:
+            prices = [it.get("final_prc") for it in items if isinstance(it, dict)]
+            valid = [p for p in prices if p is not None]
+            if valid:
+                return f"{len(items)} items, min={_won(min(valid))}"
+        return f"status={_status(result)}"
+
     if name == "get_product_description_tool":
         d = _data(result)
         gn = d.get("goodsNo") or d.get("goods_no")

@@ -317,6 +317,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_event_applicable_products_tool": "이벤트 적용 상품 조회 중...",
     "get_product_applicable_events_tool": "상품 적용 이벤트 조회 중...",
     "compare_discount_tool": "할인 가격 비교 중...",
+    "get_cheapest_price_tool": "최저 혜택가 계산 중...",
     "search_youtube_video_tool": "유튜브 영상 검색 중...",
     # Transaction
     "get_final_price_tool": "가격 정보 조회 중...",

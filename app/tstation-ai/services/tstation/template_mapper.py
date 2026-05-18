@@ -85,6 +85,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "transfer_to_qna_tool": "qnaComplete",
     # cheapestProduct
     "compare_discount_tool": "cheapestProduct",
+    "get_cheapest_price_tool": "cheapestProduct",
     # event — FE에 event 렌더러 없음, LLM fallback
     # "get_events_tool": "event",
     # previewYoutube
@@ -540,7 +541,9 @@ def _map_qna_complete(tool_data_list: list[dict], assistant_text: str) -> dict |
 # ── 5. cheapestProduct ──────────────────────────────────────────────────────────
 
 def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
-    entries = _find_entries(tool_data_list, "compare_discount_tool")
+    # 두 도구를 모두 처리: compare_discount_tool (기존: cheapest_goods_no 1건) +
+    # get_cheapest_price_tool (신규: 회원 보유 쿠폰 3-stage 시뮬레이션, 상품별 1건).
+    entries = _find_entries(tool_data_list, "compare_discount_tool", "get_cheapest_price_tool")
     if not entries:
         return None
     raw = _unwrap(entries[-1])
@@ -559,17 +562,35 @@ def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> di
         if not isinstance(row, dict):
             continue
         goods_no = _get_str(row, "goods_no")
-        # cheapest_goods_no가 있으면 그것만
+        # cheapest_goods_no가 있으면 그것만 (compare_discount_tool 경로)
         if cheapest_no and goods_no != cheapest_no:
             continue
+
+        # get_cheapest_price_tool: applied_coupons 에서 stage별 합산
+        applied = row.get("applied_coupons")
+        if isinstance(applied, list) and applied:
+            product_discount = sum(
+                int(c.get("discount_amt", 0)) for c in applied
+                if isinstance(c, dict) and c.get("stage") == "product"
+            )
+            coupon_discount = sum(
+                int(c.get("discount_amt", 0)) for c in applied
+                if isinstance(c, dict) and c.get("stage") in ("payment", "plus")
+            )
+            final_price = int(_get_num(row, "final_prc", "final_unit_price", default=0))
+        else:
+            product_discount = int(_get_num(row, "product_discount", default=0))
+            coupon_discount = int(_get_num(row, "coupon_discount", default=0))
+            final_price = int(_get_num(row, "final_unit_price", "final_prc", default=0))
+
         items.append({
             "title": _get_str(row, "goods_nm", "title", default=goods_no),
             "originalPrice": int(_get_num(row, "sale_prc", default=0)),
             "quantity": quantity,
             "totalDiscount": int(_get_num(row, "total_discount", default=0)),
-            "productDiscount": int(_get_num(row, "product_discount", default=0)),
-            "couponDiscount": int(_get_num(row, "coupon_discount", default=0)),
-            "finalPrice": int(_get_num(row, "final_unit_price", default=0)),
+            "productDiscount": product_discount,
+            "couponDiscount": coupon_discount,
+            "finalPrice": final_price,
         })
         metadata.append({"goodsId": goods_no})
 
@@ -1718,6 +1739,7 @@ _MAPPERS: dict[str, Any] = {
     "get_my_coupons_tool": _map_voucher,
     "transfer_to_qna_tool": _map_qna_complete,
     "compare_discount_tool": _map_cheapest_product,
+    "get_cheapest_price_tool": _map_cheapest_product,
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
     "get_store_list_tool": _map_location,
@@ -1778,6 +1800,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_user_vehicles_tool", _map_list_car),
         ("get_my_coupons_tool", _map_voucher),
         ("compare_discount_tool", _map_cheapest_product),
+        ("get_cheapest_price_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_stores_with_time_filter_tool", _map_time_filter_location),

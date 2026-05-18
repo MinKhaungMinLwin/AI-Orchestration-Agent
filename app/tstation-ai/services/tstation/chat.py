@@ -2415,6 +2415,7 @@ _QC_REQUIRED_TOOLS = frozenset({
     # Price, discount, promotion, coupon
     "get_final_price_tool",
     "compare_discount_tool",
+    "get_cheapest_price_tool",
     "get_my_coupons_tool",
     "issue_coupon_tool",
     "get_product_promotions_tool",
@@ -2680,6 +2681,7 @@ class TStationChatServiceV2:
             "check_compatibility_tool": "호환 사이즈 조회",
             "get_final_price_tool": "가격 조회",
             "compare_discount_tool": "할인 가격 비교",
+            "get_cheapest_price_tool": "최저 혜택가",
             "get_product_description_tool": "상품 상세",
         }
 

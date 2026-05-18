@@ -40,6 +40,7 @@ from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_�
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_cheapest_by_coupon_api_prices_cheapest_by_coupon_get import sync_detailed as get_cheapest_by_coupon
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
 
 # Member Car Info
@@ -1129,6 +1130,66 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     except Exception as e:
         logger.exception("[TOOL][compare_discount_tool] Failed")
         return _error_response(None, str(e), "Failed to compare discount prices")
+
+
+@tool
+def get_cheapest_price_tool(
+    goods_no_list: list[str],
+    quantity: int = 1,
+    shop_id: str | None = None,
+    channel: str = "web",
+):
+    """회원 보유 쿠폰을 상품→결제→플러스 순으로 자동 적용한 **상품별** 최저 혜택가.
+
+    Use when the user asks the **final benefit price** for one or more
+    *specific* products — e.g. "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가",
+    "최대 할인가", "최저가" (single-product or per-product, NOT "여러 개 중 가장 싼").
+    Different from `compare_discount_tool` which picks one cheapest item across
+    products; this tool returns one simulation row per `goods_no`.
+
+    각 단계마다 회원 보유 쿠폰 중 할인금액이 가장 큰 1장을 자동 선택해 적용.
+    상품쿠폰 CPN_DUP_USE_YN='N' 이면 결제쿠폰 단계는 건너뜀. 플러스쿠폰은 항상 적용.
+
+    Returns per-item: `sale_prc`, `final_prc`, `total_discount`, and
+    `applied_coupons[]` describing `{stage, cpn_no, cpn_nm, discount_amt}`.
+    **Cite `cpn_nm` in the natural-language reply** so the user knows which
+    coupons were used. FE renders only `sale_prc`/`final_prc` via the
+    `cheapestProduct` card.
+
+    Args:
+        goods_no_list (list[str]): 1+ product numbers. **goods_no MUST be
+            confirmed** before calling — if the user has not chosen a product
+            yet, do NOT call this tool.
+        quantity (int): Order-stage → user-selected quantity; simple
+            cheapest-price inquiry → 1 (default).
+        shop_id (str | None): Pass when the store is confirmed (matters for
+            store-scoped coupons). Otherwise omit.
+        channel (str): "web" (default) or "app".
+
+    Example: {"goods_no_list": ["G000000319449"], "quantity": 1}
+    """
+    logger.debug(
+        "[TOOL][get_cheapest_price_tool] Called with: goods_no_list=%s, quantity=%s, shop_id=%s, channel=%s",
+        goods_no_list, quantity, shop_id, channel,
+    )
+    try:
+        response = get_cheapest_by_coupon(
+            client=get_client(),
+            goods_no_list=goods_no_list,
+            quantity=quantity,
+            shop_id=shop_id,
+            channel=channel,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get cheapest price",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_cheapest_price_tool] Failed")
+        return _error_response(None, str(e), "Failed to get cheapest price")
 
 
 # Add this new tool for YouTube video search related to hankook tire and tstation tv. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.

@@ -17,7 +17,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
 )
 from services.tstation.agents.b_discovery_agent.tools import get_product_description_tool
 from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
-from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool
+from services.tstation.agents.b_discovery_agent.tools import compare_discount_tool, get_cheapest_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_final_price_tool
 from services.tstation.agents.b_discovery_agent.tools import get_best_selling_products_tool
 from services.tstation.agents.c_transaction_agent.tools import (
@@ -108,6 +108,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | search_product_tool | User searches by product name/keyword (keyword는 한글로 전달; 영문 입력은 한글로 변환) |
 | get_product_description_tool | Product details, after recommending top product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only), price comparison between multiple products, OR normal tire vs run-flat price difference after search_product_tool verified both groups |
+| get_cheapest_price_tool | User asks the **final benefit price** for one or more *specific* products — "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가", "최대 할인가", or "각 상품 최저가" (per-product, NOT one cheapest across products). goods_no MUST be confirmed. Quantity = order qty if in order flow, else 1. Cite `cpn_nm` from `applied_coupons` in the reply. |
 | check_compatibility_tool | ONLY if tire_size unknown AND user provides car_no + owner_nm |
 | search_youtube_video_tool | User asks for video reviews — call immediately, no clarification |
 | get_events_tool | User asks about 이벤트 |
@@ -1784,6 +1785,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 | get_newest_products_tool | User asks for newest/latest/new tire products in general without naming a specific model; returns items sorted by `sys_reg_dtime` descending |
 | get_product_description_tool | Product details after user selects a specific product |
 | compare_discount_tool | User asks "cheapest" (cheapest-only), price comparison between multiple products, OR normal tire vs run-flat price difference after search_product_tool verified both groups |
+| get_cheapest_price_tool | User asks the **final benefit price** for one or more *specific* products — "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가", "최대 할인가", "각 상품 최저가" (per-product). goods_no MUST be confirmed; qty = order qty in order flow else 1. Cite `cpn_nm` from `applied_coupons` in the reply. |
 | get_final_price_tool | WAGE_PRC or single canonical price for an order preview only — do NOT call per search card |
 | get_best_selling_products_tool | "가장 많이 팔린 / 베스트셀러 / 잘 팔리는 / 잘 나가는 / 인기 상품" — 기간별 판매량 정렬 (period: day/week/month/3months) |
 
@@ -2150,6 +2152,7 @@ class DiscoverySubAgent(BaseAgent):
             get_coupon_applicable_products_tool,
             get_product_promotions_tool,
             compare_discount_tool,
+            get_cheapest_price_tool,
             get_final_price_tool,
         ]
         system_prompt = get_discovery_system_prompt
@@ -2161,6 +2164,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_newest_products_tool,
                 get_product_description_tool,
                 compare_discount_tool,
+                get_cheapest_price_tool,
                 get_final_price_tool,
                 get_best_selling_products_tool,
             ]
