@@ -23,6 +23,17 @@ _QTY_QUESTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 _QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"맞으시"),
 )
+# Skip qty enforcement when the response asks about OTHER slots (product/size)
+# in addition to qty. Pure qty-only questions still trigger chip enforcement.
+# Buggy false-positive case: "어떤 상품과 수량인지 알려주세요" — response is asking
+# product AND qty together, so forcing qty chips strips the user's chance to
+# pick a product first.
+_QTY_QUESTION_SKIP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"어떤\s*상품"),
+    re.compile(r"상품과\s*(?:수량|사이즈)"),
+    re.compile(r"사이즈와\s*수량"),
+    re.compile(r"상품(?:명|을)?\s*(?:알려|말씀|선택|입력)"),
+)
 _REQUIRED_QTY_CHIPS: tuple[str, ...] = ("1개", "2개", "3개", "4개")
 
 # Deterministic enforcement for satisfaction / repurchase / greeting quickReplies.
@@ -152,6 +163,10 @@ class QuickReplyTemplate(TemplatePayload):
         if any(p.search(text) for p in _QTY_CONFIRM_PATTERNS):
             return self
         if not any(p.search(text) for p in _QTY_QUESTION_PATTERNS):
+            return self
+        # Skip if the response asks about other slots (product/size) too —
+        # forcing qty chips would strip the user's chance to pick those first.
+        if any(p.search(text) for p in _QTY_QUESTION_SKIP_PATTERNS):
             return self
         chip_labels = {c.label for c in self.quickReplies}
         if all(req in chip_labels for req in _REQUIRED_QTY_CHIPS):
