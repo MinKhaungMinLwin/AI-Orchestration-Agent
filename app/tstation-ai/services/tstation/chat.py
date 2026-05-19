@@ -378,8 +378,8 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), reservation, coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
-- SUPPORT: FAQ, warranty, returns policy questions, maintenance, human agent
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- SUPPORT: FAQ, warranty, returns policy questions, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** ⚠️ NOT to be confused with store visit reservation booking (=TRANSACTION), human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
 
@@ -400,6 +400,13 @@ SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
 ⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
+
+⚠️ ALWAYS classify as SUPPORT (NOT TRANSACTION, NOT DISCOVERY): 두 개 이상의 할인 수단(쿠폰/딜/이벤트/프로모션/기획전/혜택) 사이의 **중복 적용 여부** 발화 — "X 중복 가능?", "X이랑 Y 같이 쓸 수 있어?", "X이랑 Y 동시 적용?", "둘 다 쓸 수 있어?", "함께 사용 가능?" — DBA 의 stacking 룰을 응답해야 하므로 SUPPORT 로 라우팅. "쿠폰" 단독 단어만 보고 transaction_coupon 으로, "기획전/이벤트" 단독 단어만 보고 discovery_event_content 로 분류 금지.
+Examples:
+- "반짝블랙딜이랑 우동딜 중복 가능?" → SUPPORT
+- "반짝블랙딜에 내 생일쿠폰 같이 쓸 수 있어?" → SUPPORT
+- "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT
+- "두 쿠폰 동시 적용 가능?" → SUPPORT
 
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
@@ -510,9 +517,9 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; reservation; reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, maintenance, shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 RULES:
@@ -528,6 +535,7 @@ RULES:
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
+- 두 개 이상의 할인 수단(쿠폰/딜/이벤트/프로모션/기획전/혜택) 사이의 중복 적용 여부 — "X 중복 가능?", "X이랑 Y 같이 쓸 수 있어?", "동시 적용?", "둘 다 쓸 수 있어?" → SUPPORT (NOT transaction_coupon, NOT discovery — DBA stacking 룰 응답 필요)
 - 온라인 전용 상품 차이/온라인에서만 구매/매장 방문 구매 가능 여부 → SUPPORT
 - 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
 - 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order
@@ -540,6 +548,10 @@ EXAMPLES (tricky cases):
 - "G012345678901 재고 있어?" → TRANSACTION, agent_prompt_profile=transaction_price_stock
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
+- "반짝블랙딜이랑 우동딜 중복 가능?" → SUPPORT (discount-means stacking — DBA 룰 응답 필요, NOT transaction_coupon)
+- "반짝블랙딜에 내 생일쿠폰 같이 쓸 수 있어?" → SUPPORT (딜+쿠폰 stacking)
+- "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT (기획전+쿠폰 stacking, NOT discovery_event_content)
+- "두 쿠폰 동시 적용 가능?" → SUPPORT (쿠폰+쿠폰 stacking, NOT transaction_coupon)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
@@ -624,6 +636,51 @@ class StreamingMultiAgentCoordinator:
     _KEYWORD_FORCE_TABLE: ClassVar[
         list[tuple[list[str], "MultiAgentDomain.Domain"]]
     ] = [
+        # SUPPORT — discount-means stacking eligibility (coupon/promotion/event/deal/기획전).
+        # MUST come first so "기획전 + 중복" doesn't get hijacked by the broader
+        # DISCOVERY 기획전/이벤트 keyword below, and "쿠폰 중복" doesn't get hijacked
+        # by TRANSACTION 쿠폰함 keyword. The LLM classifier consistently mis-routes
+        # these stacking questions to transaction_coupon because the TRANSACTION
+        # domain description owns "coupon inquiry" — substring force is the
+        # deterministic fix.
+        (
+            [
+                # "중복" + verb/adjective — strong stacking signal
+                "중복 가능",
+                "중복 적용",
+                "중복 사용",
+                "중복 돼",
+                "중복돼",
+                "중복 사용 가능",
+                # "같이/동시/함께/둘 다" + 사용/적용 verbs
+                "같이 쓸 수 있",
+                "같이 쓸수 있",
+                "같이 써도",
+                "같이 쓰면",
+                "같이 사용 가능",
+                "같이 돼",
+                "같이 됨",
+                "같이 적용",
+                "동시 적용",
+                "동시 사용",
+                "동시에 사용",
+                "동시에 적용",
+                "동시에 돼",
+                "동시에돼",
+                "함께 사용 가능",
+                "함께 쓸 수 있",
+                "둘 다 쓸",
+                "둘 다 적용",
+                "둘 다 사용",
+                "두 개 다 쓸",
+                "두 개 다 적용",
+                # "추가" 계열 — "쿠폰 더 추가 돼?", "할인 추가 사용", "추가 적용?"
+                "추가 돼",
+                "추가 사용",
+                "추가 적용",
+            ],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
         # TRANSACTION — cancellation/return shipping-fee inquiry (TC-118).
         # Keep this before the broad SUPPORT "반품" rule so round-trip return-fee
         # questions check order/logistics policy instead of FAQ hallucinating 5천 원.
@@ -1945,6 +2002,50 @@ _TRANSACTION_FAST_RE = re.compile(
     r"주문|구매|사고\s*싶|사려고|살래|쿠폰|장바구니|"
     r"매장\s*찾|가까운\s*매장|근처\s*매장|올마이티|all\s*my\s*t",
     re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# P0e: 5% (할인)쿠폰 정책 정보 질문 → SUPPORT redirect
+# ---------------------------------------------------------------------------
+# "5% 쿠폰이 뭐야?" / "5%할인쿠폰 알려줘" 류 정책 정보 질문은
+# e_support_agent prompt 의 HARD STOP (PR #169, e_support_agent/agent.py:44-)
+# 에서 처리되어야 한다. 그러나 LLM classifier 는 "쿠폰" 키워드만 보고
+# TRANSACTION + transaction_coupon 으로 분류 → c_transaction_agent 가
+# get_my_coupons_tool 을 호출해 voucher 카드로 응답 → HARD STOP 발동
+# 기회 자체가 없어진다 (Langfuse trace `5a2da3ff...` 검증).
+#
+# negative guard:
+#   - ownership keyword ("내/받은/보유/가진/갖고/소유") → 보유 조회 의도, TX 유지
+#   - action keyword  ("받아/받기/받을/발급/다운로드/다운받") → 발급/획득 의도,
+#     c_transaction_agent 의 GLOBAL 룰 (line 33-) 이 "쿠폰함에서 가능합니다"
+#     로 안내. HARD STOP (정책 정보 fixed text) 발동시키지 않는다.
+_FIVE_PERCENT_COUPON_POSITIVE_RE = re.compile(
+    r"5\s*%\s*(?:할인\s*)?쿠폰"
+)
+_FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
+    # ownership
+    r"내\s*쿠폰|내\s*5\s*%|내가\s|받은|보유|가진|가지고|갖고|소유한|"
+    # action (issue / download intent)
+    r"받아|받기|받을|발급(?!\s*안|\s*기능)|다운(?:로드|받)"
+)
+
+# ---------------------------------------------------------------------------
+# P0f: 쿠폰 발급/안내 발화 → single [TRANSACTION] domain 강제
+# ---------------------------------------------------------------------------
+# "쿠폰 어떻게 받아?", "쿠폰 받아줘", "쿠폰 다운로드" 류 쿠폰 발급/안내 발화는
+# c_transaction_agent 의 GLOBAL 룰 (agent.py:33-) 이 단일 응답
+# ("쿠폰 받기는 쿠폰함에서 가능합니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip)
+# 을 emit 한다. 그러나 LLM classifier 가 multi-domain ([transaction, support])
+# 또는 speculative discovery 까지 추가 라우팅하면 discovery_agent 가 자체
+# 응답 ("이벤트/기획전 페이지에서 받기" + 이벤트/기획전 chip) 을 emit 해
+# FE 가 잘못된 chip 을 보여준다 (Langfuse trace `b14fdcf8...` 검증).
+#
+# P0f 는 transaction_coupon profile + issue intent 키워드 매칭 시 domains 를
+# 단일 [TRANSACTION] 으로 강제 narrow — discovery/support speculative
+# 차단 → c_transaction_agent 만 실행 → GLOBAL 룰의 응답이 deterministic
+# 하게 emit.
+_COUPON_ISSUE_INTENT_RE = re.compile(
+    r"쿠폰\s*(?:받(?:아|기|을|은)|다운(?:로드|받)|발급|어떻게\s*받)"
 )
 
 # ---------------------------------------------------------------------------
@@ -3962,6 +4063,64 @@ class TStationChatServiceV2:
                 f"session_id={request.session_id})"
             )
             routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+
+        # P0e domain override: classifier picks [TRANSACTION] + transaction_coupon
+        # for "5% (할인)쿠폰" policy info questions, but PR #169's HARD STOP
+        # lives in e_support_agent prompt only. Without this gate the user
+        # sees voucher card lookup (get_my_coupons_tool) instead of the
+        # fixed-text policy response. Force redirect to SUPPORT + FULL profile
+        # so e_support_agent's HARD STOP fires deterministically.
+        #
+        # Narrow trigger:
+        #   - domains EXACTLY [TRANSACTION] (multi-domain chains skip)
+        #   - profile transaction_coupon (other transaction profiles unrelated)
+        #   - last_user_text matches 5% coupon positive regex
+        #   - ownership / action keywords ABSENT (see module-level negative regex)
+        if (
+            routing_result is not None
+            and len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_COUPON
+            and last_user_text
+            and _FIVE_PERCENT_COUPON_POSITIVE_RE.search(last_user_text)
+            and not _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE.search(last_user_text)
+        ):
+            logger.info(
+                "[COORDINATOR] P0e domain override: 5%% coupon policy → SUPPORT/full "
+                f"(text={last_user_text[:80]!r}, session_id={request.session_id})"
+            )
+            domains[:] = [MultiAgentDomain.Domain.SUPPORT]
+            routing_result.domains = [MultiAgentDomain.Domain.SUPPORT]
+            routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+
+        # P0f domain narrowing: classifier picks multi-domain
+        # ([transaction, support]) or speculative discovery for coupon
+        # issue/inquiry questions ("쿠폰 어떻게 받아?", "쿠폰 받아줘"). The
+        # c_transaction GLOBAL rule (agent.py:33-) is the single source of
+        # truth for the canned response + chip, but speculative discovery /
+        # support agents emit their own answer (e.g. "이벤트/기획전" chips)
+        # overriding the FE payload (Langfuse trace `b14fdcf8...` verified).
+        # Force single [TRANSACTION] so only c_transaction_agent runs.
+        #
+        # Narrow trigger:
+        #   - profile transaction_coupon (P0e may have already redirected
+        #     5% policy questions to SUPPORT/full — skipped here)
+        #   - last_user_text matches coupon issue intent regex
+        #   - domains is NOT already exactly [TRANSACTION] (no-op skip)
+        if (
+            routing_result is not None
+            and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_COUPON
+            and last_user_text
+            and _COUPON_ISSUE_INTENT_RE.search(last_user_text)
+            and domains != [MultiAgentDomain.Domain.TRANSACTION]
+        ):
+            logger.info(
+                "[COORDINATOR] P0f domain narrowing: coupon issue intent → "
+                f"[TRANSACTION] (prev={[d.value for d in domains]}, "
+                f"text={last_user_text[:80]!r}, session_id={request.session_id})"
+            )
+            domains[:] = [MultiAgentDomain.Domain.TRANSACTION]
+            routing_result.domains = [MultiAgentDomain.Domain.TRANSACTION]
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set

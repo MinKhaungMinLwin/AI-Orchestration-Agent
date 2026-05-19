@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.deal_coupon_item import DealCouponItem
+
 
 T = TypeVar("T", bound="DealItem")
 
@@ -27,6 +31,8 @@ class DealItem:
         new_deal_yn (None | str | Unset): 신규 기획전 여부
         deal_brand_logo (None | str | Unset): 기획전 브랜드 로고
         deal_notice (None | str | Unset): 기획전 유의사항
+        mapped_coupons (list[DealCouponItem] | Unset): 해당 기획전에 매핑된 활성 쿠폰 목록 (CC_DEAL_CPN_INFO LEFT JOIN). 쿠폰 종류=C301,
+            진행상태=40, USE_YN=Y 인 쿠폰만 포함. 비어있으면 쿠폰없이 진행되는 기획전 (즉시할인 등).
     """
 
     deal_no: str
@@ -41,6 +47,7 @@ class DealItem:
     new_deal_yn: None | str | Unset = UNSET
     deal_brand_logo: None | str | Unset = UNSET
     deal_notice: None | str | Unset = UNSET
+    mapped_coupons: list[DealCouponItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +119,13 @@ class DealItem:
         else:
             deal_notice = self.deal_notice
 
+        mapped_coupons: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.mapped_coupons, Unset):
+            mapped_coupons = []
+            for mapped_coupons_item_data in self.mapped_coupons:
+                mapped_coupons_item = mapped_coupons_item_data.to_dict()
+                mapped_coupons.append(mapped_coupons_item)
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -141,11 +155,15 @@ class DealItem:
             field_dict["deal_brand_logo"] = deal_brand_logo
         if deal_notice is not UNSET:
             field_dict["deal_notice"] = deal_notice
+        if mapped_coupons is not UNSET:
+            field_dict["mapped_coupons"] = mapped_coupons
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.deal_coupon_item import DealCouponItem
+
         d = dict(src_dict)
         deal_no = d.pop("deal_no")
 
@@ -248,6 +266,15 @@ class DealItem:
 
         deal_notice = _parse_deal_notice(d.pop("deal_notice", UNSET))
 
+        _mapped_coupons = d.pop("mapped_coupons", UNSET)
+        mapped_coupons: list[DealCouponItem] | Unset = UNSET
+        if _mapped_coupons is not UNSET:
+            mapped_coupons = []
+            for mapped_coupons_item_data in _mapped_coupons:
+                mapped_coupons_item = DealCouponItem.from_dict(mapped_coupons_item_data)
+
+                mapped_coupons.append(mapped_coupons_item)
+
         deal_item = cls(
             deal_no=deal_no,
             deal_tp_cd=deal_tp_cd,
@@ -261,6 +288,7 @@ class DealItem:
             new_deal_yn=new_deal_yn,
             deal_brand_logo=deal_brand_logo,
             deal_notice=deal_notice,
+            mapped_coupons=mapped_coupons,
         )
 
         deal_item.additional_properties = d

@@ -6,6 +6,7 @@ from .available_coupon_response import AvailableCouponResponse
 from .best_seller_item import BestSellerItem
 from .best_seller_period import BestSellerPeriod
 from .best_seller_response import BestSellerResponse
+from .car_maintenance_dday import CarMaintenanceDday
 from .car_model_group import CarModelGroup
 from .car_model_group_response import CarModelGroupResponse
 from .car_model_search_item import CarModelSearchItem
@@ -13,6 +14,8 @@ from .car_model_search_response import CarModelSearchResponse
 from .car_tire_size_response import CarTireSizeResponse
 from .car_trim_item import CarTrimItem
 from .car_trim_response import CarTrimResponse
+from .card_installment_item import CardInstallmentItem
+from .card_installment_list_response import CardInstallmentListResponse
 from .chat_history_response import ChatHistoryResponse
 from .cheapest_by_coupon_item import CheapestByCouponItem
 from .cheapest_by_coupon_response import CheapestByCouponResponse
@@ -23,6 +26,9 @@ from .coupon_applicable_stores_group import CouponApplicableStoresGroup
 from .coupon_deal_applicable_products_response import CouponDealApplicableProductsResponse
 from .coupon_issue_response import CouponIssueResponse
 from .coupon_result_item import CouponResultItem
+from .coupon_stacking_check_response import CouponStackingCheckResponse
+from .coupon_stacking_info import CouponStackingInfo
+from .coupon_stacking_pair import CouponStackingPair
 from .cpn_coupon_issue_request import CpnCouponIssueRequest
 from .deal_applicable_products_group import DealApplicableProductsGroup
 from .deal_coupon_item import DealCouponItem
@@ -52,8 +58,12 @@ from .goods_item import GoodsItem
 from .http_validation_error import HTTPValidationError
 from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
+from .maintenance_dday_item import MaintenanceDdayItem
+from .maintenance_dday_response import MaintenanceDdayResponse
 from .member_car_info import MemberCarInfo
 from .member_car_list_response import MemberCarListResponse
+from .member_warranty_item import MemberWarrantyItem
+from .member_warranty_list_response import MemberWarrantyListResponse
 from .message_create import MessageCreate
 from .message_response import MessageResponse
 from .multi_event_applicable_products_response import MultiEventApplicableProductsResponse
@@ -72,6 +82,8 @@ from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
 from .product_search_item import ProductSearchItem
 from .product_search_response import ProductSearchResponse
+from .product_warranties_response import ProductWarrantiesResponse
+from .product_warranty_item import ProductWarrantyItem
 from .rcmd_goods_item import RcmdGoodsItem
 from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
@@ -104,6 +116,9 @@ __all__ = (
     "BestSellerItem",
     "BestSellerPeriod",
     "BestSellerResponse",
+    "CardInstallmentItem",
+    "CardInstallmentListResponse",
+    "CarMaintenanceDday",
     "CarModelGroup",
     "CarModelGroupResponse",
     "CarModelSearchItem",
@@ -121,6 +136,9 @@ __all__ = (
     "CouponDealApplicableProductsResponse",
     "CouponIssueResponse",
     "CouponResultItem",
+    "CouponStackingCheckResponse",
+    "CouponStackingInfo",
+    "CouponStackingPair",
     "CpnCouponIssueRequest",
     "DealApplicableProductsGroup",
     "DealCouponItem",
@@ -146,8 +164,12 @@ __all__ = (
     "HTTPValidationError",
     "LogisticsRequest",
     "LogisticsResponse",
+    "MaintenanceDdayItem",
+    "MaintenanceDdayResponse",
     "MemberCarInfo",
     "MemberCarListResponse",
+    "MemberWarrantyItem",
+    "MemberWarrantyListResponse",
     "MessageCreate",
     "MessageResponse",
     "MultiEventApplicableProductsResponse",
@@ -166,6 +188,8 @@ __all__ = (
     "ProductImage",
     "ProductSearchItem",
     "ProductSearchResponse",
+    "ProductWarrantiesResponse",
+    "ProductWarrantyItem",
     "RcmdGoodsItem",
     "RcmdType",
     "RecommendationResponse",
