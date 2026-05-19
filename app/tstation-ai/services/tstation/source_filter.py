@@ -98,6 +98,20 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "list_key": "orders",
         "keep": {"ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "sys_reg_dtime"},
     },
+    # 상품별 적용 가능 워런티 — wrt_tp_cd/wrt_nm/is_plus 만 QC 검증/응답 노출용.
+    "get_product_warranties_tool": {
+        "list_key": "warranties",
+        "keep": {"wrt_tp_cd", "wrt_nm", "is_plus"},
+    },
+    # 회원 보유 워런티 — 가입대기 100 은 BE 에서 이미 필터됨. 한글 라벨 노출.
+    "get_my_warranties_tool": {
+        "list_key": "warranties",
+        "keep": {
+            "wrt_tp_cd", "wrt_nm",
+            "wrt_reg_date", "wrt_exp_date",
+            "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
+        },
+    },
 }
 
 # tool_name → drop_keys for single-object responses
@@ -200,6 +214,19 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     "check_compatibility_tool": {
         "list_key": "tire_sizes",
         "keep": {"tire_size", "rim_size", "is_oem"},
+    },
+    # 후속 턴 "방금 본 그 상품 워런티 다시 알려줘" / "내 안심서비스 만료일 다시" 참조용.
+    "get_product_warranties_tool": {
+        "list_key": "warranties",
+        "keep": {"wrt_tp_cd", "wrt_nm", "is_plus"},
+    },
+    "get_my_warranties_tool": {
+        "list_key": "warranties",
+        "keep": {
+            "wrt_tp_cd", "wrt_nm",
+            "wrt_reg_date", "wrt_exp_date",
+            "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
+        },
     },
 }
 

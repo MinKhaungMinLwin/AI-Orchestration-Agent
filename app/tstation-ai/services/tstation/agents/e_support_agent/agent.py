@@ -3,6 +3,8 @@ from services.tstation.agents.e_support_agent.tools import (
     get_faq_tool,
     search_faq_rag_tool,
     transfer_to_qna_tool,
+    get_product_warranties_tool,
+    get_my_warranties_tool,
 )
 from services.tstation.agents.templates import SupportDataEvent
 from services.tstation.common.cta_urls import expand_url_sentinels
@@ -58,6 +60,8 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 | get_faq_tool | Intent 1B or 1C — policy/info questions |
 | search_faq_rag_tool | Fallback only: get_faq_tool fails or returns no relevant result at limit=200 |
 | transfer_to_qna_tool | Intent 0 (user agrees), 1A, 1C (after FAQ), or FAQ exhausted |
+| get_product_warranties_tool | 사용자가 **특정 상품**의 워런티 적용 가능 종류를 물을 때 (goods_no 필요). FAQ 보다 우선. |
+| get_my_warranties_tool | 사용자가 **본인 보유** 워런티 현황을 물을 때 (JWT mbr_no 자동). FAQ 보다 우선. |
 
 **get_faq_tool call rules:**
 - Infer lrcl_cd: 회원/계정/장착예약 → "C01" (mdcl: "C0103" 계정, "C0106" 장착) | 타이어/상품/공기압 → "C02" (mdcl: "C0201") | 매장/보관/런플랫 → "C03" (mdcl: "C0302") | 불분명 → None
@@ -67,6 +71,36 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 
 **search_faq_rag_tool score rules (applies to RAG results only — get_faq_tool returning no items is NOT out-of-scope, escalate limit first):**
 - ≥0.7 → answer directly | 0.45–0.7 → use as supporting info | all scores <0.45 → out-of-scope, decline politely.
+
+**Warranty data lookup rules (신규 도구 — 본 블록이 아래 FAQ 기반 Digital Warranty 룰보다 우선):**
+
+특정 상품의 워런티 적용 여부 또는 회원 본인 보유 워런티 조회는 신규 도구를 먼저 사용한다.
+정책/조건 일반 질문 ("얼마", "어떻게", "조건", "범위") 은 아래 FAQ 기반 룰 (Digital Warranty / 안심서비스 answer rules) 그대로 적용.
+
+- **Path A — 회원 본인 보유 워런티**: 사용자가 "내 워런티", "내가 가입한 안심서비스", "내 품질보증 만료일", "워런티 현황", "내 보증 남은 기간" 식으로 본인 보유를 묻는 경우 → `get_my_warranties_tool()` 호출.
+  - 응답 본문 (성공 + warranties 1건 이상): "고객님이 보유하신 워런티는 다음과 같아요 😊" + 각 항목을 다음 markdown bullet 형식으로 노출 (각 라인 사이 `\n\n` 1줄):
+    `- **{wrt_nm}**: {wrt_prgs_stat_nm} (가입 {wrt_reg_date}, 만료 {wrt_exp_date})`
+    날짜 필드가 null 이면 해당 부분만 "(만료일 미정)" 또는 "(가입일 미정)" 으로 치환. 시각(HH:MM:SS) 절대 노출 금지 — BE 가 YYYY-MM-DD 로만 내려준다.
+  - warranties=[] (보유 0건): "고객님께서 현재 보유하신 워런티가 확인되지 않아요. 자세한 가입 정보는 마이페이지 또는 1:1 문의로 확인해 주세요." (가입대기 단계는 BE 단에서 응답에서 제외되어 보이지 않음 — 본문에서 "가입대기/대기 중" 같은 추측 표현 절대 금지.)
+  - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함.
+
+- **Path B — 특정 상품 적용 가능 워런티**: 사용자가 "이 타이어 안심서비스 돼?", "이 상품 워런티 종류", "다이나프로 HPX 30일 해피보증 돼?", "방금 본 상품 품질보증 가입 가능?" 처럼 특정 상품 단위 적용 여부를 묻는 경우.
+  - 컨텍스트(직전 product 카드 / search 결과 / preOrder)에 해당 상품의 `goods_no` 가 있을 때만 `get_product_warranties_tool(goods_no=<해당값>)` 호출.
+  - `goods_no` 가 컨텍스트에 **없으면 도구 호출 금지** — 사용자에게 "어떤 상품에 대해 알려드릴까요?" + `{"label":"타이어 추천","domain":"DISCOVERY"}` / `{"label":"상품 찾기","domain":"DISCOVERY"}` chip 으로 유도. 절대 임의 goods_no 추측 금지.
+  - 응답 본문 (성공 + warranties 1건 이상): "**{상품명}** 에 적용 가능한 워런티는 다음과 같아요 😊" + 각 워런티 `- **{wrt_nm}**` bullet. PLPR_YN='Y' 케이스는 BE 가 안심서비스 / 안심플러스를 2 row 로 분리해서 내려주므로 받은 순서대로 그대로 노출 (사용자가 두 옵션 모두 가능함을 자연스럽게 인지).
+  - warranties=[] + ptrn_cd 가 채워진 경우: "**{상품명}** 은 현재 워런티 적용 대상이 아닌 것으로 확인돼요."
+  - ptrn_cd=null (상품 미존재): "해당 상품 정보를 찾지 못했어요. 정확한 상품으로 다시 확인해 주세요."
+  - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함. 자리 남으면 `{"label":"구매하기","domain":"TRANSACTION"}` 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}` 보조 chip.
+
+- **Path C — 일반 정책/조건/혜택 질문**: 위 Path A/B 트리거에 해당하지 않는 워런티 일반 정책 질문 ("안심서비스 뭐야?", "보장 범위 어디까지?", "펑크 보상 돼?", "코드절상 무상교환이 뭐야?", "어떤 조건이어야 가입돼?") 은 아래 "Digital Warranty / 안심서비스 answer rules" (FAQ 기반) 그대로 적용.
+
+⚠️ Path A/B 응답에서 절대 노출 금지:
+- BE 내부 컬럼/코드명 (`ET_DGTL_WRT_REG_INFO`, `WRT_TP_CD`, `WRT_PRGS_STAT_CD`, `PLPR_YN` 등).
+- 코드 값 ("코드 200", "100 제외됨", "상태코드 300"). 반드시 한글 라벨 (가입완료/기간만료/보상완료) 만 사용.
+- 시스템 노출 표현 ("DB 조회 결과", "BE 응답 기준", "API 응답에 따르면"). 사용자에게는 자연스러운 안내 톤만.
+
+⚠️ 도구 호출 실패 (status="error" 또는 HTTP 4xx/5xx) 시: 워런티 데이터 조회가 일시적으로 어렵다고 안내한 뒤, 위 Path C 의 FAQ 룰로 fallback 하거나 1:1 문의 chip 으로 유도.
+
 
 **Digital Warranty / 안심서비스 answer rules:**
 - For warranty coverage questions about future puncture/damage, free repair, tire replacement, plug repair (지렁이), 안심서비스, 안심플러스, 디지털워런티, 워런티, or 보증서비스, call `get_faq_tool` first with `lrcl_cd=None` and `limit=100`. Prefer FAQ items whose question/answer discusses 안심서비스, 안심플러스, 디지털워런티, 워런티, 보증, 펑크, 보상, or 교체.
@@ -392,6 +426,10 @@ class SupportSubAgent(BaseAgent):
         "search_faq_rag_tool": "FAQ",
         "transfer_to_qna_tool": "Fallback / Escalation",
         "escalate_tool": "Fallback / Escalation",
+        # Warranty 조회 도구도 정보성 응답이라 FAQ AF 로 묶는다 — 표준 AF 10개
+        # 유지를 위해 별도 AF 신설하지 않음.
+        "get_product_warranties_tool": "FAQ",
+        "get_my_warranties_tool": "FAQ",
     }
 
     def __init__(self, model):
@@ -401,6 +439,8 @@ class SupportSubAgent(BaseAgent):
                 get_faq_tool,
                 search_faq_rag_tool,
                 transfer_to_qna_tool,
+                get_product_warranties_tool,
+                get_my_warranties_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",

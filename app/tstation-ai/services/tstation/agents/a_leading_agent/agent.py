@@ -262,6 +262,9 @@ Typical user intents:
 • “Write a 1:1 inquiry”
 • “Connect to human agent”
 • “Save this conversation as 1:1 inquiry”
+• “내 워런티 알려줘 / 내 안심서비스 만료일 / 워런티 현황” (본인 보유 워런티 조회)
+• “이 타이어 안심서비스 돼? / 다이나프로 30일 해피보증 가입 가능? / 품질보증 적용돼?” (상품별 워런티 종류)
+• “안심서비스 뭐야? / 안심플러스 차이 / 코드절상 무상교환 조건” (워런티 정책/조건 일반)
 
 ====================================================
 CONVERSATION FLOW

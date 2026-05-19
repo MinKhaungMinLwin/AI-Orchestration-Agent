@@ -7,6 +7,12 @@ from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedCli
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync_detailed as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
+from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
+    sync_detailed as get_my_warranties,
+)
+from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_product_warranties_api_products_goods_no_warranties_get import (
+    sync_detailed as get_product_warranties,
+)
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
 from langchain.tools import tool
 from common.tool_cache import tool_cache
@@ -280,3 +286,88 @@ def transfer_to_qna_tool(
     except Exception as e:
         logger.exception("[TOOL][transfer_to_qna_tool] Failed")
         return {"status": "error", "response": f"❌ **오류 발생**: {str(e)}\n\n> 다시 시도하시거나 고객센터로 직접 문의해주세요."}
+
+
+# --------------------------------------------------------------------------- #
+#  Warranty (워런티 조회)                                                       #
+# --------------------------------------------------------------------------- #
+
+@tool
+@tool_cache(ttl=600)
+def get_product_warranties_tool(goods_no: str):
+    """
+    상품에 적용 가능한 워런티 종류를 조회한다 (ET_DGTL_WRT_APLY_INFO).
+
+    Use when: 사용자가 "이 타이어에 안심서비스 돼?", "이 상품 워런티 뭐 돼?",
+    "다이나프로 HPX 품질보증 가입 가능해?", "이 상품 30일 해피보증 적용돼?"
+    처럼 특정 상품의 워런티 적용 가능성을 묻는 경우.
+
+    Args:
+        goods_no (str): 상품 번호 (PR_GOODS_BASE.GOODS_NO). 직전 상품 카드/검색
+            결과에서 가져온 값을 그대로 사용. 사용자가 상품명만 언급하고
+            goods_no 가 컨텍스트에 없으면 먼저 search_product_tool 등으로
+            확인할 것 (이 도구는 search 하지 않는다).
+
+    Returns: status/http_status/data. data 구조:
+        {"goods_no": "...", "ptrn_cd": "K129",
+         "warranties": [{"wrt_tp_cd":"10","wrt_nm":"품질보증","is_plus":false}, ...]}
+
+        - wrt_tp_cd: "10"=품질보증 / "20"=안심서비스 (PLPR_YN='Y' 이면 동일 코드로
+          "안심플러스" 행이 추가됨, is_plus=true) / "30"=30일 해피보증 /
+          "40"=코드절상 무상교환.
+        - 상품이 없으면 ptrn_cd=null, warranties=[].
+        - 패턴은 있지만 적용 가능한 워런티가 0건이면 ptrn_cd 채워짐 + warranties=[].
+    """
+    logger.debug("[TOOL][get_product_warranties_tool] goods_no=%s", goods_no)
+    try:
+        response = get_product_warranties(goods_no=goods_no, client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get product warranties",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_product_warranties_tool] Failed")
+        return _error_response(None, str(e), "Failed to get product warranties")
+
+
+@tool
+@tool_cache(ttl=300)
+def get_my_warranties_tool():
+    """
+    JWT 회원이 보유한 워런티 목록을 조회한다 (ET_DGTL_WRT_REG_INFO).
+
+    Use when: 사용자가 "내 워런티 알려줘", "내가 가입한 안심서비스 만료일",
+    "내 품질보증 언제까지야?", "내 워런티 현황", "내 워런티 보유 내역"
+    처럼 본인 보유 워런티를 묻는 경우. 인증된 JWT 의 회원번호를 자동 사용.
+
+    Returns: status/http_status/data. data 구조:
+        {"warranties": [
+            {"wrt_tp_cd":"10","wrt_nm":"품질보증",
+             "wrt_reg_date":"2025-04-15","wrt_exp_date":"2027-04-15",
+             "wrt_prgs_stat_cd":"200","wrt_prgs_stat_nm":"가입완료"},
+            ...
+        ]}
+
+        - 진행상태: "200"=가입완료 / "300"=기간만료 / "400"=보상완료.
+          ("100"=가입대기는 BE 단에서 응답에서 제외됨 — 노출 금지.)
+        - 가입일자 내림차순. 보유 워런티 0건이면 warranties=[].
+        - 회원 보유 응답에는 안심플러스 구분 컬럼이 없어 wrt_tp_cd='20' 은 모두
+          "안심서비스" 로 노출됨. "안심플러스 가입 여부" 같은 세부 구분은
+          현 BE 응답으로 단정 불가.
+    """
+    logger.debug("[TOOL][get_my_warranties_tool] called")
+    try:
+        response = get_my_warranties(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get my warranties",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_warranties_tool] Failed")
+        return _error_response(None, str(e), "Failed to get my warranties")

@@ -139,6 +139,11 @@ def summarize_tool(name: str, result: Any) -> str:
     if name == "transfer_to_qna_tool":
         return "qna handoff"
 
+    if name in ("get_product_warranties_tool", "get_my_warranties_tool"):
+        d = _data(result)
+        items = d.get("warranties", []) if isinstance(d, dict) else []
+        return f"{len(items)} warranties"
+
     if name == "escalate_tool":
         d = _data(result)
         ticket = d.get("ticketId") or d.get("ticket_id")
