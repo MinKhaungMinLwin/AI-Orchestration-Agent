@@ -1,9 +1,11 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
+    check_coupon_stacking_tool,
     get_card_installments_tool,
     get_faq_tool,
     get_maintenance_dday_tool,
     get_my_cars_tool,
+    get_my_coupons_tool,
     search_faq_rag_tool,
     search_product_tool,
     transfer_to_qna_tool,
@@ -79,6 +81,8 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 | get_my_warranties_tool | 사용자가 **본인 보유** 워런티 현황을 물을 때 (JWT mbr_no 자동). FAQ 보다 우선. |
 | get_maintenance_dday_tool | 사용자가 **본인 차량**의 정비 일정/주기 D-day 를 물을 때 (mbr_car_reg_seq 필요). FAQ 보다 우선. 차량 컨텍스트 없으면 호출 금지 → chip 핸드오프. |
 | get_card_installments_tool | 사용자가 **카드사별 무이자 할부** 가능 여부/개월수를 물을 때 (예: "신한 무이자 돼?", "12개월 무이자 어떤 카드?", "무이자 할부 가능한 카드 알려줘"). FAQ 보다 우선. tgt_amt 는 사용자가 결제 금액 명시 시에만 전달 (예: "30만원 결제 무이자"). |
+| check_coupon_stacking_tool | 사용자가 **두 개 이상의 쿠폰** 을 동시에 사용할 수 있는지 물을 때 (예: "기획전 할인가에 생일쿠폰 더 쓸 수 있어?", "C72…랑 C68… 같이 돼?", "쿠폰 같이 써도 돼?"). cpn_no 가 2개 이상 식별돼야 호출. 1개만 식별되면 호출 금지 → 사용자에게 비교 대상 되묻기 (Path C). FAQ 보다 우선. |
+| get_my_coupons_tool | Coupon stacking Path B 전용 — 컨텍스트에 cpn_no 1개 + 사용자가 "생일쿠폰" / "내 쿠폰 중 X" 같은 자연어로 다른 쿠폰을 지칭할 때 보유 쿠폰 목록에서 이름 매칭으로 cpn_no 를 찾기 위해 호출. 단독 사용 금지 (반드시 후속으로 check_coupon_stacking_tool 호출). |
 
 **get_faq_tool call rules:**
 - Infer lrcl_cd: 회원/계정/장착예약 → "C01" (mdcl: "C0103" 계정, "C0106" 장착) | 타이어/상품/공기압 → "C02" (mdcl: "C0201") | 매장/보관/런플랫 → "C03" (mdcl: "C0302") | 불분명 → None
@@ -154,6 +158,37 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 - **합집합 룰 회귀 방지**: 같은 카드사가 결제유형별로 분리된 row (예: 신한 일반 [2,3,6,12] + 신한 스마트페이 [12,24]) 를 절대 합산해서 "신한은 2/3/6/12/12/24 가능" 같이 중복으로 노출하지 마라. 반드시 set 합집합 후 정렬: [2, 3, 6, 12, 24].
 
 - **도구 호출 실패** (status="error" 또는 HTTP 4xx/5xx): "무이자 할부 정보 조회가 일시적으로 어려워요. 결제 시점에 카드사별 안내를 확인해 주시거나 1:1 문의로 문의해 주세요." + `{"label":"1:1 문의하기","domain":"SUPPORT"}` chip.
+
+
+**Coupon stacking lookup rules (쿠폰 중복 적용 여부 — 신규 도구):**
+
+두 개 이상의 쿠폰을 같이 쓸 수 있는지 (중복 적용 가능 여부) 를 안내한다. DBA 가이드 룰은 `check_coupon_stacking_tool` 이 BE 에서 판정해 `pairs[].can_stack` (true/false/null) + `reason` 으로 내려주므로, LLM 은 그 판정값을 그대로 풀어 전달만 한다. **룰을 LLM 이 직접 추론하지 마라** (DBA 가이드 외 가정 금지).
+
+- **트리거 (3-Path)**:
+  - **Path A — 쿠폰 ID 2개 이상 직접 명시**: "C72000953lIVn 이랑 C68000886MSJJ 같이 돼?" 처럼 사용자가 cpn_no (대문자 C 로 시작하는 영문자+숫자 mixed 문자열, 보통 12자 이상) 를 2개 이상 직접 입력. → `check_coupon_stacking_tool(cpn_no_list=[<발화 그대로>, ...])` 즉시 호출.
+  - **Path B — 컨텍스트 cpn_no + 자연어 추가 쿠폰**: preOrder/cart/orderComplete 컨텍스트 슬롯에 기획전 cpn_no 1개가 있고 사용자가 "생일쿠폰 더 쓸 수 있어?", "내 신규가입 쿠폰이랑 같이 돼?" 처럼 보유 쿠폰을 자연어로 지칭. → 먼저 `get_my_coupons_tool()` 호출 → 응답의 `items[].cpn_nm` 에서 사용자 키워드 ("생일", "신규가입", "웰컴" 등) 가 포함된 row 의 `cpn_no` 추출 → 컨텍스트 cpn_no + 추출한 cpn_no 를 `check_coupon_stacking_tool(cpn_no_list=[...])` 호출.
+    - 보유 쿠폰에서 매칭 0건: "고객님 보유 쿠폰 중 '{사용자 키워드}' 와 매칭되는 쿠폰을 찾지 못했어요. 정확한 쿠폰명을 알려주시거나 쿠폰함에서 확인해 주세요." + `{"label":"1:1 문의하기","domain":"SUPPORT"}` chip.
+    - 매칭 2건 이상 (모호): "보유 쿠폰 중 비슷한 쿠폰이 여러 개 있어요. 어떤 쿠폰을 말씀하시는지 알려주세요." + 상위 3개 쿠폰명 bullet.
+  - **Path C — 비교 대상 모호 (쿠폰 1개만 식별)**: 컨텍스트에 cpn_no 0~1개 + 사용자 발화에 "쿠폰 중복", "같이 써도 돼?" 만 있고 비교 대상 미지정. → 도구 호출 금지. "어떤 쿠폰끼리 비교해 드릴까요? 쿠폰명 또는 쿠폰번호를 알려주시면 확인해 드릴게요." 응답.
+
+- **응답 형식 (Path A/B 공통, 도구 호출 성공 시 필수)**:
+  - `coupons[].found=false` 인 쿠폰이 있으면 응답에 그대로 노출하지 말고 "쿠폰번호 '{cpn_no}' 정보를 찾지 못했어요." 1줄 안내 후 다음 페어로.
+  - `pairs[].can_stack=true`: "**{cpn_nm_a}** 와 **{cpn_nm_b}** 는 동시 적용 가능해요 😊 ({reason})".
+  - `pairs[].can_stack=false`: "**{cpn_nm_a}** 와 **{cpn_nm_b}** 는 동시 적용이 어려워요. ({reason})".
+  - `pairs[].can_stack=null`: "**{cpn_nm_a}** 와 **{cpn_nm_b}** 는 {reason} — 정확한 안내가 어려워 1:1 문의로 도와드릴게요." (이 경우만 fallback chip 사용 가능).
+  - pairs 가 3개 이상 (3개 이상 쿠폰 비교) 일 때는 위 형식의 bullet 으로 나열.
+  - `cpn_nm` 이 null 인 쿠폰은 `cpn_tp_nm` 또는 `cpn_no` 로 대체 ("플러스쿠폰", "C68000886MSJJ 쿠폰" 등).
+
+- **CTA (필수 — HARD OVERRIDE)**: `quickReplies: [{"label":"타이어 추천","domain":"DISCOVERY"}, {"label":"구매하기","domain":"TRANSACTION"}]` **고정**. 본 룰은 위 `QUICKREPLY OUTPUT GUARANTEE` 의 **우선순위 1 (개별 룰 명시 CTA chip)** 에 해당하며 DEAD-END FALLBACK (`[1:1 문의하기, 처음으로]`) 절대 적용 금지. 단, `can_stack=null` 응답 또는 Path B 매칭 실패 fallback 에는 `[1:1 문의하기]` chip 사용 가능 (사용자가 직접 문의해야 해결되는 케이스).
+
+- **응답에서 절대 노출 금지**:
+  - 코드값/내부 필드: `cpn_no` (사용자가 직접 입력한 경우 제외), `cpn_tp_cd`, `cpn_dup_use_yn`, "TP 10", "PAY014", "CPN_DUP_USE_YN" 등.
+  - 시스템 노출: "BE 응답 기준", "DB 조회 결과", "API 응답에 따르면". 자연스러운 안내 톤만.
+  - **룰 추론 금지**: "상품쿠폰이라 …", "플러스쿠폰이니까 …" 같이 LLM 이 룰을 직접 풀어 설명하지 마라. BE 가 내려준 `reason` 텍스트만 그대로 인용.
+
+- **DBA 가이드 가정 금지 (중요)**: `can_stack=null` (서비스+서비스, 플러스+플러스, 상품+상품 등 가이드 명시 없는 조합) 인 페어는 절대 "가능합니다" / "불가능합니다" 로 단정하지 마라. 반드시 "정책상 안내가 어려워 1:1 문의로 도와드릴게요" 톤으로 fallback.
+
+- **도구 호출 실패** (status="error" 또는 HTTP 4xx/5xx, `check_coupon_stacking_tool`): "쿠폰 중복 적용 여부 조회가 일시적으로 어려워요. 잠시 후 다시 시도해 주시거나 1:1 문의로 문의해 주세요." + `{"label":"1:1 문의하기","domain":"SUPPORT"}` chip.
 
 
 **Digital Warranty / 안심서비스 answer rules:**
@@ -418,7 +453,7 @@ Style rules for PROSE MODE:
 → Output exactly ONE fenced ```json block as documented below. `assistantResponse` must be a real, substantive Korean answer — never a placeholder, never empty. 1–3 sentences.
 
 ⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. chip 선정은 아래 우선순위로 판정:
-1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림/**무이자 할부 카드 안내** 등) — 가장 우선.
+1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림/**무이자 할부 카드 안내**/**쿠폰 중복 적용 여부 안내** 등) — 가장 우선.
 2. **컨텍스트-연계 거래 chip** (아래 별도 단락 — 매장/구매 키워드 매칭 시 `매장 찾기`/`구매하기`).
 3. **DEAD-END FALLBACK** — 위 1·2 어디에도 해당 안 될 때만 `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
 
@@ -524,6 +559,11 @@ class SupportSubAgent(BaseAgent):
         "search_product_tool": "Product Recommendation",
         # 카드사별 무이자 할부 조회 — 정보성 응답이라 FAQ AF 묶음 유지.
         "get_card_installments_tool": "FAQ",
+        # 쿠폰 중복 적용 여부 조회 — 정보성 응답이라 FAQ AF 묶음 유지.
+        "check_coupon_stacking_tool": "FAQ",
+        # Coupon stacking Path B 에서 보유 쿠폰 이름 매칭으로 cpn_no 추출용으로
+        # c_transaction 의 도구를 cross-agent 재사용. c_transaction 과 동일 AF 유지.
+        "get_my_coupons_tool": "Price",
     }
 
     def __init__(self, model):
@@ -539,6 +579,8 @@ class SupportSubAgent(BaseAgent):
                 get_my_cars_tool,
                 search_product_tool,
                 get_card_installments_tool,
+                check_coupon_stacking_tool,
+                get_my_coupons_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",

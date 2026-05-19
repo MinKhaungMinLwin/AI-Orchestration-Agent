@@ -26,6 +26,9 @@ from .coupon_applicable_stores_group import CouponApplicableStoresGroup
 from .coupon_deal_applicable_products_response import CouponDealApplicableProductsResponse
 from .coupon_issue_response import CouponIssueResponse
 from .coupon_result_item import CouponResultItem
+from .coupon_stacking_check_response import CouponStackingCheckResponse
+from .coupon_stacking_info import CouponStackingInfo
+from .coupon_stacking_pair import CouponStackingPair
 from .cpn_coupon_issue_request import CpnCouponIssueRequest
 from .deal_applicable_products_group import DealApplicableProductsGroup
 from .deal_coupon_item import DealCouponItem
@@ -133,6 +136,9 @@ __all__ = (
     "CouponDealApplicableProductsResponse",
     "CouponIssueResponse",
     "CouponResultItem",
+    "CouponStackingCheckResponse",
+    "CouponStackingInfo",
+    "CouponStackingPair",
     "CpnCouponIssueRequest",
     "DealApplicableProductsGroup",
     "DealCouponItem",

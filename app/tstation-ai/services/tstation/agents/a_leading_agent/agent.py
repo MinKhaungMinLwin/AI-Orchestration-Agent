@@ -269,6 +269,10 @@ Typical user intents:
    1. preOrder / cart / orderComplete 직후 컨텍스트가 슬롯에 있음 → **TRANSACTION** (Flow 1.6 결제 흐름 보존).
    2. 그 외 일반 발화 (예: "무이자 할부 카드 알려줘", "신한 무이자 돼?", "12개월 무이자 어떤 카드?", "30만원 결제 시 무이자") → **SUPPORT** (Card installment lookup rules — payment_type 노출 금지, 카드사+개월수만 안내).
    ❌ "할부", "카드" 키워드만 보고 transaction_coupon 으로 분류하지 말 것 — 그쪽 HARD STOP 룰이 가로채 잘못 응답.
+• ⚠️ **쿠폰 중복 적용 여부 안내 (HARD ROUTING RULE)** — "쿠폰 중복", "쿠폰 같이", "쿠폰 동시", "두 쿠폰 같이 써도", "기획전 쿠폰이랑 생일쿠폰", "이 쿠폰이랑 X쿠폰" 같이 **두 개 이상의 쿠폰** 사이의 중복 적용 가능 여부를 묻는 발화 → 항상 **SUPPORT** (Coupon stacking lookup rules — DBA 가이드 룰 기반).
+   - 결제/주문 컨텍스트 (preOrder/cart) 여부와 무관하게 SUPPORT 가 응답 (정보성 응답이라 결제 흐름 보존 chip 불필요 — 응답 후 사용자가 [구매하기] chip 으로 결제 복귀).
+   - 보유 쿠폰 단독 조회 ("내 쿠폰 알려줘", "쿠폰함") 또는 단일 쿠폰 사용처 조회 ("이 쿠폰 어디서 써?") 는 기존 TRANSACTION coupon profile 유지. **2개 이상** 쿠폰의 **중복 적용 여부** 만 SUPPORT 로.
+   ❌ "쿠폰", "할인" 키워드만 보고 transaction_coupon 으로 분류하지 말 것 — 중복 적용 발화는 SUPPORT 의 stacking lookup 룰이 처리해야 정확한 DBA 룰 답변 가능.
 
 ====================================================
 CONVERSATION FLOW

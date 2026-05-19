@@ -341,6 +341,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_product_warranties_tool": "상품 워런티 조회 중...",
     "get_my_warranties_tool": "내 워런티 조회 중...",
     "get_card_installments_tool": "무이자 할부 카드 조회 중...",
+    "check_coupon_stacking_tool": "쿠폰 중복 적용 여부 확인 중...",
 }
 
 

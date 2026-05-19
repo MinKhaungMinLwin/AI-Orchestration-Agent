@@ -18,11 +18,19 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_my_cars_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
     search_product_tool,  # noqa: F401  # warranty Path B 에서 상품명→goods_no 추출용
 )
+# Coupon stacking Path B — 사용자가 컨텍스트 cpn_no + "생일쿠폰" 류 자연어로 다른
+# 쿠폰을 지칭하면 보유 쿠폰에서 이름 매칭으로 cpn_no 를 찾아 stacking_check 호출.
+from services.tstation.agents.c_transaction_agent.tools import (
+    get_my_coupons_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
+)
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
     sync_detailed as get_my_warranties,
 )
 from common.tstation_be_api_client.hkt_api_client.api.installment_af_무이자_할부_조회.get_card_installments_api_installments_cards_get import (
     sync_detailed as get_card_installments,
+)
+from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.stacking_check_api_coupons_stacking_check_get import (
+    sync_detailed as stacking_check,
 )
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_product_warranties_api_products_goods_no_warranties_get import (
     sync_detailed as get_product_warranties,
@@ -483,3 +491,59 @@ def get_card_installments_tool(tgt_amt: int | None = None):
     except Exception as e:
         logger.exception("[TOOL][get_card_installments_tool] Failed")
         return _error_response(None, str(e), "Failed to get card installments")
+
+
+@tool
+@tool_cache(ttl=600)
+def check_coupon_stacking_tool(cpn_no_list: list[str]):
+    """
+    두 개 이상의 쿠폰을 동시에 사용할 수 있는지 (중복 적용 가능 여부) 를 조회한다.
+
+    Use when: 사용자가 "이 쿠폰이랑 저 쿠폰 같이 써도 돼?", "기획전 할인가에 생일쿠폰
+    더 쓸 수 있어?", "C72... 랑 C68... 같이 돼?" 처럼 두 개 이상의 쿠폰 ID 가 식별된
+    상태에서 중복 적용 가능 여부를 묻는 경우.
+
+    Args:
+        cpn_no_list: 비교할 쿠폰 번호 목록. 2개 이상 5개 이하. 1개는 비교 불가 (400).
+
+    Returns: status/http_status/data. data 구조:
+        {
+          "coupons": [
+            {"cpn_no":"C111","cpn_nm":"상품쿠폰A","cpn_tp_cd":"10",
+             "cpn_tp_nm":"상품쿠폰","cpn_dup_use_yn":"Y","found":true},
+            ...
+          ],
+          "pairs": [
+            {"cpn_no_a":"C111","cpn_no_b":"C222",
+             "can_stack":true,
+             "reason":"두 쿠폰 모두 중복 사용이 가능합니다."},
+            ...
+          ]
+        }
+
+        - pairs 는 입력 cpn_no 들의 모든 2-조합 (N개 → C(N,2) 개).
+        - can_stack: true=중복 가능, false=중복 불가, null=정책 안내 불가 (DBA 가이드
+          명시 없는 조합 — same TP, 30+30, 40+40, 30+40, 마스터 미발견 등).
+        - cpn_no, cpn_tp_cd, cpn_dup_use_yn 은 사용자 응답에 노출 금지 (내부 코드값).
+          cpn_nm, cpn_tp_nm, reason 만 사용자 응답에 사용.
+    """
+    logger.debug("[TOOL][check_coupon_stacking_tool] cpn_no_list=%s", cpn_no_list)
+    try:
+        if not cpn_no_list or len(cpn_no_list) < 2:
+            return _error_response(
+                400,
+                "InvalidInput",
+                "cpn_no_list 는 최소 2개 이상이어야 합니다.",
+            )
+        cpn_no_csv = ",".join(cpn_no_list)
+        response = stacking_check(client=get_client(), cpn_no=cpn_no_csv)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to check coupon stacking",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][check_coupon_stacking_tool] Failed")
+        return _error_response(None, str(e), "Failed to check coupon stacking")

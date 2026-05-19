@@ -149,6 +149,12 @@ def summarize_tool(name: str, result: Any) -> str:
         cards = d.get("cards", []) if isinstance(d, dict) else []
         return f"{len(cards)} cards"
 
+    if name == "check_coupon_stacking_tool":
+        d = _data(result)
+        coupons = d.get("coupons", []) if isinstance(d, dict) else []
+        pairs = d.get("pairs", []) if isinstance(d, dict) else []
+        return f"{len(coupons)} cpn → {len(pairs)} pairs"
+
     if name == "escalate_tool":
         d = _data(result)
         ticket = d.get("ticketId") or d.get("ticket_id")
