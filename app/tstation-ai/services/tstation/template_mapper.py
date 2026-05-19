@@ -469,6 +469,12 @@ def inject_product_tags_and_sanitize(
 # ── 2. listCar ──────────────────────────────────────────────────────────────────
 
 def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    # Maintenance D-day flow guard: when get_maintenance_dday_tool ran in the
+    # same turn, get_my_cars_tool was used only to map car_no → mbr_car_reg_seq.
+    # Emitting a listCar card here would duplicate the vehicle list next to
+    # the D-day answer; suppress so quickReply owns the turn.
+    if _find_entries(tool_data_list, "get_maintenance_dday_tool"):
+        return None
     items, metadata = [], []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)
