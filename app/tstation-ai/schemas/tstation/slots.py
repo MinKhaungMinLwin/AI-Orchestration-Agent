@@ -441,6 +441,15 @@ class ConversationSlots(BaseModel):
             # follow-up region answer reuses the originating turn's context
             # (preferences) instead of running a generic store list.
             slots.goal_type = "store_finder"
+        elif qty_match is not None and cls.has_product_keyword(user_text):
+            # Product keyword + explicit quantity in the SAME turn (e.g.
+            # "벤투스 S2 AS 245/45R18 4개") — no 가격/주문 verb, but quantity
+            # signals the user is past pure browsing. Escalate to
+            # price_inquiry so the goal-router (chat.py `_GOAL_COMPLETE_DOMAIN`)
+            # routes to Transaction and `get_final_price_tool` runs
+            # deterministically, instead of leaving the LLM to non-
+            # deterministically choose between product card and price matrix.
+            slots.goal_type = "price_inquiry"
         elif cls.has_product_keyword(user_text):
             # Bare product-keyword turn — no transactional intent, no recommend
             # verb, but a known brand/model is mentioned. Drive Discovery to
