@@ -6,6 +6,7 @@ from .available_coupon_response import AvailableCouponResponse
 from .best_seller_item import BestSellerItem
 from .best_seller_period import BestSellerPeriod
 from .best_seller_response import BestSellerResponse
+from .car_maintenance_dday import CarMaintenanceDday
 from .car_model_group import CarModelGroup
 from .car_model_group_response import CarModelGroupResponse
 from .car_model_search_item import CarModelSearchItem
@@ -52,8 +53,12 @@ from .goods_item import GoodsItem
 from .http_validation_error import HTTPValidationError
 from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
+from .maintenance_dday_item import MaintenanceDdayItem
+from .maintenance_dday_response import MaintenanceDdayResponse
 from .member_car_info import MemberCarInfo
 from .member_car_list_response import MemberCarListResponse
+from .member_warranty_item import MemberWarrantyItem
+from .member_warranty_list_response import MemberWarrantyListResponse
 from .message_create import MessageCreate
 from .message_response import MessageResponse
 from .multi_event_applicable_products_response import MultiEventApplicableProductsResponse
@@ -72,6 +77,8 @@ from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
 from .product_search_item import ProductSearchItem
 from .product_search_response import ProductSearchResponse
+from .product_warranties_response import ProductWarrantiesResponse
+from .product_warranty_item import ProductWarrantyItem
 from .rcmd_goods_item import RcmdGoodsItem
 from .rcmd_type import RcmdType
 from .recommendation_response import RecommendationResponse
@@ -104,6 +111,7 @@ __all__ = (
     "BestSellerItem",
     "BestSellerPeriod",
     "BestSellerResponse",
+    "CarMaintenanceDday",
     "CarModelGroup",
     "CarModelGroupResponse",
     "CarModelSearchItem",
@@ -146,8 +154,12 @@ __all__ = (
     "HTTPValidationError",
     "LogisticsRequest",
     "LogisticsResponse",
+    "MaintenanceDdayItem",
+    "MaintenanceDdayResponse",
     "MemberCarInfo",
     "MemberCarListResponse",
+    "MemberWarrantyItem",
+    "MemberWarrantyListResponse",
     "MessageCreate",
     "MessageResponse",
     "MultiEventApplicableProductsResponse",
@@ -166,6 +178,8 @@ __all__ = (
     "ProductImage",
     "ProductSearchItem",
     "ProductSearchResponse",
+    "ProductWarrantiesResponse",
+    "ProductWarrantyItem",
     "RcmdGoodsItem",
     "RcmdType",
     "RecommendationResponse",
