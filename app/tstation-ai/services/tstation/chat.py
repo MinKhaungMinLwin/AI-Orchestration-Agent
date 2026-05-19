@@ -1948,6 +1948,31 @@ _TRANSACTION_FAST_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# P0e: 5% (할인)쿠폰 정책 정보 질문 → SUPPORT redirect
+# ---------------------------------------------------------------------------
+# "5% 쿠폰이 뭐야?" / "5%할인쿠폰 알려줘" 류 정책 정보 질문은
+# e_support_agent prompt 의 HARD STOP (PR #169, e_support_agent/agent.py:44-)
+# 에서 처리되어야 한다. 그러나 LLM classifier 는 "쿠폰" 키워드만 보고
+# TRANSACTION + transaction_coupon 으로 분류 → c_transaction_agent 가
+# get_my_coupons_tool 을 호출해 voucher 카드로 응답 → HARD STOP 발동
+# 기회 자체가 없어진다 (Langfuse trace `5a2da3ff...` 검증).
+#
+# negative guard:
+#   - ownership keyword ("내/받은/보유/가진/갖고/소유") → 보유 조회 의도, TX 유지
+#   - action keyword  ("받아/받기/받을/발급/다운로드/다운받") → 발급/획득 의도,
+#     c_transaction_agent 의 GLOBAL 룰 (line 33-) 이 "쿠폰함에서 가능합니다"
+#     로 안내. HARD STOP (정책 정보 fixed text) 발동시키지 않는다.
+_FIVE_PERCENT_COUPON_POSITIVE_RE = re.compile(
+    r"5\s*%\s*(?:할인\s*)?쿠폰"
+)
+_FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
+    # ownership
+    r"내\s*쿠폰|내\s*5\s*%|내가\s|받은|보유|가진|가지고|갖고|소유한|"
+    # action (issue / download intent)
+    r"받아|받기|받을|발급(?!\s*안|\s*기능)|다운(?:로드|받)"
+)
+
+# ---------------------------------------------------------------------------
 # Regional "cheapest store" fast-path intercept
 # ---------------------------------------------------------------------------
 # "X 도/시/군/구 에서 제일 저렴한 매장" 류 광역 가격 비교 질문은 매장·시기·
@@ -3961,6 +3986,35 @@ class TStationChatServiceV2:
                 f"(pending_intent=order, goods_no={merged_slots.goods_no!r}, "
                 f"session_id={request.session_id})"
             )
+            routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+
+        # P0e domain override: classifier picks [TRANSACTION] + transaction_coupon
+        # for "5% (할인)쿠폰" policy info questions, but PR #169's HARD STOP
+        # lives in e_support_agent prompt only. Without this gate the user
+        # sees voucher card lookup (get_my_coupons_tool) instead of the
+        # fixed-text policy response. Force redirect to SUPPORT + FULL profile
+        # so e_support_agent's HARD STOP fires deterministically.
+        #
+        # Narrow trigger:
+        #   - domains EXACTLY [TRANSACTION] (multi-domain chains skip)
+        #   - profile transaction_coupon (other transaction profiles unrelated)
+        #   - last_user_text matches 5% coupon positive regex
+        #   - ownership / action keywords ABSENT (see module-level negative regex)
+        if (
+            routing_result is not None
+            and len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_COUPON
+            and last_user_text
+            and _FIVE_PERCENT_COUPON_POSITIVE_RE.search(last_user_text)
+            and not _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE.search(last_user_text)
+        ):
+            logger.info(
+                "[COORDINATOR] P0e domain override: 5%% coupon policy → SUPPORT/full "
+                f"(text={last_user_text[:80]!r}, session_id={request.session_id})"
+            )
+            domains[:] = [MultiAgentDomain.Domain.SUPPORT]
+            routing_result.domains = [MultiAgentDomain.Domain.SUPPORT]
             routing_result.agent_prompt_profile = AgentPromptProfile.FULL
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
