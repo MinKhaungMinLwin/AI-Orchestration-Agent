@@ -1973,6 +1973,25 @@ _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# P0f: 쿠폰 발급/안내 발화 → single [TRANSACTION] domain 강제
+# ---------------------------------------------------------------------------
+# "쿠폰 어떻게 받아?", "쿠폰 받아줘", "쿠폰 다운로드" 류 쿠폰 발급/안내 발화는
+# c_transaction_agent 의 GLOBAL 룰 (agent.py:33-) 이 단일 응답
+# ("쿠폰 받기는 쿠폰함에서 가능합니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip)
+# 을 emit 한다. 그러나 LLM classifier 가 multi-domain ([transaction, support])
+# 또는 speculative discovery 까지 추가 라우팅하면 discovery_agent 가 자체
+# 응답 ("이벤트/기획전 페이지에서 받기" + 이벤트/기획전 chip) 을 emit 해
+# FE 가 잘못된 chip 을 보여준다 (Langfuse trace `b14fdcf8...` 검증).
+#
+# P0f 는 transaction_coupon profile + issue intent 키워드 매칭 시 domains 를
+# 단일 [TRANSACTION] 으로 강제 narrow — discovery/support speculative
+# 차단 → c_transaction_agent 만 실행 → GLOBAL 룰의 응답이 deterministic
+# 하게 emit.
+_COUPON_ISSUE_INTENT_RE = re.compile(
+    r"쿠폰\s*(?:받(?:아|기|을|은)|다운(?:로드|받)|발급|어떻게\s*받)"
+)
+
+# ---------------------------------------------------------------------------
 # Regional "cheapest store" fast-path intercept
 # ---------------------------------------------------------------------------
 # "X 도/시/군/구 에서 제일 저렴한 매장" 류 광역 가격 비교 질문은 매장·시기·
@@ -4016,6 +4035,35 @@ class TStationChatServiceV2:
             domains[:] = [MultiAgentDomain.Domain.SUPPORT]
             routing_result.domains = [MultiAgentDomain.Domain.SUPPORT]
             routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+
+        # P0f domain narrowing: classifier picks multi-domain
+        # ([transaction, support]) or speculative discovery for coupon
+        # issue/inquiry questions ("쿠폰 어떻게 받아?", "쿠폰 받아줘"). The
+        # c_transaction GLOBAL rule (agent.py:33-) is the single source of
+        # truth for the canned response + chip, but speculative discovery /
+        # support agents emit their own answer (e.g. "이벤트/기획전" chips)
+        # overriding the FE payload (Langfuse trace `b14fdcf8...` verified).
+        # Force single [TRANSACTION] so only c_transaction_agent runs.
+        #
+        # Narrow trigger:
+        #   - profile transaction_coupon (P0e may have already redirected
+        #     5% policy questions to SUPPORT/full — skipped here)
+        #   - last_user_text matches coupon issue intent regex
+        #   - domains is NOT already exactly [TRANSACTION] (no-op skip)
+        if (
+            routing_result is not None
+            and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_COUPON
+            and last_user_text
+            and _COUPON_ISSUE_INTENT_RE.search(last_user_text)
+            and domains != [MultiAgentDomain.Domain.TRANSACTION]
+        ):
+            logger.info(
+                "[COORDINATOR] P0f domain narrowing: coupon issue intent → "
+                f"[TRANSACTION] (prev={[d.value for d in domains]}, "
+                f"text={last_user_text[:80]!r}, session_id={request.session_id})"
+            )
+            domains[:] = [MultiAgentDomain.Domain.TRANSACTION]
+            routing_result.domains = [MultiAgentDomain.Domain.TRANSACTION]
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set
