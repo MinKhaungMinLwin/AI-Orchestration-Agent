@@ -7,6 +7,9 @@ from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedCli
 from services.tstation.common.tstation_be_client import get_tstation_be_client
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync_detailed as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
+from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정비_d_day_안내.get_maintenance_dday_api_member_maintenance_dday_get import (
+    sync_detailed as get_maintenance_dday,
+)
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
     sync_detailed as get_my_warranties,
 )
@@ -286,6 +289,56 @@ def transfer_to_qna_tool(
     except Exception as e:
         logger.exception("[TOOL][transfer_to_qna_tool] Failed")
         return {"status": "error", "response": f"❌ **오류 발생**: {str(e)}\n\n> 다시 시도하시거나 고객센터로 직접 문의해주세요."}
+
+
+@tool
+def get_maintenance_dday_tool(mbr_car_reg_seq: str | None = None) -> dict:
+    """
+    회원 등록차량의 정비 D-day 매트릭스 조회 (7개 정비 항목).
+
+    Args:
+        mbr_car_reg_seq (str | None): 특정 차량의 정비 일정만 조회할 때 사용 (예: "2000002944").
+            None 이면 회원의 모든 등록차량 매트릭스 반환.
+
+    Returns:
+        {"status": "success", "data": {"cars": [
+          {"mbr_car_reg_seq": "...", "car_nm": "현대 그랜저",
+           "items": [
+             {"kind_cd": "001", "kind_nm": "얼라인먼트 점검",
+              "exp_dt": "2026-10-31", "dday": 165,
+              "status": "future|upcoming|expired",
+              "source": "noti_record|car_reg_fallback"}, ... (7개)
+           ]}, ...
+        ]}}
+
+    항목 코드:
+        001=얼라인먼트 점검 / 002=all my T 무상점검 / 003=엔진오일 교체 /
+        004=실내필터 교체 / 005=와이퍼 교체 / 006=타이어 교체 / 007=배터리 교체
+
+    Status:
+        - expired:  D+ (만기 경과)
+        - upcoming: D-0 ~ D-30 (만기 임박)
+        - future:   D-31 이상
+
+    Source:
+        - noti_record:      ST_NOTI_DDAY_INFO 의 실제 만기일
+        - car_reg_fallback: 행 없음 → 차량등록일 + 권장 개월수로 계산한 추정 만기일
+    """
+    logger.debug("[TOOL][get_maintenance_dday_tool] Called with: mbr_car_reg_seq=%s", mbr_car_reg_seq)
+
+    try:
+        response = get_maintenance_dday(client=get_client(), mbr_car_reg_seq=mbr_car_reg_seq)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get maintenance D-day",
+            )
+        logger.debug("[TOOL][get_maintenance_dday_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_maintenance_dday_tool] Failed")
+        return _error_response(None, str(e), "Failed to get maintenance D-day")
 
 
 # --------------------------------------------------------------------------- #

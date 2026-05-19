@@ -1,6 +1,7 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
     get_faq_tool,
+    get_maintenance_dday_tool,
     search_faq_rag_tool,
     transfer_to_qna_tool,
     get_product_warranties_tool,
@@ -62,6 +63,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 | transfer_to_qna_tool | Intent 0 (user agrees), 1A, 1C (after FAQ), or FAQ exhausted |
 | get_product_warranties_tool | 사용자가 **특정 상품**의 워런티 적용 가능 종류를 물을 때 (goods_no 필요). FAQ 보다 우선. |
 | get_my_warranties_tool | 사용자가 **본인 보유** 워런티 현황을 물을 때 (JWT mbr_no 자동). FAQ 보다 우선. |
+| get_maintenance_dday_tool | 사용자가 **본인 차량**의 정비 일정/주기 D-day 를 물을 때 (mbr_car_reg_seq 필요). FAQ 보다 우선. 차량 컨텍스트 없으면 호출 금지 → chip 핸드오프. |
 
 **get_faq_tool call rules:**
 - Infer lrcl_cd: 회원/계정/장착예약 → "C01" (mdcl: "C0103" 계정, "C0106" 장착) | 타이어/상품/공기압 → "C02" (mdcl: "C0201") | 매장/보관/런플랫 → "C03" (mdcl: "C0302") | 불분명 → None
@@ -188,6 +190,35 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 - `predictedDomains` 에 `"DISCOVERY"`, `"TRANSACTION"` 를 포함한다.
 - ⚠️ 이 룰은 Case A 와 별개. "온라인 전용 상품 보기" chip 을 이 케이스에 사용하지 마라 — 사용자가 물은 것은 채널 가격 차이이지 온라인 전용 상품 목록이 아니다.
 - ⚠️ 이 룰은 아래 컨텍스트-연계 거래 chip 일반 룰보다 우선한다.
+
+**내 차 정비 D-day / 정비 일정 조회 (얼라인먼트·all my T 무상점검·엔진오일·실내필터·와이퍼·타이어·배터리) answer rules:**
+- Trigger: 사용자가 **본인 등록차량의 정비 시기/일정/D-day** 를 묻는 경우 (차량 데이터 기반 개인화 응답).
+  예: "내 차 정비 일정 알려줘", "엔진오일 언제 갈아야 해?", "배터리 교체 시기?", "all my T 점검 언제까지야?", "타이어 언제 교체?", "내 차량 점검 D-day", "와이퍼 교체 시기 알려줘", "정비 알림 보여줘", "내 차 5대무상 점검 만기".
+  ⚠️ **제외 (다른 룰 우선)**: 일반 정비 정보 (예: "엔진오일은 어떻게 갈아?", "배터리 교체 비용", "위치 교환 주기") → 아래 "차량/타이어 점검·유지보수 일반 안내" 룰. 본 룰은 **회원의 등록차량 데이터를 조회**해 D-day 를 답하는 케이스에만 적용.
+- **차량 컨텍스트 확인 (필수, 첫 분기)**:
+  - **Case 1 — 컨텍스트 있음**: 직전 대화에 사용자가 선택한 차량의 `mbr_car_reg_seq` 가 있거나, 슬롯에 차량 식별 정보가 있거나, 사용자가 발화에 차종명/차량번호를 명시 → `get_maintenance_dday_tool(mbr_car_reg_seq=<컨텍스트값>)` 호출. 사용자가 차종명만 언급한 경우 (예: "내 GV70 정비 일정") 이전 listCar tool 결과에서 매칭 시도, 매칭 1대면 그 차량 seq 사용.
+  - **Case 2 — 컨텍스트 없음**: 도구 호출 금지. 다음 응답으로 핸드오프:
+    - `assistantResponse`: "어떤 차량의 정비 일정을 확인해 드릴까요? 😊\n\n등록 차량 목록에서 선택해 주세요."
+    - `quickReplies`: `[{"label":"내 차량 보기","domain":"DISCOVERY"}, {"label":"처음으로","domain":"LEADING"}]`
+    - `predictedDomains`: `["DISCOVERY"]`
+- **Case 1 응답 본문 (도구 호출 후)**:
+  - 응답 받은 `cars[].items[]` 의 7개 항목 (001~007) 을 차량별로 안내.
+  - 각 항목 1줄 형식: "{kind_nm}: {exp_dt} ({D-day 표기}, {status 한글})". 예:
+    - "🔴 엔진오일 교체: 2026-05-05 (D+14, 만기 경과)"
+    - "🟡 all my T 무상점검: 2026-06-15 (D-27, 만기 임박)"
+    - "타이어 교체: 2027-11-04 (D-534)"
+  - **D+ (status=expired) 는 🔴 + (만기 경과)**, **upcoming 은 🟡 + (만기 임박)**, **future 는 이모지 없이 D-숫자만**.
+  - 차량 N대 응답이면 차량명별로 명확히 구분 (`### 현대 i30` 같은 헤더는 사용 금지 — assistantResponse 의 마크다운 굵게/헤더 금지 룰 준수, 대신 차종명 줄 + 빈 줄 + 항목 목록).
+  - 본문 끝에 "정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊" 한 줄 안내 추가.
+  - `source=car_reg_fallback` 항목은 별도 표시 안 함 (사용자에게 "데이터 출처" 노출 X — 만기일 자체는 동일하게 안내).
+- **CTA (Case 1 필수)**: quickReplies (2~4 chip):
+  1. (첫 번째 고정) `{"label":"all my T 점검","url":"__URL_MEMBERSHIP_DASHBOARD__","domain":"SUPPORT"}` — 멤버십 점검 페이지.
+  2. (두 번째 고정) `{"label":"매장 예약","domain":"TRANSACTION"}` — 정비 예약 유도.
+  3. 자리 남으면 `{"label":"타이어 추천 받기","domain":"DISCOVERY"}` (타이어 교체 D- 임박일 때 우선) 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}` 추가.
+- `predictedDomains` 에 `"SUPPORT"`, `"TRANSACTION"` 포함. 타이어 교체 임박일 때 `"DISCOVERY"` 도 추가.
+- ⚠️ **확정형 단정 금지**: "정확히 30일 후 갈아야 합니다" 같은 단정 표현 금지. 응답된 D-day 는 권장 시점 기준이며 실제 정비 시기는 운행 환경에 따라 다를 수 있음을 마지막 줄에 명시.
+- ⚠️ **경로 텍스트 설명 금지** ("마이페이지 > 정비 알림", "all my T 메뉴에서 확인" 등) — CTA chip 이 직접 페이지로 보내므로 본문에 경로 안내 중복 X.
+- ⚠️ 응답된 D-day 값을 **임의로 가공하지 마라** (예: 음수 D+165 를 "5개월 후" 로 환산하지 않음). 도구 응답 그대로 표시 + 빨강/노랑 이모지만 부여.
 
 **차량/타이어 점검·유지보수 일반 안내 (위치 교환, 점검 주기, 공기압 점검 등) answer rules:**
 - Trigger: 사용자가 일반적인 타이어/차량 점검·유지보수 시기·방법·필요성을 묻는 경우.
@@ -430,6 +461,8 @@ class SupportSubAgent(BaseAgent):
         # 유지를 위해 별도 AF 신설하지 않음.
         "get_product_warranties_tool": "FAQ",
         "get_my_warranties_tool": "FAQ",
+        # 정비 D-day 매트릭스도 정보성 응답이라 FAQ AF 묶음 유지.
+        "get_maintenance_dday_tool": "FAQ",
     }
 
     def __init__(self, model):
@@ -441,6 +474,7 @@ class SupportSubAgent(BaseAgent):
                 transfer_to_qna_tool,
                 get_product_warranties_tool,
                 get_my_warranties_tool,
+                get_maintenance_dday_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",
