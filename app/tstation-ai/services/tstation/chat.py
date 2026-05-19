@@ -401,6 +401,13 @@ SUPPORT — policy, warranty, human agent:
 
 ⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
 
+⚠️ ALWAYS classify as SUPPORT (NOT TRANSACTION, NOT DISCOVERY): 두 개 이상의 할인 수단(쿠폰/딜/이벤트/프로모션/기획전/혜택) 사이의 **중복 적용 여부** 발화 — "X 중복 가능?", "X이랑 Y 같이 쓸 수 있어?", "X이랑 Y 동시 적용?", "둘 다 쓸 수 있어?", "함께 사용 가능?" — DBA 의 stacking 룰을 응답해야 하므로 SUPPORT 로 라우팅. "쿠폰" 단독 단어만 보고 transaction_coupon 으로, "기획전/이벤트" 단독 단어만 보고 discovery_event_content 로 분류 금지.
+Examples:
+- "반짝블랙딜이랑 우동딜 중복 가능?" → SUPPORT
+- "반짝블랙딜에 내 생일쿠폰 같이 쓸 수 있어?" → SUPPORT
+- "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT
+- "두 쿠폰 동시 적용 가능?" → SUPPORT
+
 LEADING — greeting, unclear intent:
 - "안녕하세요/도와줘"
 
@@ -528,6 +535,7 @@ RULES:
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
+- 두 개 이상의 할인 수단(쿠폰/딜/이벤트/프로모션/기획전/혜택) 사이의 중복 적용 여부 — "X 중복 가능?", "X이랑 Y 같이 쓸 수 있어?", "동시 적용?", "둘 다 쓸 수 있어?" → SUPPORT (NOT transaction_coupon, NOT discovery — DBA stacking 룰 응답 필요)
 - 온라인 전용 상품 차이/온라인에서만 구매/매장 방문 구매 가능 여부 → SUPPORT
 - 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
 - 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order
@@ -540,6 +548,10 @@ EXAMPLES (tricky cases):
 - "G012345678901 재고 있어?" → TRANSACTION, agent_prompt_profile=transaction_price_stock
 - "내 쿠폰 보여줘" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
 - "쿠폰 사용 조건이 어떻게 돼?" → TRANSACTION, agent_prompt_profile=transaction_coupon (NOT SUPPORT)
+- "반짝블랙딜이랑 우동딜 중복 가능?" → SUPPORT (discount-means stacking — DBA 룰 응답 필요, NOT transaction_coupon)
+- "반짝블랙딜에 내 생일쿠폰 같이 쓸 수 있어?" → SUPPORT (딜+쿠폰 stacking)
+- "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT (기획전+쿠폰 stacking, NOT discovery_event_content)
+- "두 쿠폰 동시 적용 가능?" → SUPPORT (쿠폰+쿠폰 stacking, NOT transaction_coupon)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
@@ -624,6 +636,51 @@ class StreamingMultiAgentCoordinator:
     _KEYWORD_FORCE_TABLE: ClassVar[
         list[tuple[list[str], "MultiAgentDomain.Domain"]]
     ] = [
+        # SUPPORT — discount-means stacking eligibility (coupon/promotion/event/deal/기획전).
+        # MUST come first so "기획전 + 중복" doesn't get hijacked by the broader
+        # DISCOVERY 기획전/이벤트 keyword below, and "쿠폰 중복" doesn't get hijacked
+        # by TRANSACTION 쿠폰함 keyword. The LLM classifier consistently mis-routes
+        # these stacking questions to transaction_coupon because the TRANSACTION
+        # domain description owns "coupon inquiry" — substring force is the
+        # deterministic fix.
+        (
+            [
+                # "중복" + verb/adjective — strong stacking signal
+                "중복 가능",
+                "중복 적용",
+                "중복 사용",
+                "중복 돼",
+                "중복돼",
+                "중복 사용 가능",
+                # "같이/동시/함께/둘 다" + 사용/적용 verbs
+                "같이 쓸 수 있",
+                "같이 쓸수 있",
+                "같이 써도",
+                "같이 쓰면",
+                "같이 사용 가능",
+                "같이 돼",
+                "같이 됨",
+                "같이 적용",
+                "동시 적용",
+                "동시 사용",
+                "동시에 사용",
+                "동시에 적용",
+                "동시에 돼",
+                "동시에돼",
+                "함께 사용 가능",
+                "함께 쓸 수 있",
+                "둘 다 쓸",
+                "둘 다 적용",
+                "둘 다 사용",
+                "두 개 다 쓸",
+                "두 개 다 적용",
+                # "추가" 계열 — "쿠폰 더 추가 돼?", "할인 추가 사용", "추가 적용?"
+                "추가 돼",
+                "추가 사용",
+                "추가 적용",
+            ],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
         # TRANSACTION — cancellation/return shipping-fee inquiry (TC-118).
         # Keep this before the broad SUPPORT "반품" rule so round-trip return-fee
         # questions check order/logistics policy instead of FAQ hallucinating 5천 원.
