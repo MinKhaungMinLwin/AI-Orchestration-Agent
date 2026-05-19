@@ -265,7 +265,10 @@ Typical user intents:
 • “내 워런티 알려줘 / 내 안심서비스 만료일 / 워런티 현황” (본인 보유 워런티 조회)
 • “이 타이어 안심서비스 돼? / 다이나프로 30일 해피보증 가입 가능? / 품질보증 적용돼?” (상품별 워런티 종류)
 • “안심서비스 뭐야? / 안심플러스 차이 / 코드절상 무상교환 조건” (워런티 정책/조건 일반)
-• "무이자 할부 가능한 카드 알려줘 / 신한카드 무이자 돼? / 12개월 무이자 어떤 카드? / N만원 결제 시 무이자" — **결제 컨텍스트가 없는 일반 안내는 SUPPORT 우선** (TRANSACTION 으로 분류하면 transaction_coupon HARD STOP 룰이 가로채 잘못 응답함). preOrder/cart/orderComplete 직후의 동일 발화만 TRANSACTION (Flow 1.6).
+• ⚠️ **무이자 할부 카드 안내 (HARD ROUTING RULE)** — "무이자", "할부 카드", "무이자 할부", "N개월 무이자", "할부 가능" 같은 무이자 할부 키워드가 등장하면 **다음 우선순위로 분류**:
+   1. preOrder / cart / orderComplete 직후 컨텍스트가 슬롯에 있음 → **TRANSACTION** (Flow 1.6 결제 흐름 보존).
+   2. 그 외 일반 발화 (예: "무이자 할부 카드 알려줘", "신한 무이자 돼?", "12개월 무이자 어떤 카드?", "30만원 결제 시 무이자") → **SUPPORT** (Card installment lookup rules — payment_type 노출 금지, 카드사+개월수만 안내).
+   ❌ "할부", "카드" 키워드만 보고 transaction_coupon 으로 분류하지 말 것 — 그쪽 HARD STOP 룰이 가로채 잘못 응답.
 
 ====================================================
 CONVERSATION FLOW

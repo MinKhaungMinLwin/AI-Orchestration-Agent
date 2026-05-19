@@ -141,9 +141,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 
 - **금액 명시 발화** ("30만원 결제 시 무이자", "50만원 무이자 카드"): tgt_amt 인자에 정수(원 단위) 로 전달. "30만원" → 300000, "50만원" → 500000. 이후 위 Path 1/2/3 룰 동일.
 
-- **CTA (필수)**: quickReplies 에 다음 chip 1개 이상 (자리 남으면 보조).
-  - 주 chip: `{"label":"카드사별 안내","domain":"SUPPORT"}` 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}`.
-  - 결제 흐름 컨텍스트 (preOrder/cart) 가 있으면 `{"label":"결제 진행","domain":"TRANSACTION"}` 추가.
+- **CTA (필수)**: `quickReplies: [{"label":"타이어 추천","domain":"DISCOVERY"}, {"label":"구매하기","domain":"TRANSACTION"}]` 고정. "1:1 문의하기" / "처음으로" / "카드사별 안내" 등 다른 chip 사용 금지 (단, 도구 호출 실패 fallback 응답에는 "1:1 문의하기" 사용 가능).
 
 - **iscm_nm null fallback**: 응답 row 의 `iscm_nm` 이 null 인 row 는 사용자 응답에서 **제외** (카드사명 미상 row 를 코드 노출 없이 누락). 응답 마지막에 "(일부 카드사 정보는 시스템에서 표시되지 않을 수 있어요.)" 부기 가능.
 
