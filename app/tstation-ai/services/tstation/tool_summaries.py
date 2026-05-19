@@ -144,6 +144,11 @@ def summarize_tool(name: str, result: Any) -> str:
         items = d.get("warranties", []) if isinstance(d, dict) else []
         return f"{len(items)} warranties"
 
+    if name == "get_card_installments_tool":
+        d = _data(result)
+        cards = d.get("cards", []) if isinstance(d, dict) else []
+        return f"{len(cards)} cards"
+
     if name == "escalate_tool":
         d = _data(result)
         ticket = d.get("ticketId") or d.get("ticket_id")

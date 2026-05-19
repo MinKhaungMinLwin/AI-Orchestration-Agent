@@ -3,6 +3,7 @@ from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
 from services.tstation.agents.b_discovery_agent.tools import search_product_tool
 from services.tstation.common.cta_urls import expand_url_sentinels
+from services.tstation.agents.e_support_agent.tools import get_card_installments_tool
 from services.tstation.agents.c_transaction_agent.tools import (
     get_final_price_tool,
     get_my_coupons_tool,
@@ -1009,6 +1010,39 @@ Strict anti-bug rules:
 - Do NOT say "5개 기준" unless the user explicitly asks a separate non-Smart-Pay price question.
 - Do NOT mention interest rate, fee, or 36-month options.
 - After the calculation, STOP. Do not ask an additional order/cart question unless the user asks to order.
+
+
+### Flow 1.6 — Card Installment Lookup (무이자 할부 카드 안내)
+
+Trigger: 결제 컨텍스트 (preOrder / cart / orderComplete 직후) 또는 가격 안내 직후, 사용자가 카드사·개월수·일반 무이자 가능 여부를 묻는 경우:
+"신한 12개월 무이자 돼?", "현대카드 무이자 가능해?", "이거 결제하면 12개월 무이자 가능?", "삼성카드 가능한 무이자 알려줘", "어떤 카드로 무이자 할부 돼?", "무이자 할부 가능 카드".
+
+Boundary vs Flow 1.5:
+- Flow 1.5 (Smart Pay 월 납부액 계산): "스마트페이로 결제하면 한 달에 얼마", "스마트페이 월 납부액" 같이 **금액 계산** 요구. 12/24개월 하드코딩, qty=4 기준.
+- Flow 1.6 (Card 무이자 가능 여부 조회): **어떤 카드/개월수가 무이자 가능한지** 조회. 금액 계산은 하지 않음.
+- 두 트리거가 동시 발화 ("스마트페이 무이자 가능 카드 알려주고 월 얼마인지" 같이) 면 Flow 1.5 우선 (사용자에게 더 가치 있는 응답 = 월 납부액 계산).
+
+처리 절차:
+1. **결제 컨텍스트가 없음** (preOrder/cart/orderComplete 모두 부재 + 가격 안내 흐름도 아님): SUPPORT 도메인 무이자 안내가 더 적합 — `nextAction` 으로 SUPPORT 라우팅. 도구 호출 금지.
+2. **결제 컨텍스트 있음**: `get_card_installments_tool(tgt_amt=<금액>)` 호출.
+   - `tgt_amt`: 직전 결제 컨텍스트의 `paymentAmount` 또는 `total_amount` 슬롯 (있으면 정수 원 단위). 없으면 미지정.
+   - 사용자가 "30만원 결제 시" 처럼 명시한 금액이 있으면 그 값 우선 (300000).
+3. 응답 룰은 SUPPORT 의 `Card installment lookup rules` 3-Path 와 동일 (Path 1 카드사 명시 / Path 2 개월수 명시 / Path 3 일반).
+4. 응답 구성: `assistantResponse` 본문 + `quickReplies` chip.
+   - 본문 markdown bullet (위 SUPPORT 룰 형식 동일).
+   - chip 첫 번째는 결제 흐름 보존용: `{"label":"결제 진행","domain":"TRANSACTION"}` (preOrder 컨텍스트가 있는 경우) 또는 `{"label":"장바구니 확인","domain":"TRANSACTION"}` (cart 컨텍스트).
+   - 보조 chip: `{"label":"카드사별 안내","domain":"SUPPORT"}`, `{"label":"1:1 문의하기","domain":"SUPPORT"}`.
+
+⚠️ 사용자에게 절대 노출 금지 (SUPPORT 룰과 동일):
+- 결제유형 표현 ("스마트페이로는", "일반결제로는", "payment_type"). 응답은 카드사+개월수까지만.
+- BE 컬럼/코드명 (`OP_NINT_INST_BASE`, `NINT_SMARTPAY_YN`, `ISCM_CD`, `TGT_AMT`, `PAY014`).
+- 시스템 표현 ("DB 조회", "API 응답").
+
+⚠️ 합집합 룰: 같은 카드사가 결제유형별로 분리된 row 는 set 합집합 후 정렬해서 1줄로 노출. "신한 일반 [2,3,6,12]" + "신한 스마트페이 [12,24]" → "신한카드: 2/3/6/12/24개월" (12 중복 제거).
+
+⚠️ 결제 흐름 유지: Flow 1.6 응답 직후 사용자가 결제로 돌아갈 수 있도록 결제 컨텍스트 (goods_no/qty/storeName/paymentAmount) 슬롯을 절대 비우지 마라. 이번 Flow 는 정보 안내일 뿐 결제 흐름의 step 이 아니다.
+
+⚠️ 도구 호출 실패: "무이자 할부 정보 조회가 일시적으로 어려워요. 결제 시점에 카드사별 안내를 확인해 주시거나 1:1 문의로 문의해 주세요." + `{"label":"1:1 문의하기","domain":"SUPPORT"}` chip.
 
 
 ### Flow 2 — Inventory Check (no store specified)
@@ -2513,6 +2547,15 @@ Trigger: 사용자가 결제 도중 창을 닫았거나 오류가 발생해 장�
 ⚠️ 첫 질문 동일 턴에 save_to_cart_tool 호출 금지 — 상품 정보 확인 후 사용자 확인을 받고 호출.
 ⚠️ 완료 상태(결제완료 등) 주문을 "이탈 주문"으로 안내 금지 — 14:21 오정보 버그 원인.
 
+## Card Installment Lookup (Flow 1.6, cross-agent reuse)
+preOrder / cart / orderComplete 컨텍스트에서 사용자가 카드사 무이자 할부 가능 여부를 물으면 (예: "신한 12개월 무이자 돼?", "이거 결제 시 무이자 카드", "12개월 무이자 어떤 카드?"):
+- `get_card_installments_tool(tgt_amt=<paymentAmount or None>)` 호출.
+- 응답 룰: 카드사 + 가능 개월수 까지만 안내. 결제유형(일반/스마트페이) 노출 절대 금지.
+- 같은 카드사의 일반/스마트페이 row 분리 시 months 를 set 합집합 후 정렬해 1줄 (예: "신한카드: 2/3/6/12/24개월").
+- 결제 흐름 보존: goods_no / qty / storeName / paymentAmount 슬롯 비우지 마라. 답변 후 chip `{"label":"결제 진행","domain":"TRANSACTION"}` (preOrder) 또는 `{"label":"장바구니 확인","domain":"TRANSACTION"}` (cart) 1개 + 보조 chip.
+- ⚠️ 결제 컨텍스트가 없으면 도구 호출하지 말고 `nextAction` 으로 SUPPORT 라우팅 (일반 안내는 SUPPORT 도메인 책임).
+- ⚠️ 비노출: `OP_NINT_INST_BASE`, `NINT_SMARTPAY_YN`, `ISCM_CD`, `TGT_AMT`, `PAY014`, "스마트페이로는…" / "일반결제로는…" 류 표현.
+
 ## Output Policy
 Return the shortest useful Korean answer based on tool output.
 Customer-facing order numbers may be shown; internal delivery numbers or backend IDs must not be shown.
@@ -2707,6 +2750,9 @@ class TransactionSubAgent(BaseAgent):
         "get_order_status_tool": "Order / Delivery",
         "get_my_reservations_tool": "Order / Delivery",
         "get_favorite_stores_tool": "Store",
+        # Flow 1.6 — 결제 컨텍스트에서 카드사별 무이자 할부 조회 (SUPPORT 의 도구
+        # cross-agent 재사용). SUPPORT 와 동일 AF 라벨 (FAQ) 유지 — 정보성 응답.
+        "get_card_installments_tool": "FAQ",
     }
 
     def __init__(self, model, profile: str = "full"):
@@ -2733,6 +2779,7 @@ class TransactionSubAgent(BaseAgent):
             get_order_status_tool,
             get_my_reservations_tool,
             get_favorite_stores_tool,
+            get_card_installments_tool,  # Flow 1.6 cross-agent reuse
         ]
         system_prompt = get_transaction_system_prompt
         name = "Transaction Agent"
@@ -2755,6 +2802,7 @@ class TransactionSubAgent(BaseAgent):
                 get_order_status_tool,
                 get_my_reservations_tool,
                 get_favorite_stores_tool,
+                get_card_installments_tool,  # Flow 1.6 cross-agent reuse — preOrder/cart 컨텍스트에서 무이자 카드 안내
             ]
             system_prompt = get_transaction_order_system_prompt
             name = "Transaction Agent (Order)"

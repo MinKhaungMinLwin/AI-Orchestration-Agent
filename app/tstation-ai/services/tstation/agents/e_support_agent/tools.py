@@ -21,6 +21,9 @@ from services.tstation.agents.b_discovery_agent.tools import (
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
     sync_detailed as get_my_warranties,
 )
+from common.tstation_be_api_client.hkt_api_client.api.installment_af_무이자_할부_조회.get_card_installments_api_installments_cards_get import (
+    sync_detailed as get_card_installments,
+)
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_product_warranties_api_products_goods_no_warranties_get import (
     sync_detailed as get_product_warranties,
 )
@@ -432,3 +435,51 @@ def get_my_warranties_tool():
     except Exception as e:
         logger.exception("[TOOL][get_my_warranties_tool] Failed")
         return _error_response(None, str(e), "Failed to get my warranties")
+
+
+@tool
+@tool_cache(ttl=3600)
+def get_card_installments_tool(tgt_amt: int | None = None):
+    """
+    진행중인 카드사별 무이자 할부 가능 정보를 조회한다 (OP_NINT_INST_BASE + OP_NINT_INST_DTL_INFO).
+
+    Use when: 사용자가 "무이자 할부 카드 알려줘", "신한카드 무이자 돼?",
+    "12개월 무이자 어떤 카드?", "30만원 결제 시 무이자 가능?" 처럼 카드사별
+    무이자 할부 적용 가능성을 묻는 경우. 결제 시점 직전 (preOrder/cart 컨텍스트) 에서
+    같은 질문이 나오면 c_transaction_agent 가 cross-agent 로 호출한다.
+
+    Args:
+        tgt_amt: 결제 예상 금액(원). 지정하면 NDI.TGT_AMT <= tgt_amt 인 행만 반환
+            (즉 그 금액 이상부터 적용되는 무이자 행). 미지정 시 전체 진행중 카드.
+
+    Returns: status/http_status/data. data 구조:
+        {"cards": [
+            {"iscm_cd":"01","iscm_nm":"신한카드","tgt_amt":50000,
+             "months":[2,3,6,12],"payment_type":"일반"},
+            {"iscm_cd":"01","iscm_nm":"신한카드","tgt_amt":300000,
+             "months":[12,24],"payment_type":"스마트페이"},
+            ...
+        ]}
+
+        - 진행중 (SYSDATE BETWEEN APLY_STRT_DTIME AND APLY_END_DTIME) 만 포함.
+        - 같은 카드사라도 결제유형(일반/스마트페이) 또는 기준금액별로 row 분리.
+        - months 는 NINT_N_MM_YN='Y' 인 N 만 오름차순. N ∈ {2,3,...,12,24}.
+        - iscm_nm 은 FN_GET_COMMON_NAME_AI('PAY014') 결과 — 매핑 부재 시 null.
+        - payment_type 은 사용자 응답에 노출 금지 (실제 결제는 챗봇 밖에서 진행).
+    """
+    logger.debug("[TOOL][get_card_installments_tool] tgt_amt=%s", tgt_amt)
+    try:
+        kwargs: dict[str, Any] = {"client": get_client()}
+        if tgt_amt is not None:
+            kwargs["tgt_amt"] = tgt_amt
+        response = get_card_installments(**kwargs)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get card installments",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_card_installments_tool] Failed")
+        return _error_response(None, str(e), "Failed to get card installments")

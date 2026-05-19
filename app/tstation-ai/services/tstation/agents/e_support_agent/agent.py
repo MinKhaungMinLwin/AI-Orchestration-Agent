@@ -1,5 +1,6 @@
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
+    get_card_installments_tool,
     get_faq_tool,
     get_maintenance_dday_tool,
     get_my_cars_tool,
@@ -77,6 +78,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 | get_product_warranties_tool | 사용자가 **특정 상품**의 워런티 적용 가능 종류를 물을 때 (goods_no 필요). FAQ 보다 우선. |
 | get_my_warranties_tool | 사용자가 **본인 보유** 워런티 현황을 물을 때 (JWT mbr_no 자동). FAQ 보다 우선. |
 | get_maintenance_dday_tool | 사용자가 **본인 차량**의 정비 일정/주기 D-day 를 물을 때 (mbr_car_reg_seq 필요). FAQ 보다 우선. 차량 컨텍스트 없으면 호출 금지 → chip 핸드오프. |
+| get_card_installments_tool | 사용자가 **카드사별 무이자 할부** 가능 여부/개월수를 물을 때 (예: "신한 무이자 돼?", "12개월 무이자 어떤 카드?", "무이자 할부 가능한 카드 알려줘"). FAQ 보다 우선. tgt_amt 는 사용자가 결제 금액 명시 시에만 전달 (예: "30만원 결제 무이자"). |
 
 **get_faq_tool call rules:**
 - Infer lrcl_cd: 회원/계정/장착예약 → "C01" (mdcl: "C0103" 계정, "C0106" 장착) | 타이어/상품/공기압 → "C02" (mdcl: "C0201") | 매장/보관/런플랫 → "C03" (mdcl: "C0302") | 불분명 → None
@@ -119,6 +121,41 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 - 시스템 노출 표현 ("DB 조회 결과", "BE 응답 기준", "API 응답에 따르면"). 사용자에게는 자연스러운 안내 톤만.
 
 ⚠️ 도구 호출 실패 (status="error" 또는 HTTP 4xx/5xx) 시: 워런티 데이터 조회가 일시적으로 어렵다고 안내한 뒤, 위 Path C 의 FAQ 룰로 fallback 하거나 1:1 문의 chip 으로 유도.
+
+
+**Card installment lookup rules (무이자 할부 — 신규 도구):**
+
+진행중인 카드사별 무이자 할부 가능 정보를 안내한다. 실제 결제는 챗봇 밖에서 진행되므로 응답은 "어떤 카드가 어떤 개월수로 무이자 가능한지" 까지만 안내하고, 결제유형(일반/스마트페이) 같은 디테일은 사용자에게 노출하지 않는다.
+
+- **트리거 (3-Path)**:
+  - **Path 1 — 카드사 명시**: "신한카드 무이자 돼?", "현대카드 12개월 가능?", "삼성 무이자" 등. `get_card_installments_tool()` 호출 (인자 없음 = 전체 진행중) → 응답에서 `iscm_nm` 이 사용자가 말한 카드사명과 부분 매칭되는 row 들만 추출. 같은 카드사의 일반/스마트페이 row 2개가 분리되어 있으면 **months 를 합집합(union)** 으로 묶어 안내 (사용자에겐 결제유형 무관, 둘 중 한쪽이라도 가능하면 무이자 가능).
+    - 매칭 row 1건 이상: "**{카드사명}** 은 다음 개월수로 무이자 할부 가능해요 😊\n\n- {month1}/{month2}/.../{monthN}개월" (개월수 오름차순, `/` 구분).
+    - 매칭 row 0건: "현재 **{카드사명}** 으로 무이자 할부 가능한 정보가 확인되지 않아요. 카드사 또는 매장에서 다시 확인해 주세요."
+  - **Path 2 — 개월수 명시**: "12개월 무이자 어떤 카드?", "24개월 무이자 가능한 카드", "6개월 무이자 카드 알려줘" 등. `get_card_installments_tool()` 호출 → 응답에서 `months` 에 해당 개월수가 포함된 row 의 `iscm_nm` 추출 → 카드사명 중복 제거 (같은 카드사 일반/스마트페이 행 합치기).
+    - 매칭 카드사 1건 이상: "**{N}개월 무이자** 가 가능한 카드는 다음과 같아요 😊\n\n- {카드사1}\n- {카드사2}\n- ..." (가나다순).
+    - 매칭 0건: "현재 {N}개월 무이자 할부 가능한 카드사가 확인되지 않아요."
+  - **Path 3 — 일반 ("무이자 할부 어떤 카드?", "무이자 할부 카드 알려줘")**: `get_card_installments_tool()` 호출 → 카드사별로 묶어 (같은 iscm_nm 의 일반/스마트페이 합집합) 가능 개월수 요약.
+    - 응답: "현재 무이자 할부 가능한 카드사 안내드릴게요 😊\n\n- **{카드사1}**: {months1}/{months2}/...개월\n- **{카드사2}**: ...\n..." (카드사 가나다순, 카드사당 1줄).
+    - 카드사 5개 이상이면 상위 5개만 노출 + "그 외에도 일부 카드사가 가능해요. 자세한 내용은 결제 시 안내됩니다." 부기.
+    - 0건: "현재 진행중인 무이자 할부 정보가 확인되지 않아요. 결제 시점에 카드사별 안내를 확인해 주세요."
+
+- **금액 명시 발화** ("30만원 결제 시 무이자", "50만원 무이자 카드"): tgt_amt 인자에 정수(원 단위) 로 전달. "30만원" → 300000, "50만원" → 500000. 이후 위 Path 1/2/3 룰 동일.
+
+- **CTA (필수)**: quickReplies 에 다음 chip 1개 이상 (자리 남으면 보조).
+  - 주 chip: `{"label":"카드사별 안내","domain":"SUPPORT"}` 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}`.
+  - 결제 흐름 컨텍스트 (preOrder/cart) 가 있으면 `{"label":"결제 진행","domain":"TRANSACTION"}` 추가.
+
+- **iscm_nm null fallback**: 응답 row 의 `iscm_nm` 이 null 인 row 는 사용자 응답에서 **제외** (카드사명 미상 row 를 코드 노출 없이 누락). 응답 마지막에 "(일부 카드사 정보는 시스템에서 표시되지 않을 수 있어요.)" 부기 가능.
+
+- **응답에서 절대 노출 금지**:
+  - 결제유형 표현: "스마트페이로는", "일반결제로", "스마트페이 결제 시", "payment_type", "PAY014" 등.
+  - BE 컬럼/코드명: `OP_NINT_INST_BASE`, `NINT_SMARTPAY_YN`, `NINT_N_MM_YN`, `ISCM_CD`, `TGT_AMT` 등.
+  - 코드 값: "ISCM 01", "PAY014".
+  - 시스템 노출: "DB 조회 결과", "API 응답에 따르면", "BE 응답 기준". 자연스러운 안내 톤만.
+
+- **합집합 룰 회귀 방지**: 같은 카드사가 결제유형별로 분리된 row (예: 신한 일반 [2,3,6,12] + 신한 스마트페이 [12,24]) 를 절대 합산해서 "신한은 2/3/6/12/12/24 가능" 같이 중복으로 노출하지 마라. 반드시 set 합집합 후 정렬: [2, 3, 6, 12, 24].
+
+- **도구 호출 실패** (status="error" 또는 HTTP 4xx/5xx): "무이자 할부 정보 조회가 일시적으로 어려워요. 결제 시점에 카드사별 안내를 확인해 주시거나 1:1 문의로 문의해 주세요." + `{"label":"1:1 문의하기","domain":"SUPPORT"}` chip.
 
 
 **Digital Warranty / 안심서비스 answer rules:**
@@ -487,6 +524,8 @@ class SupportSubAgent(BaseAgent):
         # Warranty Path B 에서 사용자가 상품명만 발화한 경우 goods_no 추출용으로
         # b_discovery 의 도구를 cross-agent 재사용. b_discovery 와 동일 AF 유지.
         "search_product_tool": "Product Recommendation",
+        # 카드사별 무이자 할부 조회 — 정보성 응답이라 FAQ AF 묶음 유지.
+        "get_card_installments_tool": "FAQ",
     }
 
     def __init__(self, model):
@@ -501,6 +540,7 @@ class SupportSubAgent(BaseAgent):
                 get_maintenance_dday_tool,
                 get_my_cars_tool,
                 search_product_tool,
+                get_card_installments_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",

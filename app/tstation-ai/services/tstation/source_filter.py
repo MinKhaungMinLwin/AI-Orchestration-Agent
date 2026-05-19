@@ -112,6 +112,12 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
         },
     },
+    # 카드사별 무이자 할부 — 응답에는 카드사명/기준금액/가능 개월수만 노출. payment_type
+    # 은 trace/QC 식별자로 keep 에 포함하지만 LLM prompt 가 사용자에게 노출하지 않도록 강제.
+    "get_card_installments_tool": {
+        "list_key": "cards",
+        "keep": {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_type"},
+    },
 }
 
 # tool_name → drop_keys for single-object responses
@@ -227,6 +233,11 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
             "wrt_reg_date", "wrt_exp_date",
             "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
         },
+    },
+    # 후속 턴 "방금 본 무이자 카드 다시 알려줘" / "12개월 가능 카드 다시" 참조용.
+    "get_card_installments_tool": {
+        "list_key": "cards",
+        "keep": {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_type"},
     },
 }
 
