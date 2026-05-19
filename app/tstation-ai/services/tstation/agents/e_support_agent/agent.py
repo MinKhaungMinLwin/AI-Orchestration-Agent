@@ -141,7 +141,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 
 - **금액 명시 발화** ("30만원 결제 시 무이자", "50만원 무이자 카드"): tgt_amt 인자에 정수(원 단위) 로 전달. "30만원" → 300000, "50만원" → 500000. 이후 위 Path 1/2/3 룰 동일.
 
-- **CTA (필수)**: `quickReplies: [{"label":"타이어 추천","domain":"DISCOVERY"}, {"label":"구매하기","domain":"TRANSACTION"}]` 고정. "1:1 문의하기" / "처음으로" / "카드사별 안내" 등 다른 chip 사용 금지 (단, 도구 호출 실패 fallback 응답에는 "1:1 문의하기" 사용 가능).
+- **CTA (필수 — HARD OVERRIDE)**: `quickReplies: [{"label":"타이어 추천","domain":"DISCOVERY"}, {"label":"구매하기","domain":"TRANSACTION"}]` **고정**. 본 룰은 위 `QUICKREPLY OUTPUT GUARANTEE` 의 **우선순위 1 (개별 룰 명시 CTA chip)** 에 해당하며 DEAD-END FALLBACK (`[1:1 문의하기, 처음으로]`) 절대 적용 금지. "1:1 문의하기" / "처음으로" / "카드사별 안내" 등 다른 chip 사용 금지 (단, 도구 호출 실패 fallback 응답에는 "1:1 문의하기" 사용 가능).
 
 - **iscm_nm null fallback**: 응답 row 의 `iscm_nm` 이 null 인 row 는 사용자 응답에서 **제외** (카드사명 미상 row 를 코드 노출 없이 누락). 응답 마지막에 "(일부 카드사 정보는 시스템에서 표시되지 않을 수 있어요.)" 부기 가능.
 
@@ -418,7 +418,7 @@ Style rules for PROSE MODE:
 → Output exactly ONE fenced ```json block as documented below. `assistantResponse` must be a real, substantive Korean answer — never a placeholder, never empty. 1–3 sentences.
 
 ⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. chip 선정은 아래 우선순위로 판정:
-1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림 등) — 가장 우선.
+1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림/**무이자 할부 카드 안내** 등) — 가장 우선.
 2. **컨텍스트-연계 거래 chip** (아래 별도 단락 — 매장/구매 키워드 매칭 시 `매장 찾기`/`구매하기`).
 3. **DEAD-END FALLBACK** — 위 1·2 어디에도 해당 안 될 때만 `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
 
