@@ -17,6 +17,7 @@ from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정�
 from services.tstation.agents.b_discovery_agent.tools import (
     get_my_cars_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
     search_product_tool,  # noqa: F401  # warranty Path B 에서 상품명→goods_no 추출용
+    get_deals_tool,  # noqa: F401  # Coupon stacking Path B 에서 "반짝블랙딜" 류 자연어 매칭용
 )
 # Coupon stacking Path B — 사용자가 컨텍스트 cpn_no + "생일쿠폰" 류 자연어로 다른
 # 쿠폰을 지칭하면 보유 쿠폰에서 이름 매칭으로 cpn_no 를 찾아 stacking_check 호출.

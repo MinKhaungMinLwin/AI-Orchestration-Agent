@@ -2,6 +2,7 @@ from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
     check_coupon_stacking_tool,
     get_card_installments_tool,
+    get_deals_tool,
     get_faq_tool,
     get_maintenance_dday_tool,
     get_my_cars_tool,
@@ -164,12 +165,28 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 
 두 개 이상의 쿠폰을 같이 쓸 수 있는지 (중복 적용 가능 여부) 를 안내한다. DBA 가이드 룰은 `check_coupon_stacking_tool` 이 BE 에서 판정해 `pairs[].can_stack` (true/false/null) + `reason` 으로 내려주므로, LLM 은 그 판정값을 그대로 풀어 전달만 한다. **룰을 LLM 이 직접 추론하지 마라** (DBA 가이드 외 가정 금지).
 
-- **트리거 (3-Path)**:
+- **트리거 (4-Path)**:
   - **Path A — 쿠폰 ID 2개 이상 직접 명시**: "C72000953lIVn 이랑 C68000886MSJJ 같이 돼?" 처럼 사용자가 cpn_no (대문자 C 로 시작하는 영문자+숫자 mixed 문자열, 보통 12자 이상) 를 2개 이상 직접 입력. → `check_coupon_stacking_tool(cpn_no_list=[<발화 그대로>, ...])` 즉시 호출.
   - **Path B — 컨텍스트 cpn_no + 자연어 추가 쿠폰**: preOrder/cart/orderComplete 컨텍스트 슬롯에 기획전 cpn_no 1개가 있고 사용자가 "생일쿠폰 더 쓸 수 있어?", "내 신규가입 쿠폰이랑 같이 돼?" 처럼 보유 쿠폰을 자연어로 지칭. → 먼저 `get_my_coupons_tool()` 호출 → 응답의 `items[].cpn_nm` 에서 사용자 키워드 ("생일", "신규가입", "웰컴" 등) 가 포함된 row 의 `cpn_no` 추출 → 컨텍스트 cpn_no + 추출한 cpn_no 를 `check_coupon_stacking_tool(cpn_no_list=[...])` 호출.
     - 보유 쿠폰에서 매칭 0건: "고객님 보유 쿠폰 중 '{사용자 키워드}' 와 매칭되는 쿠폰을 찾지 못했어요. 정확한 쿠폰명을 알려주시거나 쿠폰함에서 확인해 주세요." + `{"label":"1:1 문의하기","domain":"SUPPORT"}` chip.
     - 매칭 2건 이상 (모호): "보유 쿠폰 중 비슷한 쿠폰이 여러 개 있어요. 어떤 쿠폰을 말씀하시는지 알려주세요." + 상위 3개 쿠폰명 bullet.
-  - **Path C — 비교 대상 모호 (쿠폰 1개만 식별)**: 컨텍스트에 cpn_no 0~1개 + 사용자 발화에 "쿠폰 중복", "같이 써도 돼?" 만 있고 비교 대상 미지정. → 도구 호출 금지. "어떤 쿠폰끼리 비교해 드릴까요? 쿠폰명 또는 쿠폰번호를 알려주시면 확인해 드릴게요." 응답.
+  - **Path B' — 두 개 이상의 자연어 명칭 (쿠폰/딜/기획전 혼합 가능)** ⚠️ 신규: 사용자가 cpn_no 직접 입력 없이 "반짝블랙딜이랑 우동딜 테스트 중복 가능?", "기획전 X 랑 내 쿠폰 Y 같이 돼?" 처럼 **두 개 이상의 자연어 명칭** 으로 비교 대상을 지칭. → **반드시 두 도구를 동시 호출** (병렬, 같은 turn 안에서):
+    - `get_my_coupons_tool()` — 보유 쿠폰 source (자연어 명칭 → cpn_no 매칭용)
+    - `get_deals_tool()` — 기획전(딜) source (자연어 명칭 → deal_no 매칭용)
+    - 두 응답이 돌아오면 자연어 명칭별로 매칭 분류:
+      - 매칭이 **쿠폰 source** 에서 발견 → cpn_no 식별
+      - 매칭이 **기획전 source** 에서 발견 (`items[].deal_nm` 에서 사용자 키워드 부분 매칭) → deal_no 식별
+    - **응답 분기 (매칭 결과별)**:
+      - (a) **두 명칭 모두 cpn_no 매칭** → `check_coupon_stacking_tool(cpn_no_list=[cpn1, cpn2])` 호출 → Path A/B 와 동일 응답 형식.
+      - (b) **한 쪽 이상이 deal_no (기획전) 매칭** → **도구 호출 금지** (check_coupon_stacking_tool 은 cpn_no 룰만 판정하므로 deal 포함 시 부정확한 found=false 응답). 다음 정해진 응답을 그대로 출력:
+        - 본문: "**{deal_nm}** 은(는) 쿠폰없이 진행되는 기획전이에요. 쿠폰 적용 여부는 상품별로 다를 수 있어요. 정확한 적용 가능 여부는 결제 단계에서 확인하실 수 있어요 😊"
+        - 여러 deal 동시 매칭 시 deal_nm 을 모두 나열 (예: "**반짝블랙딜** 과 **우동딜 테스트** 는 ..."). 단, 매칭 결과에 cpn 1개 + deal 1개 가 섞여 있으면 deal 우선 톤 + cpn 은 cpn_nm 만 언급 ("**{deal_nm}** 은 쿠폰없이 진행되는 기획전이고, **{cpn_nm}** 는 결제 시 적용 가능 여부가 자동 판정돼요.").
+        - chip: `[타이어 추천, 구매하기]` — 결제 단계 안내라 dead-end chip 금지.
+      - (c) **둘 다 매칭 0건** (보유 쿠폰/기획전 어느 source 에도 매칭 없음) → "고객님 보유 쿠폰 중에는 '{사용자 키워드}' 와 매칭되는 쿠폰이 없고, 진행 중인 기획전에도 해당 이름이 없어요. 쿠폰명 또는 기획전명을 다시 알려주시면 확인해 드릴게요." + `[1:1 문의하기]` chip.
+      - (d) **한 쪽만 매칭 0건** (다른 쪽은 매칭 1건) → 매칭된 항목명 보여주고 "다른 항목은 매칭되지 않아 정확히 비교가 어려워요." + `[1:1 문의하기]` chip.
+    - **딜(deal) 응답 시 절대 노출 금지**: deal_no 코드값, deal_tp_cd / deal_cpn_tp_cd 같은 내부 필드, "CC_DEAL_BASE", "CC_DEAL_CPN_INFO" 같은 테이블명. 자연어 톤만.
+    - **2 source 병렬 호출 의무**: 한 쪽만 호출하지 마라. 사용자 명칭이 cpn 인지 deal 인지 사전에 알 수 없으므로 두 source 모두 조회해야 매칭 정확.
+  - **Path C — 비교 대상 모호 (자연어 명칭 1개만 식별)**: 컨텍스트에 cpn_no/deal_no 0~1개 + 사용자 발화에 "쿠폰 중복", "같이 써도 돼?" 만 있고 비교 대상 미지정. → 도구 호출 금지. "어떤 쿠폰/기획전끼리 비교해 드릴까요? 이름 또는 쿠폰번호를 알려주시면 확인해 드릴게요." 응답.
 
 - **응답 형식 (Path A/B 공통, 도구 호출 성공 시 필수)**:
   - `coupons[].found=false` 인 쿠폰이 있으면 응답에 그대로 노출하지 말고 "쿠폰번호 '{cpn_no}' 정보를 찾지 못했어요." 1줄 안내 후 다음 페어로.
@@ -564,6 +581,9 @@ class SupportSubAgent(BaseAgent):
         # Coupon stacking Path B 에서 보유 쿠폰 이름 매칭으로 cpn_no 추출용으로
         # c_transaction 의 도구를 cross-agent 재사용. c_transaction 과 동일 AF 유지.
         "get_my_coupons_tool": "Price",
+        # Coupon stacking Path B 에서 "반짝블랙딜" 류 기획전(딜) 자연어 매칭용으로
+        # b_discovery 의 도구를 cross-agent 재사용. b_discovery 와 동일 AF 유지.
+        "get_deals_tool": "Price",
     }
 
     def __init__(self, model):
@@ -581,6 +601,7 @@ class SupportSubAgent(BaseAgent):
                 get_card_installments_tool,
                 check_coupon_stacking_tool,
                 get_my_coupons_tool,
+                get_deals_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",
