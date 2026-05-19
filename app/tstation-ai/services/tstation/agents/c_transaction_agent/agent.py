@@ -2228,12 +2228,13 @@ TRANSACTION_COUPON_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + 
 Handle ONLY coupon and promotion requests.
 
 ## Profile Scope
-- 사용자가 특정 카드명("T블랙멤버십 VIP 카드", "블랙카드", "VIP카드", "XX카드" 등 "카드" 키워드 포함)을 언급하며 그 카드에서 비롯된 할인/혜택/링크/쿠폰을 요청하는 경우 — HARD STOP:
+- 사용자가 특정 카드명("T블랙멤버십 VIP 카드", "블랙카드", "VIP카드", "XX카드" 등 "카드" 키워드 포함)을 언급하며 그 카드에서 비롯된 **할인/혜택/링크/쿠폰** 을 요청하는 경우 — HARD STOP:
   → 도구 호출 금지. 카드별 전용 혜택은 시스템에서 조회할 수 없다.
   → quickReply 응답: "고객님, 카드별 전용 혜택은 시스템에서 직접 확인이 어려워요. 정확한 혜택은 발급처(고객센터 또는 카드사)에 문의해 주시거나 1:1 문의를 이용해 주세요 😊"
   → quickReplies: [{"label":"1:1 문의하기","domain":"SUPPORT"}]
   ⚠️ get_my_coupons_tool 결과에 같은 할인율의 쿠폰이 있어도 — 해당 쿠폰이 그 카드 혜택임을 보장할 수 없으므로 절대로 연관지어 안내하지 않는다.
   ⚠️ 할인 링크, 전용 쿠폰코드, 카드 혜택 내용을 임의로 생성하거나 확인했다고 답하지 않는다.
+  ⚠️ **예외 — 무이자 할부 발화는 위 HARD STOP 적용 금지**: "무이자", "할부 가능", "할부 카드", "N개월 무이자", "12개월 가능" 같은 무이자 할부 키워드가 등장하면 **반드시 `get_card_installments_tool(tgt_amt=<있으면 정수>)` 호출** 후 카드사+가능 개월수만 안내 (Flow 1.6 의 SUPPORT 룰 동일). payment_type / 결제유형 / 스마트페이/일반결제 표현은 절대 노출 금지. 도구 호출 실패 시에만 위 1:1 문의 fallback 사용.
 - "내 쿠폰", "쿠폰함", "보유 쿠폰", "사용 가능한 쿠폰" -> call get_my_coupons_tool.
 - Product-specific coupon (e.g. "<상품명> 할인쿠폰", "<상품명> 쓸 수 있는 쿠폰", "<상품명> 적용 쿠폰", "<상품명> 쿠폰 적용받고 싶어", "이 상품 쿠폰") ->
   Step 1. goods_no 가 컨텍스트에 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것.
@@ -2791,6 +2792,7 @@ class TransactionSubAgent(BaseAgent):
                 get_product_promotions_tool,
                 search_product_tool,
                 get_favorite_stores_tool,
+                get_card_installments_tool,  # Flow 1.6 cross-agent reuse — 카드 HARD STOP 예외 (무이자 할부)
             ]
             system_prompt = get_transaction_coupon_system_prompt
             name = "Transaction Agent (Coupon)"
