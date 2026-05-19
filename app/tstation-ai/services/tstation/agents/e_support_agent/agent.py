@@ -4,6 +4,7 @@ from services.tstation.agents.e_support_agent.tools import (
     get_maintenance_dday_tool,
     get_my_cars_tool,
     search_faq_rag_tool,
+    search_product_tool,
     transfer_to_qna_tool,
     get_product_warranties_tool,
     get_my_warranties_tool,
@@ -98,13 +99,17 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   - warranties=[] (보유 0건): "고객님께서 현재 보유하신 워런티가 확인되지 않아요. 자세한 가입 정보는 마이페이지 또는 1:1 문의로 확인해 주세요." (가입대기 단계는 BE 단에서 응답에서 제외되어 보이지 않음 — 본문에서 "가입대기/대기 중" 같은 추측 표현 절대 금지.)
   - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함.
 
-- **Path B — 특정 상품 적용 가능 워런티**: 사용자가 "이 타이어 안심서비스 돼?", "이 상품 워런티 종류", "다이나프로 HPX 30일 해피보증 돼?", "방금 본 상품 품질보증 가입 가능?" 처럼 특정 상품 단위 적용 여부를 묻는 경우.
-  - 컨텍스트(직전 product 카드 / search 결과 / preOrder)에 해당 상품의 `goods_no` 가 있을 때만 `get_product_warranties_tool(goods_no=<해당값>)` 호출.
-  - `goods_no` 가 컨텍스트에 **없으면 도구 호출 금지** — 사용자에게 "어떤 상품에 대해 알려드릴까요?" + `{"label":"타이어 추천","domain":"DISCOVERY"}` / `{"label":"상품 찾기","domain":"DISCOVERY"}` chip 으로 유도. 절대 임의 goods_no 추측 금지.
-  - 응답 본문 (성공 + warranties 1건 이상): "**{상품명}** 에 적용 가능한 워런티는 다음과 같아요 😊" + 각 워런티 `- **{wrt_nm}**` bullet. PLPR_YN='Y' 케이스는 BE 가 안심서비스 / 안심플러스를 2 row 로 분리해서 내려주므로 받은 순서대로 그대로 노출 (사용자가 두 옵션 모두 가능함을 자연스럽게 인지).
+- **Path B — 특정 상품 적용 가능 워런티**: 사용자가 "이 타이어 안심서비스 돼?", "이 상품 워런티 종류", "다이나프로 HPX 30일 해피보증 돼?", "벤투스 S2 AS 워런티 돼?", "방금 본 상품 품질보증 가입 가능?" 처럼 특정 상품/모델 단위 적용 여부를 묻는 경우. 다음 우선순위로 처리:
+  1. **컨텍스트에 goods_no 가 이미 있는 경우** (직전 product 카드 / search 결과 / preOrder): 검색 생략하고 곧장 `get_product_warranties_tool(goods_no=<해당값>)` 호출.
+  2. **컨텍스트에 goods_no 가 없지만 발화에 상품명/모델명/사이즈가 있는 경우** ("벤투스 S2 AS", "다이나프로 HPX", "키너지 EX 235/55R19" 등): 같은 turn 안에서 먼저 `search_product_tool(keyword="<상품/모델명>", size="<있으면>", brand_cd="<있으면>")` 호출 → 응답의 `data.items[0].goods_no` 추출 (검색 결과가 여러 사이즈여도 BE 워런티 SQL 은 같은 PTRN_CD 매칭이라 어떤 행을 쓰든 결과 동일 → 첫 행 사용) → `get_product_warranties_tool(goods_no=<추출값>)` 호출. 같은 turn 두 도구 모두 호출하고 한 번에 응답.
+     - 검색 결과 0건 (`items=[]`): "해당 상품을 찾지 못했어요. 정확한 상품명으로 다시 알려주시거나 추천을 받아보세요." + DISCOVERY chip. 워런티 도구 호출 금지.
+     - 검색 결과는 있지만 `goods_no` 가 비어있는 행: 다음 행 사용. 모두 비면 위 0건 동일 처리.
+  3. **컨텍스트도 발화도 상품을 식별할 수 없는 경우** ("이 타이어", "그 상품" 만 있고 직전 컨텍스트 없음): 도구 호출 금지 — "어떤 상품에 대해 알려드릴까요?" + `{"label":"타이어 추천","domain":"DISCOVERY"}` / `{"label":"상품 찾기","domain":"DISCOVERY"}` chip 으로 유도. 절대 임의 goods_no 추측 금지.
+  - 응답 본문 (성공 + warranties 1건 이상): "**{상품명}** 에 적용 가능한 워런티는 다음과 같아요 😊" + 각 워런티 `- **{wrt_nm}**` bullet. PLPR_YN='Y' 케이스는 BE 가 안심서비스 / 안심플러스를 2 row 로 분리해서 내려주므로 받은 순서대로 그대로 노출 (사용자가 두 옵션 모두 가능함을 자연스럽게 인지). 상품명은 직전 검색/카드의 `goods_nm` 사용.
   - warranties=[] + ptrn_cd 가 채워진 경우: "**{상품명}** 은 현재 워런티 적용 대상이 아닌 것으로 확인돼요."
   - ptrn_cd=null (상품 미존재): "해당 상품 정보를 찾지 못했어요. 정확한 상품으로 다시 확인해 주세요."
   - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함. 자리 남으면 `{"label":"구매하기","domain":"TRANSACTION"}` 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}` 보조 chip.
+  - ⚠️ `search_product_tool` 결과는 워런티 답변용 보조 데이터다 — product 카드 (DISCOVERY 흐름) emit 하지 마라. SupportDataEvent (quickReply) 1개만 emit 한다.
 
 - **Path C — 일반 정책/조건/혜택 질문**: 위 Path A/B 트리거에 해당하지 않는 워런티 일반 정책 질문 ("안심서비스 뭐야?", "보장 범위 어디까지?", "펑크 보상 돼?", "코드절상 무상교환이 뭐야?", "어떤 조건이어야 가입돼?") 은 아래 "Digital Warranty / 안심서비스 answer rules" (FAQ 기반) 그대로 적용.
 
@@ -479,6 +484,9 @@ class SupportSubAgent(BaseAgent):
         # 정비 D-day Case 2 (차량 컨텍스트 없음) 에서 listCar 카드 emit 용으로
         # b_discovery 의 도구를 cross-agent 재사용. b_discovery 와 동일 AF 유지.
         "get_my_cars_tool": "Product Compatibility",
+        # Warranty Path B 에서 사용자가 상품명만 발화한 경우 goods_no 추출용으로
+        # b_discovery 의 도구를 cross-agent 재사용. b_discovery 와 동일 AF 유지.
+        "search_product_tool": "Product Recommendation",
     }
 
     def __init__(self, model):
@@ -492,6 +500,7 @@ class SupportSubAgent(BaseAgent):
                 get_my_warranties_tool,
                 get_maintenance_dday_tool,
                 get_my_cars_tool,
+                search_product_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",
