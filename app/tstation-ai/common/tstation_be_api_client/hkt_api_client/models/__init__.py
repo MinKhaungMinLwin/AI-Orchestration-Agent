@@ -14,6 +14,8 @@ from .car_model_search_response import CarModelSearchResponse
 from .car_tire_size_response import CarTireSizeResponse
 from .car_trim_item import CarTrimItem
 from .car_trim_response import CarTrimResponse
+from .card_installment_item import CardInstallmentItem
+from .card_installment_list_response import CardInstallmentListResponse
 from .chat_history_response import ChatHistoryResponse
 from .cheapest_by_coupon_item import CheapestByCouponItem
 from .cheapest_by_coupon_response import CheapestByCouponResponse
@@ -111,6 +113,8 @@ __all__ = (
     "BestSellerItem",
     "BestSellerPeriod",
     "BestSellerResponse",
+    "CardInstallmentItem",
+    "CardInstallmentListResponse",
     "CarMaintenanceDday",
     "CarModelGroup",
     "CarModelGroupResponse",
