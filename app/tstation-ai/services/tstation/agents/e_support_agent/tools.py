@@ -16,6 +16,7 @@ from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정�
 # SUPPORT 여도 동일하게 동작.
 from services.tstation.agents.b_discovery_agent.tools import (
     get_my_cars_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
+    search_product_tool,  # noqa: F401  # warranty Path B 에서 상품명→goods_no 추출용
 )
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
     sync_detailed as get_my_warranties,
