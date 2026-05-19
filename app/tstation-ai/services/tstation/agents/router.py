@@ -101,9 +101,9 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, reservation, store visit/booking, order tracking, create order draft, coupon inquiry
-        - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
-        - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
+        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, store visit reservation (specific date/time slot booking at a store), order tracking, create order draft, coupon inquiry
+        - SUPPORT: FAQ, warranty, returns, policies, general maintenance information, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 알림 만기 / all my T 점검 만기** (data-backed schedule inquiry for the user's registered car), human agent
+        - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, **registered vehicle list (listCar) inquiry**
         - LEADING: Greeting, unclear intent
 
         DECISION RULES:
@@ -155,11 +155,12 @@ class AgentDomain(BaseModel):
         - Tire replacement guidance (when to replace, air pressure, maintenance)
         - Policy questions (warranty terms, return conditions, refund process)
         - General guidance without purchase intent
+        - **Per-vehicle maintenance schedule / D-day inquiry** — "내 차 정비 일정", "엔진오일 언제 갈아야", "배터리 교체 시기", "타이어 교체 시기", "all my T 점검 만기 언제", "내 차 5대무상 점검 만기", "와이퍼 언제 갈아", "정비 D-day", "점검 만기일" (registered-car-based D-day matrix for the 7 items: 얼라인먼트/all my T 무상점검/엔진오일/실내필터/와이퍼/타이어/배터리). ⚠️ NOT to be confused with "store visit reservation booking" (=TRANSACTION).
         - Request for human agent / 1:1 inquiry
         - Write/save 1:1 inquiry with AI-summarized content
         - "1:1 문의 작성", "상담원 연결", "이 문제를 1:1로 저장하고 싶어요"
         - **Customer complaints, frustration, anger** (e.g., "뭐 이런 서비스가", "제대로 해", "상담 이딴식으로", "엉망이야", aggressive/angry tone)
-        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "짜증나", "다른 상담원 연결해줘"
+        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "짜증나", "다른 상담원 연결해줘", "내 차 정비 일정 알려줘", "엔진오일 언제 갈아야 해?", "all my T 점검 언제까지야?"
 
         LEADING if:
         - Just greeting ("hello", "hi", "안녕하세요")
@@ -176,7 +177,9 @@ class AgentDomain(BaseModel):
         - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
         - "buy tires" → TRANSACTION
         - "recommend tires" → DISCOVERY
-        - "warranty, return, maintenance" → SUPPORT
+        - "warranty, return, maintenance FAQ" → SUPPORT
+        - "내 차 정비 일정 / 정비 D-day / 교체 시기 / 점검 만기" → SUPPORT (data-backed, registered vehicle 7-item D-day matrix)
+        - "방문 예약 시간 알려줘 / 매장 예약 조회" → TRANSACTION (store visit slot booking)
         - "find stores" → TRANSACTION
 
         Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
