@@ -1510,7 +1510,7 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                 if isinstance(store, dict) and _get_str(store, "shop_id") == shop_id:
                     shop_nm = _get_str(store, "shop_nm")
                     if shop_nm:
-                        store_name = f"{shop_nm} ({shop_id})"
+                        store_name = shop_nm
                     break
             if store_name:
                 break
@@ -1523,7 +1523,7 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                 if isinstance(draw, dict):
                     shop_nm = _get_str(draw, "shop_nm")
                     if shop_nm:
-                        store_name = f"{shop_nm} ({shop_id})"
+                        store_name = shop_nm
                         break
 
     # Enrich paymentAmount from same-turn price tool.

@@ -1653,7 +1653,7 @@ STOP and wait for user's explicit confirmation ("주문할게", "확인", "yes",
 NEVER proceed to order tools in the same turn as showing the preview.
 ⚠️ Once user confirms, IMMEDIATELY execute the order tool. Do NOT show the preview again or ask for confirmation a second time.
 
-Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상품: [goods_nm] [tire_size_1], 수량: [ord_qty]개, 매장: [shop_nm]([shop_id]). 주문을 진행할까요? 😊"
+Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상품: [goods_nm] [tire_size_1], 수량: [ord_qty]개, 매장: [shop_nm]. 주문을 진행할까요? 😊"
 
 **Mid-flow changes:**
 - Quantity change → update qty, re-check inventory from STEP 3 (keep existing goods_no, shop_id)
@@ -1667,7 +1667,7 @@ Format: "주문 정보를 확인해 주세요. 차량: [car_nm]([car_no]), 상�
 Verify each required field is non-null. If any is missing, resolve it instead of emitting null:
 - `product` (goods_nm) → look up from the most recent search_product_tool or confirmed slot. NEVER null.
 - `quantity` → use most recently confirmed ord_qty from user message or slot. NEVER null.
-- `storeName` → use the MOST RECENTLY SELECTED store's shop_nm + "(" + shop_id + ")". NEVER use an earlier store from the conversation.
+- `storeName` → use the MOST RECENTLY SELECTED store's shop_nm ONLY (no shop_id suffix; FE displays this string verbatim as the "장착매장" label). NEVER use an earlier store from the conversation. shop_id is carried separately in `metadata.shopId`.
 - `bookingDateTime` → use the most recently confirmed date+time selection. If not yet confirmed → do NOT emit preOrder yet; show datepick first.
 - `paymentAmount` → MUST call get_final_price_tool(goods_no) if not already done for this goods_no. NEVER emit null without attempting the price lookup (STEP D fallback only applies when the tool itself fails or returns SP=null/0).
 - `metadata.goodsId` → goods_no (NEVER null or empty string).
@@ -2149,7 +2149,7 @@ Schema: `{type:"data", template:"preOrder", data:{assistantResponse:str, orderIn
   {"type":"data","template":"preOrder","data":{...,"metadata":{...}},"nextAction":{"type":"stop","domain":null}}
   ```
 - `assistantResponse`: ONE short sentence e.g. "주문 내용을 확인해 주세요." — NEVER list carInfo/product/quantity/storeName/bookingDateTime/paymentAmount here (FE renders them in the card below).
-- `carInfo`: `"car_nm (car_no)"` | null (see CAR INFO RESOLUTION). `product`: `"goods_nm tire_size_1"` (예: "아이온 에보 AS SUV 255/55R20"). `storeName`: `"shop_nm (shop_id)"`.
+- `carInfo`: `"car_nm (car_no)"` | null (see CAR INFO RESOLUTION). `product`: `"goods_nm tire_size_1"` (예: "아이온 에보 AS SUV 255/55R20"). `storeName`: `"shop_nm"` (shop_id 절대 포함 금지 — `metadata.shopId` 로 별도 전달).
 - ⚠️ `product` 필드에 `goods_no` 같은 내부 식별자 노출 금지 — 사용자가 볼 필요 없음. 항상 `goods_nm` + 공백 + `tire_size_1` (검색/추천 결과 row 의 tire_size_1 값) 형태로 작성. tire_size_1 가 누락된 경우(드물게)에 한해 `goods_nm` 단독 허용.
 - ⚠️ ⚠️ ⚠️ CRITICAL — `recommendActions` 필드를 **절대 emit 하지 말 것**. FE 의 preOrder 카드 가
   내부적으로 "바로 주문하기" / "장바구니에 담기" 버튼을 자체 렌더한다. `recommendActions.listActions`
@@ -2161,7 +2161,7 @@ Schema: `{type:"data", template:"preOrder", data:{assistantResponse:str, orderIn
 Schema: `{type:"data", template:"orderComplete", data:{assistantResponse:str, orderInfo:{carInfo:str|null, product:str, quantity:int, storeName:str|null, bookingDateTime:str|null, paymentAmount:int|null}, isSuccess:bool, type:str, message:str|null, data:{status:str}, metadata:{ordNo:str, goodsId:str, shopId:str}}}`
 - `type`: 항상 `"order"`. `message`: null on success | error string on failure.
 - ⚠️ FIELD CARRY-OVER FROM preOrder (MANDATORY): After `quick_order_tool` succeeds, ALL `orderInfo` fields MUST be copied verbatim from the `preOrder` card emitted in the PREVIOUS turn. Do NOT re-derive from `quick_order_tool` output and do NOT emit null for any field that was populated in preOrder:
-  • `storeName` ← copy from preOrder.orderInfo.storeName (e.g. "티스테이션 오목천점 (F08890)")
+  • `storeName` ← copy from preOrder.orderInfo.storeName (e.g. "티스테이션 오목천점" — shop_id 없는 순수 매장명)
   • `bookingDateTime` ← copy from preOrder.orderInfo.bookingDateTime (e.g. "2026년 5월 15일 (금) 17:00")
   • `paymentAmount` ← copy from preOrder.orderInfo.paymentAmount (integer, e.g. 848000)
   • `carInfo` ← copy from preOrder.orderInfo.carInfo
