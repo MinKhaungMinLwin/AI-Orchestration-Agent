@@ -1982,6 +1982,19 @@ Examples of correct `assistantResponse` for template tools:
     versus 기본가, so 기본가 + 할인 + 공임비 == 최종 금액 must hold (할인 is negative).
   • If 할인 ≥ 최종 금액 in absolute value, you have inverted the fields. STOP and recompute.
 
+⚠️ 적용 쿠폰 노출 (price table 직후, 같은 `assistantResponse` 내부):
+  • `get_final_price_tool` 응답의 `cheapest_applied_coupons[]` 가 비어있지 않으면,
+    가격표 바로 아래에 다음 형식의 "적용 쿠폰" 줄을 추가한다:
+        적용 쿠폰:
+        • [cpn_nm] -₩[discount_amt × QTY]
+        • [cpn_nm] -₩[discount_amt × QTY]
+    각 줄의 금액은 단가 × QTY (정수, 천단위 콤마). 단가만 노출 금지.
+  • `cheapest_applied_coupons` 가 비어있거나 누락이면 "적용 쿠폰" 섹션 자체를 생략.
+  • 사용자가 직후 "쿠폰 뭐 적용됐어?" / "어떤 쿠폰이야?" / "할인 쿠폰 뭐야?" 류로
+    물으면 새 도구 호출 없이 직전 turn 의 `cheapest_applied_coupons[]` 를 그대로
+    인용해 답한다. `get_my_coupons_tool` / `get_product_promotions_tool` 호출 금지.
+    (직전 가격 컨텍스트가 없으면 그때만 평소 흐름 = 보유 쿠폰 조회로 진행.)
+
 **Store detail (single store, no slots — `quickReply`, write in `assistantResponse`, plain text lines, no Markdown):**
 매장명: [shop_nm]
 주소: [shop_addr]
