@@ -2,6 +2,7 @@ from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.e_support_agent.tools import (
     get_faq_tool,
     get_maintenance_dday_tool,
+    get_my_cars_tool,
     search_faq_rag_tool,
     transfer_to_qna_tool,
     get_product_warranties_tool,
@@ -197,10 +198,11 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   ⚠️ **제외 (다른 룰 우선)**: 일반 정비 정보 (예: "엔진오일은 어떻게 갈아?", "배터리 교체 비용", "위치 교환 주기") → 아래 "차량/타이어 점검·유지보수 일반 안내" 룰. 본 룰은 **회원의 등록차량 데이터를 조회**해 D-day 를 답하는 케이스에만 적용.
 - **차량 컨텍스트 확인 (필수, 첫 분기)**:
   - **Case 1 — 컨텍스트 있음**: 직전 대화에 사용자가 선택한 차량의 `mbr_car_reg_seq` 가 있거나, 슬롯에 차량 식별 정보가 있거나, 사용자가 발화에 차종명/차량번호를 명시 → `get_maintenance_dday_tool(mbr_car_reg_seq=<컨텍스트값>)` 호출. 사용자가 차종명만 언급한 경우 (예: "내 GV70 정비 일정") 이전 listCar tool 결과에서 매칭 시도, 매칭 1대면 그 차량 seq 사용.
-  - **Case 2 — 컨텍스트 없음**: 도구 호출 금지. 다음 응답으로 핸드오프:
-    - `assistantResponse`: "어떤 차량의 정비 일정을 확인해 드릴까요? 😊\n\n등록 차량 목록에서 선택해 주세요."
-    - `quickReplies`: `[{"label":"내 차량 보기","domain":"DISCOVERY"}, {"label":"처음으로","domain":"LEADING"}]`
-    - `predictedDomains`: `["DISCOVERY"]`
+  - **Case 2 — 컨텍스트 없음**: `get_my_cars_tool(mbr_no)` 즉시 호출 (b_discovery 의 도구를 그대로 재사용 — template_mapper 가 listCar 카드 자동 발동).
+    - 결과 1+ cars → `listCar` 카드 emit. `assistantResponse` 는 한 줄 인트로: "어느 차량의 정비 일정을 확인해 드릴까요? 😊"
+    - 결과 0 cars → quickReply 로 차량 등록 안내: `[{"label":"내 차량 등록","domain":"DISCOVERY"}, {"label":"처음으로","domain":"LEADING"}]` + assistantResponse "등록된 차량이 없어요. 차량을 먼저 등록해 주세요 😊"
+    - ⚠️ 호출 후 사용자 차량 선택을 기다린다. 다음 턴에 사용자가 차량을 선택하면 (예: car_no 또는 차종명 발화) 라우터가 SUPPORT 로 다시 라우팅 → Case 1 흐름으로 `get_maintenance_dday_tool` 호출.
+    - ⚠️ Case 2 에서 `get_maintenance_dday_tool` 을 **호출하지 마라** — 차량 식별 필수.
 - **Case 1 응답 본문 (도구 호출 후)**:
   - 응답 받은 `cars[].items[]` 의 7개 항목 (001~007) 을 차량별로 안내.
   - 각 항목 1줄 형식: "{kind_nm}: {exp_dt} ({D-day 표기}, {status 한글})". 예:
@@ -463,6 +465,9 @@ class SupportSubAgent(BaseAgent):
         "get_my_warranties_tool": "FAQ",
         # 정비 D-day 매트릭스도 정보성 응답이라 FAQ AF 묶음 유지.
         "get_maintenance_dday_tool": "FAQ",
+        # 정비 D-day Case 2 (차량 컨텍스트 없음) 에서 listCar 카드 emit 용으로
+        # b_discovery 의 도구를 cross-agent 재사용. b_discovery 와 동일 AF 유지.
+        "get_my_cars_tool": "Product Compatibility",
     }
 
     def __init__(self, model):
@@ -475,6 +480,7 @@ class SupportSubAgent(BaseAgent):
                 get_product_warranties_tool,
                 get_my_warranties_tool,
                 get_maintenance_dday_tool,
+                get_my_cars_tool,
             ],
             system_prompt=get_support_system_prompt,
             name="Support Agent",

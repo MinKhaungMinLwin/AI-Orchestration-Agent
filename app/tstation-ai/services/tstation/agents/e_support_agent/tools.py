@@ -10,6 +10,13 @@ from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상
 from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정비_d_day_안내.get_maintenance_dday_api_member_maintenance_dday_get import (
     sync_detailed as get_maintenance_dday,
 )
+# Cross-agent reuse: b_discovery 의 get_my_cars_tool 을 SUPPORT 에서도 호출해
+# 정비 D-day 안내 시 차량 컨텍스트가 없으면 직접 listCar 카드를 emit 한다.
+# template_mapper 가 tool name 기준으로 listCar 템플릿을 발동하므로 호출 주체가
+# SUPPORT 여도 동일하게 동작.
+from services.tstation.agents.b_discovery_agent.tools import (
+    get_my_cars_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
+)
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
     sync_detailed as get_my_warranties,
 )
