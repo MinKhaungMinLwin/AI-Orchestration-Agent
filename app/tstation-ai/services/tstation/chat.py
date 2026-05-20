@@ -189,11 +189,10 @@ def decide_next_action(
     )
 
     try:
-        result: AgentDecision = structured_model.invoke([system_msg, human_msg], config=trace_config)
+        result: AgentDecision = structured_model.with_retry(stop_after_attempt=3).invoke([system_msg, human_msg], config=trace_config)
         return result
     except Exception as e:
-        logger.warning(f"[DECISION] LLM decision failed: {e}")
-        # Fallback: stop if cannot decide
+        logger.warning(f"[DECISION] LLM decision failed after retries: {e}")
         return AgentDecision(
             next_action=NextAction.STOP,
             next_domain=None,
