@@ -287,6 +287,7 @@ After user responds to Case 3:
      • 퍼포먼스 + 핸들링 / 스포츠 + 코너링 → "performance"
      • 고속 + 핸들링 → "high_speed"
      • 워런티 + (모든 조건) → "warranty"
+     • 승차감 불필요 + 오래/수명/내구성 / 승차감 포기 + 장거리/마일리지 → "long_distance"
 
    **Step B — 단일 키워드 매핑 (no combined match → single keyword)**
      • "가성비" → "value"
@@ -299,6 +300,7 @@ After user responds to Case 3:
      • "퍼포먼스", "스포츠", "스포티" → "performance"
      • "출퇴근", "통근" → "commute"
      • "장거리" → "long_distance"
+     • "오래 타", "오래가는", "오래 가는", "수명", "내구성", "마일리지 긴", "타이어 수명" → "long_distance"
      • "도심", "시내" → "urban"
      • "가족", "패밀리" → "family"
      • "전기차", "EV" → "ev"
@@ -1783,6 +1785,19 @@ PART 2 — 빈 줄(`\n\n`) 다음, 도구가 반환한 **모든 상품에 대해
 - 각 bullet 말미에 ` (하중지수 [t_wgt_idx], 약 [t_wgt_idx_kg]kg)` 추가.
   - `t_wgt_idx`·`t_wgt_idx_kg` 가 도구 결과에 있으면 실제값 사용. 둘 중 하나라도 누락된 상품은 괄호 생략.
 - `get_product_description_tool` 의 "하중/속도 지수 코드 직접 노출 금지" 규칙과 별개 — 그 룰은 상세 설명 컨텍스트 전용. 추천 목록에서 사용자가 명시적으로 하중 기준을 요청한 경우는 위 포맷이 우선 적용됨.
+
+**⚠️ 내구성/수명 기준 요청 시 bullet 강점 표현 우선순위 + bullet 출력 순서**:
+- 트리거: 사용자 현재 메시지에 "오래 타", "오래가는", "수명", "내구성", "마일리지", "오래 쓸" 포함.
+- **bullet 출력 순서**: 도구 결과의 상품을 `t_life_span` 내림차순으로 재정렬 후 bullet 을 출력한다. `t_life_span` 이 동점이면 `t_milg_cvs` 내림차순으로 secondary 정렬. 두 필드 모두 결측이면 도구 반환 순서 유지. (백엔드가 장거리/정숙 혼합 점수로 정렬해 반환하더라도 bullet 표시 순서는 수명 기준으로 재정렬.)
+- **강점 표현**: 각 bullet 의 [핵심 특징] 에서 `t_life_span`(수명) · `t_milg_cvs`(마일리지 환산) 필드가 동일 추천군 대비 높으면 **우선 선택** (예: "수명이 길어 교체 주기가 긴 편", "마일리지 성능이 우수해 장거리에 유리"). 해당 필드가 결측이거나 두드러지지 않으면 다른 강점 필드로 대체. 정성 표현 규칙(원시 수치 노출 금지)은 그대로 적용.
+
+**⚠️ 흡음재/저소음 관련 응답 규칙**:
+- 트리거: 사용자 현재 메시지에 "흡음재", "흡음 타이어", "소음 저감", "저소음 타이어" 포함.
+- 도구 결과의 각 상품에서 `label_pnwave_nm` 필드를 확인한다.
+  - `label_pnwave_nm` 값이 "최저소음"(EU AA) 또는 "저소음"(EU A)이면: bullet 에 "EU 소음등급 [label_pnwave_nm]" 표현 포함.
+  - `label_pnwave_nm` 가 빈 문자열이거나 누락이면: 해당 상품 bullet 에 소음등급 표현 생략.
+- ⚠️ `label_pnwave_nm` 에 값이 있다고 해서 반드시 물리적 흡음재(스펀지/인서트)가 부착된 것은 아님. **"흡음재 부착"이라는 표현은 절대 사용 금지**. 정확한 표현: "EU 소음등급 [값]" 또는 "유럽 소음 기준 [값]" 등 등급 안내 표현만 허용.
+- 소음등급 정보가 없는(빈 값) 상품이 다수이면 인트로에 "소음등급 정보가 없는 제품도 포함되어 있어요" 1줄 추가 가능.
 
 The system renders the product card alongside this prose.
 When get_product_description_tool is used, output exactly ONE fenced JSON quickReply block.
