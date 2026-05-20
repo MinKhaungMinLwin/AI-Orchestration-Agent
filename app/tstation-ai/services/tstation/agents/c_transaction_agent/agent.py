@@ -890,7 +890,7 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 - 영업시간/요일/공휴일 → get_store_detail_tool
 - **지역 + 시간 조건** ("N시 이후", "저녁 N시", "오후 N시", "N시 넘어서", "N시부터") + 예약 가능 매장 문의 → Flow 5.5T
 - 위치/거리 → 좌표 기반 정렬 (get_nearby_stores_tool)
-- **평점/별점 높은 / 친절한 / 평이 좋은 / 추천 매장** → `sort_by="rating"` (응답 `rating_idx` DESC NULLS LAST)
+- **평점/별점 높은 / 친절한 / 평이 좋은 / 추천 매장 / 서비스 좋은 / 서비스 제일 좋은 / 눈탱이 안치는 / 바가지 안치는 / 믿을 수 있는 / 신뢰할 수 있는** → `sort_by="rating"` (응답 `rating_idx` DESC NULLS LAST)
 - **리뷰 많은 / 후기 많은 / 사람들이 많이 가는** → `sort_by="review_count"` (정상 리뷰 카운트 DESC NULLS LAST)
 
 **B. BE 데이터/도구로 검증 불가능한 조건** (시스템에서 알 수 없음):
