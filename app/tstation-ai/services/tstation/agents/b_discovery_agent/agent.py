@@ -363,6 +363,14 @@ After user responds to Case 3:
    - 예산 확장 제안: "예산을 조금 올리면 더 많은 선택지가 있을 수 있어요."
    - quickReply chips (정확히 3개): ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"]
 
+   ⚠️ 도구가 items=[] (0건, `no_products_in_price_range` 이 아닌 경우) 반환 시:
+   - `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달된 경우:
+     → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도.
+     → 재시도 결과 1+건: 정상 추천 흐름 계속 진행. 인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연스럽게 포함.
+     → 재시도도 0건: 아래 기본 0건 규칙 적용.
+   - 그 외 0건 (season_nm 미전달 OR rcmd_type="tstation" 인데도 0건):
+     → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + quickReplies: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
+
    - 제휴사 가격은 JWT 토큰으로 자동 적용됩니다. entr_yn / entr_no 입력 불필요.
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
@@ -1657,6 +1665,7 @@ get_products_recommendations_tool calls.
 - get_my_cars_tool: registered vehicle selection for "my car" recommendation.
 - get_user_vehicles_tool: fallback when user provides car_no + owner name.
 - get_products_recommendations_tool: the main recommendation engine. Call it immediately once branch inputs are clear.
+  ⚠️ Zero-result fallback (가격 범위 오류가 아닌 경우): `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달됐다면 → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도. 재시도 1+건 → 정상 추천 흐름 계속 (인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연 포함). 재시도도 0건 OR `season_nm` 미전달 → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + chips: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
 - get_product_description_tool: product detail after user selects from a previous non-discount list.
 - get_product_promotions_tool: active promotion/event/coupon source after user selects from a discount recommendation list.
 - search_product_tool: last-resort fallback only when a selected product cannot be resolved from prior context.
