@@ -2423,6 +2423,55 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
     ({"get_my_coupons_tool", "get_available_coupons_tool"}, _FALLBACK_COUPON, "coupon"),
 ]
 
+_GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_DISCOVERY_SIZE_VEHICLE_CHIPS: list[dict] = [
+    {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+    {"label": "차량번호로 찾기", "domain": "DISCOVERY"},
+    {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+]
+_DISCOVERY_NO_RESULT_CHIPS: list[dict] = [
+    {"label": "다시 검색", "domain": "DISCOVERY"},
+    {"label": "다른 조건으로 찾기", "domain": "DISCOVERY"},
+    {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+]
+_DISCOVERY_PRODUCT_CHIPS: list[dict] = [
+    {"label": "다른 조건으로 찾기", "domain": "DISCOVERY"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+]
+_DISCOVERY_DEFAULT_CHIPS: list[dict] = [
+    {"label": "상품 검색", "domain": "DISCOVERY"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+_DISCOVERY_SIZE_VEHICLE_TEXT_RE = re.compile(
+    r"타이어\s*사이즈|차량번호|소유주|등록\s*차량|내\s*차|내차|"
+    r"차종|규격|하중(?:지수)?|트럭|화물",
+    re.IGNORECASE,
+)
+_DISCOVERY_NO_RESULT_TEXT_RE = re.compile(
+    r"찾을\s*수\s*없|검색\s*결과가?\s*없|조회(?:된)?\s*상품이?\s*없|"
+    r"조건에\s*맞는\s*타이어|매칭(?:되는)?\s*상품",
+    re.IGNORECASE,
+)
+_DISCOVERY_PRODUCT_TEXT_RE = re.compile(
+    r"타이어\s*추천|상품\s*추천|추천해\s*드릴|제품을?\s*선택|"
+    r"상품을?\s*찾았|구매|장바구니",
+    re.IGNORECASE,
+)
+_EXPLICIT_SUPPORT_TEXT_RE = re.compile(
+    r"1\s*:\s*1\s*문의|상담(?:원|사)?|클레임|환불\s*신청|교환\s*신청|"
+    r"문의로\s*문의|고객센터",
+    re.IGNORECASE,
+)
+_DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
+    r"제조\s*(?:일자|시점|주차|번호)|DOT|생산(?:된|일자|시점|주차)?|"
+    r"확정(?:해|하여)?\s*안내.*어려|조회.*어려|확인.*어려|"
+    r"시스템.*확인.*불가|일시적(?:인)?\s*(?:오류|문제|실패)|"
+    r"불러오지\s*못|제공(?:해)?\s*드리기\s*어려",
+    re.IGNORECASE,
+)
+
 
 def _choose_quickreply_fallback(
     called_tool_names: set[str], source_domain: str | None
@@ -2443,6 +2492,50 @@ def _choose_quickreply_fallback(
     if source_domain and source_domain.lower() == "leading":
         return _FALLBACK_LEADING_PROGRESS, "leading_progress"
     return _FALLBACK_GENERIC, "generic"
+
+
+def _looks_like_generic_dead_end_chips(chips: object) -> bool:
+    if not isinstance(chips, list) or not chips:
+        return False
+    labels = {
+        str(item.get("label", "")).strip()
+        for item in chips
+        if isinstance(item, dict)
+    }
+    return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS and _GENERIC_DEAD_END_LABELS <= labels
+
+
+def _discovery_recovery_chips_for_text(
+    assistant_text: str | None,
+    source_domain: str | None,
+) -> tuple[list[dict], str] | None:
+    """Return progress chips when Discovery accidentally emits dead-end chips.
+
+    Generic support chips are only appropriate for explicit support/policy
+    dead-ends. Normal Discovery guidance should keep the user in the discovery
+    flow with chips that match the answer.
+    """
+    if not source_domain or source_domain.lower() != "discovery":
+        return None
+    text = assistant_text or ""
+    if not text:
+        return None
+    if _EXPLICIT_SUPPORT_TEXT_RE.search(text) or _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE.search(text):
+        return None
+    if _DISCOVERY_SIZE_VEHICLE_TEXT_RE.search(text):
+        return list(_DISCOVERY_SIZE_VEHICLE_CHIPS), "discovery_size_vehicle"
+    if _DISCOVERY_NO_RESULT_TEXT_RE.search(text):
+        return list(_DISCOVERY_NO_RESULT_CHIPS), "discovery_no_result"
+    if _DISCOVERY_PRODUCT_TEXT_RE.search(text):
+        return list(_DISCOVERY_PRODUCT_CHIPS), "discovery_product"
+    return list(_DISCOVERY_DEFAULT_CHIPS), "discovery_default"
+
+
+def _should_replace_discovery_dead_end_chips(
+    assistant_text: str | None,
+    source_domain: str | None,
+) -> bool:
+    return _discovery_recovery_chips_for_text(assistant_text, source_domain) is not None
 
 
 def _goal_based_classify(
@@ -4718,6 +4811,29 @@ class TStationChatServiceV2:
                             fallback_label,
                         )
                         event_data["quickReplies"] = fallback_chips
+                    if (
+                        not is_handoff
+                        and _looks_like_generic_dead_end_chips(event_data.get("quickReplies"))
+                    ):
+                        recovery = _discovery_recovery_chips_for_text(
+                            str(event_data.get("assistantResponse") or ""),
+                            source_domain,
+                        )
+                        if recovery is not None:
+                            recovery_chips, recovery_label = recovery
+                            logger.warning(
+                                "[QUICKREPLY_FALLBACK] replacing discovery dead-end chips "
+                                "(domain=%s tools=%s) → %s",
+                                source_domain,
+                                sorted(called_tool_names),
+                                recovery_label,
+                            )
+                            event_data["quickReplies"] = recovery_chips
+                            event_data["predictedDomains"] = _dedupe_domain_values([
+                                str(chip.get("domain", ""))
+                                for chip in recovery_chips
+                                if isinstance(chip, dict)
+                            ])
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
