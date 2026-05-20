@@ -494,6 +494,25 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # the higher-priority product mapper above, so suppressing here is safe.
     if _find_entries(tool_data_list, "get_products_recommendations_tool"):
         return None
+    # Generic advice guard: Discovery sometimes calls get_my_cars_tool only to
+    # ground an answer about the user's vehicle ("내차는 트럭인데..." etc.) without
+    # actually asking the user to choose one car. In those turns, re-rendering
+    # the full vehicle list is misleading noise. Only render listCar when the
+    # assistant text clearly asks the user to pick / confirm a vehicle.
+    text = (assistant_text or "").strip()
+    if text and not any(
+        needle in text
+        for needle in (
+            "선택",
+            "골라",
+            "어떤 차량",
+            "이 차량으로 진행",
+            "차량을 확인해",
+            "등록된 차량",
+            "차량 목록",
+        )
+    ):
+        return None
     items, metadata = [], []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)

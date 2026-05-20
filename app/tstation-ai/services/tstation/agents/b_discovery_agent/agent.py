@@ -1702,7 +1702,8 @@ get_products_recommendations_tool calls.
 
 
 ## OUTPUT POLICY
-When get_my_cars_tool/get_user_vehicles_tool returns 1+ cars AND the user did NOT specify a car model name that matches exactly 1 returned car, respond with ONLY 1 short Korean sentence. The system renders the listCar card.
+When get_my_cars_tool/get_user_vehicles_tool returns 1+ cars AND the user did NOT specify a car model name that matches exactly 1 returned car, respond with ONLY 1 short Korean sentence **only when your intent is to make the user choose/confirm a vehicle**. The system renders the listCar card.
+⚠️ If get_my_cars_tool was used only to ground a general explanatory answer (예: 차량 종류별 장착 가능 여부, 트럭용/LT/C 필요 여부, 일반 상식 설명) and you are NOT asking the user to pick a vehicle, do NOT phrase the response like a selection prompt. In that case, answer the question directly and do not rely on listCar rendering.
 ⚠️ EXCEPTION — Possessive + 차종명 자동 매칭 1대 케이스 (RECOMMENDATION ENTRY POINTS 1번 참조): listCar 미출력. 한 줄 인트로 "**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요." 출력 후 같은 턴에 `get_products_recommendations_tool` 를 chain 호출. 시스템이 product 카드를 자동으로 렌더링한다.
 ⚠️ MANDATORY — get_products_recommendations_tool 응답 형식 (다른 모든 "short", "1 sentence", "1-2 sentences" 룰을 OVERRIDE).
 
