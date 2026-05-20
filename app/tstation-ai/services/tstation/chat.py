@@ -850,6 +850,16 @@ class StreamingMultiAgentCoordinator:
             return None
         return routing_result
 
+    # Korean license plate + owner name pattern (e.g. "14다5499 이동주", "12가3456 홍길동").
+    # When the user provides this exact combo alone, the LLM classifier sometimes routes
+    # to `discovery_search` profile, which does NOT expose `get_user_vehicles_tool` /
+    # `get_my_cars_tool` / `check_compatibility_tool`. The agent then hallucinates a
+    # "찾지 못했어요" reply without calling the carzen API. Force DISCOVERY +
+    # `discovery_recommendation` profile so the vehicle-lookup tool is available.
+    _CAR_NO_OWNER_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\s*\d{2,3}[가-힣]\d{4}\s+[가-힣]{2,4}\s*$"
+    )
+
     @staticmethod
     def _extract_current_user_input(message_content: str) -> str:
         """Strip the injected `# Respond in Korean language` wrapper and the
@@ -878,6 +888,20 @@ class StreamingMultiAgentCoordinator:
         text = user_input.strip()
         if not text:
             return None
+
+        # Regex force — license plate + owner name → DISCOVERY_RECOMMENDATION profile.
+        if cls._CAR_NO_OWNER_RE.match(text):
+            return MultiAgentDomain(
+                reason="regex routing matched license-plate + owner-name pattern",
+                domains=[MultiAgentDomain.Domain.DISCOVERY],
+                execution_plan=[
+                    "Call get_user_vehicles_tool(car_no, owner_nm) → "
+                    "proceed to RECOMMEND ENGINE with returned tire_size",
+                ],
+                user_behavior="providing vehicle number and owner name to identify the vehicle",
+                agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+                flow="hardcoded regex routing — bypassed LLM router",
+            )
 
         for keywords, domain in cls._KEYWORD_FORCE_TABLE:
             for kw in keywords:
