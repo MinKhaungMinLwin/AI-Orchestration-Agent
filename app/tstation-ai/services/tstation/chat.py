@@ -4218,6 +4218,7 @@ class TStationChatServiceV2:
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
         from services.tstation.template_mapper import (
+            current_ev_suitability_comparison,
             current_goal_type,
             current_pending_intent,
             current_runflat_comparison,
@@ -4228,6 +4229,10 @@ class TStationChatServiceV2:
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
+        ))
+        current_ev_suitability_comparison.set(bool(
+            re.search(r"전기차|EV|electric|테슬라|모델\s*Y|모델Y", last_user_text, re.IGNORECASE)
+            and re.search(r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라", last_user_text, re.IGNORECASE)
         ))
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)

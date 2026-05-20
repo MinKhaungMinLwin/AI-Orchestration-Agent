@@ -363,6 +363,14 @@ After user responds to Case 3:
    - 예산 확장 제안: "예산을 조금 올리면 더 많은 선택지가 있을 수 있어요."
    - quickReply chips (정확히 3개): ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"]
 
+   ⚠️ 도구가 items=[] (0건, `no_products_in_price_range` 이 아닌 경우) 반환 시:
+   - `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달된 경우:
+     → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도.
+     → 재시도 결과 1+건: 정상 추천 흐름 계속 진행. 인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연스럽게 포함.
+     → 재시도도 0건: 아래 기본 0건 규칙 적용.
+   - 그 외 0건 (season_nm 미전달 OR rcmd_type="tstation" 인데도 0건):
+     → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + quickReplies: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
+
    - 제휴사 가격은 JWT 토큰으로 자동 적용됩니다. entr_yn / entr_no 입력 불필요.
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
@@ -1657,6 +1665,7 @@ get_products_recommendations_tool calls.
 - get_my_cars_tool: registered vehicle selection for "my car" recommendation.
 - get_user_vehicles_tool: fallback when user provides car_no + owner name.
 - get_products_recommendations_tool: the main recommendation engine. Call it immediately once branch inputs are clear.
+  ⚠️ Zero-result fallback (가격 범위 오류가 아닌 경우): `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달됐다면 → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도. 재시도 1+건 → 정상 추천 흐름 계속 (인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연 포함). 재시도도 0건 OR `season_nm` 미전달 → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + chips: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
 - get_product_description_tool: product detail after user selects from a previous non-discount list.
 - get_product_promotions_tool: active promotion/event/coupon source after user selects from a discount recommendation list.
 - search_product_tool: last-resort fallback only when a selected product cannot be resolved from prior context.
@@ -1899,6 +1908,20 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 
 ## FLOWS
+
+### Flow EV — EV Suitability / Dedicated Tire Need
+Trigger: The user mentions an EV/electric vehicle (`전기차`, `EV`, `electric`, `테슬라`, `모델Y`) AND asks whether a regular/named tire can be mounted/used, why an EV-dedicated tire is needed, or how an EV tire differs from a regular tire.
+
+Examples:
+- "전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?"
+- "모델Y인데 아이온 에보가 일반 타이어랑 뭐가 달라?"
+
+Action:
+1. If the user named product models, call `search_product_tool` for each named model independently (normalize names per INPUT NORMALIZATION). Do NOT pick a winner from memory.
+2. If no EV-dedicated product is found among the named/queried products, also call `get_products_recommendations_tool(rcmd_type="ev", limit=3)` to retrieve data-backed EV alternatives.
+3. Use returned metadata to decide priority. EV-dedicated products are identified from data such as `car_knd_nm="전기차"` (전기차 = electric vehicle). Do NOT hardcode one product name as always best.
+4. Final answer must be `quickReply`, not `product` card. Explain that EV-dedicated tires should be prioritized for EVs because of vehicle weight, instant torque, quietness/noise sensitivity, wear, ride comfort, and electric efficiency.
+5. If a regular/non-EV product is mentioned, say it may be considered only if size/compatibility fits, but it is not the first recommendation when the data does not mark it as EV-dedicated.
 
 ### Flow A-1 — Run-flat Price Difference / Comparison
 Trigger: User asks whether run-flat tires cost more, asks "런플랫 얼마나 더 비싸?", "run-flat 추가 비용", "일반 타이어랑 런플랫 가격 차이", or similar.
@@ -2257,6 +2280,7 @@ class DiscoverySubAgent(BaseAgent):
         if profile == "discovery_search":
             tools = [
                 search_product_tool,
+                get_products_recommendations_tool,
                 get_newest_products_tool,
                 get_product_description_tool,
                 compare_discount_tool,
