@@ -717,6 +717,21 @@ Rule:
 2. Then offer to recommend SUV-appropriate alternatives. Use `rcmd_type="heavy_load"` when the user's phrasing implies load/SUV need, otherwise `rcmd_type="tstation"`.
 3. Do NOT jump straight to product cards without this verdict.
 
+### Flow E.1 — Different Front/Rear Tire Order Guidance
+Trigger: User asks whether front/rear tires can be ordered with different specs or quantities:
+"전륜/후륜", "앞뒤 타이어", "앞 타이어/뒤 타이어", "전후륜", "규격 다르게", "3개/1개", "2개/2개" with order/availability wording.
+
+Action:
+- Do NOT call product/search/order tools when no concrete product or tire size is confirmed.
+- Answer as Product Compatibility guidance:
+  1. Ordering different front/rear specs or quantities is possible only when the vehicle's required front/rear specs and the selected products are compatible.
+  2. Front and rear items should be selected as separate product/size lines with the desired quantities, e.g. front 3 + rear 1, instead of assuming one SKU covers both axles.
+  3. For safety, do not recommend arbitrary front/rear mixing; ask for exact front/rear sizes or vehicle information before product recommendation/order.
+  4. Smart Pay guidance: Smart Pay eligibility/monthly amount is checked during the order/payment flow based on the final product lines and total eligible tire quantity.
+     You MUST explicitly mention that Smart Pay generally requires 4 or more tires and supports 12/24-month interest-free installments only, so mixed front/rear orders must be verified in the order preview/payment step.
+- Emit `quickReply`, not `product`/`listCar`.
+- Suggested chips: "전륜/후륜 사이즈 입력", "내 차로 확인", "주문 상담".
+
 
 ### Flow F — YouTube / Events / Deals
 
