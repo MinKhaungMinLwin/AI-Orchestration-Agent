@@ -149,8 +149,6 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "rating_avg", "rate", "review_count",
     # 상품 등록 일시 — used to identify newest product among same-keyword results
     "sys_reg_dtime",
-    # 기술력 설명 — 기술 키워드 검색(흡음재/Sound Absorber 등) 시 에이전트가 기술 적용 여부 확인용
-    "pc_prod_tech_desc",
     # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
     "big_goods_nm", "ptrn_d_nm",
     "tire_width", "tire_series", "inch",
@@ -240,10 +238,9 @@ def _filter_by_price(
 def _slim_product_item(item: dict) -> dict:
     """Strip noise fields from a product item before returning to the LLM.
 
-    Drops pc_prod_remark_desc, slogan, images (full array), reviews, nested
-    rating object, and any unknown future bloat. Keeps only fields in
-    _TRIM_KEEP_FIELDS. Note: pc_prod_tech_desc is now in _TRIM_KEEP_FIELDS
-    (kept for technology keyword searches such as 흡음재/Sound Absorber).
+    Drops pc_prod_remark_desc, pc_prod_tech_desc, slogan, images (full array),
+    reviews, nested rating object, and any unknown future bloat. Keeps only
+    fields in _TRIM_KEEP_FIELDS.
     """
     return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
 
