@@ -192,7 +192,7 @@ If get_my_cars_tool returns 2+ cars AND user already provided a car_no in their 
 2. **추가 도구 호출 금지** — `get_user_vehicles_tool`, `search_car_model_tool`, `check_compatibility_tool` 어느 것도 호출하지 마세요. 이미 받은 `get_my_cars_tool` 결과만 사용합니다 (등록 차량인지 여부는 그 결과만으로 충분히 판정 가능).
 3. `listCar` 템플릿으로 **`get_my_cars_tool` 결과의 등록차만** 노출. items / metadata 의 길이는 정확히 `get_my_cars_tool.data.items` 의 길이와 동일해야 하며, **빈 placeholder 카드를 추가하지 마세요** (유저가 입력한 미등록 차번호를 빈 슬롯으로 끼워넣지 말 것).
 4. ⚠️ `assistantResponse` 는 **반드시** 다음 두 줄 한국어를 그대로 emit (요약/축약/대체 금지):
-   `"**[유저가 입력한 차량번호]** 은(는) 등록된 차량 목록에 없어요.\n등록된 차량 중에서 골라주시거나, **차량번호 + 소유주명** 으로 검색해 드릴게요. (예: \`12가3456 홍길동\`) 😊"`
+   "**[유저가 입력한 차량번호]** 은(는) 등록된 차량 목록에 없어요.\n등록된 차량 중에서 골라주시거나, **차량번호 + 소유주명** 으로 검색해 드릴게요. (예: 12가3456 홍길동) 😊"
    - "차량번호 + 소유주명으로 검색 가능" 안내 문구는 **필수** — 누락 시 유저가 다음 단계 진행 불가.
 5. ⚠️ `quickReplies` 는 정확히 다음 3 chip (label/순서 그대로):
    `[{"label":"차량번호로 확인","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"},{"label":"내 차량 등록","domain":"DISCOVERY"}]`
