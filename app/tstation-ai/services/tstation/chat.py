@@ -3534,6 +3534,39 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
+            # 3.6) Non-self car negation: when user explicitly excludes their
+            # registered cars and asks about a different vehicle model
+            # ("내차말고 G90", "다른 차종 그랜저", "저장차 아닌 모델Y" etc.), any
+            # tire_size / goods_no / car_model carried over from a prior turn
+            # belongs to the WRONG vehicle. If we keep them in merged_slots, the
+            # discovery agent receives `[확인된 고객 정보 - 타이어 사이즈: ...]`
+            # for the OLD car and reuses that size for the NEW car's
+            # recommendation (observed in Langfuse trace
+            # 97dde3aa79d2415e90ed5fdaf93243d6: "내차말고 제네시스 g90" → recs
+            # came back for 235/55R19 from a prior turn instead of G90 sizes).
+            #
+            # Clearing here (not in `_apply_tool_derived_slots`) is necessary
+            # because the stale values must be gone BEFORE slot_context is
+            # built for this turn's LLM prompt — `_apply_tool_derived_slots`
+            # only runs AFTER tool calls, which is too late.
+            if last_user_text and _NON_SELF_CAR_RE.search(last_user_text):
+                cleared = []
+                if merged_slots.tire_size is not None:
+                    cleared.append(f"tire_size={merged_slots.tire_size!r}")
+                    merged_slots.tire_size = None
+                if merged_slots.goods_no is not None:
+                    cleared.append(f"goods_no={merged_slots.goods_no!r}")
+                    merged_slots.goods_no = None
+                if merged_slots.car_model is not None:
+                    cleared.append(f"car_model={merged_slots.car_model!r}")
+                    merged_slots.car_model = None
+                if cleared:
+                    logger.debug(
+                        f"[SLOTS] Non-self car negation in user text "
+                        f"{last_user_text[:60]!r} — cleared {', '.join(cleared)} "
+                        f"so the new vehicle's CAR MODEL DISPLAY flow can run"
+                    )
+
             # 3.7) Tool context already loaded in step 1 (parallel with get_slots).
 
             # 3.7.5) Recommendation-flow stale-clear.
