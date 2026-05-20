@@ -166,9 +166,9 @@ class CryptoService:
             return plaintext
         try:
             return self._backend.encrypt(plaintext)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"[CRYPTO] encrypt failed, storing plaintext: {exc}")
-            return plaintext
+        except Exception as exc:
+            logger.error(f"[CRYPTO] encrypt failed: {exc}")
+            raise RuntimeError("Chat encryption failed") from exc
 
     def decrypt(self, value: Optional[str]) -> Optional[str]:
         if value is None or value == "":

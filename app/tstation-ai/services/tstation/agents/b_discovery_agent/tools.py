@@ -823,6 +823,7 @@ def get_products_recommendations_tool(
     sort_by: str | None = None,
     season_nm: str | None = None,
     pfm_nm: str | None = None,
+    prc_grd: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
 ):
@@ -852,6 +853,7 @@ def get_products_recommendations_tool(
     - all_weather: 전천후 (WET, T_SNOW, T_ICE 높은 순)
     - warranty: 워런티 가능 (WRT_GRTE_TERM 긴 순)
     - summer: 여름용 (SEASON_NM='여름', WET·T_HIGH_HAND_AVG 높은 순)
+    - sound_absorber: 흡음재 적용 (GOODS_DTL_PFM_NM LIKE '%흡음%' — 흡음재/흡음제(오타)/복합 모두 포함, 정숙성 점수 정렬). low_vibration 과 직교: 흡음재는 기술 사양, low_vibration 은 점수 기반.
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
@@ -869,10 +871,11 @@ def get_products_recommendations_tool(
         sort_by (str | None, optional): 사용자 의도 기반 정렬. rcmd_type 과 독립적으로 동작하며,
             BE 응답 + description enrichment 후 클라이언트 측에서 정렬한다.
             - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
-            - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
+            - "price_desc": 비싼 순 (비싼 것부터, 고가)
             - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 rcmd_type 의 BE 정렬 그대로 유지.
+            ⚠️ "프리미엄" / "프리미엄급" 의도는 `sort_by` 가 아니라 아래 `prc_grd` 파라미터로 처리.
         season_nm (str | None, optional): 계절 직교 필터. rcmd_type 과 직교로 적용된다.
             - "여름": 여름용 타이어만 (PR_GOODS_BASE.SEASON_NM='여름')
             - "겨울": 겨울용 타이어만 (PR_GOODS_BASE.SEASON_NM='겨울')
@@ -890,6 +893,13 @@ def get_products_recommendations_tool(
             "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
             "런플랫 타이어 추천" 단일 의도면 rcmd_type="tstation" + pfm_nm="RUNFLAT" 사용
               (rcmd_type="family" 는 데이터상 RUNFLAT 결과 0건이므로 사용 금지).
+        prc_grd (str | None, optional): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM).
+            - "프리미엄": 프리미엄 계열 (DB raw '프리미엄' + '프리미엄+' 모두 매칭, LIKE prefix)
+            - "스탠다드": 스탠다드 등급
+            - "이코노미": 이코노미 등급
+            ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
+            "프리미엄 타이어 추천" / "프리미엄급으로 추천" 의도면 prc_grd="프리미엄" 사용.
+            sort_by="price_desc" 는 "비싼 순" (정렬) 일 뿐 등급 필터가 아님 — 헷갈리지 말 것.
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -901,6 +911,9 @@ def get_products_recommendations_tool(
         - "런플랫 중에 빗길 강한" → rcmd_type="wet", pfm_nm="RUNFLAT"
         - "30만원 이하 사계절 타이어" → rcmd_type="all_weather", max_price=300_000
         - "20만원~30만원 가성비 타이어" → rcmd_type="value", min_price=200_000, max_price=300_000
+        - "프리미엄급으로 추천" → rcmd_type="tstation", prc_grd="프리미엄"
+        - "올웨더 말고 프리미엄급으로" (직전 올웨더 추천 후 redo) → rcmd_type="tstation", prc_grd="프리미엄"
+        - "프리미엄 사계절" → rcmd_type="tstation", prc_grd="프리미엄", season_nm="사계절"
 
     Notes:
         - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
@@ -972,8 +985,8 @@ def get_products_recommendations_tool(
     has_newest_sort = sort_by == "newest_desc"
     fetch_limit = max(limit, 100) if has_newest_sort else limit
     logger.debug(
-        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, min_price=%s, max_price=%s",
+        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, min_price, max_price,
     )
 
     try:
@@ -986,6 +999,7 @@ def get_products_recommendations_tool(
             tire_size=tire_size,
             season_nm=season_nm,
             pfm_nm=pfm_nm,
+            prc_grd=prc_grd,
             min_price=min_price,
             max_price=max_price,
         )

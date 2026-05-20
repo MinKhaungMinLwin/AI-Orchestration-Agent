@@ -66,8 +66,8 @@ class RcmdGoodsItem:
             'SPORT'(고속/제동성) / 'RUNFLAT'(런플랫) 등. 표시·답변용 — 추천 정렬 기준 아님 (orthogonal pfm_nm 필터에서만 사용)
         season_nm (None | str | Unset): 계절 분류명 (SEASON_NM)
         car_knd_nm (None | str | Unset): 차종 분류명 (CAR_KND_NM)
-        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 값 매핑: '프리미엄+'/'프리미엄' (프리미엄 계열, LIKE '프리미엄%')
-            / '스탠다드' / '이코노미'. 표시·답변용 — 추천 정렬/필터 기준 아님
+        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 응답값: '프리미엄' (DB 원본 '프리미엄+' 도 응답 단계에서 '프리미엄'
+            으로 정규화) / '스탠다드' / '이코노미'. 표시·답변용 — 추천 정렬/필터 기준 아님
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외. 정숙성 내부
             점수(t_silence/t_com_sil_avg)와 별개의 라벨 정보
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''. 라벨 표기 — 추천 정렬 기준

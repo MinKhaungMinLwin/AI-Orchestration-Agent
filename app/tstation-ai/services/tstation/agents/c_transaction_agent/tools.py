@@ -633,8 +633,10 @@ def get_nearby_stores_tool(
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
         sort_by (str | None): 정렬 기준. None(default)=좌표 있으면 거리순 / "rating"=평점순(SHOP_EVAL_CVRT_IDX
             DESC NULLS LAST) / "review_count"=리뷰 많은 순(서브쿼리 활성) / "distance"=거리순(좌표 필수).
-            사용자가 "근처/가까운"만 표현하면 None, "평점 좋은/별점 높은/친절한"이면 "rating",
-            "리뷰 많은/후기 많은"이면 "review_count".
+            사용자가 "근처/가까운"만 표현하면 None, "평점 좋은/별점 높은/친절한/직원이 친절한/직원 친절도/
+            서비스 좋은/서비스 제일 좋은/눈탱이 안치는/바가지 안치는/믿을 수 있는/신뢰할 수 있는/추천/
+            얼라인먼트 잘 보는/얼라인먼트 잘하는"이면 "rating", "리뷰 많은/후기 많은"이면 "review_count".
+            ⚠️ 얼라인먼트 관련 검색 시: sort_by="rating"과 함께 svc_codes=["124","125"] 를 반드시 함께 전달.
         limit (int): 반환 매장 수 상한 (1-10). Default 10. 사용자가 "N개"를 명시하면
             그 값을 전달. location 카드 max_length=10 제약 때문에 10 초과 시 10으로 클램핑.
 
@@ -667,24 +669,31 @@ def get_nearby_stores_tool(
         # logger.debug("[TOOL][get_nearby_stores_tool] Response: %s", response.parsed)
         data = _to_dict(response.parsed)
 
-        # Truncate to top `limit` stores (clamped to 10 — LocationTemplate
-        # max_length=10). Sort: is_installable=true first (matters for purchase
-        # flows), then by distance_km ascending. Response shape is preserved.
+        # Truncate to top `limit` stores (clamped to 10 — LocationTemplate max_length=10).
+        # Priority: all_my_t first in all modes. Secondary key depends on sort_by:
+        #   rating/review_count → preserve BE sort order (stable sort on is_all_my_t only)
+        #   default/distance   → is_installable then distance_km
         cap = max(1, min(int(limit), 10))
         stores = data.get("stores") if isinstance(data, dict) else None
         if isinstance(stores, list) and len(stores) > cap:
             original_count = len(stores)
-            sorted_stores = sorted(
-                stores,
-                key=lambda s: (
-                    not bool(s.get("is_installable", False)),
-                    s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
-                ),
-            )
+            if sort_by in ("rating", "review_count"):
+                # BE already sorted by rating/review_count; stable-sort puts all_my_t first
+                # while preserving BE order within each group.
+                sorted_stores = sorted(stores, key=lambda s: not bool(s.get("is_all_my_t", False)))
+            else:
+                sorted_stores = sorted(
+                    stores,
+                    key=lambda s: (
+                        not bool(s.get("is_all_my_t", False)),
+                        not bool(s.get("is_installable", False)),
+                        s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
+                    ),
+                )
             data["stores"] = sorted_stores[:cap]
             logger.debug(
-                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top %d (installable-first, distance-asc)",
-                original_count, cap,
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top %d (all_my_t-first, sort_by=%s)",
+                original_count, cap, sort_by,
             )
 
         return _success_response(response.status_code, data)
@@ -1336,18 +1345,19 @@ def transaction_store_preview_tool(
 
     goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
     shop_id_list = [{"shopId": sid} for sid in shop_ids]
+    be_client = get_client()
 
     def _fetch_logistics():
         body = LogisticsRequest(goods_no=goods_no)
-        return get_logistics_inventory(client=get_client(), body=body)
+        return get_logistics_inventory(client=be_client, body=body)
 
     def _fetch_store_inventory():
         g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
         s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
-        return get_store_inventory(client=get_client(), body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
+        return get_store_inventory(client=be_client, body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
 
     def _fetch_price():
-        return get_price(client=get_client(), goods_no=goods_no, member_type=None)
+        return get_price(client=be_client, goods_no=goods_no, member_type=None)
 
     tasks = {"logistics": _fetch_logistics, "store_inventory": _fetch_store_inventory}
     if include_price:
@@ -1359,6 +1369,13 @@ def transaction_store_preview_tool(
         for future in as_completed(futures):
             name = futures[future]
             response = future.result()
+            if response.status_code >= 400:
+                logger.warning(
+                    "[TOOL][transaction_store_preview_tool] %s sub-call failed: status=%s body=%s",
+                    name,
+                    response.status_code,
+                    response.content.decode(errors="ignore")[:300],
+                )
             results[name] = _to_dict(response.parsed) if response.parsed is not None else None
 
     logistics_qty = _extract_logistics_qty(results.get("logistics"))
