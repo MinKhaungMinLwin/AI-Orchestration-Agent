@@ -1430,14 +1430,22 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     inventory. Keep stock-check contexts on the location path, where the card
     intentionally shows the stock-positive store list.
     """
-    pending_intent = current_pending_intent.get()
-    goal_type = current_goal_type.get()
-    if pending_intent == "stock" or goal_type == "store_with_stock":
-        return None
-    if re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""):
-        return None
-
     for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        args = args if isinstance(args, dict) else {}
+        exact_order_preview = bool(
+            _get_str(args, "store_nm")
+            and _get_str(args, "goods_no")
+            and args.get("ord_qty")
+            and args.get("include_price")
+        )
+        pending_intent = current_pending_intent.get()
+        goal_type = current_goal_type.get()
+        if not exact_order_preview and (pending_intent == "stock" or goal_type == "store_with_stock"):
+            return None
+        if not exact_order_preview and re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""):
+            return None
+
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -1546,9 +1554,11 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             assistant_text,
         )
 
-    # Response-level installable flag: when False, treat as no available times
-    # (BE may still echo cal_day rows in some modes; FE expects empty list).
-    is_installable = bool(raw.get("is_installable", True))
+    # `is_installable` means online-shopping tire installation support. It
+    # should block tire/order schedule modes, but not the `general` store-visit
+    # schedule where the backend's slots are still the authoritative answer.
+    mode = _get_str(raw, "mode").lower()
+    allow_slots = bool(raw.get("is_installable", True)) or mode == "general"
 
     # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
     # but we sort cal_day strings before emitting to avoid relying on that.
@@ -1561,7 +1571,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not cal_day or hour is None:
             continue
         bucket = by_day.setdefault(cal_day, set())
-        if is_installable and _is_bookable_hour(hour):
+        if allow_slots and _is_bookable_hour(hour):
             bucket.add(hour)
 
     if not by_day:
