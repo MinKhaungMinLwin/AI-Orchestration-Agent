@@ -11,6 +11,8 @@ Run from repo root:
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from services.tstation.chat import (
@@ -19,6 +21,7 @@ from services.tstation.chat import (
     _FALLBACK_LEADING_PROGRESS,
     _FALLBACK_ORDER_LIST,
     _choose_quickreply_fallback,
+    _coerce_reservation_quickreply_to_datepick,
     _discovery_recovery_chips_for_text,
     _looks_like_generic_dead_end_chips,
     _should_replace_discovery_dead_end_chips,
@@ -154,3 +157,105 @@ def test_discovery_policy_dead_end_keeps_dead_end_chips() -> None:
 def test_non_discovery_domain_keeps_dead_end_chips() -> None:
     text = "타이어 사이즈나 차량번호를 알려주세요."
     assert not _should_replace_discovery_dead_end_chips(text, "support")
+
+
+# --------------------------------------------------------------------------- #
+#  Reservation-time quickReply chips → datepick, narrowly
+# --------------------------------------------------------------------------- #
+
+
+def _preview_source() -> tuple[str, dict]:
+    return (
+        "transaction_store_preview_tool",
+        {
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "tier": "today_only",
+                    "stores": [{
+                        "shop_id": "T02396",
+                        "shop_nm": "티스테이션 강릉강남점",
+                        "slots": [
+                            {"cal_day": "20260521", "tm": "09"},
+                            {"cal_day": "20260521", "tm": "10"},
+                            {"cal_day": "20260521", "tm": "12"},
+                            {"cal_day": "20260521", "tm": "13"},
+                        ],
+                    }],
+                },
+            },
+        },
+    )
+
+
+def test_reservation_time_quickreply_is_coerced_to_datepick() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "강릉에서 장착 예약 가능한 시간을 확인했어요.",
+            "quickReplies": [
+                {"label": "09시 예약", "domain": "TRANSACTION"},
+                {"label": "13시 예약", "domain": "TRANSACTION"},
+                {"label": "다른 시간 선택", "domain": "TRANSACTION"},
+            ],
+        },
+    }
+
+    result = _coerce_reservation_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="order", goal_type="place_order"),
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {
+        "shopId": "T02396",
+        "shopName": "티스테이션 강릉강남점",
+    }
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 21일 (목)",
+        "available": True,
+        "availableTimes": [9, 10, 13],
+        "index": 0,
+    }]
+
+
+def test_reservation_time_quickreply_stock_context_is_not_coerced() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "강릉에서 재고가 확인된 매장입니다.",
+            "quickReplies": [{"label": "09시 예약", "domain": "TRANSACTION"}],
+        },
+    }
+
+    result = _coerce_reservation_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="stock", goal_type="store_with_stock"),
+    )
+
+    assert result is None
+
+
+def test_non_time_quickreply_is_not_coerced() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "주문을 진행할까요?",
+            "quickReplies": [{"label": "주문하기", "domain": "TRANSACTION"}],
+        },
+    }
+
+    result = _coerce_reservation_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="order", goal_type="place_order"),
+    )
+
+    assert result is None

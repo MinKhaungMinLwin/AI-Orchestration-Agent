@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import datetime
 import json
 import threading
 import logging
@@ -2472,6 +2473,153 @@ _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
+_RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
+_WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
+
+
+def _yyyymmdd_to_korean_date(s: str) -> str:
+    try:
+        dt = datetime.datetime.strptime(s, "%Y%m%d")
+    except (TypeError, ValueError):
+        return s
+    return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
+
+
+def _parse_preview_slot_hour(tm: object) -> int | None:
+    s = str(tm or "").strip()
+    if not s.isdigit():
+        return None
+    if len(s) <= 2:
+        hour = int(s)
+    elif len(s) == 4:
+        hour = int(s[:2])
+    else:
+        return None
+    if hour == 12:
+        return None
+    return hour if 0 <= hour <= 23 else None
+
+
+def _extract_preview_payload(parsed: dict) -> dict | None:
+    if parsed.get("status") == "success" and isinstance(parsed.get("data"), dict):
+        return parsed["data"]
+    data = parsed.get("data")
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        return data["data"]
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _coerce_reservation_quickreply_to_datepick(
+    event: dict,
+    structured_sources: list[tuple[str, dict]],
+    slot_state: Any | None,
+) -> dict | None:
+    """Narrowly convert LLM reservation-time chips to the datepick template.
+
+    This only handles the regression where transaction_store_preview_tool
+    returned concrete slots but the LLM rendered "09시 예약" style quickReply
+    chips instead of the FE date picker. It deliberately avoids stock-store
+    contexts, where the correct answer is a stocked-store location card.
+    """
+    if event.get("template") != "quickReply":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list) or not chips:
+        return None
+    labels = [
+        str(chip.get("label", "")).strip()
+        for chip in chips
+        if isinstance(chip, dict)
+    ]
+    has_reservation_time_chip = any(_RESERVATION_TIME_CHIP_RE.match(label) for label in labels)
+    has_only_reservation_chips = all(
+        _RESERVATION_TIME_CHIP_RE.match(label) or label in _RESERVATION_OTHER_TIME_LABELS
+        for label in labels
+    )
+    if not has_reservation_time_chip or not has_only_reservation_chips:
+        return None
+
+    pending_intent = getattr(slot_state, "pending_intent", None)
+    goal_type = getattr(slot_state, "goal_type", None)
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return None
+    if re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text):
+        return None
+
+    preview_payload = None
+    for tool_name, parsed in reversed(structured_sources):
+        if tool_name != "transaction_store_preview_tool" or not isinstance(parsed, dict):
+            continue
+        preview_payload = _extract_preview_payload(parsed)
+        if isinstance(preview_payload, dict):
+            break
+    if not isinstance(preview_payload, dict):
+        return None
+
+    schedule = preview_payload.get("schedule")
+    if not isinstance(schedule, dict) or str(schedule.get("tier") or "").lower() == "none":
+        return None
+    schedule_stores = schedule.get("stores")
+    if not isinstance(schedule_stores, list):
+        return None
+
+    for store in schedule_stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = str(store.get("shop_id") or "").strip()
+        slots = store.get("slots")
+        if not shop_id or not isinstance(slots, list):
+            continue
+        by_day: dict[str, set[int]] = {}
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = str(slot.get("cal_day") or "").strip()
+            hour = _parse_preview_slot_hour(slot.get("tm"))
+            if cal_day and hour is not None:
+                by_day.setdefault(cal_day, set()).add(hour)
+        if not by_day:
+            continue
+
+        dates: list[dict] = []
+        selected_idx: int | None = None
+        for idx, cal_day in enumerate(sorted(by_day.keys())):
+            times = sorted(by_day[cal_day])
+            available = bool(times)
+            dates.append({
+                "date": _yyyymmdd_to_korean_date(cal_day),
+                "available": available,
+                "availableTimes": times,
+                "index": idx,
+            })
+            if selected_idx is None and available:
+                selected_idx = idx
+        if selected_idx is None:
+            continue
+
+        metadata = {"shopId": shop_id}
+        shop_name = str(store.get("shop_nm") or "").strip()
+        if shop_name:
+            metadata["shopName"] = shop_name
+        return {
+            "type": "data",
+            "template": "datepick",
+            "source_domain": event.get("source_domain"),
+            "assistant_response_source": "code_mapper_preview_quickreply",
+            "data": {
+                "assistantResponse": assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+                "dates": dates,
+                "selectedDate": selected_idx,
+                "metadata": metadata,
+            },
+        }
+    return None
+
 
 def _choose_quickreply_fallback(
     called_tool_names: set[str], source_domain: str | None
@@ -4744,13 +4892,27 @@ class TStationChatServiceV2:
                 event_response_source = event.pop("assistant_response_source", None)
                 if isinstance(event_response_source, str):
                     last_assistant_response_source = event_response_source
+                event_data = event.get("data", {})
+                coerced_event = _coerce_reservation_quickreply_to_datepick(
+                    event,
+                    structured_sources,
+                    pending_slots or initial_slots,
+                )
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] transaction_store_preview quickReply time chips → datepick"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_preview_quickreply"
+                    event_data = event.get("data", {})
                 for value in _quick_reply_domain_values_from_event(event):
                     if value not in next_quick_reply_domain_values:
                         next_quick_reply_domain_values.append(value)
                 for value in _predicted_domain_values_from_event(event):
                     if value not in next_predicted_domain_values:
                         next_predicted_domain_values.append(value)
-                event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
