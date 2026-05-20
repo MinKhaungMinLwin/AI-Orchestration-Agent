@@ -29,7 +29,8 @@ class EventApplicableProductItem:
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''
         label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB)
-        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 예: '프리미엄+'/'프리미엄'/'스탠다드'/'이코노미'
+        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 응답값: '프리미엄' (DB 원본 '프리미엄+' 도 응답 단계에서 '프리미엄'
+            으로 정규화) / '스탠다드' / '이코노미'
         goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 예:
             'COMFORT'(정숙/승차감)/'SPORT'(고속/제동성)/'RUNFLAT'(런플랫)
         rating_avg (float | None | Unset): 패턴 평균 평점 (PR_GDAS_INFO.GDAS_SCR_VAL 평균, 0.0~5.0)

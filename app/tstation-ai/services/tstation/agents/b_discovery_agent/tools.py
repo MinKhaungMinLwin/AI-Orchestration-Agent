@@ -855,6 +855,7 @@ def get_products_recommendations_tool(
     - all_weather: 전천후 (WET, T_SNOW, T_ICE 높은 순)
     - warranty: 워런티 가능 (WRT_GRTE_TERM 긴 순)
     - summer: 여름용 (SEASON_NM='여름', WET·T_HIGH_HAND_AVG 높은 순)
+    - sound_absorber: 흡음재 적용 (GOODS_DTL_PFM_NM LIKE '%흡음%' — 흡음재/흡음제(오타)/복합 모두 포함, 정숙성 점수 정렬). low_vibration 과 직교: 흡음재는 기술 사양, low_vibration 은 점수 기반.
 
     Args:
         rcmd_type (RcmdType): Recommendation type.

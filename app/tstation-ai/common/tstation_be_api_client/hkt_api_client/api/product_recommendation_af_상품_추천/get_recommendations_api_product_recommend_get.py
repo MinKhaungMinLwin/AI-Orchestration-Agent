@@ -20,6 +20,7 @@ def _get_kwargs(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> dict[str, Any]:
@@ -60,6 +61,13 @@ def _get_kwargs(
     else:
         json_pfm_nm = pfm_nm
     params["pfm_nm"] = json_pfm_nm
+
+    json_prc_grd: None | str | Unset
+    if isinstance(prc_grd, Unset):
+        json_prc_grd = UNSET
+    else:
+        json_prc_grd = prc_grd
+    params["prc_grd"] = json_prc_grd
 
     json_min_price: int | None | Unset
     if isinstance(min_price, Unset):
@@ -126,6 +134,7 @@ def sync_detailed(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
@@ -157,6 +166,11 @@ def sync_detailed(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
@@ -174,6 +188,9 @@ def sync_detailed(
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -195,6 +212,7 @@ def sync_detailed(
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        prc_grd=prc_grd,
         min_price=min_price,
         max_price=max_price,
     )
@@ -216,6 +234,7 @@ def sync(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
@@ -247,6 +266,11 @@ def sync(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
@@ -264,6 +288,9 @@ def sync(
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -286,6 +313,7 @@ def sync(
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        prc_grd=prc_grd,
         min_price=min_price,
         max_price=max_price,
     ).parsed
@@ -301,6 +329,7 @@ async def asyncio_detailed(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
@@ -332,6 +361,11 @@ async def asyncio_detailed(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
@@ -349,6 +383,9 @@ async def asyncio_detailed(
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -370,6 +407,7 @@ async def asyncio_detailed(
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        prc_grd=prc_grd,
         min_price=min_price,
         max_price=max_price,
     )
@@ -389,6 +427,7 @@ async def asyncio(
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
@@ -420,6 +459,11 @@ async def asyncio(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
@@ -437,6 +481,9 @@ async def asyncio(
             에만 적용됨.
         pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
             + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -460,6 +507,7 @@ async def asyncio(
             tire_size=tire_size,
             season_nm=season_nm,
             pfm_nm=pfm_nm,
+            prc_grd=prc_grd,
             min_price=min_price,
             max_price=max_price,
         )

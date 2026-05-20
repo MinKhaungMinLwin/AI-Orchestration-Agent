@@ -15,6 +15,7 @@ class RcmdType(str, Enum):
     PERFORMANCE = "performance"
     SAFE_KIDS = "safe_kids"
     SNOW = "snow"
+    SOUND_ABSORBER = "sound_absorber"
     SUMMER = "summer"
     TSTATION = "tstation"
     URBAN = "urban"
