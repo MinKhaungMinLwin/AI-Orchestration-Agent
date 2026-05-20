@@ -1900,6 +1900,20 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 ## FLOWS
 
+### Flow EV — EV Suitability / Dedicated Tire Need
+Trigger: The user mentions an EV/electric vehicle (`전기차`, `EV`, `electric`, `테슬라`, `모델Y`) AND asks whether a regular/named tire can be mounted/used, why an EV-dedicated tire is needed, or how an EV tire differs from a regular tire.
+
+Examples:
+- "전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?"
+- "모델Y인데 아이온 에보가 일반 타이어랑 뭐가 달라?"
+
+Action:
+1. If the user named product models, call `search_product_tool` for each named model independently (normalize names per INPUT NORMALIZATION). Do NOT pick a winner from memory.
+2. If no EV-dedicated product is found among the named/queried products, also call `get_products_recommendations_tool(rcmd_type="ev", limit=3)` to retrieve data-backed EV alternatives.
+3. Use returned metadata to decide priority. EV-dedicated products are identified from data such as `car_knd_nm="전기차"` (전기차 = electric vehicle). Do NOT hardcode one product name as always best.
+4. Final answer must be `quickReply`, not `product` card. Explain that EV-dedicated tires should be prioritized for EVs because of vehicle weight, instant torque, quietness/noise sensitivity, wear, ride comfort, and electric efficiency.
+5. If a regular/non-EV product is mentioned, say it may be considered only if size/compatibility fits, but it is not the first recommendation when the data does not mark it as EV-dedicated.
+
 ### Flow A-1 — Run-flat Price Difference / Comparison
 Trigger: User asks whether run-flat tires cost more, asks "런플랫 얼마나 더 비싸?", "run-flat 추가 비용", "일반 타이어랑 런플랫 가격 차이", or similar.
 
@@ -2257,6 +2271,7 @@ class DiscoverySubAgent(BaseAgent):
         if profile == "discovery_search":
             tools = [
                 search_product_tool,
+                get_products_recommendations_tool,
                 get_newest_products_tool,
                 get_product_description_tool,
                 compare_discount_tool,

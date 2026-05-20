@@ -42,6 +42,13 @@ current_runflat_comparison: contextvars.ContextVar[bool] = contextvars.ContextVa
     "current_runflat_comparison", default=False
 )
 
+# True only for turns where the user asks whether a regular/named tire is
+# suitable for an EV or why an EV-dedicated tire should be used. In that case
+# the answer is an explanation/comparison, not a generic product-card list.
+current_ev_suitability_comparison: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_ev_suitability_comparison", default=False
+)
+
 # True when the current turn is triggered by a return-visit CTA chip
 # ("<지역> 매장 다시 이용하기" / "<지역>점 다시 이용하기"). Forces isBookingFlow=True
 # on the resulting location card so the FE click handler routes to /chat (not
@@ -759,6 +766,83 @@ def _map_runflat_price_comparison(tool_data_list: list[dict], assistant_text: st
 
 
 # ── 6. event ────────────────────────────────────────────────────────────────────
+
+def _is_ev_product(row: dict) -> bool:
+    car_kind = _get_str(row, "car_knd_nm").lower()
+    return "전기차" in car_kind or car_kind == "ev" or "electric" in car_kind
+
+
+def _display_product_name(row: dict) -> str:
+    name = _get_str(row, "goods_nm", "title", default="상품")
+    size = _get_str(row, "tire_size_1", "tire_size_2", "tire_size")
+    return f"{name} {size}".strip()
+
+
+def _map_ev_suitability_comparison(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Build a deterministic quickReply for EV tire suitability comparisons."""
+    if not current_ev_suitability_comparison.get():
+        return None
+
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for entry in _find_entries(tool_data_list, "search_product_tool", "get_products_recommendations_tool"):
+        raw = _unwrap(entry)
+        items = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(items, list):
+            continue
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            key = _get_str(row, "goods_no") or _display_product_name(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+
+    if not rows:
+        return None
+
+    ev_rows = [row for row in rows if _is_ev_product(row)]
+    non_ev_rows = [row for row in rows if not _is_ev_product(row)]
+    ev_names = [_display_product_name(row) for row in ev_rows[:3]]
+    non_ev_names = [_display_product_name(row) for row in non_ev_rows[:3]]
+
+    lines = [
+        "고객님 차량이 전기차라면 전기차 전용 타이어를 우선 추천드려요.",
+        "",
+        "전기차는 차량 중량이 크고 순간 토크가 높아 마모, 정숙성, 승차감, 전비에 최적화된 타이어가 유리합니다.",
+    ]
+    if ev_names:
+        lines.extend([
+            "",
+            f"현재 조회된 상품 기준으로는 {', '.join(ev_names)} 상품이 전기차용으로 확인되어 더 적합합니다.",
+        ])
+    else:
+        lines.extend([
+            "",
+            "현재 조회된 상품 중 전기차 전용으로 확인된 상품은 없어 전기차용 추천 상품을 다시 확인해 드리는 것이 좋습니다.",
+        ])
+    if non_ev_names:
+        lines.extend([
+            "",
+            f"{', '.join(non_ev_names)} 상품도 조건이 맞으면 장착은 검토할 수 있지만, 현재 조회 데이터 기준 전기차 전용 상품으로 확인되지는 않아 1순위 추천은 아닙니다.",
+        ])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "전기차용 타이어 추천", "domain": "DISCOVERY"},
+                {"label": "다른 상품 비교", "domain": "DISCOVERY"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "assistant_response_source": "code_mapper",
+    }
+
 
 def _map_event(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     items, metadata = [], []
@@ -1810,6 +1894,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     runflat_comparison = _map_runflat_price_comparison(accumulated_tool_data, assistant_text)
     if runflat_comparison is not None:
         return runflat_comparison
+
+    ev_suitability_comparison = _map_ev_suitability_comparison(accumulated_tool_data, assistant_text)
+    if ev_suitability_comparison is not None:
+        return ev_suitability_comparison
 
     # When multiple tools are called, pick the most important UI template.
     # Priority order is intentional:
