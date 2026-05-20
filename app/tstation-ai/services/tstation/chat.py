@@ -839,10 +839,10 @@ class StreamingMultiAgentCoordinator:
             verified_domains, routing_result = classify_future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
             timeout_ms = timeout * 1000 if timeout is not None else 0
-            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
+            logger.warning("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
             return None
         except Exception as exc:
-            logger.debug("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
+            logger.warning("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
             return None
 
         if routing_result is None or not _domains_equal(verified_domains, domains):
