@@ -585,6 +585,8 @@ class ProductItem(BaseModel):
     imageUrl: str
     title: str = Field(..., min_length=1)
     tires: str
+    titleProductName: str = ""
+    titleTires: str = ""
     price: Optional[int] = Field(None, ge=0)
     originalPrice: Optional[int] = Field(None, ge=0)
     discountRate: Optional[float] = Field(None, ge=0)
