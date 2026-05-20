@@ -362,6 +362,8 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
                 "tires": "",
+                "titleProductName": goods_nm,
+                "titleTires": tire_size,
                 "comfort": "",
                 "price": price,
                 "originalPrice": original_price,
@@ -474,6 +476,8 @@ def inject_product_tags_and_sanitize(
                 tags.append({"text": goods_pfm_label, "primary": False})
             if _get_str(row, "label_pnwave_nm") in {"최저소음", "저소음"}:
                 tags.append({"text": "저소음", "primary": False})
+            product["titleProductName"] = _get_str(row, "goods_nm", "title")
+            product["titleTires"] = _get_str(row, "tire_size_1", "tire_size_2")
         product["tags"] = tags
 
 
