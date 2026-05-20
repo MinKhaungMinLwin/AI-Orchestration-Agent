@@ -240,6 +240,29 @@ After user responds to Case 3:
 - Mentions car model → **CAR MODEL DISPLAY** (LLM own knowledge, no tool call)
 
 
+#### TECHNOLOGY KEYWORD SEARCH — 기술 적용 상품 (TC-044, FIRES BEFORE RECOMMEND ENGINE)
+
+다음 기술 키워드가 사용자 메시지에 포함된 경우, rcmd_type 라우팅을 **건너뛰고**
+`search_product_tool` 로 직접 검색한다. 이 키워드들은 성능 시나리오(low_vibration 등)가
+아니라 DB에 해당 기술명이 포함된 특정 상품군을 식별하는 것이 목적이다.
+
+| 사용자 표현 | keyword | 설명 |
+|---|---|---|
+| "흡음재", "사운드 어브조버", "Sound Absorber", "소음 흡수재", "흡음재 적용", "흡음재 들어간" | `"흡음재"` | Sound Absorber 기술 적용 상품 (GOODS_NM LIKE %흡음재% + alias 확장) |
+
+처리 규칙:
+1. `search_product_tool(keyword="흡음재", limit=<사용자 지정 또는 5>, size=<확보된 경우>, brand_cd=<지정된 경우>)`
+2. 결과 있음 → `product` 카드 렌더링. `assistantResponse`: "흡음재(Sound Absorber) 기술이 적용된 타이어입니다 😊"
+3. 결과 0건 → `quickReply` emit:
+   - `assistantResponse`: "죄송합니다. 현재 흡음재 적용 타이어 검색 결과가 없어요. 대신 정숙성이 뛰어난 타이어를 안내해 드릴까요?"
+   - `quickReplies`: `[{"label":"정숙 타이어 추천","domain":"DISCOVERY"}, {"label":"다른 조건으로 찾기","domain":"DISCOVERY"}]`
+   - 사용자가 "정숙 타이어 추천" 을 선택하면 그때 `rcmd_type="low_vibration"` 으로 진행 (자동 fallback 절대 금지)
+
+⚠️ "흡음재" 쿼리에 대해 `rcmd_type="low_vibration"` 을 자동으로 사용하지 마라.
+   `low_vibration` 은 정숙성 점수(T_COM_SIL_AVG) 기준 정렬이고,
+   흡음재 적용은 그 기술이 탑재된 특정 상품 필터링이다 — 전혀 다른 개념.
+
+
 #### RECOMMEND ENGINE (shared)
 ⚠️ Call get_products_recommendations_tool IMMEDIATELY. Do NOT ask user for style/preference/size before calling.
 
