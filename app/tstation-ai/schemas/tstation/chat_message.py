@@ -16,7 +16,7 @@ class ChipContext(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     """Chat request - auth via Bearer token in header."""
-    content: str = Field(..., description="User message content")
+    content: str = Field(..., max_length=3000, description="User message content")
     session_id: str = Field(..., description="Session ID (required)")
     stream: bool = Field(default=False, description="Stream mode")
     user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
