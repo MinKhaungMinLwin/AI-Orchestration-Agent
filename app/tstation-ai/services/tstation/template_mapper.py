@@ -176,6 +176,22 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
     return default
 
 
+def _inventory_shop_ids(raw_inventory: object, key: str) -> set[str]:
+    """Extract shop IDs from inventory arrays such as todayShopArray/tnaShopArray."""
+    if not isinstance(raw_inventory, dict):
+        return set()
+    rows = raw_inventory.get(key)
+    if not isinstance(rows, list):
+        return set()
+    ids: set[str] = set()
+    for row in rows:
+        if isinstance(row, dict):
+            shop_id = _get_str(row, "shopId", "shop_id")
+            if shop_id:
+                ids.add(shop_id)
+    return ids
+
+
 def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
     """Filter accumulated_tool_data by tool name; skip error-status entries.
 
@@ -1087,7 +1103,14 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if isinstance(raw, dict):
             detail_by_shop_id[shop_id] = raw
 
+    stock_filter_context = (
+        current_pending_intent.get() == "stock"
+        or current_goal_type.get() == "store_with_stock"
+        or bool(re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""))
+    )
     items, metadata = [], []
+    stock_filtered_preview = False
+    stock_filtered_region = ""
     for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
@@ -1095,11 +1118,28 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         stores = raw.get("stores")
         if not isinstance(stores, list):
             continue
+        stock_labels_by_shop_id: dict[str, str] = {}
+        if entry.get("tool") == "transaction_store_preview_tool" and stock_filter_context:
+            today_ids = _inventory_shop_ids(raw.get("inventory"), "todayShopArray")
+            tna_ids = _inventory_shop_ids(raw.get("inventory"), "tnaShopArray")
+            for sid in today_ids:
+                stock_labels_by_shop_id[sid] = "매장재고"
+            for sid in tna_ids:
+                stock_labels_by_shop_id.setdefault(sid, "T바로배송")
+            if stock_labels_by_shop_id:
+                stock_filtered_preview = True
+                args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+                if isinstance(args, dict):
+                    stock_filtered_region = _get_str(args, "region_code")
+
         for row in stores:
             if not isinstance(row, dict):
                 continue
             shop_id = _get_str(row, "shop_id")
             if not shop_id:
+                continue
+            stock_label = stock_labels_by_shop_id.get(shop_id)
+            if stock_labels_by_shop_id and not stock_label:
                 continue
 
             detail = detail_by_shop_id.get(shop_id, {})
@@ -1168,6 +1208,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 description_lines.append(f"⭐ {rating:.1f}")
             if services_text:
                 description_lines.append(f"서비스: {services_text}")
+            if stock_label:
+                description_lines.append(f"[{stock_label}]")
             description = "\n ".join(description_lines)
 
             distance_km = row.get("distance_km")
@@ -1182,8 +1224,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "distance": distance_str,
                 "detailAddress": detail_addr,
                 "isAllMyT": is_all_my_t,
-                "todayInstall": False,
-                "tnaDelivery": is_tna_delivery,
+                "todayInstall": stock_label == "매장재고",
+                "tnaDelivery": is_tna_delivery or stock_label == "T바로배송",
                 "description": description,
             })
             metadata.append({"shopId": shop_id})
@@ -1235,6 +1277,13 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
+    if stock_filtered_preview and items:
+        short = (
+            f"{stock_filtered_region}에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+            if stock_filtered_region
+            else "재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+        )
+        response_source = "code_mapper"
     return {
         "type": "data",
         "template": "location",

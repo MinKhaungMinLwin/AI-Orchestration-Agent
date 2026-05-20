@@ -61,6 +61,23 @@ def _stub_store(shop_id: str, shop_nm: str) -> dict:
     }
 
 
+def _preview_entry(*, args: dict, stores: list[dict], inventory: dict) -> dict:
+    """Build a `transaction_store_preview_tool` entry with store candidates and inventory."""
+    return {
+        "tool": "transaction_store_preview_tool",
+        "args": args,
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": stores,
+                "inventory": inventory,
+                "schedule": {"tier": "today_only", "stores": [{"shop_id": "T02396"}]},
+            },
+        },
+    }
+
+
 # --------------------------------------------------------------------------- #
 #  Bug fix: region_code search with 1 store → location card emitted
 # --------------------------------------------------------------------------- #
@@ -98,6 +115,54 @@ def test_region_code_with_multiple_stores_emits_location() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert len(result["data"]["stores"]) == 2
+
+
+def test_preview_location_filters_to_inventory_positive_stores() -> None:
+    """Composite preview returns candidate stores plus inventory arrays. The
+    location card must show only stores that actually have stock."""
+    current_pending_intent.set("stock")
+    entry = _preview_entry(
+        args={"region_code": "강릉"},
+        stores=[
+            _stub_store("F00518", "티스테이션 강릉MBC점"),
+            _stub_store("T02396", "티스테이션 강릉강남점"),
+            _stub_store("F00405", "티스테이션 경포점"),
+        ],
+        inventory={"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+    )
+
+    result = _map_location([entry], "강릉에서 재고와 예약 가능 시간을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["assistantResponse"] == "강릉에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+    assert len(result["data"]["stores"]) == 1
+    assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 강릉강남점"
+    assert result["data"]["stores"][0]["todayInstall"] is True
+    assert "[매장재고]" in result["data"]["stores"][0]["description"]
+    assert result["data"]["metadata"] == [{"shopId": "T02396"}]
+
+
+def test_preview_location_does_not_filter_order_preview_candidates() -> None:
+    """Order/reservation previews may intentionally show fulfillment candidates.
+    Inventory filtering is limited to stock-check contexts."""
+    current_pending_intent.set("order")
+    entry = _preview_entry(
+        args={"region_code": "강릉"},
+        stores=[
+            _stub_store("F00518", "티스테이션 강릉MBC점"),
+            _stub_store("T02396", "티스테이션 강릉강남점"),
+            _stub_store("F00405", "티스테이션 경포점"),
+        ],
+        inventory={"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+    )
+
+    result = _map_location([entry], "강릉에서 주문 가능한 매장을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert len(result["data"]["stores"]) == 3
+    assert result["data"]["metadata"] == [{"shopId": "F00518"}, {"shopId": "T02396"}, {"shopId": "F00405"}]
 
 
 # --------------------------------------------------------------------------- #
