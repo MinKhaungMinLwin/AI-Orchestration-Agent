@@ -2247,6 +2247,27 @@ _GOAL_COMPLETE_DOMAIN: "dict[str, MultiAgentDomain.Domain]" = {
 # mis-route a goal-switch turn through a stale checklist.
 _GOAL_SWITCH_RE = re.compile(r"다른|새로|이번엔|바꿔|이전\s*추천\s*말고", re.IGNORECASE)
 
+# "Non-self car" negation: user explicitly excludes their registered/saved cars
+# and asks about a different vehicle model. When this fires, any stale
+# tire_size / goods_no / car_model carried over from a prior turn refers to the
+# WRONG vehicle and must be cleared before the slot context is injected into
+# the agent prompt — otherwise the LLM reuses the stale size and ignores the
+# car model the user just named (see CAR MODEL DISPLAY rule in
+# b_discovery_agent/agent.py).
+#
+# Covers:
+#   "내차말고", "내 차 말고", "내차 말고", "내차아닌", "내 차 아닌",
+#   "내차아니라", "내 차가 아닌", "내차빼고", "내 차 빼고",
+#   "저장차 아닌", "저장차말고", "등록차 아닌", "등록차말고",
+#   "보유차 아닌", "보유한 차 말고",
+#   "다른 차종", "다른 차"
+_NON_SELF_CAR_RE = re.compile(
+    r"(내\s*차|저장\s*차|등록\s*차|보유\s*차|보유한\s*차|내가\s*가진\s*차)"
+    r"\s*(말고|아닌|아니라|아니고|빼고|이외|제외)"
+    r"|다른\s*차(?:종)?",
+    re.IGNORECASE,
+)
+
 # Master toggle. Set False to disable goal-based fast-path without removing the
 # code (useful if downstream telemetry shows mis-routes; the LLM classifier
 # remains the safety net regardless).
@@ -3990,6 +4011,22 @@ class TStationChatServiceV2:
             and not re.search(
                 r"단골\s*매장|단골\s*가게|단골점|마이샵|자주\s*가는\s*매장",
                 last_user_text,
+            )
+            # Narrow transaction profiles (store / order / coupon) are flows where
+            # the user is NOT searching for a product. Lingering tire_size from
+            # earlier turns must not coerce a discovery prefix; the matching narrow
+            # profile already owns the right tools (store_preview, my_orders,
+            # my_coupons). transaction_price_stock is intentionally NOT excluded
+            # — that profile assumes a known goods_no, so goods_no=None still
+            # warrants a Discovery search.
+            and (
+                routing_result is None
+                or routing_result.agent_prompt_profile
+                not in (
+                    AgentPromptProfile.TRANSACTION_STORE,
+                    AgentPromptProfile.TRANSACTION_ORDER,
+                    AgentPromptProfile.TRANSACTION_COUPON,
+                )
             )
             and (
                 # Original case: no goods_no in slots + any product hint
