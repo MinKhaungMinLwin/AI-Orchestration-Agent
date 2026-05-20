@@ -167,7 +167,7 @@ def decide_next_action(
     system_msg = SystemMessage(content=prompt_router())
     human_msg = HumanMessage(
         content=dedent(f"""
-        Original User Request: {user_message}
+        <user_request>{user_message}</user_request>
 
         Previous Agent Domain: {previous_domain}
 
