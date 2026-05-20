@@ -1421,10 +1421,92 @@ def _is_bookable_hour(hour: int) -> bool:
     return hour != 12
 
 
+def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Build a date picker from transaction_store_preview_tool schedule slots.
+
+    The preview tool can already resolve the only installable store and its
+    slots. In booking/order contexts, rendering all candidate stores as a
+    location card makes the user pick among stores that may not have matching
+    inventory. Keep stock-check contexts on the location path, where the card
+    intentionally shows the stock-positive store list.
+    """
+    pending_intent = current_pending_intent.get()
+    goal_type = current_goal_type.get()
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return None
+    if re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""):
+        return None
+
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+        schedule = raw.get("schedule")
+        if not isinstance(schedule, dict) or _get_str(schedule, "tier").lower() == "none":
+            continue
+        stores = schedule.get("stores")
+        if not isinstance(stores, list) or len(stores) != 1:
+            continue
+        store = stores[0]
+        if not isinstance(store, dict):
+            continue
+        shop_id = _get_str(store, "shop_id")
+        slots = store.get("slots")
+        if not shop_id or not isinstance(slots, list):
+            continue
+
+        by_day: dict[str, set[int]] = {}
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = _get_str(slot, "cal_day")
+            hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+            if cal_day and hour is not None:
+                bucket = by_day.setdefault(cal_day, set())
+                if _is_bookable_hour(hour):
+                    bucket.add(hour)
+        if not by_day:
+            continue
+
+        dates: list[dict] = []
+        selected_idx: int | None = None
+        for i, cal_day in enumerate(sorted(by_day.keys())):
+            times = sorted(by_day[cal_day])
+            available = bool(times)
+            dates.append({
+                "date": _yyyymmdd_to_korean_date(cal_day),
+                "available": available,
+                "availableTimes": times,
+                "index": i,
+            })
+            if selected_idx is None and available:
+                selected_idx = i
+        if selected_idx is None:
+            continue
+
+        short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
+        metadata: dict = {"shopId": shop_id}
+        shop_nm = _get_str(store, "shop_nm")
+        if shop_nm:
+            metadata["shopName"] = shop_nm
+        return {
+            "type": "data",
+            "template": "datepick",
+            "assistant_response_source": response_source,
+            "data": {
+                "dates": dates,
+                "selectedDate": selected_idx,
+                "metadata": metadata,
+                "assistantResponse": short,
+            },
+        }
+    return None
+
+
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Map slot-emitting tools to a `datepick` event.
 
-    Two sources supported:
+    Three sources supported:
 
     1. ``get_store_schedule_tool`` (StoreScheduleResponse):
        ``{shop_id, shop_nm, mode, is_installable, is_tna_delivery,
@@ -1436,20 +1518,33 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
        path the agent's intended datepick gets overridden by the location
        mapper when a sibling ``transaction_store_preview_tool`` ran.
 
+    3. ``transaction_store_preview_tool`` (single resolved schedule store):
+       response has ``schedule.stores[0].slots`` and can go straight to
+       datepick in booking/order contexts.
+
     Schedule-tool path wins when both are present (richer multi-day shape).
     """
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
     if not entries:
-        return _map_datepick_from_detail(tool_data_list, assistant_text)
+        return _map_datepick_from_preview(tool_data_list, assistant_text) or _map_datepick_from_detail(
+            tool_data_list,
+            assistant_text,
+        )
     raw = _unwrap(entries[-1])
     if not isinstance(raw, dict):
-        return _map_datepick_from_detail(tool_data_list, assistant_text)
+        return _map_datepick_from_preview(tool_data_list, assistant_text) or _map_datepick_from_detail(
+            tool_data_list,
+            assistant_text,
+        )
 
     shop_id = _get_str(raw, "shop_id")
     shop_nm = _get_str(raw, "shop_nm")
     slots = raw.get("slots")
     if not shop_id or not isinstance(slots, list):
-        return _map_datepick_from_detail(tool_data_list, assistant_text)
+        return _map_datepick_from_preview(tool_data_list, assistant_text) or _map_datepick_from_detail(
+            tool_data_list,
+            assistant_text,
+        )
 
     # Response-level installable flag: when False, treat as no available times
     # (BE may still echo cal_day rows in some modes; FE expects empty list).
@@ -2005,6 +2100,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         # `transaction_store_preview_tool(tier=none)` causes `_map_location` to
         # render a store card instead of the intended time-slot picker.
         ("get_store_detail_tool", _map_datepick),
+        ("transaction_store_preview_tool", _map_datepick),
         ("search_product_tool", _map_product),
         ("get_newest_products_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
