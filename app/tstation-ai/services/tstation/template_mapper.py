@@ -486,6 +486,14 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # the D-day answer; suppress so quickReply owns the turn.
     if _find_entries(tool_data_list, "get_maintenance_dday_tool"):
         return None
+    # Recommendation-entry guard: when the same turn already used
+    # get_my_cars_tool only to recover car_lnc_cd / tire_size for
+    # get_products_recommendations_tool, a zero-result recommendation should
+    # fall through to the agent's quickReply guidance instead of re-showing the
+    # exact same vehicle card. Successful recommendation turns are handled by
+    # the higher-priority product mapper above, so suppressing here is safe.
+    if _find_entries(tool_data_list, "get_products_recommendations_tool"):
+        return None
     items, metadata = [], []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)

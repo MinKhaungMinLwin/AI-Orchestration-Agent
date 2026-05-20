@@ -395,6 +395,10 @@ After user responds to Case 3:
    - quickReply chips (정확히 3개): ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"]
 
    ⚠️ 도구가 items=[] (0건, `no_products_in_price_range` 이 아닌 경우) 반환 시:
+   - 같은 턴에 `get_my_cars_tool` 또는 `get_user_vehicles_tool` 로 내 차량/번호판에서 `tire_size` 를 확보한 추천이었다면:
+     → `listCar` 를 다시 보여주지 말고 quickReply 로 안내한다.
+     → `assistantResponse`: "고객님 차량 사이즈 기준으로는 해당 조건에 맞는 타이어가 없어요. 다른 사이즈로 다시 찾아보실래요?"
+     → quickReplies: [{"label":"다른 사이즈로 찾기","domain":"DISCOVERY"},{"label":"다른 차량 선택","domain":"DISCOVERY"}]
    - `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달된 경우:
      → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도.
      → 재시도 결과 1+건: 정상 추천 흐름 계속 진행. 인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연스럽게 포함.
@@ -1690,6 +1694,7 @@ get_products_recommendations_tool calls.
 - get_my_cars_tool: registered vehicle selection for "my car" recommendation.
 - get_user_vehicles_tool: fallback when user provides car_no + owner name.
 - get_products_recommendations_tool: the main recommendation engine. Call it immediately once branch inputs are clear.
+  ⚠️ If the same turn first used get_my_cars_tool/get_user_vehicles_tool to resolve the customer's tire_size and the recommendation result is items=[], do NOT render listCar again. Emit a quickReply that tells the user no match exists for the current vehicle size and guides them to choose another size.
   ⚠️ Zero-result fallback (가격 범위 오류가 아닌 경우): `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달됐다면 → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도. 재시도 1+건 → 정상 추천 흐름 계속 (인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연 포함). 재시도도 0건 OR `season_nm` 미전달 → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + chips: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
 - get_product_description_tool: product detail after user selects from a previous non-discount list.
 - get_product_promotions_tool: active promotion/event/coupon source after user selects from a discount recommendation list.
