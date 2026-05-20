@@ -696,6 +696,24 @@ class StreamingMultiAgentCoordinator:
             ],
             MultiAgentDomain.Domain.TRANSACTION,
         ),
+        # SUPPORT — pickup-driver (스마트픽업) status/location query.
+        # The chatbot has no tool to query a smart-pickup driver's real-time
+        # position. Without this force, "기사님 어디쯤 오고계셔?" style messages
+        # hit TRANSACTION → get_order_delivery, which only returns the user's
+        # online order/visit reservation (often a 직접방문 record with no driver)
+        # and the agent falls back to "기사님 위치 조회 불가". Route these to
+        # SUPPORT so the 픽업서비스 rule answers with the pickup management CTA.
+        (
+            [
+                "픽업기사", "픽업 기사",
+                "기사님 어디", "기사 어디",
+                "기사님 위치", "기사 위치",
+                "기사님 오고", "기사 오고",
+                "기사님 도착", "기사 도착",
+                "기사님 언제", "기사 언제",
+            ],
+            MultiAgentDomain.Domain.SUPPORT,
+        ),
         # SUPPORT — return / refund / warranty / 1:1
         (
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
