@@ -633,9 +633,10 @@ def get_nearby_stores_tool(
         chl_sct_cd (str | None): F=티스테이션, S=더타이어샵, None=전체.
         sort_by (str | None): 정렬 기준. None(default)=좌표 있으면 거리순 / "rating"=평점순(SHOP_EVAL_CVRT_IDX
             DESC NULLS LAST) / "review_count"=리뷰 많은 순(서브쿼리 활성) / "distance"=거리순(좌표 필수).
-            사용자가 "근처/가까운"만 표현하면 None, "평점 좋은/별점 높은/친절한/서비스 좋은/서비스 제일 좋은/
-            눈탱이 안치는/바가지 안치는/믿을 수 있는/신뢰할 수 있는/추천"이면 "rating",
-            "리뷰 많은/후기 많은"이면 "review_count".
+            사용자가 "근처/가까운"만 표현하면 None, "평점 좋은/별점 높은/친절한/직원이 친절한/직원 친절도/
+            서비스 좋은/서비스 제일 좋은/눈탱이 안치는/바가지 안치는/믿을 수 있는/신뢰할 수 있는/추천/
+            얼라인먼트 잘 보는/얼라인먼트 잘하는"이면 "rating", "리뷰 많은/후기 많은"이면 "review_count".
+            ⚠️ 얼라인먼트 관련 검색 시: sort_by="rating"과 함께 svc_codes=["124","125"] 를 반드시 함께 전달.
         limit (int): 반환 매장 수 상한 (1-10). Default 10. 사용자가 "N개"를 명시하면
             그 값을 전달. location 카드 max_length=10 제약 때문에 10 초과 시 10으로 클램핑.
 
