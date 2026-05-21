@@ -9,40 +9,27 @@ from pydantic import BaseModel, Field
 
 from langchain_litellm import ChatLiteLLM
 
+
+def _make_llm(model_setting: str, *, streaming: bool = True, timeout: int = 120) -> ChatLiteLLM:
+    return ChatLiteLLM(
+        api_base=settings.AI_GATEWAY_BASE_URL,
+        api_key=settings.AI_GATEWAY_API_KEY,
+        model=f"{settings.AI_DEFAULT_PROVIDER}/{model_setting}",
+        streaming=streaming,
+        request_timeout=timeout,
+    )
+
+
 # Default LLM (AI_MODEL) — used by Discovery and Support agents.
-LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
-    streaming=True,
-    request_timeout=120,
-)
+LLM = _make_llm(settings.AI_MODEL)
 
 # Per-agent overrides
-LEADING_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_LEADING_AGENT}",
-    streaming=True,
-    request_timeout=120,
-)
-
-TRANSACTION_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_TRANSACTION_AGENT}",
-    streaming=True,
-    request_timeout=120,
-)
+LEADING_LLM = _make_llm(settings.AI_MODEL_LEADING_AGENT)
+TRANSACTION_LLM = _make_llm(settings.AI_MODEL_TRANSACTION_AGENT)
 
 # Lightweight LLM for routing/decision tasks (AI_MODEL_QC_AGENT, e.g. gpt-4o-mini).
 # Use for short structured outputs where reasoning depth is not needed.
-DECISION_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
-    request_timeout=30,
-)
+DECISION_LLM = _make_llm(settings.AI_MODEL_QC_AGENT, streaming=False, timeout=30)
 
 ### Multi-Agent Router
 # Leading Agent

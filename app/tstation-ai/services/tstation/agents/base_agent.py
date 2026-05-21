@@ -79,16 +79,19 @@ def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
 
 
 def _sanitize_tool_output_for_sse(content: Any) -> Any:
-    """Return a copy of the tool result with internal-only keys removed.
+    """Return the tool result as a JSON string with internal-only keys removed.
 
-    Falls back to the original value on parse error so SSE delivery never
-    breaks even if a tool emits malformed JSON.
+    Accepts either a raw JSON string (parses it) or an already-parsed dict
+    (skips redundant json.loads). Falls back to the original value on error.
     """
-    if not isinstance(content, str):
-        return content
-    try:
-        parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return content
+    elif isinstance(content, dict):
+        parsed = content  # instruction_to_agent is internal-only; safe to strip from accumulated dict
+    else:
         return content
     _strip_keys_in_place(parsed, _SSE_TOOL_OUTPUT_STRIPPED_KEYS)
     try:
@@ -499,7 +502,9 @@ class BaseAgent(ABC):
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
-                            "output": _sanitize_tool_output_for_sse(message.content),
+                            "output": _sanitize_tool_output_for_sse(
+                                tool_result if tool_result is not None else message.content
+                            ),
                             "node": node,
                             "tool": message.name,
                         }
