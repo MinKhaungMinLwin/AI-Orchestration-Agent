@@ -1644,16 +1644,16 @@ def get_maintenance_history_tool(mbr_car_reg_seq: str | None = None, limit: int 
 
 
 @tool
-def get_my_reservations_tool(sct_cd: str = "100"):
+def get_my_reservations_tool(sct_cd: str = "all"):
     """
     Retrieve authenticated user's shop visit reservations from ET_SHOP_RSV_INFO.
 
     Args:
-        sct_cd: Reservation category filter (default "100"). Values:
-            - "100": 방문예약 (simple shop visit reservation — default)
+        sct_cd: Reservation category filter (default "all"). Values:
+            - "100": 방문예약 (simple shop visit reservation)
             - "200": 구매후방문예약 (post-purchase visit, has ord_no)
             - "300": 오프라인예약 (offline reservation)
-            - "all": all categories
+            - "all": all categories — default for reservation-history lookup
 
     Returns response with `reservations` list. Each item includes:
         shop_rsv_seq, shop_rsv_no, ord_no, shop_id, shop_nm, tel_no,
