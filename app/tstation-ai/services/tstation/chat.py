@@ -400,7 +400,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회), maintenance/service history lookup (정비이력 / 정비내역 / 관리받은 내역 / 서비스 이력)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법 / 쿠폰 적용 가능 상품 / 쿠폰 적용 상품 / 쿠폰 대상 상품), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회), maintenance/service history lookup (정비이력 / 정비내역 / 관리받은 내역 / 서비스 이력)
 - SUPPORT: FAQ, warranty, returns policy questions, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** ⚠️ NOT to be confused with store visit reservation booking (=TRANSACTION), human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -421,7 +421,7 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "쿠폰 적용 가능 상품/쿠폰 적용 상품/쿠폰 대상 상품/쿠폰으로 살 수 있는 타이어", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
 
 ⚠️ ALWAYS classify as SUPPORT (NOT TRANSACTION, NOT DISCOVERY): 두 개 이상의 할인 수단(쿠폰/딜/이벤트/프로모션/기획전/혜택) 사이의 **중복 적용 여부** 발화 — "X 중복 가능?", "X이랑 Y 같이 쓸 수 있어?", "X이랑 Y 동시 적용?", "둘 다 쓸 수 있어?", "함께 사용 가능?" — DBA 의 stacking 룰을 응답해야 하므로 SUPPORT 로 라우팅. "쿠폰" 단독 단어만 보고 transaction_coupon 으로, "기획전/이벤트" 단독 단어만 보고 discovery_event_content 로 분류 금지.
 Examples:
@@ -703,6 +703,37 @@ class StreamingMultiAgentCoordinator:
                 "추가 적용",
             ],
             MultiAgentDomain.Domain.SUPPORT,
+        ),
+        # TRANSACTION — coupon applicability lookup by coupon name/discount.
+        # This must not route to Support FAQ: the backend can resolve owned
+        # coupon names via get_my_coupons_tool and then call
+        # get_coupon_applicable_products_tool.
+        (
+            [
+                "쿠폰 적용 가능 상품",
+                "쿠폰 적용가능 상품",
+                "쿠폰 적용 상품",
+                "쿠폰으로 살 수 있는",
+                "쿠폰 어디에 쓸",
+                "쿠폰 어디 쓸",
+                "쿠폰 어느 상품",
+                "쿠폰 대상 상품",
+                "쿠폰 사용 가능 상품",
+                "쿠폰 사용가능 상품",
+                "할인권 적용 가능 상품",
+                "할인권 적용가능 상품",
+                "할인권 적용 상품",
+                "할인권 대상 상품",
+                "할인권으로 살 수 있는",
+                "할인쿠폰 적용 가능 상품",
+                "할인쿠폰 적용가능 상품",
+                "할인쿠폰 적용 상품",
+                "할인 쿠폰 적용 가능 상품",
+                "할인 쿠폰 적용가능 상품",
+                "할인 쿠폰 적용 상품",
+                "드라이브 행사 고객 한정",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
         ),
         # TRANSACTION — cancellation/return shipping-fee inquiry (TC-118).
         # Keep this before the broad SUPPORT "반품" rule so round-trip return-fee

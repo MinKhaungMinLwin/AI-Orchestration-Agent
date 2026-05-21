@@ -92,7 +92,7 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, store visit reservation (specific date/time slot booking at a store), order tracking, create order draft, coupon inquiry
+        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, store visit reservation (specific date/time slot booking at a store), order tracking, create order draft, coupon inquiry, coupon applicable product lookup
         - SUPPORT: FAQ, warranty, returns, policies, general maintenance information, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 알림 만기 / all my T 점검 만기** (data-backed schedule inquiry for the user's registered car), human agent
         - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, **registered vehicle list (listCar) inquiry**
         - LEADING: Greeting, unclear intent
@@ -114,6 +114,7 @@ class AgentDomain(BaseModel):
         - Select quantity for order (e.g., "4개 주문", "2개")
         - Select store for order
         - Coupon inquiry ("쿠폰 조회", "내 쿠폰", "쿠폰함")
+        - Coupon applicable product lookup by coupon name/discount ("드라이브 행사 고객 한정 적용 가능 상품", "30% 쿠폰 적용 상품", "이 쿠폰으로 살 수 있는 타이어")
         Examples:
         - "{{goods_no}} 가격 얼마야?" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
         - "Is {{goods_no}} in stock?" (e.g., "G012345678901")
@@ -127,6 +128,7 @@ class AgentDomain(BaseModel):
         - "장바구니에 담아줘"
         - "쿠폰 조회해줘"
         - "내 쿠폰 보여줘"
+        - "드라이브 행사 고객 한정 적용 가능 상품 뭐야"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
