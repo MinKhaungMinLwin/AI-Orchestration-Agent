@@ -2783,6 +2783,108 @@ def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
     }
 
 
+_ORDER_SUMMARY_LINE_RE = re.compile(r"^\s*([^:\n]+)\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _parse_order_summary_lines(text: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for match in _ORDER_SUMMARY_LINE_RE.finditer(text):
+        key = match.group(1).strip()
+        value = match.group(2).strip()
+        if key and value:
+            parsed[key] = value
+    return parsed
+
+
+def _normalize_order_booking_datetime(raw: str) -> str:
+    raw = str(raw or "").strip()
+    match = re.search(
+        r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})\D+(?:\([^)]*\)\s*)?(\d{1,2})\s*(?::\s*\d{1,2}|시)?",
+        raw,
+    )
+    if not match:
+        return raw
+    year, month, day, hour = (int(part) for part in match.groups())
+    try:
+        dt = datetime.datetime(year, month, day)
+    except ValueError:
+        return raw
+    return f"{year}년 {month}월 {day}일 ({_WEEKDAY_KO[dt.weekday()]}) {hour:02d}:00"
+
+
+def _parse_krw_amount(raw: str) -> int | None:
+    digits = re.sub(r"\D", "", str(raw or ""))
+    return int(digits) if digits else None
+
+
+def _coerce_order_summary_quickreply_to_preorder(
+    event: dict,
+    slot_state: Any | None,
+) -> dict | None:
+    """Convert text-only order previews back into the FE preOrder card.
+
+    The transaction LLM occasionally summarizes all preOrder fields inside a
+    quickReply instead of emitting the `preOrder` template. That makes the FE
+    render a plain text block and loses the built-in order/cart buttons. This
+    guard only fires when the assistant text already contains a complete order
+    summary.
+    """
+    if event.get("template") != "quickReply":
+        return None
+    source_domain = str(event.get("source_domain") or "").lower()
+    if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if "주문 정보" not in assistant_text and "주문을 진행" not in assistant_text:
+        return None
+
+    fields = _parse_order_summary_lines(assistant_text)
+    product = fields.get("상품")
+    qty_raw = fields.get("수량")
+    store_name = fields.get("장착 매장") or fields.get("매장")
+    booking_raw = fields.get("방문 예정") or fields.get("방문일시") or fields.get("예약 일시")
+    amount_raw = fields.get("결제 예상금액") or fields.get("결제금액") or fields.get("결제 금액")
+    if not (product and qty_raw and store_name and booking_raw):
+        return None
+
+    qty_match = re.search(r"\d+", qty_raw)
+    if not qty_match:
+        return None
+    payment_amount = _parse_krw_amount(amount_raw or "")
+    if payment_amount is None and slot_state is not None:
+        payment_amount = getattr(slot_state, "payment_amount", None)
+
+    return {
+        "type": "data",
+        "template": "preOrder",
+        "source_domain": event.get("source_domain") or MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_preorder_summary_guard",
+        "data": {
+            "assistantResponse": "주문 정보를 확인해 주세요.",
+            "orderInfo": {
+                "carInfo": None,
+                "product": product,
+                "quantity": int(qty_match.group(0)),
+                "storeName": store_name,
+                "bookingDateTime": _normalize_order_booking_datetime(booking_raw),
+                "paymentAmount": payment_amount,
+            },
+            "isReadyToOrder": True,
+            "isReadyToAddToCart": False,
+            "metadata": {
+                "goodsId": getattr(slot_state, "goods_no", None) if slot_state is not None else None,
+                "shopId": getattr(slot_state, "shop_id", None) if slot_state is not None else None,
+                "carNo": None,
+                "carLncCd": None,
+            },
+        },
+        "nextAction": {"type": "stop", "domain": None},
+    }
+
+
 def _choose_quickreply_fallback(
     called_tool_names: set[str], source_domain: str | None
 ) -> tuple[list[dict], str]:
@@ -5481,6 +5583,24 @@ class TStationChatServiceV2:
                     last_template = "quickReply"
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_coupon_issue_guard"
+                    event_data = event.get("data", {})
+                    assistant_response = str(event_data.get("assistantResponse") or "")
+                    draft_response = assistant_response
+                    draft_for_qc = assistant_response
+                    original_message_events = [{
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": "[TRANSACTION AGENT]",
+                    }]
+                coerced_event = _coerce_order_summary_quickreply_to_preorder(event, initial_slots)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] transaction order summary quickReply → preOrder"
+                    )
+                    event = coerced_event
+                    last_template = "preOrder"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_preorder_summary_guard"
                     event_data = event.get("data", {})
                     assistant_response = str(event_data.get("assistantResponse") or "")
                     draft_response = assistant_response
