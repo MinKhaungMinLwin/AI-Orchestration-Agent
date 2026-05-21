@@ -632,8 +632,7 @@ class StreamingMultiAgentCoordinator:
             tool_name = item.get("tool", "")
             data = item.get("data")
             input_data = item.get("input", item.get("args", {}))
-            raw_output = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-            compact = filter_for_context(tool_name, raw_output, input_data)
+            compact = filter_for_context(tool_name, data, input_data)
             if compact is not None:
                 compact_items.append(compact)
             else:
