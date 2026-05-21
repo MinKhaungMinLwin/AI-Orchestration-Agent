@@ -2621,6 +2621,58 @@ def _coerce_reservation_quickreply_to_datepick(
     return None
 
 
+_LISTCAR_SELECTION_NEEDLES: tuple[str, ...] = (
+    "선택",
+    "골라",
+    "어떤 차량",
+    "이 차량으로 진행",
+    "차량을 확인해",
+    "등록된 차량",
+    "차량 목록",
+)
+
+
+def _looks_like_vehicle_selection_prompt(text: str | None) -> bool:
+    normalized = (text or "").strip()
+    return bool(normalized) and any(needle in normalized for needle in _LISTCAR_SELECTION_NEEDLES)
+
+
+def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
+    """Suppress direct listCar JSON when the answer is plain advice.
+
+    The template mapper already suppresses get_my_cars_tool → listCar for
+    generic advice turns. This catches the sibling path where the LLM emits a
+    valid listCar JSON directly, bypassing the mapper guard.
+    """
+    if event.get("template") != "listCar":
+        return None
+    source_domain = str(event.get("source_domain") or "").lower()
+    if source_domain != "discovery":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if _looks_like_vehicle_selection_prompt(assistant_text):
+        return None
+    recovery = _discovery_recovery_chips_for_text(assistant_text, event.get("source_domain"))
+    if recovery is None:
+        chips = list(_DISCOVERY_DEFAULT_CHIPS)
+    else:
+        chips, _label = recovery
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": event.get("source_domain"),
+        "assistant_response_source": "code_mapper_listcar_advice_guard",
+        "data": {
+            "assistantResponse": assistant_text,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _choose_quickreply_fallback(
     called_tool_names: set[str], source_domain: str | None
 ) -> tuple[list[dict], str]:
@@ -4906,6 +4958,16 @@ class TStationChatServiceV2:
                     last_template = "datepick"
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
+                    event_data = event.get("data", {})
+                coerced_event = _coerce_non_selection_listcar_to_quickreply(event)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] discovery listCar advice turn → quickReply"
+                    )
+                    event = coerced_event
+                    last_template = "quickReply"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_listcar_advice_guard"
                     event_data = event.get("data", {})
                 for value in _quick_reply_domain_values_from_event(event):
                     if value not in next_quick_reply_domain_values:

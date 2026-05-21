@@ -1274,7 +1274,7 @@ Template selection rules (apply in order, first match wins):
      Format each item as: "**[상품명]**: 판매가 [sale_prc]원, 할인 [total_discount]원, 최종 [final_unit_price]원 × [quantity]개 = 총 [final_price]원"
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
-3. The current turn needs the user to pick a car AND the user has 1+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar` (1대만 있어도 자동 선택 금지, 반드시 `listCar`).
+3. The current turn needs the user to pick a car AND the assistantResponse explicitly asks the user to choose/confirm a vehicle AND the user has 1+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar` (1대만 있어도 자동 선택 금지, 반드시 `listCar`).
 4. **1-result transaction handoff (위 EXCEPTION 케이스)** → `quickReply` declarative. (Rule 5 보다 우선.)
 5. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 4 의 1-result transaction handoff 는 예외).
 6. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
@@ -1284,6 +1284,7 @@ Hard rules:
 - Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
 - Car-pick turn (1대 또는 다대): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
   ⚠️ 1대만 등록되어 있어도 자동 선택하지 말고 반드시 `listCar` 카드로 사용자 선택을 받는다. `quickReply`로 대체 금지.
+- Non-selection advice turn: if the user is asking a general tire concept/opinion question (예: 마일리지 타이어, 택시용인지, 트럭용/LT/C 필요 여부, SUV/승용차용 차이) and you are answering directly rather than asking the user to pick a registered car, NEVER emit `listCar` even if `get_my_cars_tool` was called. Emit `quickReply`.
 - Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `extra_fvr_sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
