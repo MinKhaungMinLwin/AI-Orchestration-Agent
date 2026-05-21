@@ -57,6 +57,7 @@ example/
 /eval/results/
 
 .vscode/
+.tmp/
 
 AGENT.md
 AGENTS.md
