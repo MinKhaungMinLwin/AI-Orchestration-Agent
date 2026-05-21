@@ -27,38 +27,28 @@ from config.env import settings
 
 logger = logging.getLogger(__name__)
 
-# Redis client for conversation management
-_redis_client: Optional[redis.Redis] = None
-_async_redis_client: Optional[async_redis.Redis] = None
+_redis_client: redis.Redis = redis.from_url(
+    settings.REDIS_CONVERSATION_MANAGEMENT_URL,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    decode_responses=True,
+    max_connections=50,
+)
+
+_async_redis_client: async_redis.Redis = async_redis.from_url(
+    settings.REDIS_CONVERSATION_MANAGEMENT_URL,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    decode_responses=True,
+    max_connections=50,
+)
 
 
 def get_redis_client() -> redis.Redis:
-    """Get Redis client for conversation management."""
-    global _redis_client
-    if _redis_client is None:
-        redis_url = settings.REDIS_CONVERSATION_MANAGEMENT_URL
-
-        # Parse URL: redis://:password@host:port/db
-        _redis_client = redis.from_url(
-            redis_url,
-            socket_timeout=5,
-            socket_connect_timeout=5,
-            decode_responses=True,
-        )
     return _redis_client
 
 
 def get_async_redis_client() -> async_redis.Redis:
-    """Get async Redis client for hot-path conversation operations."""
-    global _async_redis_client
-    if _async_redis_client is None:
-        redis_url = settings.REDIS_CONVERSATION_MANAGEMENT_URL
-        _async_redis_client = async_redis.from_url(
-            redis_url,
-            socket_timeout=5,
-            socket_connect_timeout=5,
-            decode_responses=True,
-        )
     return _async_redis_client
 
 
