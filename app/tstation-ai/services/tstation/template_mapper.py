@@ -378,6 +378,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "tires": "",
                 "titleProductName": goods_nm,
                 "titleTires": tire_size,
+                "brand_nm": _get_str(row, "brand_nm"),
                 "comfort": "",
                 "price": price,
                 "originalPrice": original_price,
