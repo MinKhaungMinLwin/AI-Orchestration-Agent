@@ -1394,6 +1394,57 @@ def _shop_id(store: dict) -> str | None:
     return str(value) if value else None
 
 
+_PREFERRED_REGION_ADDRESS_TOKENS = {
+    "강남": ("강남구",),
+}
+
+
+def _filter_stores_by_preferred_region_address(region_code: str | None, stores: list[dict]) -> list[dict]:
+    """Prefer address matches for ambiguous region terms in booking preview.
+
+    `/api/store/list` also searches SHOP_NM for region_code to support cases
+    like "광교". In order/booking preview, ambiguous terms such as "강남"
+    should not pull in a remote branch whose name merely contains the token.
+    """
+    if not region_code or not stores:
+        return stores
+
+    tokens = _PREFERRED_REGION_ADDRESS_TOKENS.get(region_code.strip())
+    if not tokens:
+        return stores
+
+    matched: list[dict] = []
+    for store in stores:
+        address = " ".join(
+            str(store.get(key) or "")
+            for key in ("addr_base", "addr_dtl", "road_addr_base", "road_addr_dtl")
+        )
+        if any(token in address for token in tokens):
+            matched.append(store)
+
+    return matched or stores
+
+
+def _scheduled_shop_ids_with_slots(schedule_data: Any) -> list[str]:
+    if not isinstance(schedule_data, dict):
+        return []
+    stores = schedule_data.get("stores")
+    if not isinstance(stores, list):
+        return []
+
+    shop_ids: list[str] = []
+    for store in stores:
+        if not isinstance(store, dict):
+            continue
+        slots = store.get("slots")
+        if not isinstance(slots, list) or not slots:
+            continue
+        shop_id = store.get("shop_id") or store.get("shopId")
+        if shop_id:
+            shop_ids.append(str(shop_id))
+    return shop_ids
+
+
 def _extract_logistics_qty(data: Any) -> int:
     if not isinstance(data, dict):
         return 0
@@ -1499,6 +1550,8 @@ def transaction_store_preview_tool(
 
     store_data = _to_dict(store_response.parsed)
     stores = _extract_stores(store_data)
+    if has_region and not has_store and not has_coords:
+        stores = _filter_stores_by_preferred_region_address(region_code, stores)
 
     # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
     # 이게 없으면 LLM 이 silent "No store candidates found" 만 받고 generic 응답을
@@ -1582,12 +1635,18 @@ def transaction_store_preview_tool(
         tna_shop_ids=tna_shop_ids,
         has_logistics=logistics_qty > 0,
     )
+    schedule_data = schedule.get("data") if isinstance(schedule, dict) else schedule
+    scheduled_shop_ids = _scheduled_shop_ids_with_slots(schedule_data)
+    if scheduled_shop_ids:
+        scheduled_set = set(scheduled_shop_ids)
+        candidates = [store for store in candidates if (_shop_id(store) in scheduled_set)]
+        shop_ids = [sid for sid in shop_ids if sid in scheduled_set]
 
     result_data: dict[str, Any] = {
         "price": results.get("price"),
         "logistics": results.get("logistics"),
         "inventory": results.get("store_inventory"),
-        "schedule": schedule.get("data") if isinstance(schedule, dict) else schedule,
+        "schedule": schedule_data,
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
     }
