@@ -1474,6 +1474,7 @@ def transaction_store_preview_tool(
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
+            installable_only=True,
             chl_sct_cd=chl_sct_cd,
         )
     else:
@@ -1485,6 +1486,7 @@ def transaction_store_preview_tool(
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
+            installable_only=True,
             chl_sct_cd=chl_sct_cd,
         )
 

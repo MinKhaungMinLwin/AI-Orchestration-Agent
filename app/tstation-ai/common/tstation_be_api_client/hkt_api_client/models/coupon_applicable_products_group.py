@@ -21,7 +21,7 @@ class CouponApplicableProductsGroup:
     Attributes:
         cpn_no (str): 쿠폰 번호
         total (int): 해당 쿠폰에 적용 가능한 상품 수
-        items (list[CouponApplicableProductItem] | Unset): 해당 쿠폰에 적용 가능한 상품 목록
+        items (list[CouponApplicableProductItem] | Unset): 해당 쿠폰에 적용 가능한 패턴 대표 상품 목록
     """
 
     cpn_no: str

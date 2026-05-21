@@ -38,6 +38,7 @@ class CouponApplicableProductItem:
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
+        field_dict.update({})
         if ptrn_cd is not UNSET:
             field_dict["ptrn_cd"] = ptrn_cd
         if goods_nm is not UNSET:

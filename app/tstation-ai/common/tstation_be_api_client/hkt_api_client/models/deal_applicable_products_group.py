@@ -21,7 +21,7 @@ class DealApplicableProductsGroup:
     Attributes:
         deal_no (str): 기획전 번호
         total (int): 해당 기획전에 매핑된 쿠폰을 통해 적용 가능한 상품 수
-        items (list[CouponApplicableProductItem] | Unset): 해당 기획전에 적용 가능한 상품 목록
+        items (list[CouponApplicableProductItem] | Unset): 해당 기획전에 적용 가능한 패턴 대표 상품 목록
     """
 
     deal_no: str
