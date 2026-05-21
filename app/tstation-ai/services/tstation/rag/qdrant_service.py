@@ -24,6 +24,9 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 _collection_size_cache: dict[str, tuple[int, float]] = {}
 _COLLECTION_CACHE_TTL: float = 3600.0
 
+# Reused across all search_multi_vector calls — avoids per-request thread create/destroy overhead
+_search_executor = ThreadPoolExecutor(max_workers=2)
+
 logger = logging.getLogger(__name__)
 
 
@@ -311,11 +314,10 @@ class QdrantService:
                     with_payload=True,
                 )
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                q_future = executor.submit(_query, "question")
-                a_future = executor.submit(_query, "answer")
-                q_results = q_future.result()
-                a_results = a_future.result()
+            q_future = _search_executor.submit(_query, "question")
+            a_future = _search_executor.submit(_query, "answer")
+            q_results = q_future.result()
+            a_results = a_future.result()
         except Exception as e:
             logger.exception(f"Failed multi-vector search in {collection_name}")
             raise

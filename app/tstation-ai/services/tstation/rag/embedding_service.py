@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from typing import Optional
 
 import redis as _redis
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 # L2: Redis shared cache (cross-worker, ~2ms hit)
 # Key:   "embed:{model}:{md5(text)}"   TTL: 1 hour
 # ─────────────────────────────────────────────────────────────
-_embed_cache: dict[str, tuple[list[float], float]] = {}
+_embed_cache: OrderedDict[str, tuple[list[float], float]] = OrderedDict()
 _EMBED_CACHE_TTL: float = 3600.0
 _EMBED_CACHE_MAX: int = 2000
 
@@ -164,11 +165,10 @@ class EmbeddingService:
             except Exception:
                 pass
 
-        # Evict oldest half when L1 is full
+        # Evict oldest half when L1 is full (OrderedDict preserves insert order → O(1) per pop)
         if len(_embed_cache) >= _EMBED_CACHE_MAX:
-            sorted_keys = sorted(_embed_cache, key=lambda k: _embed_cache[k][1])
-            for old_key in sorted_keys[: _EMBED_CACHE_MAX // 2]:
-                del _embed_cache[old_key]
+            for _ in range(_EMBED_CACHE_MAX // 2):
+                _embed_cache.popitem(last=False)
             logger.debug("[EmbeddingService] L1 evicted %d entries", _EMBED_CACHE_MAX // 2)
 
         _embed_cache[l1_key] = (vector, now)
