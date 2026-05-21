@@ -67,8 +67,8 @@ _FORBIDDEN_SATISFACTION_CHIPS: frozenset[str] = frozenset({
 _DEFAULT_SATISFACTION_CHIPS: tuple[tuple[str, str], ...] = (
     ("상품 검색", "DISCOVERY"),
     ("타이어 추천", "DISCOVERY"),
-    ("처음으로", "LEADING"),
 )
+_HOME_QUICK_REPLY_LABEL: str = "처음으로"
 
 
 class TemplatePayload(BaseModel):
@@ -207,6 +207,29 @@ class QuickReplyTemplate(TemplatePayload):
             QuickReplyChip(label=label, domain=domain)
             for label, domain in _DEFAULT_SATISFACTION_CHIPS
         ]
+        return self
+
+    @model_validator(mode="after")
+    def remove_home_chip(self) -> "QuickReplyTemplate":
+        """Do not expose the global "처음으로" quick button."""
+        if not self.quickReplies:
+            return self
+        filtered = [
+            chip for chip in self.quickReplies
+            if chip.label.strip() != _HOME_QUICK_REPLY_LABEL
+        ]
+        if len(filtered) == len(self.quickReplies):
+            return self
+        logger.info(
+            "QuickReplyTemplate removed home chip: original=%s",
+            [chip.label for chip in self.quickReplies],
+        )
+        self.quickReplies = filtered
+        if not any((chip.domain or "").upper() == "LEADING" for chip in self.quickReplies):
+            self.predictedDomains = [
+                domain for domain in self.predictedDomains
+                if str(domain).upper() != "LEADING"
+            ]
         return self
 
 

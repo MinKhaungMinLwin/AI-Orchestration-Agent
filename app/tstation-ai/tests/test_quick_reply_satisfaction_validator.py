@@ -3,7 +3,7 @@
 Locks in the deterministic fallback: when the assistant emits a satisfaction /
 repurchase response AND the quickReplies contain any forbidden chip (구매하기,
 다시 시도, 상담사 연결, 1:1 문의하기), the validator replaces the entire chip
-set with the progress-oriented default `[상품 검색, 타이어 추천, 처음으로]`.
+set with the progress-oriented default `[상품 검색, 타이어 추천]`.
 
 Does NOT fire when:
   - assistantResponse has no satisfaction pattern.
@@ -23,8 +23,8 @@ from services.tstation.agents.templates.schemas import (
 )
 
 
-_DEFAULT_LABELS = ["상품 검색", "타이어 추천", "처음으로"]
-_DEFAULT_DOMAINS = ["DISCOVERY", "DISCOVERY", "LEADING"]
+_DEFAULT_LABELS = ["상품 검색", "타이어 추천"]
+_DEFAULT_DOMAINS = ["DISCOVERY", "DISCOVERY"]
 
 
 def _labels(tpl: QuickReplyTemplate) -> list[str]:
@@ -111,7 +111,7 @@ def test_satisfaction_with_no_forbidden_chip_passes_through() -> None:
             QuickReplyChip(label=lbl, domain="DISCOVERY") for lbl in original_labels
         ],
     )
-    assert _labels(tpl) == original_labels
+    assert _labels(tpl) == ["상품 검색", "타이어 추천"]
 
 
 def test_satisfaction_with_매장찾기_only_passes_through() -> None:
@@ -122,7 +122,7 @@ def test_satisfaction_with_매장찾기_only_passes_through() -> None:
             QuickReplyChip(label="처음으로", domain="LEADING"),
         ],
     )
-    assert _labels(tpl) == ["매장 찾기", "처음으로"]
+    assert _labels(tpl) == ["매장 찾기"]
 
 
 def test_no_satisfaction_pattern_with_forbidden_chip_passes_through() -> None:

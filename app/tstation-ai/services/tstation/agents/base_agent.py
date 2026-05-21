@@ -115,7 +115,6 @@ _VALIDATION_FALLBACK_MESSAGE = (
 _VALIDATION_FALLBACK_QUICK_REPLIES = [
     {"label": "다시 시도", "domain": "LEADING"},
     {"label": "상담사 연결", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 

@@ -19,7 +19,6 @@ from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
-    AgentDomain,
     DECISION_LLM as _decision_llm,
     leading_agent,
     discovery_subagent,
@@ -1141,7 +1140,7 @@ class StreamingMultiAgentCoordinator:
         if not parts:
             return None
 
-        return {"role": "assistant", "content": f"[Context from previous steps]\n" + "\n".join(parts)}
+        return {"role": "assistant", "content": "[Context from previous steps]\n" + "\n".join(parts)}
 
     # Tool → pending_intent that the tool FULFILLS (clears from slots on successful run).
     # When one of these tools returns a successful result, the matching pending_intent
@@ -2008,9 +2007,6 @@ class StreamingMultiAgentCoordinator:
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
 
-
-import re
-
 _FALLBACK_RESPONSE = (
     "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n"
     "타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
@@ -2394,19 +2390,16 @@ def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> boo
 # makes the flow look broken).
 _FALLBACK_GENERIC: list[dict] = [
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 _FALLBACK_ORDER_LIST: list[dict] = [
     {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 _FALLBACK_COUPON: list[dict] = [
     {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 # LEADING 도메인의 fallback 은 진행형(발견 → 구매) chip 으로 시작해야 자연스럽다.
@@ -2414,7 +2407,6 @@ _FALLBACK_COUPON: list[dict] = [
 _FALLBACK_LEADING_PROGRESS: list[dict] = [
     {"label": "상품 검색", "domain": "DISCOVERY"},
     {"label": "타이어 추천", "domain": "DISCOVERY"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 # Order matters: more specific tools first so the dispatch picks the most
@@ -2425,6 +2417,7 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
 ]
 
 _GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_HOME_QUICK_REPLY_LABEL = "처음으로"
 _DISCOVERY_SIZE_VEHICLE_CHIPS: list[dict] = [
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
     {"label": "차량번호로 찾기", "domain": "DISCOVERY"},
@@ -2443,7 +2436,6 @@ _DISCOVERY_PRODUCT_CHIPS: list[dict] = [
 _DISCOVERY_DEFAULT_CHIPS: list[dict] = [
     {"label": "상품 검색", "domain": "DISCOVERY"},
     {"label": "타이어 추천", "domain": "DISCOVERY"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 _DISCOVERY_SIZE_VEHICLE_TEXT_RE = re.compile(
     r"타이어\s*사이즈|차량번호|소유주|등록\s*차량|내\s*차|내차|"
@@ -2703,6 +2695,34 @@ def _looks_like_generic_dead_end_chips(chips: object) -> bool:
         if isinstance(item, dict)
     }
     return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS and _GENERIC_DEAD_END_LABELS <= labels
+
+
+def _remove_home_quick_reply_chips(event_data: dict) -> bool:
+    """Strip the global home quick button from any FE payload before streaming."""
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+    filtered = [
+        chip for chip in chips
+        if not (
+            isinstance(chip, dict)
+            and str(chip.get("label") or "").strip() == _HOME_QUICK_REPLY_LABEL
+        )
+    ]
+    if len(filtered) == len(chips):
+        return False
+    event_data["quickReplies"] = filtered
+    if not any(
+        isinstance(chip, dict) and str(chip.get("domain") or "").upper() == "LEADING"
+        for chip in filtered
+    ):
+        predicted = event_data.get("predictedDomains")
+        if isinstance(predicted, list):
+            event_data["predictedDomains"] = [
+                domain for domain in predicted
+                if str(domain).upper() != "LEADING"
+            ]
+    return True
 
 
 def _discovery_recovery_chips_for_text(
@@ -5005,12 +5025,10 @@ class TStationChatServiceV2:
                         event_data["quickReplies"] = [
                             {"label": "주문 내역 확인", "domain": "TRANSACTION"},
                             {"label": "배송 상태 확인", "domain": "TRANSACTION"},
-                            {"label": "처음으로", "domain": "LEADING"},
                         ]
                     else:
                         event_data["quickReplies"] = [
                             {"label": "다시 시도", "domain": "TRANSACTION"},
-                            {"label": "처음으로", "domain": "LEADING"},
                         ]
                 # Defensive fallback for quickReply template: if LLM emitted empty quickReplies,
                 # inject context-aware chips so the user is never stranded. Skip when the turn
@@ -5058,6 +5076,11 @@ class TStationChatServiceV2:
                                 for chip in recovery_chips
                                 if isinstance(chip, dict)
                             ])
+                if isinstance(event_data, dict) and _remove_home_quick_reply_chips(event_data):
+                    logger.info(
+                        "[QUICKREPLY_FILTER] removed home chip from %s template",
+                        last_template,
+                    )
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue

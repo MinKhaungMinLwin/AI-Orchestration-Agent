@@ -1,9 +1,9 @@
 """Unit tests for chat._choose_quickreply_fallback() domain-aware routing.
 
 Locks in:
-  - LEADING domain → progress chips ([상품 검색, 타이어 추천, 처음으로])
+  - LEADING domain → progress chips ([상품 검색, 타이어 추천])
   - Tool dispatch (order/coupon) overrides domain routing.
-  - Unknown / non-LEADING domain → generic fallback ([1:1 문의하기, 처음으로])
+  - Unknown / non-LEADING domain → generic fallback ([1:1 문의하기])
 
 Run from repo root:
 
@@ -24,6 +24,7 @@ from services.tstation.chat import (
     _coerce_reservation_quickreply_to_datepick,
     _discovery_recovery_chips_for_text,
     _looks_like_generic_dead_end_chips,
+    _remove_home_quick_reply_chips,
     _should_replace_discovery_dead_end_chips,
 )
 
@@ -40,7 +41,7 @@ def _labels(chips: list[dict]) -> list[str]:
 @pytest.mark.parametrize("source_domain", ["leading", "LEADING", "Leading"])
 def test_leading_domain_returns_progress_chips(source_domain: str) -> None:
     chips, label = _choose_quickreply_fallback(set(), source_domain)
-    assert _labels(chips) == ["상품 검색", "타이어 추천", "처음으로"]
+    assert _labels(chips) == ["상품 검색", "타이어 추천"]
     assert label == "leading_progress"
 
 
@@ -82,7 +83,7 @@ def test_non_leading_domain_returns_generic(source_domain: str | None) -> None:
 
 
 def test_progress_constant_shape() -> None:
-    assert len(_FALLBACK_LEADING_PROGRESS) == 3
+    assert len(_FALLBACK_LEADING_PROGRESS) == 2
     assert all("label" in c and "domain" in c for c in _FALLBACK_LEADING_PROGRESS)
 
 
@@ -141,7 +142,22 @@ def test_discovery_generic_answer_uses_discovery_default_chips() -> None:
     assert recovery is not None
     chips, label = recovery
     assert label == "discovery_default"
-    assert _labels(chips) == ["상품 검색", "타이어 추천", "처음으로"]
+    assert _labels(chips) == ["상품 검색", "타이어 추천"]
+
+
+def test_remove_home_quick_reply_chips_strips_button_and_predicted_domain() -> None:
+    event_data = {
+        "assistantResponse": "무엇을 도와드릴까요?",
+        "quickReplies": [
+            {"label": "상품 검색", "domain": "DISCOVERY"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ],
+        "predictedDomains": ["DISCOVERY", "LEADING"],
+    }
+
+    assert _remove_home_quick_reply_chips(event_data)
+    assert _labels(event_data["quickReplies"]) == ["상품 검색"]
+    assert event_data["predictedDomains"] == ["DISCOVERY"]
 
 
 def test_discovery_explicit_support_text_keeps_dead_end_chips() -> None:
