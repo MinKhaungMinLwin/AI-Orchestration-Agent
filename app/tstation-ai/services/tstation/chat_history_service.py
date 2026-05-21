@@ -14,6 +14,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from typing import List, Optional
 
 from schemas.tstation.slots import ConversationSlots
@@ -97,7 +98,13 @@ def _tool_context_dedup_key(item: dict) -> str:
     return json.dumps({"tool": item.get("tool", ""), "input": dedup_input}, sort_keys=True, ensure_ascii=False)
 
 
-def _decode_template_data(value, crypto):
+@lru_cache(maxsize=1000)
+def _cached_decrypt(ciphertext: str) -> str:
+    """Cache decrypt results for immutable message content — same ciphertext always yields same plaintext."""
+    return get_crypto_service().decrypt(ciphertext)
+
+
+def _decode_template_data(value) -> dict | None:
     """Decode stored template_data into a dict.
 
     Handles three storage shapes during the migration window:
@@ -110,7 +117,7 @@ def _decode_template_data(value, crypto):
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
-        plaintext = crypto.decrypt(value)
+        plaintext = _cached_decrypt(value)
         try:
             return json.loads(plaintext)
         except (json.JSONDecodeError, TypeError):
@@ -269,9 +276,6 @@ class ChatHistoryService:
     def get_history(self, session_id: str) -> List[dict]:
         """Get all messages for a session from sorted set (decrypts content & template_data)."""
         messages = []
-        crypto = get_crypto_service()
-
-        # Get messages from custom template sorted set
         tmpl_key = _get_template_messages_key(session_id)
         tmpl_raw = self.redis.zrange(tmpl_key, 0, -1)
         for raw in tmpl_raw:
@@ -281,9 +285,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
@@ -295,8 +299,6 @@ class ChatHistoryService:
     def get_history_range(self, session_id: str, start: int, end: int) -> List[dict]:
         """Get a specific range of messages from the sorted set to avoid full decryption."""
         messages = []
-        crypto = get_crypto_service()
-
         tmpl_key = _get_template_messages_key(session_id)
         tmpl_raw = self.redis.zrange(tmpl_key, start, end)
         for raw in tmpl_raw:
@@ -306,9 +308,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
@@ -496,7 +498,6 @@ class ChatHistoryService:
         if summary is None:
             return self.get_history_range(session_id, -20, -1)
 
-        crypto = get_crypto_service()
         tmpl_key = _get_template_messages_key(session_id)
         raw_items = self.redis.zrange(tmpl_key, summary["covered_count"], -1)
         recent = []
@@ -507,9 +508,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
@@ -541,7 +542,6 @@ class ChatHistoryService:
         if limit <= 0:
             return []
 
-        crypto = get_crypto_service()
         tmpl_key = _get_template_messages_key(session_id)
         result = []
         start = 0
@@ -564,9 +564,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": "assistant",
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
                 if len(result) >= limit:
@@ -741,7 +741,7 @@ class ChatHistoryService:
             if not td_raw:
                 continue
 
-            td_decoded = _decode_template_data(td_raw, crypto)
+            td_decoded = _decode_template_data(td_raw)
 
             if td_decoded:
                 inner = td_decoded.get("data")
@@ -757,7 +757,7 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": "assistant",
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
                     "template_data": td_decoded,
                     "created_at": data.get("created_at", datetime.now().isoformat()),
