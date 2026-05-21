@@ -98,6 +98,30 @@ def test_satisfaction_with_only_1to1_inquiry_chip_is_replaced() -> None:
     assert _labels(tpl) == _DEFAULT_LABELS
 
 
+def test_satisfaction_with_url_cta_is_preserved() -> None:
+    tpl = QuickReplyTemplate(
+        assistantResponse=(
+            "좋은 응대를 받으셨다니 기쁘네요 🙏\n\n"
+            "고객님, 매장 리뷰는 마이페이지 > 매장서비스 내역에서 작성하실 수 있어요 😊\n\n"
+            "아래 버튼을 눌러 바로 이동해 주세요."
+        ),
+        quickReplies=[
+            QuickReplyChip(
+                label="바로가기",
+                url="https://www.tstation.com/mypage/tstation/custservice/carservice-hist",
+                domain="SUPPORT",
+            ),
+            QuickReplyChip(label="1:1 문의하기", domain="SUPPORT"),
+            QuickReplyChip(label="처음으로", domain="LEADING"),
+        ],
+        predictedDomains=["SUPPORT", "LEADING"],
+    )
+
+    assert _labels(tpl) == ["바로가기", "1:1 문의하기"]
+    assert _domains(tpl) == ["SUPPORT", "SUPPORT"]
+    assert tpl.predictedDomains == ["SUPPORT"]
+
+
 # --------------------------------------------------------------------------- #
 #  No-fire cases — validator must NOT touch the chips
 # --------------------------------------------------------------------------- #

@@ -195,6 +195,8 @@ class QuickReplyTemplate(TemplatePayload):
         text = self.assistantResponse or ""
         if not any(p.search(text) for p in _SATISFACTION_PATTERNS):
             return self
+        if any(c.url for c in self.quickReplies):
+            return self
         existing_labels = {c.label for c in self.quickReplies}
         if not (existing_labels & _FORBIDDEN_SATISFACTION_CHIPS):
             return self
