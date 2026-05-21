@@ -290,14 +290,6 @@ class ChatHistoryService:
                 logger.warning(f"[CHAT_HISTORY] Failed to parse message: {raw[:100]}")
                 continue
 
-        # Sort by created_at timestamp
-        def get_timestamp(msg):
-            try:
-                return datetime.fromisoformat(msg["created_at"]).timestamp()
-            except (ValueError, KeyError):
-                return 0
-        messages.sort(key=get_timestamp)
-
         return messages
 
     def get_history_range(self, session_id: str, start: int, end: int) -> List[dict]:
@@ -322,12 +314,6 @@ class ChatHistoryService:
             except json.JSONDecodeError:
                 continue
 
-        def get_timestamp(msg):
-            try:
-                return datetime.fromisoformat(msg["created_at"]).timestamp()
-            except (ValueError, KeyError):
-                return 0
-        messages.sort(key=get_timestamp)
         return messages
 
     def acquire_summary_lock(self, session_id: str) -> bool:
