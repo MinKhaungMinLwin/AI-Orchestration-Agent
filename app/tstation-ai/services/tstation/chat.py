@@ -2924,10 +2924,7 @@ def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> di
         lines.append(f"‘{coupon_name}’ 적용 가능 상품은 {total_products}개예요.")
         for item in products[:5]:
             goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
-            tire_size = str(item.get("tire_size_1") or item.get("tire_size") or "").strip()
-            if goods_nm and tire_size:
-                lines.append(f"- {goods_nm} ({tire_size})")
-            elif goods_nm:
+            if goods_nm:
                 lines.append(f"- {goods_nm}")
         if total_products > 5:
             lines.append(f"외 {total_products - 5}개 상품이 더 있어요.")

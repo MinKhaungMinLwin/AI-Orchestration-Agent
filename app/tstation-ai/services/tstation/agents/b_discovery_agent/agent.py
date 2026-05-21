@@ -931,8 +931,7 @@ The tool response shape:
   "coupons": [],             # empty in deal flow
   "deals": [
     { "deal_no": "...", "total": <int>,
-      "items": [{ "goods_no", "goods_nm", "tire_size_1", "tire_size_2",
-                  "ptrn_cd", "sale_prc", "extra_fvr_sale_prc", ... }, ...] },
+      "items": [{ "ptrn_cd", "goods_nm" }, ...] },
     ...
   ]
 }
@@ -971,13 +970,12 @@ from the **same-turn** `get_deals_tool` result (the `items[].deal_no` → `items
    - ❌ Do NOT include `deal_no` codes in display text.
    - ❌ FORBIDDEN: rendering only `deals[0]` and dropping the rest.
 
-3. **`deals.length == 1` AND `total_products` between 1 and 10** → emit `product` template
-   directly. Flatten `deals[0].items[]` into one card list.
-   - `products[i].price = item.extra_fvr_sale_prc`.
-   - `products[i].title = "{goods_nm} {tire_size_1}"`.
-   - `assistantResponse`: 1 short sentence naming the deal (resolved deal_nm),
-     e.g. "키너지EX 스페셜 오퍼 적용 상품이에요. 카드에서 원하시는 상품을 선택해 주세요 😊".
-   - ❌ NEVER substitute `template="quickReply"` here.
+3. **`deals.length == 1` AND `total_products` between 1 and 10** → emit `quickReply`
+   listing unique product names only. Do NOT render product cards because this API
+   returns pattern-level representatives, not purchasable SKU/price rows.
+   - Deduplicate `items[]` by `goods_nm`.
+   - `assistantResponse`: `"[deal_nm] 적용 상품이에요 😊\n\n- <goods_nm>\n- <goods_nm>"`
+   - `quickReplies`: 정확히 2개 chip: `"사이즈로 찾기"` + `"기획전 목록 보기"`.
 
 4. **`deals.length == 1` AND `total_products > 10`** → DO NOT render cards. Emit
    `quickReply` listing unique product names only:

@@ -2415,10 +2415,12 @@ Handle ONLY coupon and promotion requests.
     - 둘 다 비어 있으면 호출 금지 — 기획전 의도는 어떤 기획전인지 되묻는다. 쿠폰 의도는 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 조회 또는 쿠폰함 CTA 로 처리한다.
     - 응답: `{coupons:[{cpn_no,total,items:[...]}], deals:[{deal_no,total,items:[...]}],
       stores:[{cpn_no,total,items:[{shop_id,shop_nm}]}], total_products, total_stores}`.
-      coupons/deals.items 는 상품(goods_nm/sale_prc 등), stores.items 는 매장 (shop_nm).
+      coupons/deals.items 는 패턴 대표 상품(ptrn_cd, goods_nm), stores.items 는 매장 (shop_nm).
     - 매핑 결과 처리:
       * `coupons` 또는 `deals` 에 cpn_no 등장 → 적용 가능한 **상품 쿠폰**. items[] 의 goods_nm
         중복 제거 후 최대 5개 bullet. >5개면 "외 {n-5}개" 표기.
+        ⚠️ 적용 가능 상품 답변에서는 대표 상품명만 보여준다. `tire_size_1`, `tire_size_2`,
+        규격/사이즈, goods_no, ptrn_cd 는 절대 붙이지 않는다.
       * `stores` 에 cpn_no 등장 → **매장 한정 쿠폰**. items[].shop_nm 을 콤마 구분
         나열 ("방배점, 한남점, 서초점, 모란점, 테스트매장"). shop_id 는 비공개.
       * 동일 cpn_no 가 coupons + stores 둘 다 등장하면 두 줄로 안내.
@@ -2477,6 +2479,8 @@ Layout (per coupon section):
 ```
 
 Rules:
+- 적용 상품은 반드시 `items[].goods_nm` 만 사용한다. `tire_size_1` / `tire_size_2` 를
+  상품명 뒤에 붙이지 말 것. 예: "벤투스 S2 AS" O, "벤투스 S2 AS 205/50R17" X.
 - 쿠폰명 (cpn_nm) 출처: 직전 turn 의 `get_my_coupons_tool` 응답에서 cpn_no→cpn_nm 매핑.
   prior context 가 없으면 "(쿠폰 #{1,2,3...})" 처럼 익명 라벨 부여.
 - 한 쿠폰에 상품만 매핑됐으면 "적용 상품:" 라인만, 매장만 매핑됐으면 "적용 매장:" 라인만.

@@ -385,14 +385,13 @@ def get_coupon_applicable_products_tool(
           "total_products": int,        # coupons[].items + deals[].items 합계
           "total_store_coupons": int,   # stores[] 그룹 수
           "total_stores": int,          # stores[].items 합계
-          "coupons": [{"cpn_no": str, "total": int, "items": [<product>...]}],
-          "deals":   [{"deal_no": str, "total": int, "items": [<product>...]}],
+          "coupons": [{"cpn_no": str, "total": int, "items": [{ptrn_cd, goods_nm}]}],
+          "deals":   [{"deal_no": str, "total": int, "items": [{ptrn_cd, goods_nm}]}],
           "stores":  [{"cpn_no": str, "total": int, "items": [{shop_id, shop_nm}]}]
         }
 
     매핑 타입:
-    - coupons[] / deals[].items: 패턴(PTRN_CD) 기준 상품 — goods_no / goods_nm /
-      sale_prc / extra_fvr_sale_prc / tire_size_1 등 포함.
+    - coupons[] / deals[].items: 패턴(PTRN_CD) 기준 대표 상품 — ptrn_cd / goods_nm 만 포함.
     - stores[].items: **매장 한정 쿠폰** — 특정 매장에서만 쓸 수 있는 쿠폰. shop_id +
       shop_nm 만 포함, 상품 정보 없음.
 
