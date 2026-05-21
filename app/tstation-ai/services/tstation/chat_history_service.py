@@ -102,6 +102,11 @@ def _get_summary_key(session_id: str) -> str:
     return SUMMARY_KEY.format(session_id=session_id)
 
 
+def _tool_context_dedup_key(item: dict) -> str:
+    dedup_input = item.get("_dedup_input", item.get("input", {}))
+    return json.dumps({"tool": item.get("tool", ""), "input": dedup_input}, sort_keys=True, ensure_ascii=False)
+
+
 def _decode_template_data(value, crypto):
     """Decode stored template_data into a dict.
 
@@ -432,18 +437,11 @@ class ChatHistoryService:
         # Dedup by (tool, full_input): newer results replace older ones for the same query.
         # Uses _dedup_input (full params including PII) for accurate dedup,
         # while "input" (PII-filtered) is what gets injected into the prompt.
-        def _dedup_key(item: dict) -> str:
-            dedup_input = item.get("_dedup_input", item.get("input", {}))
-            return json.dumps(
-                {"tool": item.get("tool", ""), "input": dedup_input},
-                sort_keys=True, ensure_ascii=False,
-            )
-
         seen = set()
         merged = []
         # New items first (reversed so last tool call = most recent), then existing
         for item in list(reversed(tool_data)) + existing:
-            dk = _dedup_key(item)
+            dk = _tool_context_dedup_key(item)
             if dk not in seen:
                 seen.add(dk)
                 merged.append(item)
@@ -663,17 +661,10 @@ class ChatHistoryService:
         if tool_data:
             existing = await self.get_tool_context_async(session_id)
 
-            def _dedup_key(item: dict) -> str:
-                dedup_input = item.get("_dedup_input", item.get("input", {}))
-                return json.dumps(
-                    {"tool": item.get("tool", ""), "input": dedup_input},
-                    sort_keys=True, ensure_ascii=False,
-                )
-
             seen = set()
             merged = []
             for item in list(reversed(tool_data)) + existing:
-                dk = _dedup_key(item)
+                dk = _tool_context_dedup_key(item)
                 if dk not in seen:
                     seen.add(dk)
                     merged.append(item)

@@ -213,8 +213,8 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     if request.stream:
         from services.tstation.chat_history_service import get_async_redis_client
         _redis = get_async_redis_client()
-        _streaming_key = f"chat:streaming:{session_id}"
-        if await _redis.exists(_streaming_key):
+        _streaming_key = _STREAMING_KEY.format(session_id)
+        if not await _redis.set(_streaming_key, "1", nx=True, ex=_STREAMING_TTL):
             raise HTTPException(status_code=409, detail="session_busy")
         return StreamingResponse(
             stream_chat_response(chat_request, session_id, msg_id, service),
@@ -227,7 +227,15 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )
 
     # Non-stream mode
-    response = await TStationChatServiceV2.chat(chat_request)
+    from services.tstation.chat_history_service import get_async_redis_client
+    _redis = get_async_redis_client()
+    _session_key = _STREAMING_KEY.format(session_id)
+    if not await _redis.set(_session_key, "1", nx=True, ex=_STREAMING_TTL):
+        raise HTTPException(status_code=409, detail="session_busy")
+    try:
+        response = await TStationChatServiceV2.chat(chat_request)
+    finally:
+        await _redis.delete(_session_key)
 
     if isinstance(response, TStationChatResponse):
         # Save assistant response to history without blocking the event loop.
@@ -257,8 +265,6 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     _redis = get_async_redis_client()
     _streaming_key = _STREAMING_KEY.format(session_id)
     _abort_key = _ABORT_KEY.format(session_id)
-
-    await _redis.set(_streaming_key, "1", ex=_STREAMING_TTL)
 
     full_assistant_content = ""
     assistant_response_ui = None

@@ -189,11 +189,10 @@ def decide_next_action(
     )
 
     try:
-        result: AgentDecision = structured_model.invoke([system_msg, human_msg], config=trace_config)
+        result: AgentDecision = structured_model.with_retry(stop_after_attempt=3).invoke([system_msg, human_msg], config=trace_config)
         return result
     except Exception as e:
-        logger.warning(f"[DECISION] LLM decision failed: {e}")
-        # Fallback: stop if cannot decide
+        logger.warning(f"[DECISION] LLM decision failed after retries: {e}")
         return AgentDecision(
             next_action=NextAction.STOP,
             next_domain=None,
@@ -853,10 +852,10 @@ class StreamingMultiAgentCoordinator:
             verified_domains, routing_result = classify_future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
             timeout_ms = timeout * 1000 if timeout is not None else 0
-            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
+            logger.warning("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
             return None
         except Exception as exc:
-            logger.debug("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
+            logger.warning("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
             return None
 
         if routing_result is None or not _domains_equal(verified_domains, domains):
