@@ -5142,6 +5142,135 @@ class TStationChatServiceV2:
                 user_query = msg.get("content", "")
                 break
 
+        def _tool_result_dict(raw: Any) -> dict:
+            if isinstance(raw, dict):
+                return raw
+            parsed = qc_verifier.parse_tool_output(raw)
+            return parsed or {
+                "status": "error",
+                "http_status": None,
+                "message": "Invalid tool response",
+                "data": {},
+            }
+
+        def _record_code_tool_result(tool_name: str, tool_input: dict, tool_result: dict) -> None:
+            called_tool_names.add(tool_name)
+            structured_sources.append((tool_name, tool_result))
+            filtered = filter_source_data(
+                tool_name,
+                json.dumps(tool_result, ensure_ascii=False),
+            )
+            source_data_chunks.append(
+                f"Tool [{tool_name}]:\n"
+                f"Input: {json.dumps(tool_input, ensure_ascii=False)}\n"
+                f"Output: {filtered}"
+            )
+
+        async def _resolve_coupon_applicability_with_code(
+            my_coupons_result: dict | None = None,
+        ) -> tuple[list[dict], dict]:
+            emitted_events: list[dict] = []
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_coupon_applicable_products_tool as _coupon_applicable_tool,
+                get_my_coupons_tool as _my_coupons_tool,
+            )
+
+            if my_coupons_result is None:
+                my_coupons_input = {"lang_cd": "ko"}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_my_coupons_tool",
+                    "display_name": "내 쿠폰 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_my_coupons = await asyncio.to_thread(
+                        _my_coupons_tool.invoke,
+                        my_coupons_input,
+                    )
+                    my_coupons_result = _tool_result_dict(raw_my_coupons)
+                except Exception as exc:
+                    logger.exception("[COUPON_RESOLVER] my coupons tool failed")
+                    my_coupons_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result("get_my_coupons_tool", my_coupons_input, my_coupons_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": my_coupons_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": my_coupons_input,
+                    "output": json.dumps(my_coupons_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_my_coupons_tool",
+                    "source_domain": "transaction",
+                })
+
+            matched_coupon = _find_coupon_from_owned_coupons(user_query, my_coupons_result)
+            if matched_coupon is None:
+                return emitted_events, _coupon_box_event(
+                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                )
+
+            matched_cpn_no = str(matched_coupon.get("cpn_no") or "").strip()
+            if not matched_cpn_no:
+                return emitted_events, _coupon_box_event(
+                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                )
+
+            followup_tool_name = "get_coupon_applicable_products_tool"
+            followup_input = {"cpn_no": [matched_cpn_no], "deal_no": None}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": followup_tool_name,
+                "display_name": "답변 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_followup = await asyncio.to_thread(
+                    _coupon_applicable_tool.invoke,
+                    followup_input,
+                )
+                followup_result = _tool_result_dict(raw_followup)
+            except Exception as exc:
+                logger.exception("[COUPON_RESOLVER] follow-up tool failed")
+                followup_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result(followup_tool_name, followup_input, followup_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Price AF]",
+                "agent_class": "Transaction Agent",
+                "status": followup_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": followup_input,
+                "output": json.dumps(followup_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": followup_tool_name,
+                "source_domain": "transaction",
+            })
+            return emitted_events, _build_coupon_applicability_event(
+                followup_result,
+                matched_coupon,
+            )
+
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
         # Track whether a code-mapper-eligible tool was called — if so, suppress token streaming
@@ -5249,88 +5378,11 @@ class TStationChatServiceV2:
                         and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
                     ):
                         coupon_resolver_ran = True
-                        matched_coupon = _find_coupon_from_owned_coupons(
-                            user_query,
-                            parsed_for_verifier,
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_coupon_applicability_with_code(parsed_for_verifier)
                         )
-                        if matched_coupon is None:
-                            deterministic_coupon_event = _coupon_box_event(
-                                "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
-                            )
-                        else:
-                            matched_cpn_no = str(matched_coupon.get("cpn_no") or "").strip()
-                            if matched_cpn_no:
-                                followup_tool_name = "get_coupon_applicable_products_tool"
-                                followup_input = {"cpn_no": [matched_cpn_no], "deal_no": None}
-                                tool_start_event = {
-                                    "type": "status",
-                                    "status": "tool_start",
-                                    "tool": followup_tool_name,
-                                    "display_name": "답변 중...",
-                                    "source_domain": "transaction",
-                                }
-                                yield f"data: {json.dumps(tool_start_event, ensure_ascii=False)}\n\n"
-                                try:
-                                    from services.tstation.agents.c_transaction_agent.tools import (
-                                        get_coupon_applicable_products_tool as _coupon_applicable_tool,
-                                    )
-
-                                    followup_result = await asyncio.to_thread(
-                                        _coupon_applicable_tool.invoke,
-                                        followup_input,
-                                    )
-                                    if not isinstance(followup_result, dict):
-                                        parsed_followup = qc_verifier.parse_tool_output(followup_result)
-                                        followup_result = parsed_followup or {
-                                            "status": "error",
-                                            "http_status": None,
-                                            "message": "Invalid tool response",
-                                            "data": {},
-                                        }
-                                except Exception as exc:
-                                    logger.exception("[COUPON_RESOLVER] follow-up tool failed")
-                                    followup_result = {
-                                        "status": "error",
-                                        "http_status": None,
-                                        "message": str(exc),
-                                        "data": {},
-                                    }
-                                called_tool_names.add(followup_tool_name)
-                                structured_sources.append((followup_tool_name, followup_result))
-                                filtered = filter_source_data(
-                                    followup_tool_name,
-                                    json.dumps(followup_result, ensure_ascii=False),
-                                )
-                                source_data_chunks.append(
-                                    "Tool [get_coupon_applicable_products_tool]:\n"
-                                    f"Input: {json.dumps(followup_input, ensure_ascii=False)}\n"
-                                    f"Output: {filtered}"
-                                )
-                                deterministic_coupon_event = _build_coupon_applicability_event(
-                                    followup_result,
-                                    matched_coupon,
-                                )
-                                followup_flow_event = {
-                                    "type": "agent_flow",
-                                    "agent": "[Price AF]",
-                                    "agent_class": "Transaction Agent",
-                                    "status": followup_result.get("status", "success"),
-                                    "source_domain": "transaction",
-                                }
-                                yield f"data: {json.dumps(followup_flow_event, ensure_ascii=False)}\n\n"
-                                followup_tool_event = {
-                                    "type": "tool",
-                                    "input": followup_input,
-                                    "output": json.dumps(followup_result, ensure_ascii=False),
-                                    "node": "tools",
-                                    "tool": followup_tool_name,
-                                    "source_domain": "transaction",
-                                }
-                                yield f"data: {json.dumps(followup_tool_event, ensure_ascii=False)}\n\n"
-                            else:
-                                deterministic_coupon_event = _coupon_box_event(
-                                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
-                                )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
 
                 continue
 
@@ -5432,6 +5484,23 @@ class TStationChatServiceV2:
                 # "1:1 문의" pair which makes the order flow look broken).
                 if last_template == "quickReply" and isinstance(event_data, dict):
                     source_domain = str(event.get("source_domain", "ui_template")).lower()
+                    if (
+                        deterministic_coupon_event is None
+                        and not coupon_resolver_ran
+                        and source_domain == MultiAgentDomain.Domain.TRANSACTION.value
+                        and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
+                        and re.search(
+                            r"쿠폰\s*번호|cpn_no|기획전\s*번호|쿠폰함",
+                            str(event_data.get("assistantResponse") or ""),
+                            re.IGNORECASE,
+                        )
+                    ):
+                        coupon_resolver_ran = True
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_coupon_applicability_with_code()
+                        )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                     if deterministic_coupon_event is not None:
                         logger.info("[COUPON_RESOLVER] replacing LLM quickReply with code result")
                         event = deterministic_coupon_event
@@ -5439,6 +5508,14 @@ class TStationChatServiceV2:
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_coupon_resolver"
                         event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
                     elif _normalize_unmatched_coupon_quickreply(
                         event_data,
                         called_tool_names=called_tool_names,
@@ -5446,6 +5523,14 @@ class TStationChatServiceV2:
                         last_user_text=user_query,
                     ):
                         logger.info("[COUPON_RESOLVER] normalized unmatched coupon quickReply")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
                     existing_chips = event_data.get("quickReplies")
                     chips_empty = not isinstance(existing_chips, list) or len(existing_chips) == 0
                     next_action = event.get("nextAction") or {}
