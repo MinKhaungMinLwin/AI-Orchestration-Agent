@@ -57,7 +57,7 @@ def _register_litellm_user(user_id: str) -> None:
 
     redis = get_redis_client()
     cache_key = _LITELLM_REG_KEY.format(user_id=user_id)
-    if redis.exists(cache_key):
+    if redis.get(cache_key) is not None:
         return
 
     base = settings.AI_GATEWAY_BASE_URL.rstrip("/")
@@ -87,6 +87,7 @@ def _register_litellm_user(user_id: str) -> None:
                             user_id, settings.LITELLM_USER_MAX_BUDGET, settings.LITELLM_USER_BUDGET_DURATION)
     except Exception as exc:
         logger.warning("[LITELLM] Failed to register user %s: %s", user_id, exc)
+        redis.setex(cache_key, 60, "0")  # back-off 60s to avoid retry storm on LiteLLM failure
 
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")

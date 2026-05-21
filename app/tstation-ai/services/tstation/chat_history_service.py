@@ -333,7 +333,7 @@ class ChatHistoryService:
     def acquire_summary_lock(self, session_id: str) -> bool:
         """Acquire a lock for summarization to prevent concurrent race conditions."""
         key = f"chat:summary_lock:{session_id}"
-        return bool(self.redis.set(key, "1", nx=True, ex=30))
+        return bool(self.redis.set(key, "1", nx=True, ex=120))
 
     def release_summary_lock(self, session_id: str) -> None:
         """Release the summarization lock."""
