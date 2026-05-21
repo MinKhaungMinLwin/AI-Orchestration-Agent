@@ -69,9 +69,28 @@ class AgentPromptProfile(str, Enum):
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 _speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_speculative_classify_sem = threading.Semaphore(4)
 _decision_verify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S = 0.15
 _SYNC_ITER_SENTINEL = object()
+
+
+def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
+    """Submit fn to speculative executor only if a worker is immediately available.
+
+    Returns None when all workers are busy so callers fall back to the non-speculative
+    path rather than growing the internal queue unbounded under high load.
+    """
+    if not _speculative_classify_sem.acquire(blocking=False):
+        return None
+
+    def _run():
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _speculative_classify_sem.release()
+
+    return _speculative_classify_executor.submit(_run)
 
 
 def _next_or_sentinel(iterator: Iterator[dict]) -> dict | object:
@@ -3870,7 +3889,7 @@ class TStationChatServiceV2:
             )
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
-            classify_future = _speculative_classify_executor.submit(
+            classify_future = _try_submit_speculative(
                 _coordinator.classify_multi_intent,
                 classifier_messages,
                 session_id=request.session_id,
