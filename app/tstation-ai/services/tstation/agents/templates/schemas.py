@@ -613,6 +613,8 @@ class ProductItem(BaseModel):
     titleProductName: str = ""
     titleTires: str = ""
     brandName: str = ""
+    oeBadgeYn: str = Field("", description="OE badge flag from oe_badge_yn. Use Y/N string, empty if missing.")
+    oeMaker: str = Field("", description="OE maker value from t_oe_maker_1, empty if missing.")
     price: Optional[int] = Field(None, ge=0)
     originalPrice: Optional[int] = Field(None, ge=0)
     discountRate: Optional[float] = Field(None, ge=0)

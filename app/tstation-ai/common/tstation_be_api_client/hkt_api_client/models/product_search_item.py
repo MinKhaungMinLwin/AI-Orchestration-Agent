@@ -29,6 +29,8 @@ class ProductSearchItem:
             으로 정규화) / '스탠다드' / '이코노미'. 표시·답변용 — 검색 정렬/필터 기준 아님
         goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 값 매핑: 'COMFORT'(정숙/승차감) /
             'SPORT'(고속/제동성) / 'RUNFLAT'(런플랫) 등. 표시·답변용 — 검색 정렬/필터 기준 아님
+        t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
+        oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         sale_prc (int | None | Unset): 기본 판매가 (PR_ITEM_PRC_INFO.SALE_PRC)
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가. 회원 유형에 따라 PR_GOODS_DSCNT_PRC_INFO(일반) 또는
             PR_GOODS_ENTR_DSCNT_PRC_INFO(PARTNER)에서 join
@@ -77,6 +79,8 @@ class ProductSearchItem:
     label_pndb: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
+    t_oe_maker_1: None | str | Unset = UNSET
+    oe_badge_yn: None | str | Unset = UNSET
     sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
@@ -168,6 +172,18 @@ class ProductSearchItem:
             goods_pfm_nm = UNSET
         else:
             goods_pfm_nm = self.goods_pfm_nm
+
+        t_oe_maker_1: None | str | Unset
+        if isinstance(self.t_oe_maker_1, Unset):
+            t_oe_maker_1 = UNSET
+        else:
+            t_oe_maker_1 = self.t_oe_maker_1
+
+        oe_badge_yn: None | str | Unset
+        if isinstance(self.oe_badge_yn, Unset):
+            oe_badge_yn = UNSET
+        else:
+            oe_badge_yn = self.oe_badge_yn
 
         sale_prc: int | None | Unset
         if isinstance(self.sale_prc, Unset):
@@ -395,6 +411,10 @@ class ProductSearchItem:
             field_dict["prc_grd_nm"] = prc_grd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if t_oe_maker_1 is not UNSET:
+            field_dict["t_oe_maker_1"] = t_oe_maker_1
+        if oe_badge_yn is not UNSET:
+            field_dict["oe_badge_yn"] = oe_badge_yn
         if sale_prc is not UNSET:
             field_dict["sale_prc"] = sale_prc
         if extra_fvr_sale_prc is not UNSET:
@@ -546,6 +566,24 @@ class ProductSearchItem:
             return cast(None | str | Unset, data)
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
+
+        def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        t_oe_maker_1 = _parse_t_oe_maker_1(d.pop("t_oe_maker_1", UNSET))
+
+        def _parse_oe_badge_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        oe_badge_yn = _parse_oe_badge_yn(d.pop("oe_badge_yn", UNSET))
 
         def _parse_sale_prc(data: object) -> int | None | Unset:
             if data is None:
@@ -857,6 +895,8 @@ class ProductSearchItem:
             label_pndb=label_pndb,
             prc_grd_nm=prc_grd_nm,
             goods_pfm_nm=goods_pfm_nm,
+            t_oe_maker_1=t_oe_maker_1,
+            oe_badge_yn=oe_badge_yn,
             sale_prc=sale_prc,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,

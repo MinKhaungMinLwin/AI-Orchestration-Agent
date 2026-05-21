@@ -394,6 +394,8 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "titleProductName": goods_nm,
                 "titleTires": tire_size,
                 "brandName": _normalize_brand_name(_get_str(row, "brand_nm")),
+                "oeBadgeYn": _get_str(row, "oe_badge_yn"),
+                "oeMaker": _get_str(row, "t_oe_maker_1"),
                 "comfort": "",
                 "price": price,
                 "originalPrice": original_price,
@@ -507,6 +509,8 @@ def inject_product_tags_and_sanitize(
             product["titleProductName"] = _get_str(row, "goods_nm", "title")
             product["titleTires"] = _get_str(row, "tire_size_1", "tire_size_2")
             product["brandName"] = _normalize_brand_name(_get_str(row, "brand_nm"))
+            product["oeBadgeYn"] = _get_str(row, "oe_badge_yn")
+            product["oeMaker"] = _get_str(row, "t_oe_maker_1")
         product["tags"] = tags
 
 

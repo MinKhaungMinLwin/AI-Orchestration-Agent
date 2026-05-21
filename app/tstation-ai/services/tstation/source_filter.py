@@ -43,6 +43,7 @@ _RCMD_BASE_FIELDS: set[str] = {
     "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
+    "t_oe_maker_1", "oe_badge_yn",
     "wrt_grte_term", "rating_avg",
     # EU 소음 라벨 (정숙성 점수와 별개)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
@@ -67,6 +68,7 @@ _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
     "prc_grd_nm",
     # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
     "goods_pfm_nm",
+    "t_oe_maker_1", "oe_badge_yn",
     # 신규 BE 확장 필드
     "big_goods_nm", "ptrn_d_nm",
     "tire_width", "tire_series", "inch",
@@ -115,6 +117,7 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "tire_width", "tire_series", "inch",
             "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
             "season_nm", "car_knd_nm", "goods_pfm_nm",
+            "t_oe_maker_1", "oe_badge_yn",
             "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
             "t_comfort", "t_silence", "t_high_perform", "t_handling",
             "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
@@ -322,6 +325,7 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
                 "tire_width", "tire_series", "inch",
                 "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
                 "season_nm", "car_knd_nm", "goods_pfm_nm",
+                "t_oe_maker_1", "oe_badge_yn",
                 "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
                 "rr", "wet", "label_pndb",
                 "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",

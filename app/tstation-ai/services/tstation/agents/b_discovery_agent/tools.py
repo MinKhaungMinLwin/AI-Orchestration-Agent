@@ -143,6 +143,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
+    "t_oe_maker_1", "oe_badge_yn",
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
