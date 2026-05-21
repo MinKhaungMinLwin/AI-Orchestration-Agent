@@ -176,6 +176,10 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
     return default
 
 
+def _normalize_brand_name(value: str) -> str:
+    return re.sub(r"\s+", "", value or "").upper()
+
+
 def _inventory_shop_ids(raw_inventory: object, key: str) -> set[str]:
     """Extract shop IDs from inventory arrays such as todayShopArray/tnaShopArray."""
     if not isinstance(raw_inventory, dict):
@@ -378,7 +382,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "tires": "",
                 "titleProductName": goods_nm,
                 "titleTires": tire_size,
-                "brand_nm": _get_str(row, "brand_nm"),
+                "brandName": _normalize_brand_name(_get_str(row, "brand_nm")),
                 "comfort": "",
                 "price": price,
                 "originalPrice": original_price,
@@ -491,6 +495,7 @@ def inject_product_tags_and_sanitize(
                 tags.append({"text": goods_pfm_label, "primary": False})
             product["titleProductName"] = _get_str(row, "goods_nm", "title")
             product["titleTires"] = _get_str(row, "tire_size_1", "tire_size_2")
+            product["brandName"] = _normalize_brand_name(_get_str(row, "brand_nm"))
         product["tags"] = tags
 
 
