@@ -42,6 +42,11 @@ from services.tstation.chat import TStationChatServiceV2
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _log_task_error(task: asyncio.Task) -> None:
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Background task %s failed: %s", task.get_name(), exc, exc_info=exc)
+
 _LITELLM_REG_KEY = "litellm:registered:{user_id}"
 _LITELLM_REG_TTL = 90 * 24 * 60 * 60  # 90 days
 
@@ -151,7 +156,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     # Register user in LiteLLM budget system on first request (fire-and-forget)
     if user_id:
-        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id))
+        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id)).add_done_callback(_log_task_error)
 
     # Always generate a trace ID so Langfuse scores are linkable
     tracing_id = _valid_tracing_id(request.tracing_id) or uuid.uuid4().hex
@@ -208,7 +213,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         asyncio.create_task(asyncio.to_thread(
             _update_quota_score, user_id, input_tokens + output_estimate,
             tracing_id, settings.MONTHLY_TOKEN_LIMIT,
-        ))
+        )).add_done_callback(_log_task_error)
 
     # Call chat service
     if request.stream:
@@ -340,8 +345,8 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
                 message_to_save,
                 template_data=template_data,
                 user_id=chat_request.user_id,
-            ))
-            asyncio.create_task(refresh_summary(session_id))
+            )).add_done_callback(_log_task_error)
+            asyncio.create_task(refresh_summary(session_id)).add_done_callback(_log_task_error)
 
         yield "data: [DONE]\n\n"
 

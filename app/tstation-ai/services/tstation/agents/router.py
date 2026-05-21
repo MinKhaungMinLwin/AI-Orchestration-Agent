@@ -15,6 +15,7 @@ LLM = ChatLiteLLM(
     api_key=settings.AI_GATEWAY_API_KEY,
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
     streaming=True,
+    request_timeout=120,
 )
 
 # Per-agent overrides
@@ -23,6 +24,7 @@ LEADING_LLM = ChatLiteLLM(
     api_key=settings.AI_GATEWAY_API_KEY,
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_LEADING_AGENT}",
     streaming=True,
+    request_timeout=120,
 )
 
 TRANSACTION_LLM = ChatLiteLLM(
@@ -30,6 +32,7 @@ TRANSACTION_LLM = ChatLiteLLM(
     api_key=settings.AI_GATEWAY_API_KEY,
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_TRANSACTION_AGENT}",
     streaming=True,
+    request_timeout=120,
 )
 
 # Lightweight LLM for routing/decision tasks (AI_MODEL_QC_AGENT, e.g. gpt-4o-mini).
@@ -38,6 +41,7 @@ DECISION_LLM = ChatLiteLLM(
     api_base=settings.AI_GATEWAY_BASE_URL,
     api_key=settings.AI_GATEWAY_API_KEY,
     model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
+    request_timeout=30,
 )
 
 ### Multi-Agent Router
