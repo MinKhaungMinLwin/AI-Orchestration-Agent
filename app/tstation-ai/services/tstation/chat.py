@@ -2482,6 +2482,43 @@ _FALLBACK_COUPON: list[dict] = [
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
 ]
 
+_COUPON_BOX_CHIPS: list[dict] = [
+    {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+    {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+]
+_COUPON_APPLICABILITY_INTENT_RE = re.compile(
+    r"쿠폰|할인권|적용\s*가능|적용가능|대상\s*상품|사용\s*가능|사용가능|"
+    r"어디\s*(?:에)?\s*(?:쓸|사용)|쓸\s*수\s*있",
+    re.IGNORECASE,
+)
+_COUPON_UNMATCHED_TEXT_RE = re.compile(
+    r"(?:보유\s*)?쿠폰.{0,50}(?:찾지\s*못|없)",
+    re.IGNORECASE,
+)
+_COUPON_DIRECT_ID_RE = re.compile(r"\bC[A-Za-z0-9]{8,}\b")
+_COUPON_DISCOUNT_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_COUPON_MATCH_STOPWORDS = {
+    "쿠폰",
+    "할인쿠폰",
+    "할인",
+    "할인권",
+    "적용",
+    "적용가능",
+    "가능",
+    "상품",
+    "대상",
+    "사용",
+    "있는",
+    "쓸수있는",
+    "뭐야",
+    "뭐",
+    "어디",
+    "알려줘",
+    "확인",
+    "해줘",
+    "가능한",
+}
+
 # LEADING 도메인의 fallback 은 진행형(발견 → 구매) chip 으로 시작해야 자연스럽다.
 # "1:1 문의하기" 같은 escalation chip 은 사용자가 인사·일반 문의를 한 직후엔 부적절.
 _FALLBACK_LEADING_PROGRESS: list[dict] = [
@@ -2764,6 +2801,191 @@ def _choose_quickreply_fallback(
     if source_domain and source_domain.lower() == "leading":
         return _FALLBACK_LEADING_PROGRESS, "leading_progress"
     return _FALLBACK_GENERIC, "generic"
+
+
+def _unwrap_tool_data(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested = data.get("data")
+        return nested if isinstance(nested, dict) else data
+    return payload
+
+
+def _normalize_coupon_match_text(value: object) -> str:
+    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", str(value or "")).lower()
+
+
+def _coupon_query_terms(user_text: str) -> list[str]:
+    terms: list[str] = []
+    for raw in re.findall(r"[0-9a-zA-Z가-힣]+", user_text):
+        normalized = _normalize_coupon_match_text(raw)
+        if len(normalized) < 2 or normalized in _COUPON_MATCH_STOPWORDS:
+            continue
+        terms.append(normalized)
+    return terms
+
+
+def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    rows = data.get("coupons")
+    if rows is None:
+        rows = data.get("items")
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _find_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> dict | None:
+    rows = _coupon_rows_from_my_coupons(tool_result)
+    if not rows:
+        return None
+
+    direct_ids = {item.upper() for item in _COUPON_DIRECT_ID_RE.findall(user_text)}
+    if direct_ids:
+        for row in rows:
+            cpn_no = str(row.get("cpn_no") or "").upper()
+            if cpn_no in direct_ids:
+                return row
+
+    query_norm = _normalize_coupon_match_text(user_text)
+    terms = _coupon_query_terms(user_text)
+    discount_match = _COUPON_DISCOUNT_RATE_RE.search(user_text)
+    requested_rate = float(discount_match.group(1)) if discount_match else None
+
+    best_row: dict | None = None
+    best_score = 0.0
+    for row in rows:
+        coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
+        name_norm = _normalize_coupon_match_text(coupon_name)
+        if not name_norm:
+            continue
+
+        score = 0.0
+        if name_norm and name_norm in query_norm:
+            score += 100.0
+        meaningful_query = "".join(terms)
+        if meaningful_query and meaningful_query in name_norm:
+            score += 80.0
+
+        matched_terms = [term for term in terms if term in name_norm]
+        score += len(matched_terms) * 10.0
+        if terms and len(matched_terms) == len(terms):
+            score += 20.0
+
+        if requested_rate is not None:
+            try:
+                coupon_rate = float(row.get("rt_amt_val"))
+            except (TypeError, ValueError):
+                coupon_rate = None
+            if coupon_rate is not None and abs(coupon_rate - requested_rate) < 0.001:
+                score += 25.0
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= 20.0:
+        return best_row
+    return None
+
+
+def _coupon_box_event(message: str) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_coupon_resolver",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [dict(chip) for chip in _COUPON_BOX_CHIPS],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> dict:
+    data = _unwrap_tool_data(tool_result)
+    coupon_name = str(coupon_row.get("cpn_nm") or "해당 쿠폰")
+    products: list[dict] = []
+    stores: list[dict] = []
+
+    for group in data.get("coupons") or []:
+        if isinstance(group, dict) and isinstance(group.get("items"), list):
+            products.extend(item for item in group["items"] if isinstance(item, dict))
+    for group in data.get("stores") or []:
+        if isinstance(group, dict) and isinstance(group.get("items"), list):
+            stores.extend(item for item in group["items"] if isinstance(item, dict))
+
+    total_products = int(data.get("total_products") or len(products))
+    total_stores = int(data.get("total_stores") or len(stores))
+
+    lines: list[str] = []
+    if products:
+        lines.append(f"‘{coupon_name}’ 적용 가능 상품은 {total_products}개예요.")
+        for item in products[:5]:
+            goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            tire_size = str(item.get("tire_size_1") or item.get("tire_size") or "").strip()
+            if goods_nm and tire_size:
+                lines.append(f"- {goods_nm} ({tire_size})")
+            elif goods_nm:
+                lines.append(f"- {goods_nm}")
+        if total_products > 5:
+            lines.append(f"외 {total_products - 5}개 상품이 더 있어요.")
+    if stores:
+        store_names = [
+            str(item.get("shop_nm") or "").strip()
+            for item in stores[:5]
+            if str(item.get("shop_nm") or "").strip()
+        ]
+        if store_names:
+            lines.append(f"사용 가능 매장은 {', '.join(store_names)}예요.")
+            if total_stores > 5:
+                lines.append(f"외 {total_stores - 5}개 매장이 더 있어요.")
+
+    if not lines:
+        lines.append("해당 쿠폰의 적용 정보를 찾을 수 없어요. 쿠폰함에서 적용 대상을 확인해 주세요.")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_coupon_resolver",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "상품 검색", "domain": "DISCOVERY"},
+                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+    }
+
+
+def _normalize_unmatched_coupon_quickreply(
+    event_data: dict[str, Any],
+    *,
+    called_tool_names: set[str],
+    source_domain: str,
+    last_user_text: str,
+) -> bool:
+    if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
+        return False
+    if "get_my_coupons_tool" not in called_tool_names:
+        return False
+    if "get_coupon_applicable_products_tool" in called_tool_names:
+        return False
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not _COUPON_UNMATCHED_TEXT_RE.search(assistant_text):
+        return False
+    if not _COUPON_APPLICABILITY_INTENT_RE.search(last_user_text):
+        return False
+
+    event_data["assistantResponse"] = (
+        "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+    )
+    event_data["quickReplies"] = [dict(chip) for chip in _COUPON_BOX_CHIPS]
+    event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
 
 
 def _looks_like_generic_dead_end_chips(chips: object) -> bool:
@@ -4882,6 +5104,8 @@ class TStationChatServiceV2:
         next_quick_reply_domain_values: list[str] = []
         next_predicted_domain_values: list[str] = []
         pending_slots = None
+        deterministic_coupon_event: dict | None = None
+        coupon_resolver_ran = False
         # Hoisted so the trace summary at end-of-stream can reference QC verdict
         # even when the draft was empty and the QC block below never ran.
         _qc_passed = True
@@ -5019,6 +5243,95 @@ class TStationChatServiceV2:
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
 
+                    if (
+                        tool_name == "get_my_coupons_tool"
+                        and not coupon_resolver_ran
+                        and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
+                    ):
+                        coupon_resolver_ran = True
+                        matched_coupon = _find_coupon_from_owned_coupons(
+                            user_query,
+                            parsed_for_verifier,
+                        )
+                        if matched_coupon is None:
+                            deterministic_coupon_event = _coupon_box_event(
+                                "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                            )
+                        else:
+                            matched_cpn_no = str(matched_coupon.get("cpn_no") or "").strip()
+                            if matched_cpn_no:
+                                followup_tool_name = "get_coupon_applicable_products_tool"
+                                followup_input = {"cpn_no": [matched_cpn_no], "deal_no": None}
+                                tool_start_event = {
+                                    "type": "status",
+                                    "status": "tool_start",
+                                    "tool": followup_tool_name,
+                                    "display_name": "답변 중...",
+                                    "source_domain": "transaction",
+                                }
+                                yield f"data: {json.dumps(tool_start_event, ensure_ascii=False)}\n\n"
+                                try:
+                                    from services.tstation.agents.c_transaction_agent.tools import (
+                                        get_coupon_applicable_products_tool as _coupon_applicable_tool,
+                                    )
+
+                                    followup_result = await asyncio.to_thread(
+                                        _coupon_applicable_tool.invoke,
+                                        followup_input,
+                                    )
+                                    if not isinstance(followup_result, dict):
+                                        parsed_followup = qc_verifier.parse_tool_output(followup_result)
+                                        followup_result = parsed_followup or {
+                                            "status": "error",
+                                            "http_status": None,
+                                            "message": "Invalid tool response",
+                                            "data": {},
+                                        }
+                                except Exception as exc:
+                                    logger.exception("[COUPON_RESOLVER] follow-up tool failed")
+                                    followup_result = {
+                                        "status": "error",
+                                        "http_status": None,
+                                        "message": str(exc),
+                                        "data": {},
+                                    }
+                                called_tool_names.add(followup_tool_name)
+                                structured_sources.append((followup_tool_name, followup_result))
+                                filtered = filter_source_data(
+                                    followup_tool_name,
+                                    json.dumps(followup_result, ensure_ascii=False),
+                                )
+                                source_data_chunks.append(
+                                    "Tool [get_coupon_applicable_products_tool]:\n"
+                                    f"Input: {json.dumps(followup_input, ensure_ascii=False)}\n"
+                                    f"Output: {filtered}"
+                                )
+                                deterministic_coupon_event = _build_coupon_applicability_event(
+                                    followup_result,
+                                    matched_coupon,
+                                )
+                                followup_flow_event = {
+                                    "type": "agent_flow",
+                                    "agent": "[Price AF]",
+                                    "agent_class": "Transaction Agent",
+                                    "status": followup_result.get("status", "success"),
+                                    "source_domain": "transaction",
+                                }
+                                yield f"data: {json.dumps(followup_flow_event, ensure_ascii=False)}\n\n"
+                                followup_tool_event = {
+                                    "type": "tool",
+                                    "input": followup_input,
+                                    "output": json.dumps(followup_result, ensure_ascii=False),
+                                    "node": "tools",
+                                    "tool": followup_tool_name,
+                                    "source_domain": "transaction",
+                                }
+                                yield f"data: {json.dumps(followup_tool_event, ensure_ascii=False)}\n\n"
+                            else:
+                                deterministic_coupon_event = _coupon_box_event(
+                                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                                )
+
                 continue
 
             if event_type == "internal_slots":
@@ -5118,6 +5431,21 @@ class TStationChatServiceV2:
                 # conversation context (e.g., order list → order-related chips, not a generic
                 # "1:1 문의" pair which makes the order flow look broken).
                 if last_template == "quickReply" and isinstance(event_data, dict):
+                    source_domain = str(event.get("source_domain", "ui_template")).lower()
+                    if deterministic_coupon_event is not None:
+                        logger.info("[COUPON_RESOLVER] replacing LLM quickReply with code result")
+                        event = deterministic_coupon_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_coupon_resolver"
+                        event_data = event.get("data", {})
+                    elif _normalize_unmatched_coupon_quickreply(
+                        event_data,
+                        called_tool_names=called_tool_names,
+                        source_domain=source_domain,
+                        last_user_text=user_query,
+                    ):
+                        logger.info("[COUPON_RESOLVER] normalized unmatched coupon quickReply")
                     existing_chips = event_data.get("quickReplies")
                     chips_empty = not isinstance(existing_chips, list) or len(existing_chips) == 0
                     next_action = event.get("nextAction") or {}
