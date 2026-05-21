@@ -2743,7 +2743,7 @@ def _looks_like_generic_dead_end_chips(chips: object) -> bool:
         for item in chips
         if isinstance(item, dict)
     }
-    return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS and _GENERIC_DEAD_END_LABELS <= labels
+    return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS
 
 
 def _remove_home_quick_reply_chips(event_data: dict) -> bool:
