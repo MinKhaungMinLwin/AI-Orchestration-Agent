@@ -12,65 +12,97 @@ logger = logging.getLogger(__name__)
 
 MAX_LIST_ITEMS = 10
 
+# ─── Shared field sets — single source of truth for tools in both dicts ───────
+# When BE adds a new field, update the base set here; both QC and CTX pick it up.
+
+_STORE_BASE_FIELDS: set[str] = {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"}
+_NEARBY_STORE_FIELDS: set[str] = _STORE_BASE_FIELDS | {"distance_km"}
+_FAVORITE_STORE_FIELDS: set[str] = {"shop_id", "shop_seq", "shop_nm", "addr_base", "addr_dtl", "tel_no", "favored_at"}
+
+_PRODUCT_WARRANTY_FIELDS: set[str] = {"wrt_tp_cd", "wrt_nm", "is_plus"}
+_MY_WARRANTY_FIELDS: set[str] = {
+    "wrt_tp_cd", "wrt_nm",
+    "wrt_reg_date", "wrt_exp_date",
+    "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
+}
+_CARD_FIELDS: set[str] = {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_type"}
+
+# Orders: CTX adds ord_stat_nm (status label for follow-up turn references)
+_ORDER_FIELDS_BASE: set[str] = {
+    "ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "sys_reg_dtime",
+}
+
+# Recommendation product base — shared by QC and CTX.
+# QC adds t_highspd_cd (high-speed tier fact-check label).
+# CTX adds tot_scr / comfort / silence / life_span (follow-up scoring references).
+_RCMD_BASE_FIELDS: set[str] = {
+    "goods_no", "goods_nm", "tire_size_1",
+    "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    # 신규 케이스용 점수/속성
+    "wet", "t_snow", "t_ice", "t_highspd",
+    "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
+    "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
+    "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
+    "wrt_grte_term", "rating_avg",
+    # EU 소음 라벨 (정숙성 점수와 별개)
+    "label_pnwave", "label_pnwave_nm", "label_pndb",
+    # 신규 BE 확장 필드 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
+    "big_goods_nm", "ptrn_d_nm",
+    "tire_width", "tire_series", "inch", "t_wgt_spd",
+    "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+    "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
+    "wage_prc", "wage_today_prc", "free_guarantee_yn",
+    # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후)
+    "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
+}
+_RCMD_QC_FIELDS: set[str] = _RCMD_BASE_FIELDS | {"t_highspd_cd"}
+_RCMD_CTX_FIELDS: set[str] = _RCMD_BASE_FIELDS | {"tot_scr", "t_comfort", "t_silence", "t_life_span"}
+
+# Search product base — CTX adds extra_fvr_sale_prc for follow-up price questions.
+_SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
+    "goods_no", "goods_nm", "tire_size_1",
+    # EU 소음 라벨 (정숙성 점수와 별개)
+    "label_pnwave", "label_pnwave_nm", "label_pndb",
+    # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
+    "prc_grd_nm",
+    # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
+    "goods_pfm_nm",
+    # 신규 BE 확장 필드
+    "big_goods_nm", "ptrn_d_nm",
+    "tire_width", "tire_series", "inch",
+    "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
+    "season_nm", "car_knd_nm",
+    "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+    "t_comfort", "t_silence", "t_high_perform", "t_handling",
+    "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
+    "rr", "wet",
+    "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
+}
+_SEARCH_PRODUCT_CTX_FIELDS: set[str] = _SEARCH_PRODUCT_BASE_FIELDS | {"extra_fvr_sale_prc"}
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 # tool_name → {list_key, keep_fields} for list-type responses
 _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
     "get_nearby_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
+        "keep": _NEARBY_STORE_FIELDS,
     },
     "get_store_list_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
+        "keep": _STORE_BASE_FIELDS,
     },
     "get_favorite_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_seq", "shop_nm", "addr_base", "addr_dtl", "tel_no", "favored_at"},
+        "keep": _FAVORITE_STORE_FIELDS,
     },
     "get_products_recommendations_tool": {
         "list_key": "items",
-        "keep": {
-            "goods_no", "goods_nm", "tire_size_1",
-            "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
-            # 신규 케이스용 점수/속성 (QC 사실 검증용)
-            "wet", "t_snow", "t_ice", "t_highspd", "t_highspd_cd",
-            "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
-            "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
-            "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
-            "wrt_grte_term", "rating_avg",
-            # EU 소음 라벨 (정숙성 점수와 별개)
-            "label_pnwave", "label_pnwave_nm", "label_pndb",
-            # 신규 BE 확장 필드 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
-            "big_goods_nm", "ptrn_d_nm",
-            "tire_width", "tire_series", "inch",
-            "t_wgt_spd",
-            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
-            "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
-            "wage_prc", "wage_today_prc", "free_guarantee_yn",
-            # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후)
-            "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
-        },
+        "keep": _RCMD_QC_FIELDS,
     },
     "search_product_tool": {
         "list_key": "items",
-        "keep": {
-            "goods_no", "goods_nm", "tire_size_1",
-            # EU 소음 라벨 (정숙성 점수와 별개)
-            "label_pnwave", "label_pnwave_nm", "label_pndb",
-            # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
-            "prc_grd_nm",
-            # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
-            "goods_pfm_nm",
-            # 신규 BE 확장 필드
-            "big_goods_nm", "ptrn_d_nm",
-            "tire_width", "tire_series", "inch",
-            "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
-            "season_nm", "car_knd_nm",
-            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
-            "t_comfort", "t_silence", "t_high_perform", "t_handling",
-            "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
-            "rr", "wet",
-            "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
-        },
+        "keep": _SEARCH_PRODUCT_BASE_FIELDS,
     },
     # sale_qty 는 내부 정렬 근거 — 사용자 노출 금지. QC source 에서 제거해 QC 가 "사실 추가" 정정을 못하도록 차단.
     "get_best_selling_products_tool": {
@@ -96,27 +128,23 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
     },
     "get_orders_of_user_tool": {
         "list_key": "orders",
-        "keep": {"ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "sys_reg_dtime"},
+        "keep": _ORDER_FIELDS_BASE,
     },
     # 상품별 적용 가능 워런티 — wrt_tp_cd/wrt_nm/is_plus 만 QC 검증/응답 노출용.
     "get_product_warranties_tool": {
         "list_key": "warranties",
-        "keep": {"wrt_tp_cd", "wrt_nm", "is_plus"},
+        "keep": _PRODUCT_WARRANTY_FIELDS,
     },
     # 회원 보유 워런티 — 가입대기 100 은 BE 에서 이미 필터됨. 한글 라벨 노출.
     "get_my_warranties_tool": {
         "list_key": "warranties",
-        "keep": {
-            "wrt_tp_cd", "wrt_nm",
-            "wrt_reg_date", "wrt_exp_date",
-            "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
-        },
+        "keep": _MY_WARRANTY_FIELDS,
     },
     # 카드사별 무이자 할부 — 응답에는 카드사명/기준금액/가능 개월수만 노출. payment_type
     # 은 trace/QC 식별자로 keep 에 포함하지만 LLM prompt 가 사용자에게 노출하지 않도록 강제.
     "get_card_installments_tool": {
         "list_key": "cards",
-        "keep": {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_type"},
+        "keep": _CARD_FIELDS,
     },
 }
 
@@ -152,62 +180,23 @@ def _filter_drop(data: dict, drop_keys: set[str]) -> dict:
 _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     "get_products_recommendations_tool": {
         "list_key": "items",
-        "keep": {
-            "goods_no", "goods_nm", "tire_size_1",
-            "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
-            "tot_scr", "t_comfort", "t_silence", "t_life_span",
-            # 신규 케이스용 점수/속성 (대화 컨텍스트 보존)
-            "wet", "t_snow", "t_ice", "t_highspd",
-            "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
-            "t_wgt_idx", "t_tray_ware", "t_rlx_isn_yn",
-            "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
-            "wrt_grte_term", "rating_avg",
-            # EU 소음 라벨 (정숙성 점수와 별개)
-            "label_pnwave", "label_pnwave_nm", "label_pndb",
-            # 신규 BE 확장 필드 (후속 턴 참조용 — "방금 본 그 상품 공임비?")
-            "big_goods_nm", "ptrn_d_nm",
-            "tire_width", "tire_series", "inch",
-            "t_wgt_idx_kg", "t_wgt_spd",
-            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
-            "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
-            "wage_prc", "wage_today_prc", "free_guarantee_yn",
-            # 회원 보유 쿠폰 기반 최저가 (후속 턴 "그 중 최저가는?" 등 인용)
-            "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
-        },
+        "keep": _RCMD_CTX_FIELDS,
     },
     "search_product_tool": {
         "list_key": "items",
-        "keep": {
-            "goods_no", "goods_nm", "tire_size_1", "extra_fvr_sale_prc",
-            # EU 소음 라벨 (정숙성 점수와 별개)
-            "label_pnwave", "label_pnwave_nm", "label_pndb",
-            # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 후속 턴에서 등급 질문 답변용
-            "prc_grd_nm",
-            # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 후속 턴 답변용
-            "goods_pfm_nm",
-            # 신규 BE 확장 필드 (후속 턴 참조용)
-            "big_goods_nm", "ptrn_d_nm",
-            "tire_width", "tire_series", "inch",
-            "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
-            "season_nm", "car_knd_nm",
-            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
-            "t_comfort", "t_silence", "t_high_perform", "t_handling",
-            "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
-            "rr", "wet",
-            "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
-        },
+        "keep": _SEARCH_PRODUCT_CTX_FIELDS,
     },
     "get_nearby_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "distance_km", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
+        "keep": _NEARBY_STORE_FIELDS,
     },
     "get_store_list_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"},
+        "keep": _STORE_BASE_FIELDS,
     },
     "get_favorite_stores_tool": {
         "list_key": "stores",
-        "keep": {"shop_id", "shop_seq", "shop_nm", "addr_base", "addr_dtl", "tel_no", "favored_at"},
+        "keep": _FAVORITE_STORE_FIELDS,
     },
     "get_store_inventory_tool": {
         "list_key": "items",
@@ -215,7 +204,7 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     },
     "get_orders_of_user_tool": {
         "list_key": "orders",
-        "keep": {"ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "ord_stat_nm", "sys_reg_dtime"},
+        "keep": _ORDER_FIELDS_BASE | {"ord_stat_nm"},
     },
     "check_compatibility_tool": {
         "list_key": "tire_sizes",
@@ -224,20 +213,16 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     # 후속 턴 "방금 본 그 상품 워런티 다시 알려줘" / "내 안심서비스 만료일 다시" 참조용.
     "get_product_warranties_tool": {
         "list_key": "warranties",
-        "keep": {"wrt_tp_cd", "wrt_nm", "is_plus"},
+        "keep": _PRODUCT_WARRANTY_FIELDS,
     },
     "get_my_warranties_tool": {
         "list_key": "warranties",
-        "keep": {
-            "wrt_tp_cd", "wrt_nm",
-            "wrt_reg_date", "wrt_exp_date",
-            "wrt_prgs_stat_cd", "wrt_prgs_stat_nm",
-        },
+        "keep": _MY_WARRANTY_FIELDS,
     },
     # 후속 턴 "방금 본 무이자 카드 다시 알려줘" / "12개월 가능 카드 다시" 참조용.
     "get_card_installments_tool": {
         "list_key": "cards",
-        "keep": {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_type"},
+        "keep": _CARD_FIELDS,
     },
 }
 

@@ -364,6 +364,7 @@ class BaseAgent(ABC):
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
         self._system_prompt_chars = len(prompt or "")
+        logger.info("[AGENT] %s system_prompt_chars=%d", self.__class__.__name__, self._system_prompt_chars)
         return create_agent(
             model=self._model,
             tools=self._tools,
