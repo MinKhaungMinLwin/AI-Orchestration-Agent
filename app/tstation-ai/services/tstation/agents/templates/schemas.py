@@ -610,7 +610,7 @@ class ProductItem(BaseModel):
     tires: str
     titleProductName: str = ""
     titleTires: str = ""
-    brand_nm: str = ""
+    brandName: str = ""
     price: Optional[int] = Field(None, ge=0)
     originalPrice: Optional[int] = Field(None, ge=0)
     discountRate: Optional[float] = Field(None, ge=0)

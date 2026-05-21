@@ -1076,7 +1076,7 @@ makes the BE round-trip free.
      ```
      Mapping rules (per item):
      - `products[i].title = "{goods_nm} {tire_size_1}"`.
-     - `products[i].brand_nm = item.brand_nm` if present.
+     - `products[i].brandName = normalized item.brand_nm` if present.
      - `products[i].price = item.extra_fvr_sale_prc` (already member-type-branched).
      - `products[i].imageUrl = item.image_url` (절대 URL 그대로; null 이면 `""`).
      - `products[i].rate = item.rating_avg` (없으면 `0`).
@@ -1298,7 +1298,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, titleProductName:str, titleTires:str, brand_nm:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, titleProductName:str, titleTires:str, brandName:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `listCar` shape (max 5; no auto-select even for 1 car):
 Schema: `{type:"data", template:"listCar", data:{assistantResponse:str, listCar:[{licensePlate:str, info:str, description:str, imageUrl:str}], metadata:[{carNo:str, carLncCd:str, tireSize:str, tireSizeRe:str}]}}`
@@ -1315,7 +1315,7 @@ Backend → FE field mapping (all templates):
 |---|---|---|
 | `image_url` | `products[i].imageUrl` | `""` if missing |
 | `goods_nm` + `tire_size_1` | `products[i].title` | e.g. `"벤투스 S2 AS 225/45R18"` — include tire_size_1 to differentiate SKUs |
-| `brand_nm` | `products[i].brand_nm` | brand name text; `""` if missing |
+| `brand_nm` | `products[i].brandName` | normalized brand name text; uppercase/no spaces, `""` if missing |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
@@ -2230,7 +2230,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, titleProductName:str, titleTires:str, brand_nm:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, titleProductName:str, titleTires:str, brandName:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `cheapestProduct` shape (exactly 1 item):
 Schema: `{type:"data", template:"cheapestProduct", data:{assistantResponse:str, cheapestProduct:[{title:str, originalPrice:int, quantity:int, totalDiscount:int, productDiscount:int, couponDiscount:int, finalPrice:int}], metadata:[{goodsId:str}]}}`
@@ -2241,7 +2241,7 @@ Backend → FE field mapping:
 |---|---|---|
 | `image_url` | `products[i].imageUrl` | `""` if missing |
 | `goods_nm` + `tire_size_1` | `products[i].title` | e.g. `"벤투스 S2 AS 225/45R18"` — include tire_size_1 to differentiate SKUs |
-| `brand_nm` | `products[i].brand_nm` | brand name text; `""` if missing |
+| `brand_nm` | `products[i].brandName` | normalized brand name text; uppercase/no spaces, `""` if missing |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` | `products[i].price` | `null` if missing/0 — NEVER use 0 |
