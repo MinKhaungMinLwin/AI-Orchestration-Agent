@@ -378,7 +378,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회), maintenance/service history lookup (정비이력 / 정비내역 / 관리받은 내역 / 서비스 이력)
 - SUPPORT: FAQ, warranty, returns policy questions, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** ⚠️ NOT to be confused with store visit reservation booking (=TRANSACTION), human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -517,7 +517,7 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
 - SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
@@ -532,6 +532,7 @@ RULES:
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
 - 매장/근처/올마이티/All My T → TRANSACTION
+- 정비이력/정비내역/관리받은 내역/서비스 이력/받은 서비스 → TRANSACTION, agent_prompt_profile=transaction_order
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
@@ -553,6 +554,7 @@ EXAMPLES (tricky cases):
 - "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT (기획전+쿠폰 stacking, NOT discovery_event_content)
 - "두 쿠폰 동시 적용 가능?" → SUPPORT (쿠폰+쿠폰 stacking, NOT transaction_coupon)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "정비이력 보여줘", "내가 관리받은 내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (maintenance/service history lookup, NOT SUPPORT)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
 - "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
@@ -715,6 +717,17 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT,
         ),
         # SUPPORT — return / refund / warranty / 1:1
+        (
+            [
+                "정비이력", "정비 이력",
+                "정비내역", "정비 내역",
+                "관리받은 내역", "관리 받은 내역",
+                "관리받은 거", "관리 받은 거",
+                "서비스 이력", "서비스 내역",
+                "받은 서비스", "받은 정비",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
         (
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
             MultiAgentDomain.Domain.SUPPORT,
@@ -915,8 +928,13 @@ class StreamingMultiAgentCoordinator:
                             AgentPromptProfile.TRANSACTION_ORDER
                             if domain == MultiAgentDomain.Domain.TRANSACTION
                             and any(
-                                fee_kw in text
-                                for fee_kw in ("취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료")
+                                order_kw in text
+                                for order_kw in (
+                                    "취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료",
+                                    "정비이력", "정비 이력", "정비내역", "정비 내역",
+                                    "관리받은", "관리 받은", "서비스 이력", "서비스 내역",
+                                    "받은 서비스", "받은 정비",
+                                )
                             )
                             else AgentPromptProfile.FULL
                         ),
