@@ -2939,8 +2939,15 @@ def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> di
             if total_stores > 5:
                 lines.append(f"외 {total_stores - 5}개 매장이 더 있어요.")
 
+    quick_replies = [
+        {"label": "상품 검색", "domain": "DISCOVERY"},
+        {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+    ]
+    predicted_domains = ["DISCOVERY", "TRANSACTION"]
     if not lines:
         lines.append("해당 쿠폰의 적용 정보를 찾을 수 없어요. 쿠폰함에서 적용 대상을 확인해 주세요.")
+        quick_replies = [dict(chip) for chip in _COUPON_BOX_CHIPS]
+        predicted_domains = ["TRANSACTION"]
 
     return {
         "type": "data",
@@ -2949,11 +2956,8 @@ def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> di
         "assistant_response_source": "code_coupon_resolver",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "상품 검색", "domain": "DISCOVERY"},
-                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "quickReplies": quick_replies,
+            "predictedDomains": predicted_domains,
         },
     }
 

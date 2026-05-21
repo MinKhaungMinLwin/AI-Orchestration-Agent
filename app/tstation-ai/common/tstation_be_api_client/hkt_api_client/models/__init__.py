@@ -21,6 +21,7 @@ from .cheapest_by_coupon_item import CheapestByCouponItem
 from .cheapest_by_coupon_response import CheapestByCouponResponse
 from .compatibility_response import CompatibilityResponse
 from .coupon_applicable_products_group import CouponApplicableProductsGroup
+from .coupon_applicable_product_item import CouponApplicableProductItem
 from .coupon_applicable_store_item import CouponApplicableStoreItem
 from .coupon_applicable_stores_group import CouponApplicableStoresGroup
 from .coupon_deal_applicable_products_response import CouponDealApplicableProductsResponse
@@ -133,6 +134,7 @@ __all__ = (
     "CheapestByCouponResponse",
     "CompatibilityResponse",
     "CouponApplicableProductsGroup",
+    "CouponApplicableProductItem",
     "CouponApplicableStoreItem",
     "CouponApplicableStoresGroup",
     "CouponDealApplicableProductsResponse",
