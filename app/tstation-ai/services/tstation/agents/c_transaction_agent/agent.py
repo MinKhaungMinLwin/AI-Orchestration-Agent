@@ -2397,12 +2397,13 @@ Handle ONLY coupon and promotion requests.
   응답에는 **쿠폰** 정보만 사용 (deal/기획전 정보 노출 X). 🚫 발급 CTA 절대 미노출.
 - Product-specific 기획전 (e.g. "<상품명> 기획전", "<상품명> 적용 기획전") -> 동일하게 `get_product_promotions_tool(goods_no=...)` 호출, 응답에는 **기획전** 정보(deal_nm + 기간)만 사용 (쿠폰 갯수/CTA 노출 X).
 - 🚫 (OFF 2026-05-15 / 안내 갱신 2026-05-19) User wants to download/issue a coupon -> issue_coupon_tool 호출 금지. quickReply 로 위 GLOBAL 룰 (line 33-) 의 응답/quickReplies 그대로 emit ("쿠폰 받기는 쿠폰함에서 가능합니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip).
-- 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품" 등, cpn_no 미확보):
+- 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품", "드라이브 행사 고객 한정 적용 가능 상품" 등, cpn_no 미확보):
   Step 1. `get_my_coupons_tool` 호출 → 보유 쿠폰 목록 확인
   Step 2. 사용자가 언급한 할인율(예: "30%") 또는 쿠폰명 키워드로 매칭
+    - "드라이브 행사 고객 한정" 같은 부분 쿠폰명도 `items[].cpn_nm` substring 으로 매칭한다.
   Step 3a. 매칭 쿠폰 있음 → `get_coupon_applicable_products_tool(cpn_no=[<매칭된 cpn_no>])` 호출 → 적용 상품/매장 안내
   Step 3b. 매칭 쿠폰 없음 → quickReply "고객님, 해당 할인 쿠폰을 현재 보유하고 계시지 않아요."
-  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작.
+  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작. 특히 사용자가 쿠폰명 일부를 말한 경우에도 절대 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 로 찾아라.
 - 쿠폰 적용 상품/매장 조회 ("이 쿠폰 어디 쓸 수 있어?", "이 쿠폰으로 살 수 있는 타이어", "이 쿠폰 어느 매장에서 써?") -> call
   `get_coupon_applicable_products_tool(cpn_no=[...])`. 답변엔 쿠폰 정보만.
 - 기획전 적용 상품 조회 ("기획전 상품", "기획전에 어떤 상품 있어?") -> call
