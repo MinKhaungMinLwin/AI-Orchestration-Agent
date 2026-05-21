@@ -214,7 +214,7 @@ def decide_next_action(
         logger.warning(f"[DECISION] LLM decision failed after retries: {e}")
         return AgentDecision(
             next_action=NextAction.STOP,
-            next_domain=None,
+            next_domain="null",
             reason=f"Decision failed: {str(e)[:100]}",
         )
 
