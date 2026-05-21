@@ -894,7 +894,7 @@ def get_products_recommendations_tool(
             "런플랫 타이어 추천" 단일 의도면 rcmd_type="tstation" + pfm_nm="RUNFLAT" 사용
               (rcmd_type="family" 는 데이터상 RUNFLAT 결과 0건이므로 사용 금지).
         prc_grd (str | None, optional): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM).
-            - "프리미엄": 프리미엄 계열 (DB raw '프리미엄' + '프리미엄+' 모두 매칭, LIKE prefix)
+            - "프리미엄": 최상위 프리미엄 계열
             - "스탠다드": 스탠다드 등급
             - "이코노미": 이코노미 등급
             ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
