@@ -216,6 +216,17 @@ def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
     return out
 
 
+_LOCATION_SELECTION_TEXT_RE = re.compile(
+    r"원하시는\s*매장|매장을?\s*선택|선택해\s*주세요|골라\s*주세요|"
+    r"매장\s*\d+\s*곳",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_location_selection_prompt(text: str | None) -> bool:
+    return bool(text and _LOCATION_SELECTION_TEXT_RE.search(text))
+
+
 def _yyyymmdd_to_korean_date(s: str) -> str:
     """'20260422' → '2026년 4월 22일 (수)'. Returns the input unchanged on parse failure."""
     try:
@@ -1090,6 +1101,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         and not is_list_browsing
         and not has_booking_intent
         and not has_favorite_stores
+        and not _looks_like_location_selection_prompt(assistant_text)
     ):
         return None
 
