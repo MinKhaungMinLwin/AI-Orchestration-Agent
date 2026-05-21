@@ -185,7 +185,7 @@ class CryptoService:
             return self._backend.decrypt(value)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[CRYPTO] decrypt failed: {exc}")
-            return value
+            raise
 
 
 _crypto_service: Optional[CryptoService] = None

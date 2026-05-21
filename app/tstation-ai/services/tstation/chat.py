@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import datetime
+import hashlib
 import json
 import threading
 import logging
@@ -316,6 +317,9 @@ class _SlimMultiAgentDomain(BaseModel):
 # require recalling tool signatures (which the small model used to hallucinate).
 _multi_intent_model = _decision_llm.with_structured_output(MultiAgentDomain, strict=True)
 _slim_intent_model = _decision_llm.with_structured_output(_SlimMultiAgentDomain, strict=True)
+
+# (session_id, n_messages, last_msg_hash) → (domains, result, expires_monotonic)
+_classify_cache: dict[tuple, tuple] = {}
 
 
 def prompt_router_multi() -> str:
@@ -998,7 +1002,16 @@ class StreamingMultiAgentCoordinator:
                 last_user_text[:80],
             )
             return forced_result.domains, forced_result
-        # --------------------------------------------------------------
+
+        # ── Classification cache (60 s) — skip LLM on spam-click / rapid re-submit ──
+        _cache_key = (session_id, len(messages), hashlib.md5(last_user_text.encode()).hexdigest())
+        _cached = _classify_cache.get(_cache_key)
+        if _cached is not None:
+            _domains, _result, _expires = _cached
+            if time.monotonic() < _expires:
+                logger.debug("[MULTI-DOMAIN] Cache HIT key=%s...", str(_cache_key)[-12:])
+                return _domains, _result
+            del _classify_cache[_cache_key]
 
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
@@ -1065,6 +1078,7 @@ class StreamingMultiAgentCoordinator:
                 f"flow={result.flow!r}, profile={result.agent_prompt_profile!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            _classify_cache[_cache_key] = (domains, result.model_copy(), time.monotonic() + 60)
             return domains, result
 
         except Exception as e:
