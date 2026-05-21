@@ -1422,6 +1422,18 @@ The ONLY acceptable next tools in those cases are `get_store_inventory_tool` + `
 
 ### Flow 5 — Store Hours / Reservation
 
+⚠️ TOP GATE 0 — Selected-store reservation/visit availability (datepick path):
+If a specific store is already identified from conversation/slots and the user asks whether they can
+reserve or visit there — patterns include "예약 가능해?", "방문 가능해?", "방문 되냐고",
+"이번주말 예약 가능해?", "이번주말 방문 돼?", "주말에도 예약/방문 돼?" — then this is
+NOT a store-hours lookup.
+→ Call `get_store_schedule_tool(shop_id=<known_shop_id>, mode="general")`.
+→ Return the `datepick` template from the schedule slots.
+→ Do NOT call `get_store_detail_tool` for individual weekend dates in this case.
+→ Do NOT answer with only operating hours / holiday prose when schedule slots exist.
+Only use `get_store_detail_tool(cal_day=YYYYMMDD)` when the user asks if the store is open/closed
+or asks about hours/holiday for a specific date without requesting reservation/visit slots.
+
 ⚠️ TOP GATE 1 — Sunday/Holiday open-store filter (TC-050):
 If user asks which stores are open on a SPECIFIC day of the week or holiday
 (patterns: "이번 주 일요일에 문 여는", "X요일에 영업하는", "공휴일에 영업하는", "X일에 문 여는",
@@ -2753,6 +2765,16 @@ tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오
 - Store detail for a known shop_id -> call get_store_detail_tool.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
 - Schedule or reservation date/time -> call get_store_schedule_tool or get_multi_store_schedule_tool.
+- ⚠️ Selected-store reservation/visit availability hard gate:
+  If a specific store is already identified from conversation/slots and the user asks whether they can
+  reserve or visit there — patterns include "예약 가능해?", "방문 가능해?", "방문 되냐고",
+  "이번주말 예약 가능해?", "이번주말 방문 돼?", "주말에도 예약/방문 돼?" — then this is NOT
+  a store-hours lookup.
+  → Call `get_store_schedule_tool(shop_id=<known_shop_id>, mode="general")`.
+  → Return the `datepick` template from the schedule slots.
+  → Do NOT call `get_store_detail_tool` for individual weekend dates in this case.
+  → Only use `get_store_detail_tool(cal_day=YYYYMMDD)` when the user asks if the store is open/closed
+    or asks about hours/holiday for a specific date without requesting reservation/visit slots.
 - Purchase/store preview when goods_no + qty + store/region context are known -> call transaction_store_preview_tool.
   After transaction_store_preview_tool returns, interpret result.data:
   → If result.data.instruction_to_agent 가 존재하면 그 지시를 그대로 따른다 (DETERMINISTIC GUARD — 위반 절대 금지).

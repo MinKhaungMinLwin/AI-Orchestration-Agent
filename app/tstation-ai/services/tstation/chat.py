@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import datetime
 import json
 import threading
 import logging
@@ -2422,6 +2423,254 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
     ({"get_my_coupons_tool", "get_available_coupons_tool"}, _FALLBACK_COUPON, "coupon"),
 ]
 
+_GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_DISCOVERY_SIZE_VEHICLE_CHIPS: list[dict] = [
+    {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+    {"label": "차량번호로 찾기", "domain": "DISCOVERY"},
+    {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+]
+_DISCOVERY_NO_RESULT_CHIPS: list[dict] = [
+    {"label": "다시 검색", "domain": "DISCOVERY"},
+    {"label": "다른 조건으로 찾기", "domain": "DISCOVERY"},
+    {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+]
+_DISCOVERY_PRODUCT_CHIPS: list[dict] = [
+    {"label": "다른 조건으로 찾기", "domain": "DISCOVERY"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+]
+_DISCOVERY_DEFAULT_CHIPS: list[dict] = [
+    {"label": "상품 검색", "domain": "DISCOVERY"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+_DISCOVERY_SIZE_VEHICLE_TEXT_RE = re.compile(
+    r"타이어\s*사이즈|차량번호|소유주|등록\s*차량|내\s*차|내차|"
+    r"차종|규격|하중(?:지수)?|트럭|화물",
+    re.IGNORECASE,
+)
+_DISCOVERY_NO_RESULT_TEXT_RE = re.compile(
+    r"찾을\s*수\s*없|검색\s*결과가?\s*없|조회(?:된)?\s*상품이?\s*없|"
+    r"조건에\s*맞는\s*타이어|매칭(?:되는)?\s*상품",
+    re.IGNORECASE,
+)
+_DISCOVERY_PRODUCT_TEXT_RE = re.compile(
+    r"타이어\s*추천|상품\s*추천|추천해\s*드릴|제품을?\s*선택|"
+    r"상품을?\s*찾았|구매|장바구니",
+    re.IGNORECASE,
+)
+_EXPLICIT_SUPPORT_TEXT_RE = re.compile(
+    r"1\s*:\s*1\s*문의|상담(?:원|사)?|클레임|환불\s*신청|교환\s*신청|"
+    r"문의로\s*문의|고객센터",
+    re.IGNORECASE,
+)
+_DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
+    r"제조\s*(?:일자|시점|주차|번호)|DOT|생산(?:된|일자|시점|주차)?|"
+    r"확정(?:해|하여)?\s*안내.*어려|조회.*어려|확인.*어려|"
+    r"시스템.*확인.*불가|일시적(?:인)?\s*(?:오류|문제|실패)|"
+    r"불러오지\s*못|제공(?:해)?\s*드리기\s*어려",
+    re.IGNORECASE,
+)
+
+_RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
+_RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
+_WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
+
+
+def _yyyymmdd_to_korean_date(s: str) -> str:
+    try:
+        dt = datetime.datetime.strptime(s, "%Y%m%d")
+    except (TypeError, ValueError):
+        return s
+    return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
+
+
+def _parse_preview_slot_hour(tm: object) -> int | None:
+    s = str(tm or "").strip()
+    if not s.isdigit():
+        return None
+    if len(s) <= 2:
+        hour = int(s)
+    elif len(s) == 4:
+        hour = int(s[:2])
+    else:
+        return None
+    if hour == 12:
+        return None
+    return hour if 0 <= hour <= 23 else None
+
+
+def _extract_preview_payload(parsed: dict) -> dict | None:
+    if parsed.get("status") == "success" and isinstance(parsed.get("data"), dict):
+        return parsed["data"]
+    data = parsed.get("data")
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        return data["data"]
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _coerce_reservation_quickreply_to_datepick(
+    event: dict,
+    structured_sources: list[tuple[str, dict]],
+    slot_state: Any | None,
+) -> dict | None:
+    """Narrowly convert LLM reservation-time chips to the datepick template.
+
+    This only handles the regression where transaction_store_preview_tool
+    returned concrete slots but the LLM rendered "09시 예약" style quickReply
+    chips instead of the FE date picker. It deliberately avoids stock-store
+    contexts, where the correct answer is a stocked-store location card.
+    """
+    if event.get("template") != "quickReply":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list) or not chips:
+        return None
+    labels = [
+        str(chip.get("label", "")).strip()
+        for chip in chips
+        if isinstance(chip, dict)
+    ]
+    has_reservation_time_chip = any(_RESERVATION_TIME_CHIP_RE.match(label) for label in labels)
+    has_only_reservation_chips = all(
+        _RESERVATION_TIME_CHIP_RE.match(label) or label in _RESERVATION_OTHER_TIME_LABELS
+        for label in labels
+    )
+    if not has_reservation_time_chip or not has_only_reservation_chips:
+        return None
+
+    pending_intent = getattr(slot_state, "pending_intent", None)
+    goal_type = getattr(slot_state, "goal_type", None)
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return None
+    if re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text):
+        return None
+
+    preview_payload = None
+    for tool_name, parsed in reversed(structured_sources):
+        if tool_name != "transaction_store_preview_tool" or not isinstance(parsed, dict):
+            continue
+        preview_payload = _extract_preview_payload(parsed)
+        if isinstance(preview_payload, dict):
+            break
+    if not isinstance(preview_payload, dict):
+        return None
+
+    schedule = preview_payload.get("schedule")
+    if not isinstance(schedule, dict) or str(schedule.get("tier") or "").lower() == "none":
+        return None
+    schedule_stores = schedule.get("stores")
+    if not isinstance(schedule_stores, list):
+        return None
+
+    for store in schedule_stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = str(store.get("shop_id") or "").strip()
+        slots = store.get("slots")
+        if not shop_id or not isinstance(slots, list):
+            continue
+        by_day: dict[str, set[int]] = {}
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = str(slot.get("cal_day") or "").strip()
+            hour = _parse_preview_slot_hour(slot.get("tm"))
+            if cal_day and hour is not None:
+                by_day.setdefault(cal_day, set()).add(hour)
+        if not by_day:
+            continue
+
+        dates: list[dict] = []
+        selected_idx: int | None = None
+        for idx, cal_day in enumerate(sorted(by_day.keys())):
+            times = sorted(by_day[cal_day])
+            available = bool(times)
+            dates.append({
+                "date": _yyyymmdd_to_korean_date(cal_day),
+                "available": available,
+                "availableTimes": times,
+                "index": idx,
+            })
+            if selected_idx is None and available:
+                selected_idx = idx
+        if selected_idx is None:
+            continue
+
+        metadata = {"shopId": shop_id}
+        shop_name = str(store.get("shop_nm") or "").strip()
+        if shop_name:
+            metadata["shopName"] = shop_name
+        return {
+            "type": "data",
+            "template": "datepick",
+            "source_domain": event.get("source_domain"),
+            "assistant_response_source": "code_mapper_preview_quickreply",
+            "data": {
+                "assistantResponse": assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+                "dates": dates,
+                "selectedDate": selected_idx,
+                "metadata": metadata,
+            },
+        }
+    return None
+
+
+_LISTCAR_SELECTION_NEEDLES: tuple[str, ...] = (
+    "선택",
+    "골라",
+    "어떤 차량",
+    "이 차량으로 진행",
+    "차량을 확인해",
+    "등록된 차량",
+    "차량 목록",
+)
+
+
+def _looks_like_vehicle_selection_prompt(text: str | None) -> bool:
+    normalized = (text or "").strip()
+    return bool(normalized) and any(needle in normalized for needle in _LISTCAR_SELECTION_NEEDLES)
+
+
+def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
+    """Suppress direct listCar JSON when the answer is plain advice.
+
+    The template mapper already suppresses get_my_cars_tool → listCar for
+    generic advice turns. This catches the sibling path where the LLM emits a
+    valid listCar JSON directly, bypassing the mapper guard.
+    """
+    if event.get("template") != "listCar":
+        return None
+    source_domain = str(event.get("source_domain") or "").lower()
+    if source_domain != "discovery":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if _looks_like_vehicle_selection_prompt(assistant_text):
+        return None
+    recovery = _discovery_recovery_chips_for_text(assistant_text, event.get("source_domain"))
+    if recovery is None:
+        chips = list(_DISCOVERY_DEFAULT_CHIPS)
+    else:
+        chips, _label = recovery
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": event.get("source_domain"),
+        "assistant_response_source": "code_mapper_listcar_advice_guard",
+        "data": {
+            "assistantResponse": assistant_text,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
 
 def _choose_quickreply_fallback(
     called_tool_names: set[str], source_domain: str | None
@@ -2442,6 +2691,50 @@ def _choose_quickreply_fallback(
     if source_domain and source_domain.lower() == "leading":
         return _FALLBACK_LEADING_PROGRESS, "leading_progress"
     return _FALLBACK_GENERIC, "generic"
+
+
+def _looks_like_generic_dead_end_chips(chips: object) -> bool:
+    if not isinstance(chips, list) or not chips:
+        return False
+    labels = {
+        str(item.get("label", "")).strip()
+        for item in chips
+        if isinstance(item, dict)
+    }
+    return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS and _GENERIC_DEAD_END_LABELS <= labels
+
+
+def _discovery_recovery_chips_for_text(
+    assistant_text: str | None,
+    source_domain: str | None,
+) -> tuple[list[dict], str] | None:
+    """Return progress chips when Discovery accidentally emits dead-end chips.
+
+    Generic support chips are only appropriate for explicit support/policy
+    dead-ends. Normal Discovery guidance should keep the user in the discovery
+    flow with chips that match the answer.
+    """
+    if not source_domain or source_domain.lower() != "discovery":
+        return None
+    text = assistant_text or ""
+    if not text:
+        return None
+    if _EXPLICIT_SUPPORT_TEXT_RE.search(text) or _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE.search(text):
+        return None
+    if _DISCOVERY_SIZE_VEHICLE_TEXT_RE.search(text):
+        return list(_DISCOVERY_SIZE_VEHICLE_CHIPS), "discovery_size_vehicle"
+    if _DISCOVERY_NO_RESULT_TEXT_RE.search(text):
+        return list(_DISCOVERY_NO_RESULT_CHIPS), "discovery_no_result"
+    if _DISCOVERY_PRODUCT_TEXT_RE.search(text):
+        return list(_DISCOVERY_PRODUCT_CHIPS), "discovery_product"
+    return list(_DISCOVERY_DEFAULT_CHIPS), "discovery_default"
+
+
+def _should_replace_discovery_dead_end_chips(
+    assistant_text: str | None,
+    source_domain: str | None,
+) -> bool:
+    return _discovery_recovery_chips_for_text(assistant_text, source_domain) is not None
 
 
 def _goal_based_classify(
@@ -4650,13 +4943,37 @@ class TStationChatServiceV2:
                 event_response_source = event.pop("assistant_response_source", None)
                 if isinstance(event_response_source, str):
                     last_assistant_response_source = event_response_source
+                event_data = event.get("data", {})
+                coerced_event = _coerce_reservation_quickreply_to_datepick(
+                    event,
+                    structured_sources,
+                    pending_slots or initial_slots,
+                )
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] transaction_store_preview quickReply time chips → datepick"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_preview_quickreply"
+                    event_data = event.get("data", {})
+                coerced_event = _coerce_non_selection_listcar_to_quickreply(event)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] discovery listCar advice turn → quickReply"
+                    )
+                    event = coerced_event
+                    last_template = "quickReply"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_listcar_advice_guard"
+                    event_data = event.get("data", {})
                 for value in _quick_reply_domain_values_from_event(event):
                     if value not in next_quick_reply_domain_values:
                         next_quick_reply_domain_values.append(value)
                 for value in _predicted_domain_values_from_event(event):
                     if value not in next_predicted_domain_values:
                         next_predicted_domain_values.append(value)
-                event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
@@ -4717,6 +5034,29 @@ class TStationChatServiceV2:
                             fallback_label,
                         )
                         event_data["quickReplies"] = fallback_chips
+                    if (
+                        not is_handoff
+                        and _looks_like_generic_dead_end_chips(event_data.get("quickReplies"))
+                    ):
+                        recovery = _discovery_recovery_chips_for_text(
+                            str(event_data.get("assistantResponse") or ""),
+                            source_domain,
+                        )
+                        if recovery is not None:
+                            recovery_chips, recovery_label = recovery
+                            logger.warning(
+                                "[QUICKREPLY_FALLBACK] replacing discovery dead-end chips "
+                                "(domain=%s tools=%s) → %s",
+                                source_domain,
+                                sorted(called_tool_names),
+                                recovery_label,
+                            )
+                            event_data["quickReplies"] = recovery_chips
+                            event_data["predictedDomains"] = _dedupe_domain_values([
+                                str(chip.get("domain", ""))
+                                for chip in recovery_chips
+                                if isinstance(chip, dict)
+                            ])
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue

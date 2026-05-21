@@ -19,6 +19,7 @@ import pytest
 
 from services.tstation.template_mapper import (
     _map_location,
+    current_goal_type,
     current_pending_intent,
     try_build_template,
 )
@@ -32,9 +33,11 @@ from services.tstation.template_mapper import (
 @pytest.fixture(autouse=True)
 def _reset_pending_intent():
     """Each test sets pending_intent fresh; reset to avoid bleed across tests."""
-    token = current_pending_intent.set(None)
+    pending_token = current_pending_intent.set(None)
+    goal_token = current_goal_type.set(None)
     yield
-    current_pending_intent.reset(token)
+    current_pending_intent.reset(pending_token)
+    current_goal_type.reset(goal_token)
 
 
 def _store_list_entry(*, args: dict, stores: list[dict]) -> dict:
@@ -58,6 +61,60 @@ def _stub_store(shop_id: str, shop_nm: str) -> dict:
         "road_addr_dtl": None,
         "tel_no": "02-790-2921",
         "svc_codes": ["113"],
+    }
+
+
+def _preview_entry(*, args: dict, stores: list[dict], inventory: dict) -> dict:
+    """Build a `transaction_store_preview_tool` entry with store candidates and inventory."""
+    return {
+        "tool": "transaction_store_preview_tool",
+        "args": args,
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": stores,
+                "inventory": inventory,
+                "schedule": {"tier": "today_only", "stores": [{"shop_id": "T02396"}]},
+            },
+        },
+    }
+
+
+def _preview_entry_with_schedule(*, args: dict, stores: list[dict], schedule_stores: list[dict]) -> dict:
+    """Build a preview entry where the preview tool already resolved bookable slots."""
+    return {
+        "tool": "transaction_store_preview_tool",
+        "args": args,
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": stores,
+                "inventory": {"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+                "schedule": {"tier": "today_only", "stores": schedule_stores},
+            },
+        },
+    }
+
+
+def _schedule_entry(*, mode: str, is_installable: bool, slots: list[dict]) -> dict:
+    """Build a `get_store_schedule_tool` entry mimicking the StoreScheduleResponse."""
+    return {
+        "tool": "get_store_schedule_tool",
+        "args": {"shop_id": "F00405", "mode": mode},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "shop_id": "F00405",
+                "mode": mode,
+                "shop_nm": "티스테이션 경포점",
+                "is_installable": is_installable,
+                "is_tna_delivery": False,
+                "slots": slots,
+            },
+        },
     }
 
 
@@ -98,6 +155,219 @@ def test_region_code_with_multiple_stores_emits_location() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert len(result["data"]["stores"]) == 2
+
+
+def test_preview_location_filters_to_inventory_positive_stores() -> None:
+    """Composite preview returns candidate stores plus inventory arrays. The
+    location card must show only stores that actually have stock."""
+    current_pending_intent.set("stock")
+    entry = _preview_entry(
+        args={"region_code": "강릉"},
+        stores=[
+            _stub_store("F00518", "티스테이션 강릉MBC점"),
+            _stub_store("T02396", "티스테이션 강릉강남점"),
+            _stub_store("F00405", "티스테이션 경포점"),
+        ],
+        inventory={"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+    )
+
+    result = _map_location([entry], "강릉에서 재고와 예약 가능 시간을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["assistantResponse"] == "강릉에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+    assert len(result["data"]["stores"]) == 1
+    assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 강릉강남점"
+    assert result["data"]["stores"][0]["todayInstall"] is True
+    assert "[매장재고]" in result["data"]["stores"][0]["description"]
+    assert result["data"]["metadata"] == [{"shopId": "T02396"}]
+
+
+def test_preview_location_does_not_filter_order_preview_candidates() -> None:
+    """Order/reservation previews may intentionally show fulfillment candidates.
+    Inventory filtering is limited to stock-check contexts."""
+    current_pending_intent.set("order")
+    entry = _preview_entry(
+        args={"region_code": "강릉"},
+        stores=[
+            _stub_store("F00518", "티스테이션 강릉MBC점"),
+            _stub_store("T02396", "티스테이션 강릉강남점"),
+            _stub_store("F00405", "티스테이션 경포점"),
+        ],
+        inventory={"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+    )
+
+    result = _map_location([entry], "강릉에서 주문 가능한 매장을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert len(result["data"]["stores"]) == 3
+    assert result["data"]["metadata"] == [{"shopId": "F00518"}, {"shopId": "T02396"}, {"shopId": "F00405"}]
+
+
+def test_preview_single_scheduled_store_maps_to_datepick_for_booking() -> None:
+    """When preview already found one bookable store, reservation flow should
+    show datepick directly instead of all candidate stores."""
+    current_pending_intent.set("order")
+    entry = _preview_entry_with_schedule(
+        args={"region_code": "강릉"},
+        stores=[
+            _stub_store("F00518", "티스테이션 강릉MBC점"),
+            _stub_store("T02396", "티스테이션 강릉강남점"),
+            _stub_store("F00405", "티스테이션 경포점"),
+        ],
+        schedule_stores=[{
+            "shop_id": "T02396",
+            "shop_nm": "티스테이션 강릉강남점",
+            "slots": [
+                {"cal_day": "20260521", "tm": "09"},
+                {"cal_day": "20260521", "tm": "12"},
+                {"cal_day": "20260521", "tm": "13"},
+                {"cal_day": "20260522", "tm": "10"},
+            ],
+        }],
+    )
+
+    result = try_build_template([entry], "원하시는 날짜와 시간을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {"shopId": "T02396", "shopName": "티스테이션 강릉강남점"}
+    assert result["data"]["dates"] == [
+        {
+            "date": "2026년 5월 21일 (목)",
+            "available": True,
+            "availableTimes": [9, 13],
+            "index": 0,
+        },
+        {
+            "date": "2026년 5월 22일 (금)",
+            "available": True,
+            "availableTimes": [10],
+            "index": 1,
+        },
+    ]
+
+
+def test_preview_single_scheduled_store_keeps_stock_location_flow() -> None:
+    """Stock-store checks must still render the stock-positive location card."""
+    current_pending_intent.set("stock")
+    entry = _preview_entry_with_schedule(
+        args={"region_code": "강릉"},
+        stores=[
+            _stub_store("F00518", "티스테이션 강릉MBC점"),
+            _stub_store("T02396", "티스테이션 강릉강남점"),
+            _stub_store("F00405", "티스테이션 경포점"),
+        ],
+        schedule_stores=[{
+            "shop_id": "T02396",
+            "shop_nm": "티스테이션 강릉강남점",
+            "slots": [{"cal_day": "20260521", "tm": "09"}],
+        }],
+    )
+
+    result = try_build_template([entry], "강릉에서 재고가 확인된 매장입니다.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert len(result["data"]["stores"]) == 1
+    assert result["data"]["metadata"] == [{"shopId": "T02396"}]
+
+
+def test_exact_order_preview_maps_to_datepick_even_if_pending_stock_context_lingers() -> None:
+    """A named-store order preview already has price, qty, and schedule slots.
+    It must render datepick even when a previous stock intent lingers in slots."""
+    current_pending_intent.set("stock")
+    entry = _preview_entry_with_schedule(
+        args={
+            "goods_no": "G000000309780",
+            "ord_qty": 4,
+            "store_nm": "티스테이션 강릉MBC점",
+            "include_price": True,
+        },
+        stores=[_stub_store("F00518", "티스테이션 강릉MBC점")],
+        schedule_stores=[{
+            "shop_id": "F00518",
+            "mode": "logistics_only",
+            "shop_nm": "티스테이션 강릉MBC점",
+            "is_installable": True,
+            "is_tna_delivery": True,
+            "slots": [
+                {"cal_day": "20260527", "tm": "09"},
+                {"cal_day": "20260527", "tm": "12"},
+                {"cal_day": "20260527", "tm": "13"},
+                {"cal_day": "20260528", "tm": "10"},
+            ],
+        }],
+    )
+
+    result = try_build_template([entry], "티스테이션 강릉MBC점의 예약 가능한 일정을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {"shopId": "F00518", "shopName": "티스테이션 강릉MBC점"}
+    assert result["data"]["dates"] == [
+        {
+            "date": "2026년 5월 27일 (수)",
+            "available": True,
+            "availableTimes": [9, 13],
+            "index": 0,
+        },
+        {
+            "date": "2026년 5월 28일 (목)",
+            "available": True,
+            "availableTimes": [10],
+            "index": 1,
+        },
+    ]
+
+
+def test_general_schedule_maps_to_datepick_even_when_online_install_unavailable() -> None:
+    """`is_installable=false` means online tire installation is unavailable,
+    not that a general store-visit schedule should be hidden."""
+    entry = _schedule_entry(
+        mode="general",
+        is_installable=False,
+        slots=[
+            {"cal_day": "20260521", "tm": "09"},
+            {"cal_day": "20260521", "tm": "12"},
+            {"cal_day": "20260521", "tm": "13"},
+            {"cal_day": "20260522", "tm": "10"},
+        ],
+    )
+
+    result = try_build_template([entry], "티스테이션 경포점의 예약 가능한 일정을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {"shopId": "F00405", "shopName": "티스테이션 경포점"}
+    assert result["data"]["dates"] == [
+        {
+            "date": "2026년 5월 21일 (목)",
+            "available": True,
+            "availableTimes": [9, 13],
+            "index": 0,
+        },
+        {
+            "date": "2026년 5월 22일 (금)",
+            "available": True,
+            "availableTimes": [10],
+            "index": 1,
+        },
+    ]
+
+
+def test_order_schedule_still_blocks_datepick_when_online_install_unavailable() -> None:
+    """Non-general schedule modes still require an installable store."""
+    entry = _schedule_entry(
+        mode="in_store_only",
+        is_installable=False,
+        slots=[{"cal_day": "20260521", "tm": "09"}],
+    )
+
+    result = try_build_template([entry], "예약 가능한 일정을 확인했어요.")
+
+    assert result is None
 
 
 # --------------------------------------------------------------------------- #

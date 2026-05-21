@@ -149,8 +149,6 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "rating_avg", "rate", "review_count",
     # 상품 등록 일시 — used to identify newest product among same-keyword results
     "sys_reg_dtime",
-    # 기술력 설명 — 기술 키워드 검색(흡음재/Sound Absorber 등) 시 에이전트가 기술 적용 여부 확인용
-    "pc_prod_tech_desc",
     # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
     "big_goods_nm", "ptrn_d_nm",
     "tire_width", "tire_series", "inch",
@@ -240,10 +238,9 @@ def _filter_by_price(
 def _slim_product_item(item: dict) -> dict:
     """Strip noise fields from a product item before returning to the LLM.
 
-    Drops pc_prod_remark_desc, slogan, images (full array), reviews, nested
-    rating object, and any unknown future bloat. Keeps only fields in
-    _TRIM_KEEP_FIELDS. Note: pc_prod_tech_desc is now in _TRIM_KEEP_FIELDS
-    (kept for technology keyword searches such as 흡음재/Sound Absorber).
+    Drops pc_prod_remark_desc, pc_prod_tech_desc, slogan, images (full array),
+    reviews, nested rating object, and any unknown future bloat. Keeps only
+    fields in _TRIM_KEEP_FIELDS.
     """
     return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
 
@@ -897,7 +894,7 @@ def get_products_recommendations_tool(
             "런플랫 타이어 추천" 단일 의도면 rcmd_type="tstation" + pfm_nm="RUNFLAT" 사용
               (rcmd_type="family" 는 데이터상 RUNFLAT 결과 0건이므로 사용 금지).
         prc_grd (str | None, optional): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM).
-            - "프리미엄": 프리미엄 계열 (DB raw '프리미엄' + '프리미엄+' 모두 매칭, LIKE prefix)
+            - "프리미엄": 최상위 프리미엄 계열
             - "스탠다드": 스탠다드 등급
             - "이코노미": 이코노미 등급
             ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).

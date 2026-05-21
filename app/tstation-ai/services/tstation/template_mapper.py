@@ -176,6 +176,22 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
     return default
 
 
+def _inventory_shop_ids(raw_inventory: object, key: str) -> set[str]:
+    """Extract shop IDs from inventory arrays such as todayShopArray/tnaShopArray."""
+    if not isinstance(raw_inventory, dict):
+        return set()
+    rows = raw_inventory.get(key)
+    if not isinstance(rows, list):
+        return set()
+    ids: set[str] = set()
+    for row in rows:
+        if isinstance(row, dict):
+            shop_id = _get_str(row, "shopId", "shop_id")
+            if shop_id:
+                ids.add(shop_id)
+    return ids
+
+
 def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
     """Filter accumulated_tool_data by tool name; skip error-status entries.
 
@@ -356,12 +372,12 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
             if goods_pfm_label:
                 tags.append({"text": goods_pfm_label, "primary": False})
-            if _get_str(row, "label_pnwave_nm") in {"최저소음", "저소음"}:
-                tags.append({"text": "저소음", "primary": False})
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
                 "tires": "",
+                "titleProductName": goods_nm,
+                "titleTires": tire_size,
                 "comfort": "",
                 "price": price,
                 "originalPrice": original_price,
@@ -472,8 +488,8 @@ def inject_product_tags_and_sanitize(
             goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
             if goods_pfm_label:
                 tags.append({"text": goods_pfm_label, "primary": False})
-            if _get_str(row, "label_pnwave_nm") in {"최저소음", "저소음"}:
-                tags.append({"text": "저소음", "primary": False})
+            product["titleProductName"] = _get_str(row, "goods_nm", "title")
+            product["titleTires"] = _get_str(row, "tire_size_1", "tire_size_2")
         product["tags"] = tags
 
 
@@ -485,6 +501,33 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Emitting a listCar card here would duplicate the vehicle list next to
     # the D-day answer; suppress so quickReply owns the turn.
     if _find_entries(tool_data_list, "get_maintenance_dday_tool"):
+        return None
+    # Recommendation-entry guard: when the same turn already used
+    # get_my_cars_tool only to recover car_lnc_cd / tire_size for
+    # get_products_recommendations_tool, a zero-result recommendation should
+    # fall through to the agent's quickReply guidance instead of re-showing the
+    # exact same vehicle card. Successful recommendation turns are handled by
+    # the higher-priority product mapper above, so suppressing here is safe.
+    if _find_entries(tool_data_list, "get_products_recommendations_tool"):
+        return None
+    # Generic advice guard: Discovery sometimes calls get_my_cars_tool only to
+    # ground an answer about the user's vehicle ("내차는 트럭인데..." etc.) without
+    # actually asking the user to choose one car. In those turns, re-rendering
+    # the full vehicle list is misleading noise. Only render listCar when the
+    # assistant text clearly asks the user to pick / confirm a vehicle.
+    text = (assistant_text or "").strip()
+    if text and not any(
+        needle in text
+        for needle in (
+            "선택",
+            "골라",
+            "어떤 차량",
+            "이 차량으로 진행",
+            "차량을 확인해",
+            "등록된 차량",
+            "차량 목록",
+        )
+    ):
         return None
     items, metadata = [], []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
@@ -1060,7 +1103,14 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if isinstance(raw, dict):
             detail_by_shop_id[shop_id] = raw
 
+    stock_filter_context = (
+        current_pending_intent.get() == "stock"
+        or current_goal_type.get() == "store_with_stock"
+        or bool(re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""))
+    )
     items, metadata = [], []
+    stock_filtered_preview = False
+    stock_filtered_region = ""
     for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
@@ -1068,11 +1118,28 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         stores = raw.get("stores")
         if not isinstance(stores, list):
             continue
+        stock_labels_by_shop_id: dict[str, str] = {}
+        if entry.get("tool") == "transaction_store_preview_tool" and stock_filter_context:
+            today_ids = _inventory_shop_ids(raw.get("inventory"), "todayShopArray")
+            tna_ids = _inventory_shop_ids(raw.get("inventory"), "tnaShopArray")
+            for sid in today_ids:
+                stock_labels_by_shop_id[sid] = "매장재고"
+            for sid in tna_ids:
+                stock_labels_by_shop_id.setdefault(sid, "T바로배송")
+            if stock_labels_by_shop_id:
+                stock_filtered_preview = True
+                args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+                if isinstance(args, dict):
+                    stock_filtered_region = _get_str(args, "region_code")
+
         for row in stores:
             if not isinstance(row, dict):
                 continue
             shop_id = _get_str(row, "shop_id")
             if not shop_id:
+                continue
+            stock_label = stock_labels_by_shop_id.get(shop_id)
+            if stock_labels_by_shop_id and not stock_label:
                 continue
 
             detail = detail_by_shop_id.get(shop_id, {})
@@ -1141,6 +1208,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 description_lines.append(f"⭐ {rating:.1f}")
             if services_text:
                 description_lines.append(f"서비스: {services_text}")
+            if stock_label:
+                description_lines.append(f"[{stock_label}]")
             description = "\n ".join(description_lines)
 
             distance_km = row.get("distance_km")
@@ -1155,8 +1224,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "distance": distance_str,
                 "detailAddress": detail_addr,
                 "isAllMyT": is_all_my_t,
-                "todayInstall": False,
-                "tnaDelivery": is_tna_delivery,
+                "todayInstall": stock_label == "매장재고",
+                "tnaDelivery": is_tna_delivery or stock_label == "T바로배송",
                 "description": description,
             })
             metadata.append({"shopId": shop_id})
@@ -1208,6 +1277,13 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     )
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
+    if stock_filtered_preview and items:
+        short = (
+            f"{stock_filtered_region}에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+            if stock_filtered_region
+            else "재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+        )
+        response_source = "code_mapper"
     return {
         "type": "data",
         "template": "location",
@@ -1345,10 +1421,100 @@ def _is_bookable_hour(hour: int) -> bool:
     return hour != 12
 
 
+def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Build a date picker from transaction_store_preview_tool schedule slots.
+
+    The preview tool can already resolve the only installable store and its
+    slots. In booking/order contexts, rendering all candidate stores as a
+    location card makes the user pick among stores that may not have matching
+    inventory. Keep stock-check contexts on the location path, where the card
+    intentionally shows the stock-positive store list.
+    """
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        args = args if isinstance(args, dict) else {}
+        exact_order_preview = bool(
+            _get_str(args, "store_nm")
+            and _get_str(args, "goods_no")
+            and args.get("ord_qty")
+            and args.get("include_price")
+        )
+        pending_intent = current_pending_intent.get()
+        goal_type = current_goal_type.get()
+        if not exact_order_preview and (pending_intent == "stock" or goal_type == "store_with_stock"):
+            return None
+        if not exact_order_preview and re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""):
+            return None
+
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+        schedule = raw.get("schedule")
+        if not isinstance(schedule, dict) or _get_str(schedule, "tier").lower() == "none":
+            continue
+        stores = schedule.get("stores")
+        if not isinstance(stores, list) or len(stores) != 1:
+            continue
+        store = stores[0]
+        if not isinstance(store, dict):
+            continue
+        shop_id = _get_str(store, "shop_id")
+        slots = store.get("slots")
+        if not shop_id or not isinstance(slots, list):
+            continue
+
+        by_day: dict[str, set[int]] = {}
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = _get_str(slot, "cal_day")
+            hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+            if cal_day and hour is not None:
+                bucket = by_day.setdefault(cal_day, set())
+                if _is_bookable_hour(hour):
+                    bucket.add(hour)
+        if not by_day:
+            continue
+
+        dates: list[dict] = []
+        selected_idx: int | None = None
+        for i, cal_day in enumerate(sorted(by_day.keys())):
+            times = sorted(by_day[cal_day])
+            available = bool(times)
+            dates.append({
+                "date": _yyyymmdd_to_korean_date(cal_day),
+                "available": available,
+                "availableTimes": times,
+                "index": i,
+            })
+            if selected_idx is None and available:
+                selected_idx = i
+        if selected_idx is None:
+            continue
+
+        short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
+        metadata: dict = {"shopId": shop_id}
+        shop_nm = _get_str(store, "shop_nm")
+        if shop_nm:
+            metadata["shopName"] = shop_nm
+        return {
+            "type": "data",
+            "template": "datepick",
+            "assistant_response_source": response_source,
+            "data": {
+                "dates": dates,
+                "selectedDate": selected_idx,
+                "metadata": metadata,
+                "assistantResponse": short,
+            },
+        }
+    return None
+
+
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Map slot-emitting tools to a `datepick` event.
 
-    Two sources supported:
+    Three sources supported:
 
     1. ``get_store_schedule_tool`` (StoreScheduleResponse):
        ``{shop_id, shop_nm, mode, is_installable, is_tna_delivery,
@@ -1360,24 +1526,39 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
        path the agent's intended datepick gets overridden by the location
        mapper when a sibling ``transaction_store_preview_tool`` ran.
 
+    3. ``transaction_store_preview_tool`` (single resolved schedule store):
+       response has ``schedule.stores[0].slots`` and can go straight to
+       datepick in booking/order contexts.
+
     Schedule-tool path wins when both are present (richer multi-day shape).
     """
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
     if not entries:
-        return _map_datepick_from_detail(tool_data_list, assistant_text)
+        return _map_datepick_from_preview(tool_data_list, assistant_text) or _map_datepick_from_detail(
+            tool_data_list,
+            assistant_text,
+        )
     raw = _unwrap(entries[-1])
     if not isinstance(raw, dict):
-        return _map_datepick_from_detail(tool_data_list, assistant_text)
+        return _map_datepick_from_preview(tool_data_list, assistant_text) or _map_datepick_from_detail(
+            tool_data_list,
+            assistant_text,
+        )
 
     shop_id = _get_str(raw, "shop_id")
     shop_nm = _get_str(raw, "shop_nm")
     slots = raw.get("slots")
     if not shop_id or not isinstance(slots, list):
-        return _map_datepick_from_detail(tool_data_list, assistant_text)
+        return _map_datepick_from_preview(tool_data_list, assistant_text) or _map_datepick_from_detail(
+            tool_data_list,
+            assistant_text,
+        )
 
-    # Response-level installable flag: when False, treat as no available times
-    # (BE may still echo cal_day rows in some modes; FE expects empty list).
-    is_installable = bool(raw.get("is_installable", True))
+    # `is_installable` means online-shopping tire installation support. It
+    # should block tire/order schedule modes, but not the `general` store-visit
+    # schedule where the backend's slots are still the authoritative answer.
+    mode = _get_str(raw, "mode").lower()
+    allow_slots = bool(raw.get("is_installable", True)) or mode == "general"
 
     # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
     # but we sort cal_day strings before emitting to avoid relying on that.
@@ -1390,7 +1571,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not cal_day or hour is None:
             continue
         bucket = by_day.setdefault(cal_day, set())
-        if is_installable and _is_bookable_hour(hour):
+        if allow_slots and _is_bookable_hour(hour):
             bucket.add(hour)
 
     if not by_day:
@@ -1929,6 +2110,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         # `transaction_store_preview_tool(tier=none)` causes `_map_location` to
         # render a store card instead of the intended time-slot picker.
         ("get_store_detail_tool", _map_datepick),
+        ("transaction_store_preview_tool", _map_datepick),
         ("search_product_tool", _map_product),
         ("get_newest_products_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),

@@ -1345,18 +1345,19 @@ def transaction_store_preview_tool(
 
     goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
     shop_id_list = [{"shopId": sid} for sid in shop_ids]
+    be_client = get_client()
 
     def _fetch_logistics():
         body = LogisticsRequest(goods_no=goods_no)
-        return get_logistics_inventory(client=get_client(), body=body)
+        return get_logistics_inventory(client=be_client, body=body)
 
     def _fetch_store_inventory():
         g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
         s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
-        return get_store_inventory(client=get_client(), body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
+        return get_store_inventory(client=be_client, body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
 
     def _fetch_price():
-        return get_price(client=get_client(), goods_no=goods_no, member_type=None)
+        return get_price(client=be_client, goods_no=goods_no, member_type=None)
 
     tasks = {"logistics": _fetch_logistics, "store_inventory": _fetch_store_inventory}
     if include_price:
@@ -1368,6 +1369,13 @@ def transaction_store_preview_tool(
         for future in as_completed(futures):
             name = futures[future]
             response = future.result()
+            if response.status_code >= 400:
+                logger.warning(
+                    "[TOOL][transaction_store_preview_tool] %s sub-call failed: status=%s body=%s",
+                    name,
+                    response.status_code,
+                    response.content.decode(errors="ignore")[:300],
+                )
             results[name] = _to_dict(response.parsed) if response.parsed is not None else None
 
     logistics_qty = _extract_logistics_qty(results.get("logistics"))
