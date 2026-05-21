@@ -51,6 +51,7 @@ from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRe
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_orders_api_orders_get import sync_detailed as get_orders
+from common.tstation_be_api_client.hkt_api_client.api.maintenance_history_af_정비이력_조회.get_maintenance_history_api_member_maintenance_history_get import sync_detailed as get_maintenance_history
 
 # Reservation AF — 매장 방문 예약 조회
 from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방문_예약_조회.get_reservations_api_reservations_get import sync_detailed as get_reservations
@@ -1597,6 +1598,49 @@ def get_orders_of_user_tool():
     except Exception as e:
         logger.exception("[TOOL][get_orders_of_user_tool] Failed")
         return _error_response(None, str(e), "Failed to retrieve order list")
+
+
+@tool
+def get_maintenance_history_tool(mbr_car_reg_seq: str | None = None, limit: int = 5):
+    """
+    Retrieve authenticated user's recent maintenance/service history.
+
+    Use when the user asks for 정비이력/정비내역/관리받은 내역/서비스 이력.
+    The backend unions offline completed maintenance history and online completed
+    installation history, sorted by service date descending.
+
+    Args:
+        mbr_car_reg_seq: Optional registered car sequence when a specific vehicle is selected.
+        limit: Number of recent history rows. Always use 5 unless user explicitly asks for fewer.
+
+    Returns:
+        {"items": [
+          {"car_svc_dt":"2026-05-20", "shop_nm":"티스테이션 ...",
+           "car_svc_info":"...", "car_svc_qty":"4", "svc_tp":"온라인/장착", ...}
+        ]}
+    """
+    safe_limit = max(1, min(int(limit or 5), 5))
+    logger.debug(
+        "[TOOL][get_maintenance_history_tool] Called mbr_car_reg_seq=%s limit=%s",
+        mbr_car_reg_seq, safe_limit,
+    )
+
+    try:
+        response = get_maintenance_history(
+            client=get_client(),
+            mbr_car_reg_seq=mbr_car_reg_seq,
+            limit=safe_limit,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve maintenance history",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_maintenance_history_tool] Failed")
+        return _error_response(None, str(e), "Failed to retrieve maintenance history")
 
 
 @tool

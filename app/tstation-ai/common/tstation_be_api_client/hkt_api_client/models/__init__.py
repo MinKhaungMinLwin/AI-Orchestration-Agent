@@ -60,6 +60,8 @@ from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
 from .maintenance_dday_item import MaintenanceDdayItem
 from .maintenance_dday_response import MaintenanceDdayResponse
+from .maintenance_history_item import MaintenanceHistoryItem
+from .maintenance_history_response import MaintenanceHistoryResponse
 from .member_car_info import MemberCarInfo
 from .member_car_list_response import MemberCarListResponse
 from .member_warranty_item import MemberWarrantyItem
@@ -166,6 +168,8 @@ __all__ = (
     "LogisticsResponse",
     "MaintenanceDdayItem",
     "MaintenanceDdayResponse",
+    "MaintenanceHistoryItem",
+    "MaintenanceHistoryResponse",
     "MemberCarInfo",
     "MemberCarListResponse",
     "MemberWarrantyItem",
