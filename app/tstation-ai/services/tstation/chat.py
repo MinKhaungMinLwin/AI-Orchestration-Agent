@@ -1301,6 +1301,7 @@ class StreamingMultiAgentCoordinator:
 
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
+            "search_stores_tool": ["shop_id"],
             "get_store_list_tool": ["shop_id"],
             "get_nearby_stores_tool": ["shop_id"],
             "get_store_inventory_tool": ["shop_id"],
@@ -3561,6 +3562,7 @@ class TStationChatServiceV2:
         tool_labels = {
             "get_products_recommendations_tool": "타이어 추천 결과",
             "search_product_tool": "상품 검색 결과",
+            "search_stores_tool": "매장 검색 결과",
             "get_nearby_stores_tool": "근처 매장 목록",
             "get_store_list_tool": "매장 검색 결과",
             "get_store_inventory_tool": "매장 재고 현황",
@@ -3957,7 +3959,7 @@ class TStationChatServiceV2:
              resolution when multiple stores share a substring like "한남점".
 
         Expected tool_context entry shape (from filter_for_context):
-            {"tool": "get_nearby_stores_tool" | "get_store_list_tool",
+            {"tool": "search_stores_tool" | "get_nearby_stores_tool" | "get_store_list_tool",
              "data": [{"shop_id": "F07782", "shop_nm": "티스테이션 한남점",
                        "distance_km": 4.59, "addr_base": "..."}],
              "input": {...}}
@@ -3965,7 +3967,7 @@ class TStationChatServiceV2:
         if not user_text or not prev_tool_data:
             return None
 
-        STORE_TOOLS = {"get_nearby_stores_tool", "get_store_list_tool"}
+        STORE_TOOLS = {"search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"}
         items: list[dict] = []
         for entry in prev_tool_data:
             if entry.get("tool") not in STORE_TOOLS:
@@ -4425,7 +4427,7 @@ class TStationChatServiceV2:
                     logger.warning(f"[SLOTS] history tire_size resolver failed: {e}")
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
-            # the most recent get_nearby_stores_tool / get_store_list_tool result.
+            # the most recent search_stores_tool / get_nearby_stores_tool / get_store_list_tool result.
             # `_apply_tool_derived_slots` only auto-saves shop_id when the tool returned
             # exactly 1 store — multi-result lists (nearby stores within radius, region
             # searches) leave shop_id=None. When the user then picks a store from that
@@ -4445,7 +4447,7 @@ class TStationChatServiceV2:
                     store_tool_entries = [
                         e.get("tool")
                         for e in prev_tool_data
-                        if e.get("tool") in ("get_nearby_stores_tool", "get_store_list_tool")
+                        if e.get("tool") in ("search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool")
                     ]
                     logger.debug(
                         f"[SLOTS] shop_id resolver (tool path) no-match: "

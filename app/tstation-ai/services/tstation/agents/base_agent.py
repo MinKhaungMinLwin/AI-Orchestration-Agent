@@ -326,6 +326,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_my_coupons_tool": "내 쿠폰 조회 중...",
     "get_logistics_inventory_tool": "재고 확인 중...",
     "get_store_inventory_tool": "매장 재고 확인 중...",
+    "search_stores_tool": "매장 검색 중...",
     "search_place_tool": "위치 검색 중...",
     "get_nearby_stores_tool": "주변 매장 검색 중...",
     "get_store_list_tool": "매장 목록 조회 중...",

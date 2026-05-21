@@ -702,6 +702,40 @@ def get_nearby_stores_tool(
         return _error_response(None, str(e), "Failed to get nearby stores")
 
 
+def _clamp_int(value: int | None, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _sort_store_candidates(stores: list[dict], sort_by: str | None) -> list[dict]:
+    if sort_by in ("rating", "review_count"):
+        return sorted(stores, key=lambda s: not bool(s.get("is_all_my_t", False)))
+    return sorted(
+        stores,
+        key=lambda s: (
+            not bool(s.get("is_all_my_t", False)),
+            not bool(s.get("is_installable", False)),
+            s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
+        ),
+    )
+
+
+def _first_place_coordinates(place_data: dict) -> tuple[float | None, float | None, dict | None]:
+    items = place_data.get("items") or place_data.get("documents") or place_data.get("places")
+    if not isinstance(items, list) or not items:
+        return None, None, None
+    place = items[0] if isinstance(items[0], dict) else {}
+    x_raw = place.get("x") or place.get("longitude") or place.get("lng")
+    y_raw = place.get("y") or place.get("latitude") or place.get("lat")
+    try:
+        return float(x_raw), float(y_raw), place
+    except (TypeError, ValueError):
+        return None, None, None
+
+
 @tool_cache(ttl=1800)
 def _get_store_list_cached(
     region_code: str | None = None,
@@ -830,6 +864,165 @@ def get_store_list_tool(
             )
             return validation_override
     return result
+
+
+@tool
+@tool_cache(ttl=300)
+def search_stores_tool(
+    place_query: str | None = None,
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    xpos: float | None = None,
+    ypos: float | None = None,
+    radius_km: float = 20.0,
+    candidate_limit: int = 20,
+    limit: int = 10,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
+):
+    """
+    통합 매장 검색 v1. 장소명/좌표/지역명/매장명 검색을 한 번에 처리합니다.
+
+    v1 scope:
+    - place_query가 있으면 장소 검색으로 좌표를 얻은 뒤 주변 매장을 조회합니다.
+    - xpos/ypos가 있으면 좌표 기반 주변 매장을 조회합니다.
+    - 그 외에는 region_code/store_nm 기반 매장 목록을 조회합니다.
+    - 날짜/요일 영업 여부, 예약 슬롯, 재고 확인은 하지 않습니다. 해당 확인은
+      get_store_detail_tool/get_store_schedule_tool/재고 도구를 후속 호출하세요.
+
+    Args:
+        place_query (str | None): 랜드마크/장소명 (예: "남산타워", "강남역").
+        region_code (str | None): 지역명 키워드 (예: "인천", "강릉").
+        store_nm (str | None): 매장명 키워드 (예: "안양점").
+        xpos/ypos (float | None): 직접 전달된 좌표.
+        radius_km (float): 좌표 검색 반경 km.
+        candidate_limit (int): 내부 후보 조회 수 (1-30). 조건 적용 후 limit로 잘라 반환.
+        limit (int): 최종 반환 매장 수 (1-10). 사용자가 "N개"를 말하면 이 값에 반영.
+        svc_codes/all_my_t_only/imported_car_only/chl_sct_cd/sort_by: get_store_list_tool과 동일 필터.
+
+    Example: {"place_query": "남산타워", "limit": 5, "svc_codes": ["126"]}
+    """
+    final_limit = _clamp_int(limit, default=10, minimum=1, maximum=10)
+    candidate_cap = _clamp_int(candidate_limit, default=max(20, final_limit), minimum=final_limit, maximum=30)
+    normalized_store_nm = normalize_brand_name(store_nm) if store_nm else None
+
+    logger.debug(
+        "[TOOL][search_stores_tool] Called with: place_query=%s, region_code=%s, store_nm=%s, "
+        "xpos=%s, ypos=%s, radius_km=%s, candidate_limit=%s, limit=%s, svc_codes=%s, "
+        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        place_query, region_code, normalized_store_nm, xpos, ypos, radius_km, candidate_cap, final_limit,
+        svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
+    )
+
+    try:
+        search_meta: dict[str, Any] = {
+            "source": "list",
+            "filters": {
+                "svc_codes": svc_codes,
+                "all_my_t_only": all_my_t_only,
+                "imported_car_only": imported_car_only,
+                "chl_sct_cd": chl_sct_cd,
+                "sort_by": sort_by,
+            },
+            "requested_limit": final_limit,
+            "candidate_limit": candidate_cap,
+        }
+
+        if place_query:
+            place_response = search_place(client=get_client(), query=place_query, size=1)
+            if place_response.parsed is None:
+                return _error_response(
+                    place_response.status_code,
+                    f"HTTP {place_response.status_code}",
+                    place_response.content.decode(errors="ignore") or "Failed to search place",
+                )
+            place_data = _to_dict(place_response.parsed)
+            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
+            if found_xpos is None or found_ypos is None:
+                return _success_response(
+                    place_response.status_code,
+                    {"stores": [], "search": {**search_meta, "source": "place", "place_query": place_query}},
+                )
+            xpos, ypos = found_xpos, found_ypos
+            search_meta.update({
+                "source": "place",
+                "place_query": place_query,
+                "place": {
+                    "place_name": place.get("place_name") or place.get("name"),
+                    "address_name": place.get("address_name") or place.get("address"),
+                },
+            })
+
+        if xpos is not None and ypos is not None:
+            response = get_store_list(
+                client=get_client(),
+                xpos=xpos,
+                ypos=ypos,
+                radius_km=radius_km,
+                svc_codes=svc_codes,
+                all_my_t_only=all_my_t_only,
+                imported_car_only=imported_car_only,
+                chl_sct_cd=chl_sct_cd,
+                sort_by=sort_by,
+                limit=candidate_cap,
+            )
+            source_status = response.status_code
+            if response.parsed is None:
+                return _error_response(
+                    response.status_code,
+                    f"HTTP {response.status_code}",
+                    response.content.decode(errors="ignore") or "Failed to search stores",
+                )
+            data = _to_dict(response.parsed)
+            search_meta.setdefault("source", "coords")
+            if search_meta.get("source") == "list":
+                search_meta["source"] = "coords"
+        else:
+            result = _get_store_list_cached(
+                region_code=region_code,
+                store_nm=normalized_store_nm,
+                limit=candidate_cap,
+                svc_codes=svc_codes,
+                all_my_t_only=all_my_t_only,
+                imported_car_only=imported_car_only,
+                chl_sct_cd=chl_sct_cd,
+                sort_by=sort_by,
+            )
+            if normalized_store_nm and isinstance(result, dict) and result.get("status") == "success":
+                raw_data = result.get("data") or {}
+                stores_for_validation = raw_data.get("stores", []) if isinstance(raw_data, dict) else []
+                validation_override = _validate_store_nm_exact_match(
+                    user_input=normalized_store_nm,
+                    stores=stores_for_validation,
+                )
+                if validation_override is not None:
+                    logger.info(
+                        "[TOOL][search_stores_tool] store_nm validation override: status=%s, user_input=%s",
+                        validation_override.get("status"), normalized_store_nm,
+                    )
+                    return validation_override
+            if not isinstance(result, dict) or result.get("status") != "success":
+                return result
+            source_status = result.get("http_status") or 200
+            data = result.get("data") or {}
+
+        if not isinstance(data, dict):
+            return _success_response(source_status, data)
+
+        stores = data.get("stores")
+        if isinstance(stores, list):
+            sorted_stores = _sort_store_candidates([s for s in stores if isinstance(s, dict)], sort_by)
+            data["stores"] = sorted_stores[:final_limit]
+            search_meta["candidate_count"] = len(stores)
+            search_meta["returned_count"] = len(data["stores"])
+            data["search"] = search_meta
+        return _success_response(source_status, data)
+    except Exception as e:
+        logger.exception("[TOOL][search_stores_tool] Failed")
+        return _error_response(None, str(e), "Failed to search stores")
 
 
 @tool

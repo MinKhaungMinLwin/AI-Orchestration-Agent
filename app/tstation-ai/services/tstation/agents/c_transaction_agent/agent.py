@@ -13,6 +13,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_logistics_inventory_tool,
     get_store_inventory_tool,
     transaction_store_preview_tool,
+    search_stores_tool,
     search_place_tool,
     get_nearby_stores_tool,
     get_store_list_tool,
@@ -63,10 +64,20 @@ Never fabricate values. Never expose internal IDs, backend field names, coordina
 
 ## USER-SPECIFIED COUNT (필수)
 사용자가 메시지에서 결과 수량을 명시하면(예: "5개만", "3개 알려줘", "10개 추천", "top 5", "다섯 개") 그 숫자를 **반드시** 도구의 `limit` 파라미터로 전달한다. 도구 기본값을 그대로 쓰지 말 것.
-- 매장 검색 (`get_nearby_stores_tool` / `get_store_list_tool`) → `limit=<사용자 지정값>`
+- 매장 검색 (`search_stores_tool` / `get_nearby_stores_tool` / `get_store_list_tool`) → `limit=<사용자 지정값>`
 - 도구 응답이 더 많이 와도 답변에는 사용자가 요청한 수량만 노출.
 - 한국어 수사 매핑: "다섯/5" → 5, "셋/세 개/3" → 3, "열/10" → 10.
 - 사용자가 수량을 명시하지 않으면 도구 기본값 사용 (`limit` 생략).
+
+## STORE SEARCH V1 — 통합 매장검색 우선 사용
+일반 매장 검색에서 사용자가 장소/랜드마크/좌표/지역/매장명과 함께 매장 수량, 서비스 필터,
+올마이T, 수입차 특화, 평점/리뷰 정렬을 말하면 우선 `search_stores_tool` 을 사용한다.
+- 장소/랜드마크 예: "남산타워 근처", "강남역 근처" → `place_query`
+- 지역 예: "인천 매장 5개", "강릉 티스테이션" → `region_code`
+- 매장명 예: "안양점", "한남점" → `store_nm`
+- 사용자가 "5개"처럼 수량을 말하면 `limit=5`, 후보가 더 필요하면 `candidate_limit` 은 `limit` 보다 크게 유지한다.
+- v1은 날짜/요일 영업 여부, 예약 가능 시간, 상품 재고를 확인하지 않는다. 그런 조건이 있으면
+  `search_stores_tool` 로 후보를 찾은 뒤 기존 상세/스케줄/재고 도구를 후속 호출한다.
 
 Keep user-visible text short and mobile-friendly. Do not use markdown headings, bold/italic, or numbered prefixes.
 For code-mapped card results, respond with ONLY 1 short Korean sentence; the system renders card details from tool output.
@@ -2771,7 +2782,7 @@ tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오
   `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
   `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
 
-- Nearby/location/name store search -> call search_place_tool, get_nearby_stores_tool, or get_store_list_tool.
+- Nearby/location/name store search -> prefer search_stores_tool. Use search_place_tool/get_nearby_stores_tool/get_store_list_tool only for legacy flows or explicit low-level lookup needs.
 - Store detail for a known shop_id -> call get_store_detail_tool.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
 - Schedule or reservation date/time -> call get_store_schedule_tool or get_multi_store_schedule_tool.
@@ -2918,6 +2929,7 @@ class TransactionSubAgent(BaseAgent):
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
         "transaction_store_preview_tool": "Inventory",
+        "search_stores_tool": "Store",
         "search_place_tool": "Store",
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
@@ -2948,6 +2960,7 @@ class TransactionSubAgent(BaseAgent):
             get_logistics_inventory_tool,
             get_store_inventory_tool,
             transaction_store_preview_tool,
+            search_stores_tool,
             search_place_tool,
             get_nearby_stores_tool,
             get_store_list_tool,
@@ -2995,6 +3008,7 @@ class TransactionSubAgent(BaseAgent):
             tools = [
                 get_store_inventory_tool,
                 transaction_store_preview_tool,
+                search_stores_tool,
                 search_place_tool,
                 get_nearby_stores_tool,
                 get_store_list_tool,

@@ -98,6 +98,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     # previewYoutube
     "search_youtube_video_tool": "previewYoutube",
     # location
+    "search_stores_tool": "location",
     "get_store_list_tool": "location",
     "get_nearby_stores_tool": "location",
     "transaction_store_preview_tool": "location",
@@ -1133,7 +1134,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     items, metadata = [], []
     stock_filtered_preview = False
     stock_filtered_region = ""
-    for entry in _find_entries(tool_data_list, "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
+    for entry in _find_entries(tool_data_list, "search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -1266,7 +1267,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # yield 1 store do NOT loop — the user hasn't named that store yet, so
     # we must render the card for selection.
     called_with_store_nm = False
-    for entry in _find_entries(tool_data_list, "get_store_list_tool"):
+    for entry in _find_entries(tool_data_list, "search_stores_tool", "get_store_list_tool"):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if isinstance(args, dict) and args.get("store_nm"):
             called_with_store_nm = True
@@ -2077,6 +2078,7 @@ _MAPPERS: dict[str, Any] = {
     "get_cheapest_price_tool": _map_cheapest_product,
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
+    "search_stores_tool": _map_location,
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "transaction_store_preview_tool": _map_location,
@@ -2145,6 +2147,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_stores_with_time_filter_tool", _map_time_filter_location),
+        ("search_stores_tool", _map_location),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
         ("transaction_store_preview_tool", _map_location),

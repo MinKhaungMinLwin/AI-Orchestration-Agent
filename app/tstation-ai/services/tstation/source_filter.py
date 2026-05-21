@@ -86,6 +86,10 @@ _SEARCH_PRODUCT_CTX_FIELDS: set[str] = _SEARCH_PRODUCT_BASE_FIELDS | {"extra_fvr
 
 # tool_name → {list_key, keep_fields} for list-type responses
 _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
+    "search_stores_tool": {
+        "list_key": "stores",
+        "keep": _NEARBY_STORE_FIELDS,
+    },
     "get_nearby_stores_tool": {
         "list_key": "stores",
         "keep": _NEARBY_STORE_FIELDS,
@@ -188,6 +192,10 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     "search_product_tool": {
         "list_key": "items",
         "keep": _SEARCH_PRODUCT_CTX_FIELDS,
+    },
+    "search_stores_tool": {
+        "list_key": "stores",
+        "keep": _NEARBY_STORE_FIELDS,
     },
     "get_nearby_stores_tool": {
         "list_key": "stores",
