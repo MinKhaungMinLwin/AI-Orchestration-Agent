@@ -2164,7 +2164,7 @@ _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
 # 차단 → c_transaction_agent 만 실행 → GLOBAL 룰의 응답이 deterministic
 # 하게 emit.
 _COUPON_ISSUE_INTENT_RE = re.compile(
-    r"쿠폰\s*(?:받(?:아|기|을|은)|다운(?:로드|받)|발급|어떻게\s*받)"
+    r"(?:쿠폰\s*)?(?:받(?:아|기|을|은)|다운(?:로드|받)|발급(?:해|해줘|받|받아|해도|돼|되|가능)?|어떻게\s*받)"
 )
 
 # ---------------------------------------------------------------------------
@@ -2901,6 +2901,10 @@ def _coupon_box_event(message: str) -> dict:
             "predictedDomains": ["TRANSACTION"],
         },
     }
+
+
+def _coupon_issue_event() -> dict:
+    return _coupon_box_event("쿠폰 받기는 쿠폰함에서 가능합니다.")
 
 
 def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> dict:
@@ -5377,6 +5381,7 @@ class TStationChatServiceV2:
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
                         and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
+                        and not _COUPON_ISSUE_INTENT_RE.search(user_query)
                     ):
                         coupon_resolver_ran = True
                         code_events, deterministic_coupon_event = (
@@ -5465,6 +5470,25 @@ class TStationChatServiceV2:
                         template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
                         if template_payload:
                             draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                if (
+                    isinstance(event_data, dict)
+                    and str(event.get("source_domain", "")).lower()
+                    == MultiAgentDomain.Domain.TRANSACTION.value
+                    and _COUPON_ISSUE_INTENT_RE.search(user_query)
+                ):
+                    event = _coupon_issue_event()
+                    last_template = "quickReply"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_coupon_issue_guard"
+                    event_data = event.get("data", {})
+                    assistant_response = str(event_data.get("assistantResponse") or "")
+                    draft_response = assistant_response
+                    draft_for_qc = assistant_response
+                    original_message_events = [{
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": "[TRANSACTION AGENT]",
+                    }]
                 # Inject quickReplies into orderComplete (LLM-written path; mapper path injects via _map_order_complete).
                 if last_template == "orderComplete" and isinstance(event_data, dict) and "quickReplies" not in event_data:
                     if event_data.get("isSuccess"):
@@ -5490,6 +5514,7 @@ class TStationChatServiceV2:
                         and not coupon_resolver_ran
                         and source_domain == MultiAgentDomain.Domain.TRANSACTION.value
                         and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
+                        and not _COUPON_ISSUE_INTENT_RE.search(user_query)
                         and re.search(
                             r"쿠폰\s*번호|cpn_no|기획전\s*번호|쿠폰함",
                             str(event_data.get("assistantResponse") or ""),
