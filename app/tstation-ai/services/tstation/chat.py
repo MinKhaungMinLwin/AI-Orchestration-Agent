@@ -2731,7 +2731,6 @@ def _coerce_reservation_quickreply_to_datepick(
         }
     return None
 
-
 _LISTCAR_SELECTION_NEEDLES: tuple[str, ...] = (
     "선택",
     "골라",
