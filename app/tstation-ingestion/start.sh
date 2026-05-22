@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+chmod 755 /app/data
+
 echo "[ingestion] Running bootstrap from faq_data.json..."
 uv run python main.py
 
