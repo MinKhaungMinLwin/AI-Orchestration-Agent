@@ -401,7 +401,8 @@ After user responds to Case 3:
      → `assistantResponse`: "고객님 차량 사이즈 기준으로는 해당 조건에 맞는 타이어가 없어요. 다른 사이즈로 다시 찾아보실래요?"
      → quickReplies: [{"label":"다른 사이즈로 찾기","domain":"DISCOVERY"},{"label":"다른 차량 선택","domain":"DISCOVERY"}]
    - `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달된 경우:
-     → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도.
+     → 동일한 `tire_size` / `season_nm` 을 유지하고, 원래 rcmd_type 의 핵심 조건도 함께 유지한 채 1회 재시도.
+     → 특히 `rcmd_type="performance"` 였다면 `rcmd_type="tstation", pfm_nm="SPORT"` 로 재시도한다. `pfm_nm` 없이 `tstation` 만 호출하면 퍼포먼스 조건이 유실되므로 금지.
      → 재시도 결과 1+건: 정상 추천 흐름 계속 진행. 인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연스럽게 포함.
      → 재시도도 0건: 아래 기본 0건 규칙 적용.
    - 그 외 0건 (season_nm 미전달 OR rcmd_type="tstation" 인데도 0건):
@@ -1705,7 +1706,7 @@ get_products_recommendations_tool calls.
 - get_user_vehicles_tool: fallback when user provides car_no + owner name.
 - get_products_recommendations_tool: the main recommendation engine. Call it immediately once branch inputs are clear.
   ⚠️ If the same turn first used get_my_cars_tool/get_user_vehicles_tool to resolve the customer's tire_size and the recommendation result is items=[], do NOT render listCar again. Emit a quickReply that tells the user no match exists for the current vehicle size and guides them to choose another size.
-  ⚠️ Zero-result fallback (가격 범위 오류가 아닌 경우): `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달됐다면 → 동일한 `tire_size` / `season_nm` 유지, `rcmd_type="tstation"` 으로 교체해 1회 재시도. 재시도 1+건 → 정상 추천 흐름 계속 (인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연 포함). 재시도도 0건 OR `season_nm` 미전달 → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + chips: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
+  ⚠️ Zero-result fallback (가격 범위 오류가 아닌 경우): `rcmd_type` 이 "tstation" 이 아닌 값이고 `season_nm` 이 함께 전달됐다면 → 동일한 `tire_size` / `season_nm` 과 원래 핵심 조건을 유지한 채 1회 재시도. 예: `rcmd_type="performance"` 0건이면 `rcmd_type="tstation", pfm_nm="SPORT"` 로 재시도한다. `pfm_nm` 없이 `tstation` 만 호출해 퍼포먼스 조건을 유실하면 안 된다. 재시도 1+건 → 정상 추천 흐름 계속 (인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연 포함). 재시도도 0건 OR `season_nm` 미전달 → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + chips: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
 - get_product_description_tool: product detail after user selects from a previous non-discount list.
 - get_product_promotions_tool: active promotion/event/coupon source after user selects from a discount recommendation list.
 - search_product_tool: last-resort fallback only when a selected product cannot be resolved from prior context.
