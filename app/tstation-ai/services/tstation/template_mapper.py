@@ -652,6 +652,11 @@ def _map_qna_complete(tool_data_list: list[dict], assistant_text: str) -> dict |
         "summary": summary,
     }
     short = assistant_text.strip() if assistant_text and len(assistant_text.strip()) <= 120 else "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요."
+    if re.search(r"쿠폰", f"{title}\n{summary}") and re.search(r"만료|원복|복구|다시\s*쓸|재사용", f"{title}\n{summary}"):
+        short = (
+            "만료된 쿠폰은 원칙적으로 원복이 어렵습니다. "
+            "다만 자세한 확인이 필요하시면 아래 버튼을 눌러 1:1 문의를 진행해 주세요."
+        )
     return {"type": "data", "template": "qnaComplete", "data": {**data, "assistantResponse": short}}
 
 
