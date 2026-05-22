@@ -19,6 +19,7 @@ import pytest
 
 from services.tstation.template_mapper import (
     _map_location,
+    current_ev_suitability_comparison,
     current_goal_type,
     current_pending_intent,
     current_store_date_availability,
@@ -36,9 +37,11 @@ def _reset_pending_intent():
     """Each test sets pending_intent fresh; reset to avoid bleed across tests."""
     pending_token = current_pending_intent.set(None)
     goal_token = current_goal_type.set(None)
+    ev_token = current_ev_suitability_comparison.set(False)
     store_date_token = current_store_date_availability.set(False)
     yield
     current_store_date_availability.reset(store_date_token)
+    current_ev_suitability_comparison.reset(ev_token)
     current_pending_intent.reset(pending_token)
     current_goal_type.reset(goal_token)
 
@@ -149,6 +152,52 @@ def _store_detail_entry(*, cal_day: str, available_slots: list[str]) -> dict:
             },
         },
     }
+
+
+def _product_entry() -> dict:
+    """Build a `search_product_tool` entry with EV tire search results."""
+    return {
+        "tool": "search_product_tool",
+        "args": {"keyword": "아이온 evo", "limit": 10, "brand_cd": "HK"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000319448",
+                        "goods_nm": "아이온 에보",
+                        "tire_size_1": "235/35R20",
+                        "car_knd_nm": "전기차",
+                        "brand_nm": "HANKOOK",
+                        "extra_fvr_sale_prc": 410500,
+                        "sale_prc": 533500,
+                    }
+                ]
+            },
+        },
+    }
+
+
+def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
+    current_ev_suitability_comparison.set(True)
+
+    result = try_build_template([_product_entry()], "전기차에는 전기차 전용 타이어가 유리합니다.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assert "전기차 전용 타이어를 우선 추천" in result["data"]["assistantResponse"]
+
+
+def test_ev_suitability_does_not_override_stock_product_flow() -> None:
+    current_ev_suitability_comparison.set(True)
+    current_pending_intent.set("stock")
+    current_goal_type.set("store_with_stock")
+
+    result = try_build_template([_product_entry()], "상품을 검색했습니다.")
+
+    assert result is not None
+    assert result["template"] == "product"
 
 
 # --------------------------------------------------------------------------- #

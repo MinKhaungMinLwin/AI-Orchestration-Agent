@@ -3319,6 +3319,35 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
     return None
 
 
+_EV_CONTEXT_RE = re.compile(
+    r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_EV_SUITABILITY_RE = re.compile(
+    r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라",
+    re.IGNORECASE,
+)
+_EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
+_EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
+
+
+def _is_ev_suitability_turn(
+    text: str,
+    pending_intent: str | None = None,
+    goal_type: str | None = None,
+) -> bool:
+    """Return True only for EV tire suitability/explanation turns.
+
+    Product names such as "iON evo" must not satisfy the EV context by
+    substring, and stock/order/reservation turns must stay in Transaction flow.
+    """
+    if not text:
+        return False
+    if pending_intent in _EV_BLOCKING_TRANSACTION_INTENTS or goal_type in _EV_BLOCKING_TRANSACTION_GOALS:
+        return False
+    return bool(_EV_CONTEXT_RE.search(text) and _EV_SUITABILITY_RE.search(text))
+
+
 def _rule_based_classify(
     last_user_text: str,
     merged_slots,
@@ -5066,9 +5095,10 @@ class TStationChatServiceV2:
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
         ))
-        current_ev_suitability_comparison.set(bool(
-            re.search(r"전기차|EV|electric|테슬라|모델\s*Y|모델Y", last_user_text, re.IGNORECASE)
-            and re.search(r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라", last_user_text, re.IGNORECASE)
+        current_ev_suitability_comparison.set(_is_ev_suitability_turn(
+            last_user_text,
+            merged_slots.pending_intent,
+            merged_slots.goal_type,
         ))
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)

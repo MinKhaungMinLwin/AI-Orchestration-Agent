@@ -863,6 +863,11 @@ def _map_ev_suitability_comparison(tool_data_list: list[dict], assistant_text: s
     """Build a deterministic quickReply for EV tire suitability comparisons."""
     if not current_ev_suitability_comparison.get():
         return None
+    if current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
+        "store_with_stock",
+        "place_order",
+    ):
+        return None
 
     rows: list[dict] = []
     seen: set[str] = set()

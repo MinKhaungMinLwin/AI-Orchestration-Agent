@@ -23,6 +23,7 @@ from services.tstation.chat import (
     _choose_quickreply_fallback,
     _coerce_reservation_quickreply_to_datepick,
     _discovery_recovery_chips_for_text,
+    _is_ev_suitability_turn,
     _looks_like_generic_dead_end_chips,
     _remove_home_quick_reply_chips,
     _should_replace_discovery_dead_end_chips,
@@ -31,6 +32,26 @@ from services.tstation.chat import (
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
+
+
+# --------------------------------------------------------------------------- #
+#  EV suitability intent detection
+# --------------------------------------------------------------------------- #
+
+
+def test_ev_suitability_detects_explicit_ev_explanation_question() -> None:
+    text = "내 차는 전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?"
+    assert _is_ev_suitability_turn(text) is True
+
+
+def test_ev_suitability_does_not_treat_evo_as_ev_context() -> None:
+    text = "파주 시청 근처 더타이어샵 매장에 iON evo 재고 있을까? 오늘 당장 장착해야 하는데"
+    assert _is_ev_suitability_turn(text, pending_intent="stock", goal_type="store_with_stock") is False
+
+
+def test_ev_suitability_does_not_override_stock_turn_even_for_ev_owner() -> None:
+    text = "전기차 타는데 iON evo 재고 있을까? 오늘 당장 장착해야 해"
+    assert _is_ev_suitability_turn(text, pending_intent="stock", goal_type="store_with_stock") is False
 
 
 # --------------------------------------------------------------------------- #
