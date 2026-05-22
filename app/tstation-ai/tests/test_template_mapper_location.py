@@ -19,8 +19,10 @@ import pytest
 
 from services.tstation.template_mapper import (
     _map_location,
+    current_ev_suitability_comparison,
     current_goal_type,
     current_pending_intent,
+    current_store_date_availability,
     try_build_template,
 )
 
@@ -35,7 +37,11 @@ def _reset_pending_intent():
     """Each test sets pending_intent fresh; reset to avoid bleed across tests."""
     pending_token = current_pending_intent.set(None)
     goal_token = current_goal_type.set(None)
+    ev_token = current_ev_suitability_comparison.set(False)
+    store_date_token = current_store_date_availability.set(False)
     yield
+    current_store_date_availability.reset(store_date_token)
+    current_ev_suitability_comparison.reset(ev_token)
     current_pending_intent.reset(pending_token)
     current_goal_type.reset(goal_token)
 
@@ -116,6 +122,82 @@ def _schedule_entry(*, mode: str, is_installable: bool, slots: list[dict]) -> di
             },
         },
     }
+
+
+def _store_detail_entry(*, cal_day: str, available_slots: list[str]) -> dict:
+    """Build a `get_store_detail_tool` entry for a single-date store lookup."""
+    return {
+        "tool": "get_store_detail_tool",
+        "args": {"shop_id": "C01312", "cal_day": cal_day},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "shop_seq": "F202053575",
+                "shop_nm": "티스테이션 송파오금점",
+                "tel_no": "02-403-0666",
+                "is_all_my_t": True,
+                "is_installable": True,
+                "is_tna_delivery": True,
+                "is_imported_car": True,
+                "svc_codes": ["113", "116"],
+                "holiday": "토요일 17:00/일요일휴무 ",
+                "shop_biz_strt_time": "09",
+                "shop_biz_end_time": "18",
+                "shop_biz_strt_wday": "월요일",
+                "shop_biz_end_wday": "토요일",
+                "shop_sat_strt_time": "09:00",
+                "shop_sat_end_time": "17:00",
+                "available_slots": available_slots,
+            },
+        },
+    }
+
+
+def _product_entry() -> dict:
+    """Build a `search_product_tool` entry with EV tire search results."""
+    return {
+        "tool": "search_product_tool",
+        "args": {"keyword": "아이온 evo", "limit": 10, "brand_cd": "HK"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000319448",
+                        "goods_nm": "아이온 에보",
+                        "tire_size_1": "235/35R20",
+                        "car_knd_nm": "전기차",
+                        "brand_nm": "HANKOOK",
+                        "extra_fvr_sale_prc": 410500,
+                        "sale_prc": 533500,
+                    }
+                ]
+            },
+        },
+    }
+
+
+def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
+    current_ev_suitability_comparison.set(True)
+
+    result = try_build_template([_product_entry()], "전기차에는 전기차 전용 타이어가 유리합니다.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assert "전기차 전용 타이어를 우선 추천" in result["data"]["assistantResponse"]
+
+
+def test_ev_suitability_does_not_override_stock_product_flow() -> None:
+    current_ev_suitability_comparison.set(True)
+    current_pending_intent.set("stock")
+    current_goal_type.set("store_with_stock")
+
+    result = try_build_template([_product_entry()], "상품을 검색했습니다.")
+
+    assert result is not None
+    assert result["template"] == "product"
 
 
 # --------------------------------------------------------------------------- #
@@ -368,6 +450,39 @@ def test_order_schedule_still_blocks_datepick_when_online_install_unavailable() 
     result = try_build_template([entry], "예약 가능한 일정을 확인했어요.")
 
     assert result is None
+
+
+def test_specific_date_store_availability_maps_detail_slots_to_datepick() -> None:
+    """A single-date open/holiday question should show the concrete slots,
+    even when no product/order booking tool ran in the same turn."""
+    current_store_date_availability.set(True)
+    entry = _store_detail_entry(cal_day="20260606", available_slots=["09", "10", "11", "13", "14", "15", "16", "17"])
+
+    result = try_build_template([entry], "고객님, 티스테이션 송파오금점 매장 정보를 안내드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["assistantResponse"] == "2026년 6월 6일 (토) 티스테이션 송파오금점은 영업하며 예약 가능한 시간이 있습니다."
+    assert result["data"]["metadata"] == {"shopId": "C01312", "shopName": "티스테이션 송파오금점"}
+    assert result["data"]["dates"] == [{
+        "date": "2026년 6월 6일 (토)",
+        "available": True,
+        "availableTimes": [9, 10, 11, 13, 14, 15, 16, 17],
+        "index": 0,
+    }]
+
+
+def test_plain_store_detail_with_slots_still_maps_to_info_quickreply() -> None:
+    """Plain store-info lookups should not turn into a reservation picker just
+    because `get_store_detail_tool` always returns today's available slots."""
+    entry = _store_detail_entry(cal_day="20260606", available_slots=["09", "10"])
+
+    result = try_build_template([entry], "고객님, 티스테이션 송파오금점 매장 정보를 안내드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assert "매장명: 티스테이션 송파오금점" in result["data"]["assistantResponse"]
+    assert "예약 가능한 시간이 있습니다" not in result["data"]["assistantResponse"]
 
 
 # --------------------------------------------------------------------------- #

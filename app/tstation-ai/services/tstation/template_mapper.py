@@ -57,6 +57,13 @@ current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.Cont
     "current_return_visit_store_flow", default=False
 )
 
+# True when the current turn asks whether a store is open/closed or bookable on
+# a specific date. In that case a single-day `get_store_detail_tool` result
+# with slots is the answer, even if there is no product/order booking context.
+current_store_date_availability: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "current_store_date_availability", default=False
+)
+
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
 # routes to /chat (advancing the flow) instead of /append (which only shows
@@ -645,6 +652,11 @@ def _map_qna_complete(tool_data_list: list[dict], assistant_text: str) -> dict |
         "summary": summary,
     }
     short = assistant_text.strip() if assistant_text and len(assistant_text.strip()) <= 120 else "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요."
+    if re.search(r"쿠폰", f"{title}\n{summary}") and re.search(r"만료|원복|복구|다시\s*쓸|재사용", f"{title}\n{summary}"):
+        short = (
+            "만료된 쿠폰은 원칙적으로 원복이 어렵습니다. "
+            "다만 자세한 확인이 필요하시면 아래 버튼을 눌러 1:1 문의를 진행해 주세요."
+        )
     return {"type": "data", "template": "qnaComplete", "data": {**data, "assistantResponse": short}}
 
 
@@ -850,6 +862,11 @@ def _display_product_name(row: dict) -> str:
 def _map_ev_suitability_comparison(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Build a deterministic quickReply for EV tire suitability comparisons."""
     if not current_ev_suitability_comparison.get():
+        return None
+    if current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
+        "store_with_stock",
+        "place_order",
+    ):
         return None
 
     rows: list[dict] = []
@@ -1644,13 +1661,13 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
     tool's input args. Falls back to None when args.cal_day is missing or
     slots are empty/unparseable.
 
-    Booking-intent guard: when the same turn carries no booking-signal tool
-    (stock/price/cart/order), the user is asking for plain store info, not
-    booking a slot. Returning None lets `_map_store_detail_info` render the
+    Intent guard: when the same turn carries no booking-signal tool and the
+    user did not ask about a specific date's opening/availability, treat it as
+    plain store info. Returning None lets `_map_store_detail_info` render the
     info card instead of an unwanted reservation picker.
     """
     called_tools = {e.get("tool", "") for e in tool_data_list}
-    if not (called_tools & _BOOKING_SIGNAL_TOOLS):
+    if not (called_tools & _BOOKING_SIGNAL_TOOLS) and not current_store_date_availability.get():
         return None
     for entry in _find_entries(tool_data_list, "get_store_detail_tool"):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
@@ -1674,11 +1691,17 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         hours = sorted(set(hours))
         if not hours:
             continue
-        short, response_source = _summarize_with_source(assistant_text, "datepick", 1)
         shop_nm = _get_str(raw, "shop_nm")
         metadata: dict = {"shopId": shop_id}
         if shop_nm:
             metadata["shopName"] = shop_nm
+        if current_store_date_availability.get():
+            date_label = _yyyymmdd_to_korean_date(cal_day)
+            shop_label = f"{shop_nm}은" if shop_nm else "해당 매장은"
+            short = f"{date_label} {shop_label} 영업하며 예약 가능한 시간이 있습니다."
+            response_source = "code_mapper"
+        else:
+            short, response_source = _summarize_with_source(assistant_text, "datepick", 1)
         return {
             "type": "data",
             "template": "datepick",

@@ -1406,7 +1406,7 @@ class StreamingMultiAgentCoordinator:
         if active_routing_result is None:
             active_routing_result = self._resolve_routing_for_agent_profile(classify_future, domains)
 
-        for domain in domains:
+        for agent_index, domain in enumerate(domains):
             agent = self._select_agent(domain, active_routing_result)
             if not agent:
                 logger.warning(f"[COORDINATOR] No agent found for domain: {domain}")
@@ -1800,6 +1800,25 @@ class StreamingMultiAgentCoordinator:
                 "status": "done",
             }
 
+            # Auto-chained transaction flows must only continue after Discovery
+            # resolved one concrete goods_no. This is the same safety check used
+            # for first-agent chains below, but it also covers P1-B recovery where
+            # the active list is [TRANSACTION, DISCOVERY, TRANSACTION].
+            if (
+                skip_decision
+                and domain == MultiAgentDomain.Domain.DISCOVERY
+                and any(
+                    next_domain == MultiAgentDomain.Domain.TRANSACTION
+                    for next_domain in domains[agent_index + 1:]
+                )
+                and (pending_slots is None or pending_slots.goods_no is None)
+            ):
+                logger.debug(
+                    "[COORDINATOR] skip_decision=True but Discovery did not resolve "
+                    "goods_no before a queued Transaction agent — stopping chain"
+                )
+                break
+
             if decision_verify_future is not None and decision_verify_future.done():
                 verified_decision = decision_verify_future.result()
                 mismatch_decision = decision_guard.get("mismatch_decision") if decision_guard else None
@@ -2154,7 +2173,7 @@ _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
 # ---------------------------------------------------------------------------
 # "쿠폰 어떻게 받아?", "쿠폰 받아줘", "쿠폰 다운로드" 류 쿠폰 발급/안내 발화는
 # c_transaction_agent 의 GLOBAL 룰 (agent.py:33-) 이 단일 응답
-# ("쿠폰 받기는 쿠폰함에서 가능합니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip)
+# ("현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요..." + 쿠폰함 바로가기/내 쿠폰 조회 chip)
 # 을 emit 한다. 그러나 LLM classifier 가 multi-domain ([transaction, support])
 # 또는 speculative discovery 까지 추가 라우팅하면 discovery_agent 가 자체
 # 응답 ("이벤트/기획전 페이지에서 받기" + 이벤트/기획전 chip) 을 emit 해
@@ -2587,6 +2606,11 @@ _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
 _RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
 _RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
+_WEEKDAY_REQUEST_RE = re.compile(r"(월|화|수|목|금|토|일)\s*(?:요일)?")
+_BOOKING_PREVIEW_CHIPS = [
+    {"label": "예약하기", "domain": "TRANSACTION"},
+    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+]
 
 
 def _yyyymmdd_to_korean_date(s: str) -> str:
@@ -2595,6 +2619,66 @@ def _yyyymmdd_to_korean_date(s: str) -> str:
     except (TypeError, ValueError):
         return s
     return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
+
+
+def _normalize_booking_preview_quickreply(event_data: dict, called_tool_names: set[str]) -> bool:
+    """Add booking-oriented CTAs after a stock/booking preview quickReply.
+
+    `transaction_store_preview_tool` is the ground-truth tool for "this tire,
+    this store, this qty" installability. When it returns a text quickReply
+    (for example "today is unavailable, earliest is next Tuesday"), generic
+    discovery chips are a dead end. Keep this scoped to turns where that tool
+    actually ran so ordinary product/search quickReplies are untouched.
+    """
+    if "transaction_store_preview_tool" not in called_tool_names:
+        return False
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not re.search(r"예약|장착", assistant_text):
+        return False
+    chips = event_data.get("quickReplies")
+    if isinstance(chips, list) and any(
+        isinstance(chip, dict) and "예약" in str(chip.get("label") or "")
+        for chip in chips
+    ):
+        return False
+    event_data["quickReplies"] = [dict(chip) for chip in _BOOKING_PREVIEW_CHIPS]
+    event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
+
+
+def _filter_datepick_to_requested_weekday(event: dict, user_text: str) -> dict | None:
+    """If the user asked for a specific weekday, show only that date in datepick.
+
+    This prevents a follow-up like "화요일 예약할래" from rendering the generic
+    store schedule starting with today after the agent re-queries
+    `get_store_schedule_tool(mode=general)`.
+    """
+    if event.get("template") != "datepick":
+        return None
+    match = _WEEKDAY_REQUEST_RE.search(user_text or "")
+    if not match:
+        return None
+    requested_weekday = match.group(1)
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    dates = event_data.get("dates")
+    if not isinstance(dates, list) or len(dates) <= 1:
+        return None
+    for date_item in dates:
+        if not isinstance(date_item, dict):
+            continue
+        label = str(date_item.get("date") or "")
+        if f"({requested_weekday})" not in label and f"{requested_weekday}요일" not in label:
+            continue
+        filtered_item = dict(date_item)
+        filtered_item["index"] = 0
+        event_data["dates"] = [filtered_item]
+        event_data["selectedDate"] = 0
+        if not event_data.get("assistantResponse") or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요.":
+            event_data["assistantResponse"] = f"{label} 예약 가능한 시간을 선택해 주세요."
+        return event
+    return None
 
 
 def _parse_preview_slot_hour(tm: object) -> int | None:
@@ -3007,7 +3091,10 @@ def _coupon_box_event(message: str) -> dict:
 
 
 def _coupon_issue_event() -> dict:
-    return _coupon_box_event("쿠폰 받기는 쿠폰함에서 가능합니다.")
+    return _coupon_box_event(
+        "고객님, 현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요. "
+        "쿠폰 받기는 쿠폰함에서 확인하고 진행하실 수 있습니다."
+    )
 
 
 def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> dict:
@@ -3230,6 +3317,35 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
         logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
     return None
+
+
+_EV_CONTEXT_RE = re.compile(
+    r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_EV_SUITABILITY_RE = re.compile(
+    r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라",
+    re.IGNORECASE,
+)
+_EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
+_EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
+
+
+def _is_ev_suitability_turn(
+    text: str,
+    pending_intent: str | None = None,
+    goal_type: str | None = None,
+) -> bool:
+    """Return True only for EV tire suitability/explanation turns.
+
+    Product names such as "iON evo" must not satisfy the EV context by
+    substring, and stock/order/reservation turns must stay in Transaction flow.
+    """
+    if not text:
+        return False
+    if pending_intent in _EV_BLOCKING_TRANSACTION_INTENTS or goal_type in _EV_BLOCKING_TRANSACTION_GOALS:
+        return False
+    return bool(_EV_CONTEXT_RE.search(text) and _EV_SUITABILITY_RE.search(text))
 
 
 def _rule_based_classify(
@@ -4971,6 +5087,7 @@ class TStationChatServiceV2:
             current_pending_intent,
             current_runflat_comparison,
             current_return_visit_store_flow,
+            current_store_date_availability,
         )
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
@@ -4978,13 +5095,29 @@ class TStationChatServiceV2:
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
         ))
-        current_ev_suitability_comparison.set(bool(
-            re.search(r"전기차|EV|electric|테슬라|모델\s*Y|모델Y", last_user_text, re.IGNORECASE)
-            and re.search(r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라", last_user_text, re.IGNORECASE)
+        current_ev_suitability_comparison.set(_is_ev_suitability_turn(
+            last_user_text,
+            merged_slots.pending_intent,
+            merged_slots.goal_type,
         ))
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
         ))
+        has_store_availability_keyword = bool(
+            re.search(r"영업|운영|휴무|휴일|쉬어|열어|문\s*열|문\s*닫|예약|가능|스케줄|시간", last_user_text)
+        )
+        has_date_reference = bool(
+            re.search(
+                r"\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|"
+                r"오늘|내일|모레|이번\s*주|다음\s*주|다다음\s*주|이번\s*주말|주말|"
+                r"월요일|화요일|수요일|목요일|금요일|토요일|일요일|"
+                r"공휴일|휴일|연휴|"
+                r"설날|설\s*연휴|추석|현충일|광복절|개천절|한글날|성탄절|크리스마스|"
+                r"석가탄신일|부처님\s*오신\s*날|어린이날|삼일절|3\.1절",
+                last_user_text,
+            )
+        )
+        current_store_date_availability.set(has_store_availability_keyword and has_date_reference)
 
         _t_prestream = time.perf_counter()
         logger.debug(
@@ -5534,6 +5667,16 @@ class TStationChatServiceV2:
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
                     event_data = event.get("data", {})
+                coerced_event = _filter_datepick_to_requested_weekday(event, user_query)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] datepick filtered to requested weekday"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = last_template_source or "code_mapper"
+                    last_assistant_response_source = "code_mapper_weekday_filter"
+                    event_data = event.get("data", {})
                 coerced_event = _coerce_non_selection_listcar_to_quickreply(event)
                 if coerced_event is not None:
                     logger.warning(
@@ -5671,6 +5814,18 @@ class TStationChatServiceV2:
                         last_user_text=user_query,
                     ):
                         logger.info("[COUPON_RESOLVER] normalized unmatched coupon quickReply")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
+                    if _normalize_booking_preview_quickreply(event_data, called_tool_names):
+                        logger.info(
+                            "[QUICKREPLY_FILTER] booking preview chips normalized"
+                        )
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
                         draft_for_qc = assistant_response
