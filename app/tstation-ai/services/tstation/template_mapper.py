@@ -64,6 +64,9 @@ current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.Cont
 current_store_date_availability: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "current_store_date_availability", default=False
 )
+current_user_text: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_user_text", default=""
+)
 
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
@@ -372,6 +375,66 @@ def _tire_summary_second_line(row: dict) -> str:
     return "주행 조건에 맞춰 검토할 수 있는 타이어입니다."
 
 
+_PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
+
+
+def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
+    """Answer size/fitment-size questions from product search results.
+
+    Product search results should serve the user's purpose. If the user asks
+    which sizes a searched product family has, a generic "size not confirmed"
+    summary is the wrong answer; list the SKU sizes returned by search instead.
+    """
+    user_text = current_user_text.get()
+    if not _PRODUCT_SEARCH_SIZE_INTENT_RE.search(user_text):
+        return None
+
+    grouped: dict[str, list[str]] = {}
+    found = False
+    for entry in _find_entries(tool_data_list, "search_product_tool"):
+        if _has_size_arg(entry):
+            continue
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        found = True
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = _get_str(row, "goods_nm", "title")
+            size = _get_str(row, "tire_size_1", "tire_size_2")
+            if not name or not size:
+                continue
+            sizes = grouped.setdefault(name, [])
+            if size not in sizes:
+                sizes.append(size)
+
+    if not found or not grouped:
+        return None
+
+    lines = ["검색된 상품은 현재 아래 사이즈로 확인돼요."]
+    for name, sizes in list(grouped.items())[:5]:
+        lines.append(f"- {name}: {', '.join(sizes[:12])}")
+    lines.extend([
+        "",
+        "차량에 장착 가능한지는 차량번호나 현재 타이어 규격 기준으로 다시 확인해 주세요.",
+    ])
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+        "assistant_response_source": "code_mapper",
+    }
+
+
 def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Summarize tire patterns as text when no vehicle/size is confirmed.
 
@@ -387,6 +450,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         return None
     if _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         return None
+    product_search_size_summary = _map_product_search_size_summary(tool_data_list)
+    if product_search_size_summary:
+        return product_search_size_summary
 
     rows_by_name: dict[str, dict] = {}
     found_product_tool = False

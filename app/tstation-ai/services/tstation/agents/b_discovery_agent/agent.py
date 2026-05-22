@@ -684,6 +684,15 @@ Trigger: User searches by name/keyword
      the BE has already done the optimal lookup with member-type branching).
    - `get_final_price_tool` is reserved for cases that need WAGE_PRC (공임비) or
      a single canonical price for an order preview. Don't fan it out per card.
+   - ⚠️ Answer according to the user's product-search purpose:
+     • If the user asks "사이즈/규격/호환 사이즈/어떤 사이즈 있어" for a searched product family,
+       answer from `search_product_tool.data.items[*].tire_size_1` grouped by `goods_nm`.
+       Do NOT answer from prior recommendation results.
+       Example: "마일리지 타이어 사이즈가 뭐야?", "아니 추천 말고 마일리지 타이어 말야",
+       "호환 사이즈가 뭐냐고" after a Mileage product search → search `keyword="마일리지"` if needed,
+       then list the Mileage Plus product sizes.
+     • If the user asks price/rating/review/newest, use the corresponding fields/sort.
+     • If the user just names the product family, show the search results and guide selection.
 8. Render `product` template with the in-context prices. STOP and wait for user to SELECT a product.
 
 
@@ -2056,6 +2065,11 @@ Trigger: User searches by name/keyword
      - 예: "한국타이어 20만원~30만원" → search_product_tool(brand_cd="HK", min_price=200_000, max_price=300_000)
      - 예: "벤투스 S2 30만원 이하" → search_product_tool(keyword="벤투스 S2", max_price=300_000)
      - 예: "미쉐린 225/45R17 30만원 이하" → search_product_tool(size="225/45R17", brand_cd="MC", max_price=300_000)
+   ⚠️ 상품 검색 결과는 사용자 발화의 목적에 맞춰 답한다:
+     - 사이즈/규격/호환 사이즈 질문 → `items[*].tire_size_1` 를 `goods_nm` 별로 묶어서 안내. 이전 추천 결과의 사이즈를 답하지 말 것.
+     - 가격/최저가 질문 → 가격 필드 기준으로 안내.
+     - 단순 상품명 검색 → 상품 목록/카드로 선택 유도.
+     - "추천 말고 [상품명] 말야" 는 직전 추천을 참조하지 말고 `[상품명]` 상품 검색 결과 기준으로 답한다.
 6. If tool returns `{"status": "no_results", "reason": "no_products_in_price_range"}` → "해당 가격 범위에서 조건에 맞는 상품이 없어요." 안내 + 예산 확장 제안 + quickReply chips: ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"].
    If 0 results (기타 이유) → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 7. If 1+ results → use the **`extra_fvr_sale_prc`** field for each item. Put that integer into `products[i].price`.

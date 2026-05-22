@@ -5240,11 +5240,25 @@ class TStationChatServiceV2:
             current_runflat_comparison,
             current_return_visit_store_flow,
             current_store_date_availability,
+            current_user_text,
         )
         from services.tstation.agents.b_discovery_agent.tools import current_confirmed_tire_size
+        recent_user_texts: list[str] = []
+        for msg in reversed(request.messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content", "")
+            if "USER CONTEXT INFORMATION" in content:
+                continue
+            extracted = TStationChatServiceV2._extract_current_user_input(content)
+            if extracted:
+                recent_user_texts.append(extracted)
+            if len(recent_user_texts) >= 3:
+                break
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
         current_confirmed_tire_size.set(merged_slots.tire_size)
+        current_user_text.set("\n".join(reversed(recent_user_texts)) or last_user_text)
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
