@@ -1406,7 +1406,7 @@ class StreamingMultiAgentCoordinator:
         if active_routing_result is None:
             active_routing_result = self._resolve_routing_for_agent_profile(classify_future, domains)
 
-        for domain in domains:
+        for agent_index, domain in enumerate(domains):
             agent = self._select_agent(domain, active_routing_result)
             if not agent:
                 logger.warning(f"[COORDINATOR] No agent found for domain: {domain}")
@@ -1799,6 +1799,25 @@ class StreamingMultiAgentCoordinator:
                 "agent": f"[{domain_key.upper()} AGENT]",
                 "status": "done",
             }
+
+            # Auto-chained transaction flows must only continue after Discovery
+            # resolved one concrete goods_no. This is the same safety check used
+            # for first-agent chains below, but it also covers P1-B recovery where
+            # the active list is [TRANSACTION, DISCOVERY, TRANSACTION].
+            if (
+                skip_decision
+                and domain == MultiAgentDomain.Domain.DISCOVERY
+                and any(
+                    next_domain == MultiAgentDomain.Domain.TRANSACTION
+                    for next_domain in domains[agent_index + 1:]
+                )
+                and (pending_slots is None or pending_slots.goods_no is None)
+            ):
+                logger.debug(
+                    "[COORDINATOR] skip_decision=True but Discovery did not resolve "
+                    "goods_no before a queued Transaction agent — stopping chain"
+                )
+                break
 
             if decision_verify_future is not None and decision_verify_future.done():
                 verified_decision = decision_verify_future.result()
