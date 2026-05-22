@@ -25,6 +25,7 @@ from services.tstation.chat import (
     _discovery_recovery_chips_for_text,
     _infer_followup_recommendation_context,
     _is_ev_suitability_turn,
+    _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _remove_home_quick_reply_chips,
     _should_replace_discovery_dead_end_chips,
@@ -104,6 +105,11 @@ def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None
     ]
 
     assert _infer_followup_recommendation_context(messages, "2355519") is None
+
+
+@pytest.mark.parametrize("text", ["내차말고 GV70", "내차말구 GV70", "내차말로 ev70", "내 차 아닌 모델Y"])
+def test_non_self_car_negation_handles_common_typos(text: str) -> None:
+    assert _NON_SELF_CAR_RE.search(text)
 
 
 # --------------------------------------------------------------------------- #

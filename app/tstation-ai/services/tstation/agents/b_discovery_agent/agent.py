@@ -1536,7 +1536,7 @@ Tire size priority: user's new input > confirmed slot > user context fallback.
 If the user names a car model (e.g., "G90", "그랜저 IG", "모델Y") that is NOT the same vehicle the confirmed
 `타이어 사이즈` slot originated from, the slot is for the WRONG car. IGNORE it completely and do NOT pass it
 to `get_products_recommendations_tool`. Re-derive size for the new vehicle:
-- Negative-ownership phrasing ("내차말고/내 차 말고/내차 아닌/다른 차종/저장차 아닌/등록차 아닌") → skip
+- Negative-ownership phrasing ("내차말고/내차말구/내차말로/내 차 말고/내차 아닌/다른 차종/저장차 아닌/등록차 아닌") → skip
   `get_my_cars_tool` and go directly to **CAR MODEL DISPLAY** flow (대표 사이즈 2-3개 + 사이즈 확인 방법 + 사용자 입력 유도).
 - Possessive phrasing ("내 [차종]") → `get_my_cars_tool` 호출. Possessive auto-match 룰의 0대 매칭 분기는
   **CAR MODEL DISPLAY** flow 로 위임된다.
@@ -1581,7 +1581,7 @@ Choose exactly one branch before calling tools:
      → **정확히 1대 매칭** → listCar 출력 **금지**. 한 줄 인트로 "**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요." 출력 후 같은 턴에서 즉시 `get_products_recommendations_tool(tire_size=<tire_size_fr>, limit=3, rcmd_type=...)` 를 chain 호출한다. 이 한 줄 인트로는 Transaction Agent 가 preOrder 의 carInfo 를 채울 때 출처가 되므로 절대 생략하지 말 것.
      → **0대 매칭** → 등록 차량 중 해당 차종이 없음. listCar 출력 **금지**. **CAR MODEL DISPLAY 룰로 위임** — LLM own knowledge 로 해당 차종의 대표 세대/트림 2-3개 + 각 대표 사이즈 안내 + 사이즈 확인 방법 + 사용자 사이즈 입력 유도 (방법 1️⃣/2️⃣/3️⃣). `get_products_recommendations_tool` 호출 **금지** — 정확한 사이즈가 확정될 때까지 대기. 다음 턴에 사용자가 사이즈를 입력하면 CAR MODEL DISPLAY STEP 3 흐름대로 RECOMMEND ENGINE 진행.
      → **2+대 매칭** (드물게 같은 모델 여러 대) → 매칭된 차량만 listCar 로 노출하고 선택 대기.
-   - ⚠️ NEGATIVE OWNERSHIP — "내차말고/내 차 말고/내차 아닌/저장차 아닌/등록차 아닌/다른 차종" 등 부정어와 함께 차종명이 등장하면 (예: "내차말고 G90", "다른 차 그랜저 IG", "저장차 아닌 모델Y"):
+   - ⚠️ NEGATIVE OWNERSHIP — "내차말고/내차말구/내차말로/내 차 말고/내차 아닌/저장차 아닌/등록차 아닌/다른 차종" 등 부정어와 함께 차종명이 등장하면 (예: "내차말고 G90", "내차말로 GV70", "다른 차 그랜저 IG", "저장차 아닌 모델Y"):
      `get_my_cars_tool` 호출 **금지** — 사용자가 명시적으로 등록차를 배제했다. 즉시 **CAR MODEL DISPLAY 룰** 로 진입해 대표 사이즈 2-3개 + 사이즈 확인 방법 + 사용자 입력 유도 한 번에 처리. 시스템이 stale 슬롯을 자동으로 비웠으므로 `[확인된 고객 정보 - 타이어 사이즈]` 가 남아있어도 **무시**하고 새 차종 기준으로 다시 안내한다.
    - If multiple cars are returned AND the user did not specify a car model name, let the system render listCar and wait for selection.
    - If one or more cars are returned, do not invent a tire size. Use returned tire_size_fr only after the user-selected/identified car is clear.
@@ -1596,7 +1596,7 @@ Choose exactly one branch before calling tools:
 
 4. Non-self car model request (NEW — supersedes branches 1–3 when applicable):
    - Trigger: user names a car model (e.g., "G90", "그랜저 IG", "모델Y", "팰리세이드") AND any of:
-     (a) the message contains negative-ownership phrasing ("내차말고", "내 차 말고", "내차 아닌", "다른 차종",
+     (a) the message contains negative-ownership phrasing ("내차말고", "내차말구", "내차말로", "내 차 말고", "내차 아닌", "다른 차종",
          "저장차 아닌", "등록차 아닌"); OR
      (b) the message uses a possessive marker ("내 [차종]") but the named model is NOT in `get_my_cars_tool` result; OR
      (c) the message has no possessive marker, just the car model name + recommend intent
