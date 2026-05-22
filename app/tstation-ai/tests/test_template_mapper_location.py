@@ -247,6 +247,16 @@ def test_unsized_transaction_flow_still_maps_to_product_cards() -> None:
     assert result["template"] == "product"
 
 
+def test_recommendation_with_car_lnc_cd_maps_to_product_cards() -> None:
+    entry = _unsized_recommendation_entry()
+    entry["args"] = {"rcmd_type": "performance", "limit": 3, "brand_cd": "HK", "car_lnc_cd": "W011338"}
+
+    result = try_build_template([entry], "추천 상품을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "product"
+
+
 def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
     current_ev_suitability_comparison.set(True)
 

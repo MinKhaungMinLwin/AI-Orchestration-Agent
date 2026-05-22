@@ -327,7 +327,7 @@ def _tool_args(entry: dict) -> dict:
 
 def _has_size_arg(entry: dict) -> bool:
     args = _tool_args(entry)
-    return bool(args.get("size") or args.get("tire_size"))
+    return bool(args.get("size") or args.get("tire_size") or args.get("car_lnc_cd"))
 
 
 def _numeric_score(row: dict, *keys: str) -> float:
