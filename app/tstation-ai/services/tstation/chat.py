@@ -3331,6 +3331,40 @@ _VEHICLE_SUITABILITY_RE = re.compile(
 )
 _EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
 _EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
+_SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
+_RECOMMENDATION_BRIDGE_RE = re.compile(
+    r"추천|규격|사이즈|차종|차량|타이어|전용|적합|맞는|찾기|골라",
+    re.IGNORECASE,
+)
+_FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS: tuple[tuple[str, str, str | None], ...] = (
+    (r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])", "전기차용", "ev"),
+    (r"SUV|스포츠\s*유틸리티", "SUV 차량용", None),
+    (r"세단|승용차", "승용/세단 차량용", None),
+    (r"경차|소형차", "경차/소형차용", None),
+    (r"화물차|트럭|밴|승합차|고하중|무거운\s*짐", "하중 중심 차량용", "heavy_load"),
+    (r"가성비|저렴|싼|cheap|value", "가성비", "value"),
+    (r"할인|세일|할인율", "할인", "discount"),
+    (r"조용|정숙|소음|진동", "정숙/저진동", "low_vibration"),
+    (r"빗길|젖은\s*노면|wet|비\s*오는", "빗길", "wet"),
+    (r"눈길|겨울|winter|스노우", "겨울/눈길", "snow"),
+    (r"사계절|올시즌", "사계절", "all_weather"),
+    (r"올웨더|전천후|all[-\s]?weather", "올웨더", "all_weather"),
+    (r"여름|summer", "여름", "summer"),
+    (r"고속|고속도로|high\s*speed", "고속 주행", "high_speed"),
+    (r"퍼포먼스|스포츠|코너링|핸들링|performance|handling", "퍼포먼스/핸들링", "performance"),
+    (r"패밀리|가족|승차감|컴포트|comfort", "가족/승차감", "family"),
+    (r"출퇴근|통근|commute", "출퇴근", "commute"),
+    (r"장거리|long\s*distance", "장거리", "long_distance"),
+    (r"도심|시내|urban", "도심 주행", "urban"),
+    (r"주말|weekend", "주말 주행", "weekend"),
+    (r"아이|키즈|안전", "아이/안전", "safe_kids"),
+    (r"흡음재|노이즈\s*흡수", "흡음재", "sound_absorber"),
+    (r"보증|warranty", "보증", "warranty"),
+)
+_FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED = tuple(
+    (re.compile(pattern, re.IGNORECASE), label, rcmd_type)
+    for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS
+)
 
 
 def _is_ev_suitability_turn(
@@ -3348,6 +3382,72 @@ def _is_ev_suitability_turn(
     if pending_intent in _EV_BLOCKING_TRANSACTION_INTENTS or goal_type in _EV_BLOCKING_TRANSACTION_GOALS:
         return False
     return bool(_VEHICLE_CATEGORY_CONTEXT_RE.search(text) and _VEHICLE_SUITABILITY_RE.search(text))
+
+
+def _infer_followup_recommendation_context(messages: list[dict], last_user_text: str) -> str | None:
+    """Infer the scenario/category to preserve when the user replies with only a tire size.
+
+    This is deliberately generic: EV is just one supported scenario. The same
+    bridge preserves SUV/compact/heavy-load categories and performance/season/
+    price scenarios when an intermediate chip like "규격으로 찾기" separates the
+    original recommendation request from the final size input.
+    """
+    if not last_user_text or not _SIZE_ONLY_RE.match(last_user_text):
+        return None
+    if not messages:
+        return None
+
+    current_seen = False
+    recent_texts: list[str] = []
+    for message in reversed(messages):
+        role = str(message.get("role") or "")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        if not current_seen and role == "user" and content.endswith(last_user_text.strip()):
+            current_seen = True
+            continue
+        recent_texts.append(content)
+        if len(recent_texts) >= 8:
+            break
+
+    if not recent_texts:
+        return None
+    context_blob = "\n".join(reversed(recent_texts))
+    if not _RECOMMENDATION_BRIDGE_RE.search(context_blob):
+        return None
+
+    matches: list[tuple[str, str | None]] = []
+    for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED:
+        if pattern.search(context_blob):
+            matches.append((label, rcmd_type))
+    if not matches:
+        return None
+
+    labels: list[str] = []
+    rcmd_type: str | None = None
+    for label, candidate_rcmd_type in matches:
+        if label not in labels:
+            labels.append(label)
+        if rcmd_type is None and candidate_rcmd_type:
+            rcmd_type = candidate_rcmd_type
+
+    lines = [
+        "## 후속 추천 조건",
+        f"- 현재 사용자 입력은 타이어 규격만 제공한 후속 입력입니다: {last_user_text.strip()}",
+        f"- 직전 추천/적합성 상담의 조건을 유지하세요: {', '.join(labels[:3])}",
+    ]
+    if rcmd_type:
+        lines.append(f"- get_products_recommendations_tool 호출 시 rcmd_type='{rcmd_type}' 를 우선 사용하세요.")
+    else:
+        lines.append(
+            "- 해당 조건에 직접 대응하는 rcmd_type 이 없으면 rcmd_type='tstation' 으로 조회하되, "
+            "결과 설명/필터링에서 위 차량 카테고리 조건을 유지하세요."
+        )
+    lines.append("- 이 규격 입력을 새 일반 추천으로 초기화하지 마세요.")
+    return "\n".join(lines)
 
 
 def _rule_based_classify(
@@ -4610,6 +4710,20 @@ class TStationChatServiceV2:
             # downstream coordinator only injects one block.
             if slot_context_with_intent == slot_context:
                 slot_context_with_intent = None
+
+            followup_recommendation_context = _infer_followup_recommendation_context(messages, last_user_text)
+            if followup_recommendation_context:
+                slot_context = (
+                    f"{slot_context}\n\n{followup_recommendation_context}"
+                    if slot_context
+                    else followup_recommendation_context
+                )
+                slot_context_with_intent = (
+                    f"{slot_context_with_intent}\n\n{followup_recommendation_context}"
+                    if slot_context_with_intent
+                    else slot_context_with_intent
+                )
+                logger.debug("[SLOTS] Injected follow-up recommendation context from recent history")
 
             # 6) Format tool context for prompt injection
             if prev_tool_data:

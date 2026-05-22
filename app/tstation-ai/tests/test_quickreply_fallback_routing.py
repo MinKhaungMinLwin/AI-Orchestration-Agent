@@ -23,6 +23,7 @@ from services.tstation.chat import (
     _choose_quickreply_fallback,
     _coerce_reservation_quickreply_to_datepick,
     _discovery_recovery_chips_for_text,
+    _infer_followup_recommendation_context,
     _is_ev_suitability_turn,
     _looks_like_generic_dead_end_chips,
     _remove_home_quick_reply_chips,
@@ -57,6 +58,52 @@ def test_ev_suitability_does_not_treat_evo_as_ev_context() -> None:
 def test_ev_suitability_does_not_override_stock_turn_even_for_ev_owner() -> None:
     text = "전기차 타는데 iON evo 재고 있을까? 오늘 당장 장착해야 해"
     assert _is_ev_suitability_turn(text, pending_intent="stock", goal_type="store_with_stock") is False
+
+
+def test_followup_size_input_preserves_ev_recommendation_context() -> None:
+    messages = [
+        {
+            "role": "user",
+            "content": "내 차는 전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?",
+        },
+        {
+            "role": "assistant",
+            "content": "전기차는 전기차용 타이어를 우선 확인하는 것이 좋아요. 정확한 차량이나 규격을 확인해 주세요.",
+        },
+        {"role": "user", "content": "규격으로 찾기"},
+        {"role": "user", "content": "2355519"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "2355519")
+
+    assert context is not None
+    assert "전기차용" in context
+    assert "rcmd_type='ev'" in context
+
+
+def test_followup_size_input_preserves_non_ev_vehicle_category_context() -> None:
+    messages = [
+        {"role": "user", "content": "내 차는 SUV인데 승용차용 타이어 껴도 돼?"},
+        {"role": "assistant", "content": "SUV는 하중과 차종 조건이 중요해요. 차량이나 규격을 확인해 주세요."},
+        {"role": "user", "content": "사이즈 직접 입력"},
+        {"role": "user", "content": "2355519"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "2355519")
+
+    assert context is not None
+    assert "SUV 차량용" in context
+    assert "rcmd_type='tstation'" in context
+
+
+def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None:
+    messages = [
+        {"role": "user", "content": "안녕하세요"},
+        {"role": "assistant", "content": "무엇을 도와드릴까요?"},
+        {"role": "user", "content": "2355519"},
+    ]
+
+    assert _infer_followup_recommendation_context(messages, "2355519") is None
 
 
 # --------------------------------------------------------------------------- #

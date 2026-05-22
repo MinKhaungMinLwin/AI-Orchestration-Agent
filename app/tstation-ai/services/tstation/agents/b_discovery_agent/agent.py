@@ -1672,6 +1672,15 @@ Override only when the user already gave a scenario:
 If the user gives a price budget/range, pass min_price/max_price to the recommendation tool.
 If the user asks for cheapest/rating/review order, pass sort_by when supported by the tool.
 
+⚠️ FOLLOW-UP SIZE INPUT CONTEXT:
+If the system prompt includes `## 후속 추천 조건`, the current user entered only a tire size after a prior
+recommendation/fitment scenario. Preserve that scenario generically — not just EV. Examples:
+- prior EV/electric context → use rcmd_type="ev" with the new tire_size.
+- prior winter/wet/quiet/value/discount/family/etc. context → keep the matching rcmd_type with the new tire_size.
+- prior SUV/세단/경차/트럭 등 vehicle-category context with no direct rcmd_type → use rcmd_type="tstation" with the
+  new tire_size, then keep/filter/explain results according to the vehicle category metadata when available.
+Do NOT reset to a plain T'Station recommendation if the follow-up context names a scenario-specific rcmd_type.
+
 Discounted tire ranking is a product recommendation flow. For requests asking to
 show tires with the highest current sale/discount applied, call
 get_products_recommendations_tool(rcmd_type="discount") and render product cards.
