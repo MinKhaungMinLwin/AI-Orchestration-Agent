@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app && chmod 755 /app/data
 USER appuser
 
 CMD ["uv", "run", "main.py"]

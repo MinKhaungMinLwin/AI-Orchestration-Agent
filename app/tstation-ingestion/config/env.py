@@ -49,6 +49,22 @@ class Settings(BaseSettings):
     EMBEDDING_PROVIDER: str = Field(default="openai")
     EMBEDDING_MODEL: str = Field(default="text-embedding-3-large")
 
+    ### -------------------------------
+    # FAQ Periodic Sync (tstation-be → Qdrant)
+    ### -------------------------------
+    TSTATION_BE_API: str = Field(
+        default="",
+        description="Base URL for tstation-be API (e.g. http://tstation-be:8000). Required for periodic FAQ sync.",
+    )
+    JWT_TOKEN: str = Field(
+        default="",
+        description="Bearer JWT token used by the ingestion service to authenticate against tstation-be /api/faq.",
+    )
+    FAQ_SYNC_INTERVAL_SECONDS: int = Field(
+        default=3600,
+        description="Interval in seconds between periodic FAQ fetches from tstation-be into Qdrant.",
+    )
+
     class Config:
         # automatically load variables from a .env file in the project root
         env_file = ".env"

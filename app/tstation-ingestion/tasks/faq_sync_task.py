@@ -173,11 +173,12 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
 
     stats = qdrant_svc.get_collection_stats(target_collection)
     indexed_count = stats.get("points_count") or 0
-    if indexed_count != len(slim_docs):
+    expected_count = len(set(point_ids))
+    if indexed_count != expected_count:
         qdrant_svc.delete_collection(target_collection)
         raise RuntimeError(
             f"Indexed count mismatch for {target_collection}: "
-            f"expected={len(slim_docs)} actual={indexed_count}"
+            f"expected={expected_count} actual={indexed_count}"
         )
 
     old_collection = qdrant_svc.swap_alias(alias_name, target_collection)
