@@ -6,6 +6,7 @@ into the Qdrant multi-vector collection with deterministic point IDs for
 idempotency (same FAQ id → same Qdrant point ID → update, not duplicate).
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +31,11 @@ _TASK_TTL = 8 * 3600  # Redis key TTL: 8 hours
 def _faq_point_id(faq_id: str | int) -> str:
     """Deterministic UUID v5 from FAQ id — enables idempotent Qdrant upsert."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, str(faq_id)))
+
+
+def _content_hash(question: str, answer: str) -> str:
+    """MD5 fingerprint of question+answer — detects content changes for incremental sync."""
+    return hashlib.md5(f"{question}\n{answer}".encode()).hexdigest()
 
 
 def _update_redis_status(task_id: str, status: str, result: dict | None = None, error: str | None = None):
@@ -152,6 +158,7 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
         meta["keywords_normalized"] = DocumentProcessor.normalize_keywords(
             meta.get("keywords", [])
         )
+        meta["content_hash"] = _content_hash(doc.get("question", ""), doc.get("answer", ""))
         slim_docs.append(
             {
                 "id": doc.get("id"),
@@ -189,6 +196,105 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
             "previous_collection_name": old_collection,
         }
     )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Incremental sync (periodic fetch: only embed/upsert what changed)
+# ---------------------------------------------------------------------------
+
+def _run_incremental_sync(documents: list[dict], collection_name: str) -> dict:
+    """
+    Incremental FAQ sync: only embed and upsert changed/new docs, delete removed ones.
+    Falls back to full _run_ingestion if the target collection does not exist yet.
+    """
+    from config.env import settings
+    from rag.document_processor import DocumentProcessor
+    from rag.embedding_service import get_embedding_service
+    from rag.qdrant_service import get_qdrant_service
+
+    qdrant_svc = get_qdrant_service(
+        host=settings.QDRANT_HOST,
+        port=settings.QDRANT_PORT,
+        api_key=settings.QDRANT_API_KEY or None,
+    )
+
+    # Resolve live collection from alias (or direct name)
+    live_collection = qdrant_svc.get_alias_target(collection_name)
+    if live_collection is None:
+        existing = {c.name for c in qdrant_svc.client.get_collections().collections}
+        if collection_name not in existing:
+            logger.info("[incremental_sync] Collection absent — running full ingestion")
+            return _run_ingestion(documents, collection_name)
+        live_collection = collection_name
+
+    # Normalize documents
+    documents = [DocumentProcessor._normalize_document(doc, idx) for idx, doc in enumerate(documents)]
+
+    # Build incoming map: point_id → entry
+    incoming: dict[str, dict] = {}
+    for doc in documents:
+        meta = dict(doc.get("metadata", {}))
+        meta["keywords_normalized"] = DocumentProcessor.normalize_keywords(meta.get("keywords", []))
+        c_hash = _content_hash(doc.get("question", ""), doc.get("answer", ""))
+        meta["content_hash"] = c_hash
+        q_text, a_text = DocumentProcessor.build_embedding_texts(doc)
+        point_id = _faq_point_id(doc.get("id"))
+        incoming[point_id] = {
+            "slim_doc": {
+                "id": doc.get("id"),
+                "question": doc.get("question", ""),
+                "answer": doc.get("answer", ""),
+                "metadata": meta,
+            },
+            "q_text": q_text,
+            "a_text": a_text,
+            "content_hash": c_hash,
+        }
+
+    # Compare with existing hashes in Qdrant
+    existing_hashes = qdrant_svc.get_all_content_hashes(live_collection)
+    to_upsert = [pid for pid, v in incoming.items() if existing_hashes.get(pid) != v["content_hash"]]
+    to_delete = [pid for pid in existing_hashes if pid not in incoming]
+
+    logger.info(
+        "[incremental_sync] total=%d upsert=%d delete=%d unchanged=%d",
+        len(incoming), len(to_upsert), len(to_delete), len(incoming) - len(to_upsert),
+    )
+
+    if not to_upsert and not to_delete:
+        logger.info("[incremental_sync] No changes detected — skipping OpenAI + Qdrant writes")
+        return {"status": "success", "collection_name": live_collection, "upserted_count": 0, "deleted_count": 0}
+
+    result: dict = {"collection_name": live_collection, "upserted_count": 0, "deleted_count": 0}
+
+    if to_upsert:
+        api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+        embedding_svc = get_embedding_service(
+            model=settings.EMBEDDING_MODEL,
+            provider=settings.EMBEDDING_PROVIDER,
+            api_key=api_key,
+        )
+        entries = [incoming[pid] for pid in to_upsert]
+        all_texts = [e["q_text"] for e in entries] + [e["a_text"] for e in entries]
+        embeddings = embedding_svc.embed_texts(all_texts)
+        q_vecs = embeddings[: len(to_upsert)]
+        a_vecs = embeddings[len(to_upsert) :]
+
+        upsert_result = qdrant_svc.upsert_multi_vector(
+            collection_name=live_collection,
+            documents=[e["slim_doc"] for e in entries],
+            question_vectors=q_vecs,
+            answer_vectors=a_vecs,
+            point_ids=to_upsert,
+            batch_size=50,
+        )
+        result["upserted_count"] = upsert_result.get("upserted_count", 0)
+
+    if to_delete:
+        qdrant_svc.delete_points(live_collection, to_delete)
+        result["deleted_count"] = len(to_delete)
+
     return result
 
 
