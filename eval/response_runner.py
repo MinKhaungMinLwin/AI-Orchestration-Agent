@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_jwt_token() -> str:
-    return os.environ.get("EVAL_JWT_TOKEN", "")
+    return os.environ.get("JWT_TOKEN", "")
 
 
 def call_chat(

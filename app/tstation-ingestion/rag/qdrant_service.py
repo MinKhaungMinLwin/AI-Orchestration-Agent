@@ -494,10 +494,10 @@ class QdrantService:
     def get_collection_stats(self, collection_name: str) -> dict:
         """Get collection statistics."""
         try:
-            collection_info = self.client.get_collection(collection_name)
+            count_result = self.client.count(collection_name, exact=True)
             return {
                 "collection_name": collection_name,
-                "points_count": collection_info.points_count,
+                "points_count": count_result.count,
             }
         except Exception:
             logger.exception(f"Failed to get stats for {collection_name}")
