@@ -44,6 +44,11 @@ def test_ev_suitability_detects_explicit_ev_explanation_question() -> None:
     assert _is_ev_suitability_turn(text) is True
 
 
+def test_vehicle_category_suitability_detects_non_ev_question() -> None:
+    text = "내 차는 SUV인데 경차용 타이어 그냥 껴도 되나?"
+    assert _is_ev_suitability_turn(text) is True
+
+
 def test_ev_suitability_does_not_treat_evo_as_ev_context() -> None:
     text = "파주 시청 근처 더타이어샵 매장에 iON evo 재고 있을까? 오늘 당장 장착해야 하는데"
     assert _is_ev_suitability_turn(text, pending_intent="stock", goal_type="store_with_stock") is False

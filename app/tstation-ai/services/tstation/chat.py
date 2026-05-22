@@ -3319,11 +3319,13 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
     return None
 
 
-_EV_CONTEXT_RE = re.compile(
-    r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+_VEHICLE_CATEGORY_CONTEXT_RE = re.compile(
+    r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])|"
+    r"SUV|세단|승용차|경차|소형차|중형차|대형차|화물차|트럭|밴|승합차|"
+    r"수입차|국산차|전륜|후륜|사륜|4륜|AWD|RWD|FWD",
     re.IGNORECASE,
 )
-_EV_SUITABILITY_RE = re.compile(
+_VEHICLE_SUITABILITY_RE = re.compile(
     r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라",
     re.IGNORECASE,
 )
@@ -3345,7 +3347,7 @@ def _is_ev_suitability_turn(
         return False
     if pending_intent in _EV_BLOCKING_TRANSACTION_INTENTS or goal_type in _EV_BLOCKING_TRANSACTION_GOALS:
         return False
-    return bool(_EV_CONTEXT_RE.search(text) and _EV_SUITABILITY_RE.search(text))
+    return bool(_VEHICLE_CATEGORY_CONTEXT_RE.search(text) and _VEHICLE_SUITABILITY_RE.search(text))
 
 
 def _rule_based_classify(

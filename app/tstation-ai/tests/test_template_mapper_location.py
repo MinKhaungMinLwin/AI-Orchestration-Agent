@@ -186,7 +186,11 @@ def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
 
     assert result is not None
     assert result["template"] == "quickReply"
-    assert "전기차 전용 타이어를 우선 추천" in result["data"]["assistantResponse"]
+    assistant_response = result["data"]["assistantResponse"]
+    assert "차량 카테고리만으로는 특정 상품이나 규격을 바로 추천드리기 어렵습니다" in assistant_response
+    assert "보유차량을 확인하거나 차종을 알려주시면" in assistant_response
+    assert "235/35R20" not in assistant_response
+    assert "현재 조회된 상품 기준" not in assistant_response
 
 
 def test_ev_suitability_does_not_override_stock_product_flow() -> None:

@@ -43,8 +43,9 @@ current_runflat_comparison: contextvars.ContextVar[bool] = contextvars.ContextVa
 )
 
 # True only for turns where the user asks whether a regular/named tire is
-# suitable for an EV or why an EV-dedicated tire should be used. In that case
-# the answer is an explanation/comparison, not a generic product-card list.
+# suitable for a vehicle category or why a category-specific tire should be
+# used. In that case the answer is a fitment guardrail, not a generic product
+# card list that may imply a size/product recommendation without vehicle data.
 current_ev_suitability_comparison: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "current_ev_suitability_comparison", default=False
 )
@@ -888,31 +889,30 @@ def _map_ev_suitability_comparison(tool_data_list: list[dict], assistant_text: s
     if not rows:
         return None
 
-    ev_rows = [row for row in rows if _is_ev_product(row)]
     non_ev_rows = [row for row in rows if not _is_ev_product(row)]
-    ev_names = [_display_product_name(row) for row in ev_rows[:3]]
-    non_ev_names = [_display_product_name(row) for row in non_ev_rows[:3]]
+    non_ev_product_names = []
+    seen_non_ev_names: set[str] = set()
+    for row in non_ev_rows:
+        name = _get_str(row, "goods_nm", "title")
+        if not name or name in seen_non_ev_names:
+            continue
+        seen_non_ev_names.add(name)
+        non_ev_product_names.append(name)
 
     lines = [
-        "고객님 차량이 전기차라면 전기차 전용 타이어를 우선 추천드려요.",
+        "타이어는 차량 유형뿐 아니라 차량 모델, 순정 규격, 하중지수, 속도지수까지 함께 맞아야 합니다.",
         "",
-        "전기차는 차량 중량이 크고 순간 토크가 높아 마모, 정숙성, 승차감, 전비에 최적화된 타이어가 유리합니다.",
+        "따라서 전기차, SUV, 경차 같은 차량 카테고리만으로는 특정 상품이나 규격을 바로 추천드리기 어렵습니다.",
+        "",
+        "보유차량을 확인하거나 차종을 알려주시면, 해당 차량 규격 기준으로 장착 가능한 타이어를 안내드릴게요.",
     ]
-    if ev_names:
-        lines.extend([
-            "",
-            f"현재 조회된 상품 기준으로는 {', '.join(ev_names)} 상품이 전기차용으로 확인되어 더 적합합니다.",
-        ])
-    else:
-        lines.extend([
-            "",
-            "현재 조회된 상품 중 전기차 전용으로 확인된 상품은 없어 전기차용 추천 상품을 다시 확인해 드리는 것이 좋습니다.",
-        ])
-    if non_ev_names:
-        lines.extend([
-            "",
-            f"{', '.join(non_ev_names)} 상품도 조건이 맞으면 장착은 검토할 수 있지만, 현재 조회 데이터 기준 전기차 전용 상품으로 확인되지는 않아 1순위 추천은 아닙니다.",
-        ])
+    if non_ev_product_names:
+        lines.extend(
+            [
+                "",
+                f"{', '.join(non_ev_product_names[:2])} 같은 상품도 장착 가능 여부는 차량 카테고리만이 아니라 실제 차량 규격과 하중지수 기준으로 확인해야 합니다.",
+            ]
+        )
 
     return {
         "type": "data",
@@ -920,8 +920,9 @@ def _map_ev_suitability_comparison(tool_data_list: list[dict], assistant_text: s
         "data": {
             "assistantResponse": "\n".join(lines),
             "quickReplies": [
-                {"label": "전기차용 타이어 추천", "domain": "DISCOVERY"},
-                {"label": "다른 상품 비교", "domain": "DISCOVERY"},
+                {"label": "보유차량 확인", "domain": "TRANSACTION"},
+                {"label": "차종으로 추천", "domain": "DISCOVERY"},
+                {"label": "규격으로 찾기", "domain": "DISCOVERY"},
                 {"label": "구매하기", "domain": "TRANSACTION"},
             ],
             "predictedDomains": ["DISCOVERY", "TRANSACTION"],
