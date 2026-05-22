@@ -2173,7 +2173,7 @@ _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
 # ---------------------------------------------------------------------------
 # "쿠폰 어떻게 받아?", "쿠폰 받아줘", "쿠폰 다운로드" 류 쿠폰 발급/안내 발화는
 # c_transaction_agent 의 GLOBAL 룰 (agent.py:33-) 이 단일 응답
-# ("쿠폰 받기는 쿠폰함에서 가능합니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip)
+# ("현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요..." + 쿠폰함 바로가기/내 쿠폰 조회 chip)
 # 을 emit 한다. 그러나 LLM classifier 가 multi-domain ([transaction, support])
 # 또는 speculative discovery 까지 추가 라우팅하면 discovery_agent 가 자체
 # 응답 ("이벤트/기획전 페이지에서 받기" + 이벤트/기획전 chip) 을 emit 해
@@ -3091,7 +3091,10 @@ def _coupon_box_event(message: str) -> dict:
 
 
 def _coupon_issue_event() -> dict:
-    return _coupon_box_event("쿠폰 받기는 쿠폰함에서 가능합니다.")
+    return _coupon_box_event(
+        "고객님, 현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요. "
+        "쿠폰 받기는 쿠폰함에서 확인하고 진행하실 수 있습니다."
+    )
 
 
 def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> dict:
