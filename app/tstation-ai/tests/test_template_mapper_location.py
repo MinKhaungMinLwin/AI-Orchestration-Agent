@@ -179,6 +179,74 @@ def _product_entry() -> dict:
     }
 
 
+def _unsized_recommendation_entry() -> dict:
+    """Build recommendation results with repeated tire names across sizes."""
+    return {
+        "tool": "get_products_recommendations_tool",
+        "args": {"rcmd_type": "ev", "limit": 5},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000317729",
+                        "goods_nm": "아이온 에보 AS",
+                        "tire_size_1": "235/35R20",
+                        "car_knd_nm": "전기차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "SPORT",
+                    },
+                    {
+                        "goods_no": "G000000317730",
+                        "goods_nm": "아이온 에보 AS",
+                        "tire_size_1": "265/35R21",
+                        "car_knd_nm": "전기차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "SPORT",
+                    },
+                    {
+                        "goods_no": "G000000317664",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "265/50R20",
+                        "car_knd_nm": "SUV",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                        "t_life_span": "5",
+                    },
+                ]
+            },
+        },
+    }
+
+
+def test_unsized_recommendation_maps_to_text_summary_not_product_cards() -> None:
+    result = try_build_template([_unsized_recommendation_entry()], "전기차용 타이어를 추천해 드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "- 아이온 에보 AS: 전기차용 사계절 스포츠 타이어입니다." in assistant_response
+    assert "정숙성과 승차감 중심의 타이어입니다." in assistant_response
+    assert "- 다이나프로 HPX: SUV용 사계절 컴포트 타이어입니다." in assistant_response
+    assert "승차감과 마일리지 중심의 타이어입니다." in assistant_response
+    assert assistant_response.count("아이온 에보 AS") == 1
+    assert "235/35R20" not in assistant_response
+    assert "265/35R21" not in assistant_response
+    assert "패턴" not in assistant_response
+    assert "products" not in result["data"]
+
+
+def test_unsized_transaction_flow_still_maps_to_product_cards() -> None:
+    current_pending_intent.set("stock")
+    current_goal_type.set("store_with_stock")
+
+    result = try_build_template([_unsized_recommendation_entry()], "상품을 검색했습니다.")
+
+    assert result is not None
+    assert result["template"] == "product"
+
+
 def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
     current_ev_suitability_comparison.set(True)
 

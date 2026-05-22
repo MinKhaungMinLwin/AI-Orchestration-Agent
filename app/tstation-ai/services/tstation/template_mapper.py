@@ -313,6 +313,132 @@ _GOODS_PFM_LABELS: dict[str, str] = {
     "SPORT": "고속/제동성",
     "RUNFLAT": "런플랫",
 }
+_GOODS_PFM_SUMMARY_LABELS: dict[str, str] = {
+    "COMFORT": "컴포트",
+    "SPORT": "스포츠",
+    "RUNFLAT": "런플랫",
+}
+
+
+def _tool_args(entry: dict) -> dict:
+    args = entry.get("args") or entry.get("input") or {}
+    return args if isinstance(args, dict) else {}
+
+
+def _has_size_arg(entry: dict) -> bool:
+    args = _tool_args(entry)
+    return bool(args.get("size") or args.get("tire_size"))
+
+
+def _numeric_score(row: dict, *keys: str) -> float:
+    for key in keys:
+        value = _get_num(row, key, default=0.0)
+        if value:
+            return float(value)
+    return 0.0
+
+
+def _tire_summary_first_line(row: dict) -> str:
+    parts: list[str] = []
+    car_kind = _get_str(row, "car_knd_nm")
+    season = _get_str(row, "season_nm")
+    goods_pfm = _GOODS_PFM_SUMMARY_LABELS.get(_get_str(row, "goods_pfm_nm").upper())
+    if car_kind:
+        parts.append(f"{car_kind}용")
+    if season:
+        parts.append(season)
+    if goods_pfm and goods_pfm not in parts:
+        parts.append(goods_pfm)
+    if parts:
+        return f"{' '.join(parts)} 타이어입니다."
+    return "상품 정보가 확인된 타이어입니다."
+
+
+def _tire_summary_second_line(row: dict) -> str:
+    car_kind = _get_str(row, "car_knd_nm")
+    goods_pfm = _get_str(row, "goods_pfm_nm").upper()
+    if "전기차" in car_kind:
+        return "정숙성과 승차감 중심의 타이어입니다."
+    if goods_pfm == "COMFORT":
+        if _numeric_score(row, "t_life_span") > 0:
+            return "승차감과 마일리지 중심의 타이어입니다."
+        return "정숙성과 승차감 중심의 타이어입니다."
+    if goods_pfm == "SPORT":
+        return "고속 주행과 제동 성능 중심의 타이어입니다."
+    if goods_pfm == "RUNFLAT":
+        return "주행 안정성과 비상 주행 특성을 고려한 타이어입니다."
+    if _numeric_score(row, "wet", "t_dryroad_brk") > 0:
+        return "제동 성능을 고려해 검토할 수 있는 타이어입니다."
+    return "주행 조건에 맞춰 검토할 수 있는 타이어입니다."
+
+
+def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Summarize tire patterns as text when no vehicle/size is confirmed.
+
+    In this state SKU cards are misleading because the same tire appears in
+    many unrelated sizes. Keep this as quickReply text until the user provides
+    a vehicle or tire size.
+    """
+    if current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
+        "store_with_stock",
+        "place_order",
+        "price_inquiry",
+    ):
+        return None
+    if _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
+        return None
+
+    rows_by_name: dict[str, dict] = {}
+    found_product_tool = False
+    for entry in _find_entries(
+        tool_data_list,
+        "search_product_tool",
+        "get_newest_products_tool",
+        "get_products_recommendations_tool",
+        "get_best_selling_products_tool",
+    ):
+        found_product_tool = True
+        if _has_size_arg(entry):
+            return None
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
+            if name and name not in rows_by_name:
+                rows_by_name[name] = row
+    if not found_product_tool or not rows_by_name:
+        return None
+
+    lines = ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
+    for name, row in list(rows_by_name.items())[:5]:
+        lines.extend([
+            "",
+            f"- {name}: {_tire_summary_first_line(row)}",
+            f"  {_tire_summary_second_line(row)}",
+        ])
+    lines.extend([
+        "",
+        "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
+    ])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "차량번호로 확인", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+        "assistant_response_source": "code_mapper",
+    }
 
 
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
@@ -2131,6 +2257,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     ev_suitability_comparison = _map_ev_suitability_comparison(accumulated_tool_data, assistant_text)
     if ev_suitability_comparison is not None:
         return ev_suitability_comparison
+
+    unsized_tire_summary = _map_unsized_tire_summary(accumulated_tool_data, assistant_text)
+    if unsized_tire_summary is not None:
+        return unsized_tire_summary
 
     # When multiple tools are called, pick the most important UI template.
     # Priority order is intentional:
