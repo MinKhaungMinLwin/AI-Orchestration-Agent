@@ -5250,7 +5250,7 @@ class TStationChatServiceV2:
             content = msg.get("content", "")
             if "USER CONTEXT INFORMATION" in content:
                 continue
-            extracted = TStationChatServiceV2._extract_current_user_input(content)
+            extracted = StreamingMultiAgentCoordinator._extract_current_user_input(content)
             if extracted:
                 recent_user_texts.append(extracted)
             if len(recent_user_texts) >= 3:
