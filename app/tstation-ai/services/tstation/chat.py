@@ -2606,6 +2606,11 @@ _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
 _RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
 _RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
+_WEEKDAY_REQUEST_RE = re.compile(r"(월|화|수|목|금|토|일)\s*(?:요일)?")
+_BOOKING_PREVIEW_CHIPS = [
+    {"label": "예약하기", "domain": "TRANSACTION"},
+    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+]
 
 
 def _yyyymmdd_to_korean_date(s: str) -> str:
@@ -2614,6 +2619,66 @@ def _yyyymmdd_to_korean_date(s: str) -> str:
     except (TypeError, ValueError):
         return s
     return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
+
+
+def _normalize_booking_preview_quickreply(event_data: dict, called_tool_names: set[str]) -> bool:
+    """Add booking-oriented CTAs after a stock/booking preview quickReply.
+
+    `transaction_store_preview_tool` is the ground-truth tool for "this tire,
+    this store, this qty" installability. When it returns a text quickReply
+    (for example "today is unavailable, earliest is next Tuesday"), generic
+    discovery chips are a dead end. Keep this scoped to turns where that tool
+    actually ran so ordinary product/search quickReplies are untouched.
+    """
+    if "transaction_store_preview_tool" not in called_tool_names:
+        return False
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not re.search(r"예약|장착", assistant_text):
+        return False
+    chips = event_data.get("quickReplies")
+    if isinstance(chips, list) and any(
+        isinstance(chip, dict) and "예약" in str(chip.get("label") or "")
+        for chip in chips
+    ):
+        return False
+    event_data["quickReplies"] = [dict(chip) for chip in _BOOKING_PREVIEW_CHIPS]
+    event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
+
+
+def _filter_datepick_to_requested_weekday(event: dict, user_text: str) -> dict | None:
+    """If the user asked for a specific weekday, show only that date in datepick.
+
+    This prevents a follow-up like "화요일 예약할래" from rendering the generic
+    store schedule starting with today after the agent re-queries
+    `get_store_schedule_tool(mode=general)`.
+    """
+    if event.get("template") != "datepick":
+        return None
+    match = _WEEKDAY_REQUEST_RE.search(user_text or "")
+    if not match:
+        return None
+    requested_weekday = match.group(1)
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    dates = event_data.get("dates")
+    if not isinstance(dates, list) or len(dates) <= 1:
+        return None
+    for date_item in dates:
+        if not isinstance(date_item, dict):
+            continue
+        label = str(date_item.get("date") or "")
+        if f"({requested_weekday})" not in label and f"{requested_weekday}요일" not in label:
+            continue
+        filtered_item = dict(date_item)
+        filtered_item["index"] = 0
+        event_data["dates"] = [filtered_item]
+        event_data["selectedDate"] = 0
+        if not event_data.get("assistantResponse") or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요.":
+            event_data["assistantResponse"] = f"{label} 예약 가능한 시간을 선택해 주세요."
+        return event
+    return None
 
 
 def _parse_preview_slot_hour(tm: object) -> int | None:
@@ -5553,6 +5618,16 @@ class TStationChatServiceV2:
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
                     event_data = event.get("data", {})
+                coerced_event = _filter_datepick_to_requested_weekday(event, user_query)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] datepick filtered to requested weekday"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = last_template_source or "code_mapper"
+                    last_assistant_response_source = "code_mapper_weekday_filter"
+                    event_data = event.get("data", {})
                 coerced_event = _coerce_non_selection_listcar_to_quickreply(event)
                 if coerced_event is not None:
                     logger.warning(
@@ -5690,6 +5765,18 @@ class TStationChatServiceV2:
                         last_user_text=user_query,
                     ):
                         logger.info("[COUPON_RESOLVER] normalized unmatched coupon quickReply")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
+                    if _normalize_booking_preview_quickreply(event_data, called_tool_names):
+                        logger.info(
+                            "[QUICKREPLY_FILTER] booking preview chips normalized"
+                        )
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
                         draft_for_qc = assistant_response
