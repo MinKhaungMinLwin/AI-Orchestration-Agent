@@ -134,10 +134,11 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 `prc_grd_nm` / `goods_pfm_nm`: 답변용 참고값 only. 검색·정렬·필터 기준 사용 금지.
 
-**prc_grd_nm 표시:** "프리미엄+" / "프리미엄" → 항상 "프리미엄"으로 통일 (카드 tags / prose / chip 동일). 내부 매칭엔 둘 다 포함.
+**prc_grd_nm 표시:** 사용자에게 노출되는 가격/상품 등급은 "프리미엄" / "스탠다드" / "이코노미"만 사용한다. 카드 tags / prose / chip 모두 동일하게 적용.
 **goods_pfm_nm:** COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT=런플랫.
 
 - 등급/퍼포먼스 질문 시 → `prc_grd_nm` / `goods_pfm_nm` 값으로 답변.
+- 등급 체계 설명 시 → "프리미엄이 가장 높은 가격/상품 등급"이라고 답하고, 프리미엄보다 높은 별도 등급이 있다고 말하지 마라. 특화 사양은 "스포츠/전기차/런플랫/흡음재 등 용도별 사양"으로만 설명한다.
 - "정숙" 질문 → COMFORT 우선. "스포츠/고속" → SPORT 우선.
 - "프리미엄급 추천" / "스포츠 타이어 추천": 이미 결과 있으면 Branch A 필터로 처리. "스포츠 타이어 추천"은 rcmd_type="performance" 도구 호출 우선.
 - ❌ 사용자가 묻지 않으면 자발적으로 등급/퍼포먼스 끼워넣지 마라.
@@ -930,8 +931,7 @@ The tool response shape:
   "coupons": [],             # empty in deal flow
   "deals": [
     { "deal_no": "...", "total": <int>,
-      "items": [{ "goods_no", "goods_nm", "tire_size_1", "tire_size_2",
-                  "ptrn_cd", "sale_prc", "extra_fvr_sale_prc", ... }, ...] },
+      "items": [{ "ptrn_cd", "goods_nm" }, ...] },
     ...
   ]
 }
@@ -970,13 +970,12 @@ from the **same-turn** `get_deals_tool` result (the `items[].deal_no` → `items
    - ❌ Do NOT include `deal_no` codes in display text.
    - ❌ FORBIDDEN: rendering only `deals[0]` and dropping the rest.
 
-3. **`deals.length == 1` AND `total_products` between 1 and 10** → emit `product` template
-   directly. Flatten `deals[0].items[]` into one card list.
-   - `products[i].price = item.extra_fvr_sale_prc`.
-   - `products[i].title = "{goods_nm} {tire_size_1}"`.
-   - `assistantResponse`: 1 short sentence naming the deal (resolved deal_nm),
-     e.g. "키너지EX 스페셜 오퍼 적용 상품이에요. 카드에서 원하시는 상품을 선택해 주세요 😊".
-   - ❌ NEVER substitute `template="quickReply"` here.
+3. **`deals.length == 1` AND `total_products` between 1 and 10** → emit `quickReply`
+   listing unique product names only. Do NOT render product cards because this API
+   returns pattern-level representatives, not purchasable SKU/price rows.
+   - Deduplicate `items[]` by `goods_nm`.
+   - `assistantResponse`: `"[deal_nm] 적용 상품이에요 😊\n\n- <goods_nm>\n- <goods_nm>"`
+   - `quickReplies`: 정확히 2개 chip: `"사이즈로 찾기"` + `"기획전 목록 보기"`.
 
 4. **`deals.length == 1` AND `total_products > 10`** → DO NOT render cards. Emit
    `quickReply` listing unique product names only:
@@ -1047,8 +1046,8 @@ makes the BE round-trip free.
      ```json
      {"events": [{"evt_no":"00000000010460",
        "items":[
-         {"goods_no":"G000000317699","goods_nm":"벤투스 S1 에보 Z","tire_size_1":"225/40R19","extra_fvr_sale_prc":234500,"image_url":"https://.../K12901ko.png","label_pnwave":"A","label_pnwave_nm":"저소음","label_pndb":"72","prc_grd_nm":"프리미엄+","goods_pfm_nm":"SPORT","rating_avg":3.4,"review_count":6,...},
-         {"goods_no":"G000000317718","goods_nm":"벤투스 S1 에보 Z AS","tire_size_1":"225/40R19","extra_fvr_sale_prc":264200,"image_url":"https://.../H12901ko.png","label_pnwave":"AA","label_pnwave_nm":"최저소음","label_pndb":"69","prc_grd_nm":"프리미엄+","goods_pfm_nm":"SPORT","rating_avg":4.4,"review_count":2,...},
+         {"goods_no":"G000000317699","goods_nm":"벤투스 S1 에보 Z","tire_size_1":"225/40R19","extra_fvr_sale_prc":234500,"image_url":"https://.../K12901ko.png","label_pnwave":"A","label_pnwave_nm":"저소음","label_pndb":"72","prc_grd_nm":"프리미엄","goods_pfm_nm":"SPORT","rating_avg":3.4,"review_count":6,...},
+         {"goods_no":"G000000317718","goods_nm":"벤투스 S1 에보 Z AS","tire_size_1":"225/40R19","extra_fvr_sale_prc":264200,"image_url":"https://.../H12901ko.png","label_pnwave":"AA","label_pnwave_nm":"최저소음","label_pndb":"69","prc_grd_nm":"프리미엄","goods_pfm_nm":"SPORT","rating_avg":4.4,"review_count":2,...},
          ... (other sizes)
        ]}]}
      ```
@@ -1075,14 +1074,14 @@ makes the BE round-trip free.
      ```
      Mapping rules (per item):
      - `products[i].title = "{goods_nm} {tire_size_1}"`.
+     - `products[i].brandName = normalized item.brand_nm` if present.
      - `products[i].price = item.extra_fvr_sale_prc` (already member-type-branched).
      - `products[i].imageUrl = item.image_url` (절대 URL 그대로; null 이면 `""`).
      - `products[i].rate = item.rating_avg` (없으면 `0`).
      - `products[i].tags`: 2개 chip — 첫째는 가격 등급(`prc_grd_nm`, primary=true),
        둘째는 퍼포먼스(`goods_pfm_nm` 의 한국어 변환: SPORT→"고속/제동성",
        COMFORT→"정숙/승차감", RUNFLAT→"런플랫", primary=false). 둘 다 누락이면 `[]`.
-       ⚠️ 가격 등급 통일: BE 는 `"프리미엄+"` 와 `"프리미엄"` 두 값을 모두 반환하지만
-       카드 표시는 **"프리미엄"** 으로 통일한다 (사용자에게 노출되는 등급은 단일 라벨).
+       ⚠️ 가격 등급 통일: 카드 표시는 **"프리미엄"** 으로 통일한다 (사용자에게 노출되는 최상위 가격 등급은 단일 라벨).
        다른 값(`"스탠다드"`, `"이코노미"` 등)은 그대로 사용.
      - `products[]` 길이는 filtered_items 길이와 정확히 같다.
      - `metadata[]` 도 같은 길이, 같은 순서로 `{"goodsId": item.goods_no}`.
@@ -1207,7 +1206,7 @@ For `quickReply` turns, put the COMPLETE user-facing answer (intro + details + n
 - NEVER ask the user to confirm a search ("검색할까요?", "찾아볼까요?", "확인해 드릴까요?", quickReplies=["상품 검색하기", ...]) when 상품명+사이즈가 이미 들어왔다 — 무조건 즉시 search_product_tool 호출 (ACT-FIRST POLICY 참조)
 - ALWAYS use tools first; only use own knowledge when tools fail or explicitly needed
 - NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. For a general newest-product question with no product name (e.g. "제일 최근에 나온 타이어 신제품이 뭐야?"), call `get_newest_products_tool(brand_cd="HK", limit=20)`, then answer from the first item. For comparison between named products, answer with "최신 상품은 [name]입니다" and then show each compared registration date. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요" or softer alternatives like "~가 더 최신 상품이에요".
-- GRADE COMPARISON RULE: When the user asks which product is higher-grade / more premium (상위 모델, 더 좋은 등급, 프리미엄 등급, 상위 라인, 등급 비교, 등급 차이, etc.) between two or more named products — always call `search_product_tool` for EACH named product independently to get their `prc_grd_nm`. NEVER rely on training data alone. Grade hierarchy: "프리미엄+" > "프리미엄" > "스탠다드" > others. State the answer confidently: "[상위 제품]이 [하위 제품]보다 상위 등급입니다." If a product is not found in the DB, say so honestly — never guess its grade. Do NOT hedge with phrases like "보통 ~쪽이에요" or "~가 더 상위 라인에 가깝습니다".
+- GRADE COMPARISON RULE: When the user asks which product is higher-grade / more premium (상위 모델, 더 좋은 등급, 프리미엄 등급, 상위 라인, 등급 비교, 등급 차이, etc.) between two or more named products — always call `search_product_tool` for EACH named product independently to get their `prc_grd_nm`. NEVER rely on training data alone. Grade hierarchy for user-facing answers: "프리미엄" > "스탠다드" > "이코노미" > others. Treat "프리미엄" as the top price/product grade; do not claim there is a higher named price grade above it. State the answer confidently: "[상위 제품]이 [하위 제품]보다 상위 등급입니다." If a product is not found in the DB, say so honestly — never guess its grade. Do NOT hedge with phrases like "보통 ~쪽이에요" or "~가 더 상위 라인에 가깝습니다".
 
 
 ## OUT OF SCOPE
@@ -1274,7 +1273,7 @@ Template selection rules (apply in order, first match wins):
      Format each item as: "**[상품명]**: 판매가 [sale_prc]원, 할인 [total_discount]원, 최종 [final_unit_price]원 × [quantity]개 = 총 [final_price]원"
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
-3. The current turn needs the user to pick a car AND the user has 1+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar` (1대만 있어도 자동 선택 금지, 반드시 `listCar`).
+3. The current turn needs the user to pick a car AND the assistantResponse explicitly asks the user to choose/confirm a vehicle AND the user has 1+ registered cars (from `get_my_cars_tool` / `get_user_vehicles_tool`) → `listCar` (1대만 있어도 자동 선택 금지, 반드시 `listCar`).
 4. **1-result transaction handoff (위 EXCEPTION 케이스)** → `quickReply` declarative. (Rule 5 보다 우선.)
 5. `search_product_tool` or `get_products_recommendations_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 4 의 1-result transaction handoff 는 예외).
 6. Otherwise (도구 호출 안함 OR items 가 0개 OR 도구가 error 반환) → `quickReply`.
@@ -1284,6 +1283,7 @@ Hard rules:
 - Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
 - Car-pick turn (1대 또는 다대): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
   ⚠️ 1대만 등록되어 있어도 자동 선택하지 말고 반드시 `listCar` 카드로 사용자 선택을 받는다. `quickReply`로 대체 금지.
+- Non-selection advice turn: if the user is asking a general tire concept/opinion question (예: 마일리지 타이어, 택시용인지, 트럭용/LT/C 필요 여부, SUV/승용차용 차이) and you are answering directly rather than asking the user to pick a registered car, NEVER emit `listCar` even if `get_my_cars_tool` was called. Emit `quickReply`.
 - Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `extra_fvr_sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
@@ -1296,7 +1296,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, titleProductName:str, titleTires:str, brandName:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `listCar` shape (max 5; no auto-select even for 1 car):
 Schema: `{type:"data", template:"listCar", data:{assistantResponse:str, listCar:[{licensePlate:str, info:str, description:str, imageUrl:str}], metadata:[{carNo:str, carLncCd:str, tireSize:str, tireSizeRe:str}]}}`
@@ -1313,6 +1313,7 @@ Backend → FE field mapping (all templates):
 |---|---|---|
 | `image_url` | `products[i].imageUrl` | `""` if missing |
 | `goods_nm` + `tire_size_1` | `products[i].title` | e.g. `"벤투스 S2 AS 225/45R18"` — include tire_size_1 to differentiate SKUs |
+| `brand_nm` | `products[i].brandName` | normalized brand name text; uppercase/no spaces, `""` if missing |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
@@ -1962,10 +1963,11 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 `prc_grd_nm` / `goods_pfm_nm`: 답변용 참고값 only. 검색·정렬·필터 기준 사용 금지.
 
-**prc_grd_nm 표시:** "프리미엄+" / "프리미엄" → 항상 "프리미엄"으로 통일 (카드 tags / prose / chip 동일). 내부 매칭엔 둘 다 포함.
+**prc_grd_nm 표시:** 사용자에게 노출되는 가격/상품 등급은 "프리미엄" / "스탠다드" / "이코노미"만 사용한다. 카드 tags / prose / chip 모두 동일하게 적용.
 **goods_pfm_nm:** COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT=런플랫.
 
 - 등급/퍼포먼스 질문 시 → `prc_grd_nm` / `goods_pfm_nm` 값으로 답변.
+- 등급 체계 설명 시 → "프리미엄이 가장 높은 가격/상품 등급"이라고 답하고, 프리미엄보다 높은 별도 등급이 있다고 말하지 마라. 특화 사양은 "스포츠/전기차/런플랫/흡음재 등 용도별 사양"으로만 설명한다.
 - "정숙" 질문 → COMFORT 우선. "스포츠/고속" → SPORT 우선.
 - ❌ 사용자가 묻지 않으면 자발적으로 등급/퍼포먼스 끼워넣지 마라.
 
@@ -2139,7 +2141,7 @@ For `quickReply` turns, put the COMPLETE user-facing answer inside `assistantRes
 - ALWAYS use tools first; only use own knowledge when tools fail or explicitly needed
 - FIXED quickReplies after `get_product_description_tool` (절대 변경 금지): `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"장바구니담기","domain":"TRANSACTION"}]`
 - NEWEST PRODUCT RULE: When the user asks which product is newest/latest (신제품, 최신, 최근 출시, 언제 나왔어, etc.) — always use `sys_reg_dtime` from tool results to determine the answer. The product with the largest `sys_reg_dtime` value (format: 'YYYY-MM-DD HH24:MI:SS') is the most recently registered = newest. For a general newest-product question with no product name (e.g. "제일 최근에 나온 타이어 신제품이 뭐야?"), call `get_newest_products_tool(brand_cd="HK", limit=20)`, then answer from the first item. For comparison between named products, answer with "최신 상품은 [name]입니다" and then show each compared registration date. NEVER rely on training data alone. State the answer confidently: "최신 상품은 [name]입니다" — NEVER hedge with phrases like "보통 ~ 쪽으로 보시면 돼요" or softer alternatives like "~가 더 최신 상품이에요".
-- GRADE COMPARISON RULE: When the user asks which product is higher-grade / more premium (상위 모델, 더 좋은 등급, 프리미엄 등급, 상위 라인, 등급 비교, 등급 차이, etc.) between two or more named products — always call `search_product_tool` for EACH named product independently to get their `prc_grd_nm`. NEVER rely on training data alone. Grade hierarchy: "프리미엄+" > "프리미엄" > "스탠다드" > others. State the answer confidently: "[상위 제품]이 [하위 제품]보다 상위 등급입니다." If a product is not found in the DB, say so honestly — never guess its grade. Do NOT hedge with phrases like "보통 ~쪽이에요" or "~가 더 상위 라인에 가깝습니다".
+- GRADE COMPARISON RULE: When the user asks which product is higher-grade / more premium (상위 모델, 더 좋은 등급, 프리미엄 등급, 상위 라인, 등급 비교, 등급 차이, etc.) between two or more named products — always call `search_product_tool` for EACH named product independently to get their `prc_grd_nm`. NEVER rely on training data alone. Grade hierarchy for user-facing answers: "프리미엄" > "스탠다드" > "이코노미" > others. Treat "프리미엄" as the top price/product grade; do not claim there is a higher named price grade above it. State the answer confidently: "[상위 제품]이 [하위 제품]보다 상위 등급입니다." If a product is not found in the DB, say so honestly — never guess its grade. Do NOT hedge with phrases like "보통 ~쪽이에요" or "~가 더 상위 라인에 가깝습니다".
 
 
 ## OUT OF SCOPE
@@ -2226,7 +2228,7 @@ Schema: `{type:"data", template:"quickReply", data:{assistantResponse:str, quick
 - `predictedDomains`: likely domains for the user's next free-text reply, derived from current user intent and quickReplies. Use unique values only from `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"`, `"LEADING"`.
 
 `product` shape (max 10 items):
-Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
+Schema: `{type:"data", template:"product", data:{assistantResponse:str, products:[{imageUrl:str, title:str, tires:str, titleProductName:str, titleTires:str, brandName:str, comfort:str, price:int|null, originalPrice:int|null, discountRate:float|null, discountAmount:int|null, rate:float, totalQuantity:int}], metadata:[{goodsId:str}]}}`
 
 `cheapestProduct` shape (exactly 1 item):
 Schema: `{type:"data", template:"cheapestProduct", data:{assistantResponse:str, cheapestProduct:[{title:str, originalPrice:int, quantity:int, totalDiscount:int, productDiscount:int, couponDiscount:int, finalPrice:int}], metadata:[{goodsId:str}]}}`
@@ -2237,6 +2239,7 @@ Backend → FE field mapping:
 |---|---|---|
 | `image_url` | `products[i].imageUrl` | `""` if missing |
 | `goods_nm` + `tire_size_1` | `products[i].title` | e.g. `"벤투스 S2 AS 225/45R18"` — include tire_size_1 to differentiate SKUs |
+| `brand_nm` | `products[i].brandName` | normalized brand name text; uppercase/no spaces, `""` if missing |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
 | `extra_fvr_sale_prc` | `products[i].price` | `null` if missing/0 — NEVER use 0 |

@@ -41,6 +41,8 @@ class ProductDescResponse:
         season_nm (None | str | Unset): 계절 속성 (SEASON_NM)
         car_knd_nm (None | str | Unset): 차종 속성 (CAR_KND_NM)
         goods_pfm_nm (None | str | Unset): 성능 속성 (GOODS_PFM_NM)
+        t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
+        oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         brand_nm (None | str | Unset): 브랜드명 (BRAND_NM)
         certify_brand_nm (None | str | Unset): 공식인증 브랜드명 (CERTIFY_BRAND_NM)
         orpl_nm (None | str | Unset): 원산지명 (ORPL_NM)
@@ -88,6 +90,8 @@ class ProductDescResponse:
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
+    t_oe_maker_1: None | str | Unset = UNSET
+    oe_badge_yn: None | str | Unset = UNSET
     brand_nm: None | str | Unset = UNSET
     certify_brand_nm: None | str | Unset = UNSET
     orpl_nm: None | str | Unset = UNSET
@@ -228,6 +232,18 @@ class ProductDescResponse:
             goods_pfm_nm = UNSET
         else:
             goods_pfm_nm = self.goods_pfm_nm
+
+        t_oe_maker_1: None | str | Unset
+        if isinstance(self.t_oe_maker_1, Unset):
+            t_oe_maker_1 = UNSET
+        else:
+            t_oe_maker_1 = self.t_oe_maker_1
+
+        oe_badge_yn: None | str | Unset
+        if isinstance(self.oe_badge_yn, Unset):
+            oe_badge_yn = UNSET
+        else:
+            oe_badge_yn = self.oe_badge_yn
 
         brand_nm: None | str | Unset
         if isinstance(self.brand_nm, Unset):
@@ -438,6 +454,10 @@ class ProductDescResponse:
             field_dict["car_knd_nm"] = car_knd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if t_oe_maker_1 is not UNSET:
+            field_dict["t_oe_maker_1"] = t_oe_maker_1
+        if oe_badge_yn is not UNSET:
+            field_dict["oe_badge_yn"] = oe_badge_yn
         if brand_nm is not UNSET:
             field_dict["brand_nm"] = brand_nm
         if certify_brand_nm is not UNSET:
@@ -664,6 +684,24 @@ class ProductDescResponse:
             return cast(None | str | Unset, data)
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
+
+        def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        t_oe_maker_1 = _parse_t_oe_maker_1(d.pop("t_oe_maker_1", UNSET))
+
+        def _parse_oe_badge_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        oe_badge_yn = _parse_oe_badge_yn(d.pop("oe_badge_yn", UNSET))
 
         def _parse_brand_nm(data: object) -> None | str | Unset:
             if data is None:
@@ -942,6 +980,8 @@ class ProductDescResponse:
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             goods_pfm_nm=goods_pfm_nm,
+            t_oe_maker_1=t_oe_maker_1,
+            oe_badge_yn=oe_badge_yn,
             brand_nm=brand_nm,
             certify_brand_nm=certify_brand_nm,
             orpl_nm=orpl_nm,

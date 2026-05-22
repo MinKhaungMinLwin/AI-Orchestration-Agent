@@ -42,6 +42,11 @@ from services.tstation.chat import TStationChatServiceV2
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _log_task_error(task: asyncio.Task) -> None:
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Background task %s failed: %s", task.get_name(), exc, exc_info=exc)
+
 _LITELLM_REG_KEY = "litellm:registered:{user_id}"
 _LITELLM_REG_TTL = 90 * 24 * 60 * 60  # 90 days
 
@@ -57,7 +62,7 @@ def _register_litellm_user(user_id: str) -> None:
 
     redis = get_redis_client()
     cache_key = _LITELLM_REG_KEY.format(user_id=user_id)
-    if redis.exists(cache_key):
+    if redis.get(cache_key) is not None:
         return
 
     base = settings.AI_GATEWAY_BASE_URL.rstrip("/")
@@ -87,6 +92,7 @@ def _register_litellm_user(user_id: str) -> None:
                             user_id, settings.LITELLM_USER_MAX_BUDGET, settings.LITELLM_USER_BUDGET_DURATION)
     except Exception as exc:
         logger.warning("[LITELLM] Failed to register user %s: %s", user_id, exc)
+        redis.setex(cache_key, 60, "0")  # back-off 60s to avoid retry storm on LiteLLM failure
 
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -150,7 +156,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     # Register user in LiteLLM budget system on first request (fire-and-forget)
     if user_id:
-        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id))
+        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id)).add_done_callback(_log_task_error)
 
     # Always generate a trace ID so Langfuse scores are linkable
     tracing_id = _valid_tracing_id(request.tracing_id) or uuid.uuid4().hex
@@ -207,14 +213,14 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         asyncio.create_task(asyncio.to_thread(
             _update_quota_score, user_id, input_tokens + output_estimate,
             tracing_id, settings.MONTHLY_TOKEN_LIMIT,
-        ))
+        )).add_done_callback(_log_task_error)
 
     # Call chat service
     if request.stream:
         from services.tstation.chat_history_service import get_async_redis_client
         _redis = get_async_redis_client()
-        _streaming_key = f"chat:streaming:{session_id}"
-        if await _redis.exists(_streaming_key):
+        _streaming_key = _STREAMING_KEY.format(session_id)
+        if not await _redis.set(_streaming_key, "1", nx=True, ex=_STREAMING_TTL):
             raise HTTPException(status_code=409, detail="session_busy")
         return StreamingResponse(
             stream_chat_response(chat_request, session_id, msg_id, service),
@@ -227,7 +233,15 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )
 
     # Non-stream mode
-    response = await TStationChatServiceV2.chat(chat_request)
+    from services.tstation.chat_history_service import get_async_redis_client
+    _redis = get_async_redis_client()
+    _session_key = _STREAMING_KEY.format(session_id)
+    if not await _redis.set(_session_key, "1", nx=True, ex=_STREAMING_TTL):
+        raise HTTPException(status_code=409, detail="session_busy")
+    try:
+        response = await TStationChatServiceV2.chat(chat_request)
+    finally:
+        await _redis.delete(_session_key)
 
     if isinstance(response, TStationChatResponse):
         # Save assistant response to history without blocking the event loop.
@@ -257,8 +271,6 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     _redis = get_async_redis_client()
     _streaming_key = _STREAMING_KEY.format(session_id)
     _abort_key = _ABORT_KEY.format(session_id)
-
-    await _redis.set(_streaming_key, "1", ex=_STREAMING_TTL)
 
     full_assistant_content = ""
     assistant_response_ui = None
@@ -333,8 +345,8 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
                 message_to_save,
                 template_data=template_data,
                 user_id=chat_request.user_id,
-            ))
-            asyncio.create_task(refresh_summary(session_id))
+            )).add_done_callback(_log_task_error)
+            asyncio.create_task(refresh_summary(session_id)).add_done_callback(_log_task_error)
 
         yield "data: [DONE]\n\n"
 

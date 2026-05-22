@@ -20,6 +20,7 @@ from .chat_history_response import ChatHistoryResponse
 from .cheapest_by_coupon_item import CheapestByCouponItem
 from .cheapest_by_coupon_response import CheapestByCouponResponse
 from .compatibility_response import CompatibilityResponse
+from .coupon_applicable_product_item import CouponApplicableProductItem
 from .coupon_applicable_products_group import CouponApplicableProductsGroup
 from .coupon_applicable_store_item import CouponApplicableStoreItem
 from .coupon_applicable_stores_group import CouponApplicableStoresGroup
@@ -60,6 +61,8 @@ from .logistics_request import LogisticsRequest
 from .logistics_response import LogisticsResponse
 from .maintenance_dday_item import MaintenanceDdayItem
 from .maintenance_dday_response import MaintenanceDdayResponse
+from .maintenance_history_item import MaintenanceHistoryItem
+from .maintenance_history_response import MaintenanceHistoryResponse
 from .member_car_info import MemberCarInfo
 from .member_car_list_response import MemberCarListResponse
 from .member_warranty_item import MemberWarrantyItem
@@ -130,6 +133,7 @@ __all__ = (
     "CheapestByCouponItem",
     "CheapestByCouponResponse",
     "CompatibilityResponse",
+    "CouponApplicableProductItem",
     "CouponApplicableProductsGroup",
     "CouponApplicableStoreItem",
     "CouponApplicableStoresGroup",
@@ -166,6 +170,8 @@ __all__ = (
     "LogisticsResponse",
     "MaintenanceDdayItem",
     "MaintenanceDdayResponse",
+    "MaintenanceHistoryItem",
+    "MaintenanceHistoryResponse",
     "MemberCarInfo",
     "MemberCarListResponse",
     "MemberWarrantyItem",

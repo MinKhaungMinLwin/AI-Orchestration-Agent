@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import datetime
+import hashlib
 import json
 import threading
 import logging
@@ -19,7 +20,6 @@ from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.router import (
-    AgentDomain,
     DECISION_LLM as _decision_llm,
     leading_agent,
     discovery_subagent,
@@ -70,9 +70,28 @@ class AgentPromptProfile(str, Enum):
 # Module-level singleton: avoid re-creating LLM client + structured-output wrapper per request.
 _decision_structured_model = _decision_llm.with_structured_output(AgentDecision)
 _speculative_classify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_speculative_classify_sem = threading.Semaphore(4)
 _decision_verify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S = 0.15
 _SYNC_ITER_SENTINEL = object()
+
+
+def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
+    """Submit fn to speculative executor only if a worker is immediately available.
+
+    Returns None when all workers are busy so callers fall back to the non-speculative
+    path rather than growing the internal queue unbounded under high load.
+    """
+    if not _speculative_classify_sem.acquire(blocking=False):
+        return None
+
+    def _run():
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _speculative_classify_sem.release()
+
+    return _speculative_classify_executor.submit(_run)
 
 
 def _next_or_sentinel(iterator: Iterator[dict]) -> dict | object:
@@ -190,14 +209,13 @@ def decide_next_action(
     )
 
     try:
-        result: AgentDecision = structured_model.invoke([system_msg, human_msg], config=trace_config)
+        result: AgentDecision = structured_model.with_retry(stop_after_attempt=3).invoke([system_msg, human_msg], config=trace_config)
         return result
     except Exception as e:
-        logger.warning(f"[DECISION] LLM decision failed: {e}")
-        # Fallback: stop if cannot decide
+        logger.warning(f"[DECISION] LLM decision failed after retries: {e}")
         return AgentDecision(
             next_action=NextAction.STOP,
-            next_domain=None,
+            next_domain="null",
             reason=f"Decision failed: {str(e)[:100]}",
         )
 
@@ -300,6 +318,9 @@ class _SlimMultiAgentDomain(BaseModel):
 _multi_intent_model = _decision_llm.with_structured_output(MultiAgentDomain, strict=True)
 _slim_intent_model = _decision_llm.with_structured_output(_SlimMultiAgentDomain, strict=True)
 
+# (session_id, n_messages, last_msg_hash) → (domains, result, expires_monotonic)
+_classify_cache: dict[tuple, tuple] = {}
+
 
 def prompt_router_multi() -> str:
     """Classification prompt that detects multi-intent with flow sequences and conversation context."""
@@ -379,7 +400,7 @@ Worked examples (RE-RECOMMENDATION vs FILTER):
 Also identify the FLOW SEQUENCE (ordered list of domains) for the request and mirror it in execution_plan.
 
 DOMAINS:
-- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회)
+- TRANSACTION: Price, stock (logistics/store), inventory, store availability, store search by location/name, purchase, checkout, order tracking, reservation time change (예약 시간 변경 / 방문 시간 변경 / 일정 변경), order cancellation/cancellation fee (주문 취소 / 취소하고 싶어 / 취소해줘 / 취소 수수료 / 오늘 취소하면 수수료), store visit reservation (specific date/time slot booking), coupon inquiry (내 쿠폰 / 쿠폰함 / 쿠폰 사용 조건 / 쿠폰 어떻게 써 / 쿠폰 사용법 / 쿠폰 적용 가능 상품 / 쿠폰 적용 상품 / 쿠폰 대상 상품), order history inquiry (내 주문내역 / 주문 내역 / 주문 조회), maintenance/service history lookup (정비이력 / 정비내역 / 관리받은 내역 / 서비스 이력)
 - SUPPORT: FAQ, warranty, returns policy questions, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** ⚠️ NOT to be confused with store visit reservation booking (=TRANSACTION), human agent
 - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, product video reviews, YouTube video search
 - LEADING: Greeting, unclear intent
@@ -400,7 +421,7 @@ TRANSACTION — price/stock/store/order with goods_no already known in context:
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
 
-⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
+⚠️ NEVER classify as SUPPORT (must be TRANSACTION): "내 쿠폰/쿠폰함", "쿠폰 사용 조건/쿠폰 어떻게 써", "쿠폰 적용 가능 상품/쿠폰 적용 상품/쿠폰 대상 상품/쿠폰으로 살 수 있는 타이어", "내 주문/주문 조회", "주문 취소/취소하고 싶어/취소해줘", "취소 수수료/취소비용/취소 비용 있나요", "오늘 취소하면/예약 취소하면 수수료" — cancellation fee questions must check order/logistics state, not FAQ
 
 ⚠️ ALWAYS classify as SUPPORT (NOT TRANSACTION, NOT DISCOVERY): 두 개 이상의 할인 수단(쿠폰/딜/이벤트/프로모션/기획전/혜택) 사이의 **중복 적용 여부** 발화 — "X 중복 가능?", "X이랑 Y 같이 쓸 수 있어?", "X이랑 Y 동시 적용?", "둘 다 쓸 수 있어?", "함께 사용 가능?" — DBA 의 stacking 룰을 응답해야 하므로 SUPPORT 로 라우팅. "쿠폰" 단독 단어만 보고 transaction_coupon 으로, "기획전/이벤트" 단독 단어만 보고 discovery_event_content 로 분류 금지.
 Examples:
@@ -518,7 +539,7 @@ You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
 
 DOMAINS:
-- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
+- TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
 - SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
@@ -533,6 +554,7 @@ RULES:
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
 - 매장/근처/올마이티/All My T → TRANSACTION
+- 정비이력/정비내역/관리받은 내역/서비스 이력/받은 서비스 → TRANSACTION, agent_prompt_profile=transaction_order
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
@@ -554,6 +576,7 @@ EXAMPLES (tricky cases):
 - "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT (기획전+쿠폰 stacking, NOT discovery_event_content)
 - "두 쿠폰 동시 적용 가능?" → SUPPORT (쿠폰+쿠폰 stacking, NOT transaction_coupon)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
+- "정비이력 보여줘", "내가 관리받은 내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (maintenance/service history lookup, NOT SUPPORT)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
 - "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
@@ -613,8 +636,7 @@ class StreamingMultiAgentCoordinator:
             tool_name = item.get("tool", "")
             data = item.get("data")
             input_data = item.get("input", item.get("args", {}))
-            raw_output = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-            compact = filter_for_context(tool_name, raw_output, input_data)
+            compact = filter_for_context(tool_name, data, input_data)
             if compact is not None:
                 compact_items.append(compact)
             else:
@@ -682,6 +704,37 @@ class StreamingMultiAgentCoordinator:
             ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
+        # TRANSACTION — coupon applicability lookup by coupon name/discount.
+        # This must not route to Support FAQ: the backend can resolve owned
+        # coupon names via get_my_coupons_tool and then call
+        # get_coupon_applicable_products_tool.
+        (
+            [
+                "쿠폰 적용 가능 상품",
+                "쿠폰 적용가능 상품",
+                "쿠폰 적용 상품",
+                "쿠폰으로 살 수 있는",
+                "쿠폰 어디에 쓸",
+                "쿠폰 어디 쓸",
+                "쿠폰 어느 상품",
+                "쿠폰 대상 상품",
+                "쿠폰 사용 가능 상품",
+                "쿠폰 사용가능 상품",
+                "할인권 적용 가능 상품",
+                "할인권 적용가능 상품",
+                "할인권 적용 상품",
+                "할인권 대상 상품",
+                "할인권으로 살 수 있는",
+                "할인쿠폰 적용 가능 상품",
+                "할인쿠폰 적용가능 상품",
+                "할인쿠폰 적용 상품",
+                "할인 쿠폰 적용 가능 상품",
+                "할인 쿠폰 적용가능 상품",
+                "할인 쿠폰 적용 상품",
+                "드라이브 행사 고객 한정",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
         # TRANSACTION — cancellation/return shipping-fee inquiry (TC-118).
         # Keep this before the broad SUPPORT "반품" rule so round-trip return-fee
         # questions check order/logistics policy instead of FAQ hallucinating 5천 원.
@@ -716,6 +769,17 @@ class StreamingMultiAgentCoordinator:
             MultiAgentDomain.Domain.SUPPORT,
         ),
         # SUPPORT — return / refund / warranty / 1:1
+        (
+            [
+                "정비이력", "정비 이력",
+                "정비내역", "정비 내역",
+                "관리받은 내역", "관리 받은 내역",
+                "관리받은 거", "관리 받은 거",
+                "서비스 이력", "서비스 내역",
+                "받은 서비스", "받은 정비",
+            ],
+            MultiAgentDomain.Domain.TRANSACTION,
+        ),
         (
             ["1:1 문의", "상담원 연결", "환불", "반품", "교환", "보증", "워런티"],
             MultiAgentDomain.Domain.SUPPORT,
@@ -841,10 +905,10 @@ class StreamingMultiAgentCoordinator:
             verified_domains, routing_result = classify_future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
             timeout_ms = timeout * 1000 if timeout is not None else 0
-            logger.debug("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
+            logger.warning("[COORDINATOR] classifier profile not ready after %.0fms", timeout_ms)
             return None
         except Exception as exc:
-            logger.debug("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
+            logger.warning("[COORDINATOR] classifier profile unavailable before agent selection: %s", exc)
             return None
 
         if routing_result is None or not _domains_equal(verified_domains, domains):
@@ -916,8 +980,13 @@ class StreamingMultiAgentCoordinator:
                             AgentPromptProfile.TRANSACTION_ORDER
                             if domain == MultiAgentDomain.Domain.TRANSACTION
                             and any(
-                                fee_kw in text
-                                for fee_kw in ("취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료")
+                                order_kw in text
+                                for order_kw in (
+                                    "취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료",
+                                    "정비이력", "정비 이력", "정비내역", "정비 내역",
+                                    "관리받은", "관리 받은", "서비스 이력", "서비스 내역",
+                                    "받은 서비스", "받은 정비",
+                                )
                             )
                             else AgentPromptProfile.FULL
                         ),
@@ -964,7 +1033,16 @@ class StreamingMultiAgentCoordinator:
                 last_user_text[:80],
             )
             return forced_result.domains, forced_result
-        # --------------------------------------------------------------
+
+        # ── Classification cache (60 s) — skip LLM on spam-click / rapid re-submit ──
+        _cache_key = (session_id, len(messages), hashlib.md5(last_user_text.encode()).hexdigest())
+        _cached = _classify_cache.get(_cache_key)
+        if _cached is not None:
+            _domains, _result, _expires = _cached
+            if time.monotonic() < _expires:
+                logger.debug("[MULTI-DOMAIN] Cache HIT key=%s...", str(_cache_key)[-12:])
+                return _domains, _result
+            del _classify_cache[_cache_key]
 
         # First turn = single user message, no prior conversation history.
         is_first_turn = len(messages) == 1 and messages[0].get("role") == "user"
@@ -1031,6 +1109,7 @@ class StreamingMultiAgentCoordinator:
                 f"flow={result.flow!r}, profile={result.agent_prompt_profile!r}"
             )
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            _classify_cache[_cache_key] = (domains, result.model_copy(), time.monotonic() + 60)
             return domains, result
 
         except Exception as e:
@@ -1141,7 +1220,7 @@ class StreamingMultiAgentCoordinator:
         if not parts:
             return None
 
-        return {"role": "assistant", "content": f"[Context from previous steps]\n" + "\n".join(parts)}
+        return {"role": "assistant", "content": "[Context from previous steps]\n" + "\n".join(parts)}
 
     # Tool → pending_intent that the tool FULFILLS (clears from slots on successful run).
     # When one of these tools returns a successful result, the matching pending_intent
@@ -1222,6 +1301,7 @@ class StreamingMultiAgentCoordinator:
 
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
+            "search_stores_tool": ["shop_id"],
             "get_store_list_tool": ["shop_id"],
             "get_nearby_stores_tool": ["shop_id"],
             "get_store_inventory_tool": ["shop_id"],
@@ -2008,9 +2088,6 @@ class StreamingMultiAgentCoordinator:
         # Final done event
         yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
 
-
-import re
-
 _FALLBACK_RESPONSE = (
     "죄송합니다, 해당 내용은 제가 안내해 드리기 어려운 부분이에요.\n\n"
     "타이어 추천, 가격 조회, 매장 검색 등 타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
@@ -2088,7 +2165,8 @@ _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
 # 차단 → c_transaction_agent 만 실행 → GLOBAL 룰의 응답이 deterministic
 # 하게 emit.
 _COUPON_ISSUE_INTENT_RE = re.compile(
-    r"쿠폰\s*(?:받(?:아|기|을|은)|다운(?:로드|받)|발급|어떻게\s*받)"
+    r"(?:쿠폰\s*)?(?:받(?:아|기|을|은)|다운(?:로드|받)?(?:\s*(?:돼|되|가능|해|해줘))?|"
+    r"발급(?:해|해줘|받|받아|해도|돼|되|가능)?|어떻게\s*받)"
 )
 
 # ---------------------------------------------------------------------------
@@ -2394,27 +2472,60 @@ def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> boo
 # makes the flow look broken).
 _FALLBACK_GENERIC: list[dict] = [
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 _FALLBACK_ORDER_LIST: list[dict] = [
     {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 _FALLBACK_COUPON: list[dict] = [
     {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
+
+_COUPON_BOX_CHIPS: list[dict] = [
+    {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+    {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+]
+_COUPON_APPLICABILITY_INTENT_RE = re.compile(
+    r"쿠폰|할인권|적용\s*가능|적용가능|대상\s*상품|사용\s*가능|사용가능|"
+    r"어디\s*(?:에)?\s*(?:쓸|사용)|쓸\s*수\s*있",
+    re.IGNORECASE,
+)
+_COUPON_UNMATCHED_TEXT_RE = re.compile(
+    r"(?:보유\s*)?쿠폰.{0,50}(?:찾지\s*못|없)",
+    re.IGNORECASE,
+)
+_COUPON_DIRECT_ID_RE = re.compile(r"\bC[A-Za-z0-9]{8,}\b")
+_COUPON_DISCOUNT_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_COUPON_MATCH_STOPWORDS = {
+    "쿠폰",
+    "할인쿠폰",
+    "할인",
+    "할인권",
+    "적용",
+    "적용가능",
+    "가능",
+    "상품",
+    "대상",
+    "사용",
+    "있는",
+    "쓸수있는",
+    "뭐야",
+    "뭐",
+    "어디",
+    "알려줘",
+    "확인",
+    "해줘",
+    "가능한",
+}
 
 # LEADING 도메인의 fallback 은 진행형(발견 → 구매) chip 으로 시작해야 자연스럽다.
 # "1:1 문의하기" 같은 escalation chip 은 사용자가 인사·일반 문의를 한 직후엔 부적절.
 _FALLBACK_LEADING_PROGRESS: list[dict] = [
     {"label": "상품 검색", "domain": "DISCOVERY"},
     {"label": "타이어 추천", "domain": "DISCOVERY"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 # Order matters: more specific tools first so the dispatch picks the most
@@ -2425,6 +2536,7 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
 ]
 
 _GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_HOME_QUICK_REPLY_LABEL = "처음으로"
 _DISCOVERY_SIZE_VEHICLE_CHIPS: list[dict] = [
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
     {"label": "차량번호로 찾기", "domain": "DISCOVERY"},
@@ -2443,7 +2555,6 @@ _DISCOVERY_PRODUCT_CHIPS: list[dict] = [
 _DISCOVERY_DEFAULT_CHIPS: list[dict] = [
     {"label": "상품 검색", "domain": "DISCOVERY"},
     {"label": "타이어 추천", "domain": "DISCOVERY"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 _DISCOVERY_SIZE_VEHICLE_TEXT_RE = re.compile(
     r"타이어\s*사이즈|차량번호|소유주|등록\s*차량|내\s*차|내차|"
@@ -2620,6 +2731,159 @@ def _coerce_reservation_quickreply_to_datepick(
         }
     return None
 
+_LISTCAR_SELECTION_NEEDLES: tuple[str, ...] = (
+    "선택",
+    "골라",
+    "어떤 차량",
+    "이 차량으로 진행",
+    "차량을 확인해",
+    "등록된 차량",
+    "차량 목록",
+)
+
+
+def _looks_like_vehicle_selection_prompt(text: str | None) -> bool:
+    normalized = (text or "").strip()
+    return bool(normalized) and any(needle in normalized for needle in _LISTCAR_SELECTION_NEEDLES)
+
+
+def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
+    """Suppress direct listCar JSON when the answer is plain advice.
+
+    The template mapper already suppresses get_my_cars_tool → listCar for
+    generic advice turns. This catches the sibling path where the LLM emits a
+    valid listCar JSON directly, bypassing the mapper guard.
+    """
+    if event.get("template") != "listCar":
+        return None
+    source_domain = str(event.get("source_domain") or "").lower()
+    if source_domain != "discovery":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if _looks_like_vehicle_selection_prompt(assistant_text):
+        return None
+    recovery = _discovery_recovery_chips_for_text(assistant_text, event.get("source_domain"))
+    if recovery is None:
+        chips = list(_DISCOVERY_DEFAULT_CHIPS)
+    else:
+        chips, _label = recovery
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": event.get("source_domain"),
+        "assistant_response_source": "code_mapper_listcar_advice_guard",
+        "data": {
+            "assistantResponse": assistant_text,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+_ORDER_SUMMARY_LINE_RE = re.compile(r"^\s*([^:\n]+)\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _parse_order_summary_lines(text: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for match in _ORDER_SUMMARY_LINE_RE.finditer(text):
+        key = match.group(1).strip()
+        value = match.group(2).strip()
+        if key and value:
+            parsed[key] = value
+    return parsed
+
+
+def _normalize_order_booking_datetime(raw: str) -> str:
+    raw = str(raw or "").strip()
+    match = re.search(
+        r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})\D+(?:\([^)]*\)\s*)?(\d{1,2})\s*(?::\s*\d{1,2}|시)?",
+        raw,
+    )
+    if not match:
+        return raw
+    year, month, day, hour = (int(part) for part in match.groups())
+    try:
+        dt = datetime.datetime(year, month, day)
+    except ValueError:
+        return raw
+    return f"{year}년 {month}월 {day}일 ({_WEEKDAY_KO[dt.weekday()]}) {hour:02d}:00"
+
+
+def _parse_krw_amount(raw: str) -> int | None:
+    digits = re.sub(r"\D", "", str(raw or ""))
+    return int(digits) if digits else None
+
+
+def _coerce_order_summary_quickreply_to_preorder(
+    event: dict,
+    slot_state: Any | None,
+) -> dict | None:
+    """Convert text-only order previews back into the FE preOrder card.
+
+    The transaction LLM occasionally summarizes all preOrder fields inside a
+    quickReply instead of emitting the `preOrder` template. That makes the FE
+    render a plain text block and loses the built-in order/cart buttons. This
+    guard only fires when the assistant text already contains a complete order
+    summary.
+    """
+    if event.get("template") != "quickReply":
+        return None
+    source_domain = str(event.get("source_domain") or "").lower()
+    if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if "주문 정보" not in assistant_text and "주문을 진행" not in assistant_text:
+        return None
+
+    fields = _parse_order_summary_lines(assistant_text)
+    product = fields.get("상품")
+    qty_raw = fields.get("수량")
+    store_name = fields.get("장착 매장") or fields.get("매장")
+    booking_raw = fields.get("방문 예정") or fields.get("방문일시") or fields.get("예약 일시")
+    amount_raw = fields.get("결제 예상금액") or fields.get("결제금액") or fields.get("결제 금액")
+    if not (product and qty_raw and store_name and booking_raw):
+        return None
+
+    qty_match = re.search(r"\d+", qty_raw)
+    if not qty_match:
+        return None
+    payment_amount = _parse_krw_amount(amount_raw or "")
+    if payment_amount is None and slot_state is not None:
+        payment_amount = getattr(slot_state, "payment_amount", None)
+
+    return {
+        "type": "data",
+        "template": "preOrder",
+        "source_domain": event.get("source_domain") or MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_preorder_summary_guard",
+        "data": {
+            "assistantResponse": "주문 정보를 확인해 주세요.",
+            "orderInfo": {
+                "carInfo": None,
+                "product": product,
+                "quantity": int(qty_match.group(0)),
+                "storeName": store_name,
+                "bookingDateTime": _normalize_order_booking_datetime(booking_raw),
+                "paymentAmount": payment_amount,
+            },
+            "isReadyToOrder": True,
+            "isReadyToAddToCart": False,
+            "metadata": {
+                "goodsId": getattr(slot_state, "goods_no", None) if slot_state is not None else None,
+                "shopId": getattr(slot_state, "shop_id", None) if slot_state is not None else None,
+                "carNo": None,
+                "carLncCd": None,
+            },
+        },
+        "nextAction": {"type": "stop", "domain": None},
+    }
+
 
 def _choose_quickreply_fallback(
     called_tool_names: set[str], source_domain: str | None
@@ -2642,6 +2906,196 @@ def _choose_quickreply_fallback(
     return _FALLBACK_GENERIC, "generic"
 
 
+def _unwrap_tool_data(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested = data.get("data")
+        return nested if isinstance(nested, dict) else data
+    return payload
+
+
+def _normalize_coupon_match_text(value: object) -> str:
+    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", str(value or "")).lower()
+
+
+def _coupon_query_terms(user_text: str) -> list[str]:
+    terms: list[str] = []
+    for raw in re.findall(r"[0-9a-zA-Z가-힣]+", user_text):
+        normalized = _normalize_coupon_match_text(raw)
+        if len(normalized) < 2 or normalized in _COUPON_MATCH_STOPWORDS:
+            continue
+        terms.append(normalized)
+    return terms
+
+
+def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    rows = data.get("coupons")
+    if rows is None:
+        rows = data.get("items")
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _find_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> dict | None:
+    rows = _coupon_rows_from_my_coupons(tool_result)
+    if not rows:
+        return None
+
+    direct_ids = {item.upper() for item in _COUPON_DIRECT_ID_RE.findall(user_text)}
+    if direct_ids:
+        for row in rows:
+            cpn_no = str(row.get("cpn_no") or "").upper()
+            if cpn_no in direct_ids:
+                return row
+
+    query_norm = _normalize_coupon_match_text(user_text)
+    terms = _coupon_query_terms(user_text)
+    discount_match = _COUPON_DISCOUNT_RATE_RE.search(user_text)
+    requested_rate = float(discount_match.group(1)) if discount_match else None
+
+    best_row: dict | None = None
+    best_score = 0.0
+    for row in rows:
+        coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
+        name_norm = _normalize_coupon_match_text(coupon_name)
+        if not name_norm:
+            continue
+
+        score = 0.0
+        if name_norm and name_norm in query_norm:
+            score += 100.0
+        meaningful_query = "".join(terms)
+        if meaningful_query and meaningful_query in name_norm:
+            score += 80.0
+
+        matched_terms = [term for term in terms if term in name_norm]
+        score += len(matched_terms) * 10.0
+        if terms and len(matched_terms) == len(terms):
+            score += 20.0
+
+        if requested_rate is not None:
+            try:
+                coupon_rate = float(row.get("rt_amt_val"))
+            except (TypeError, ValueError):
+                coupon_rate = None
+            if coupon_rate is not None and abs(coupon_rate - requested_rate) < 0.001:
+                score += 25.0
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= 20.0:
+        return best_row
+    return None
+
+
+def _coupon_box_event(message: str) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_coupon_resolver",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [dict(chip) for chip in _COUPON_BOX_CHIPS],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _coupon_issue_event() -> dict:
+    return _coupon_box_event("쿠폰 받기는 쿠폰함에서 가능합니다.")
+
+
+def _build_coupon_applicability_event(tool_result: dict, coupon_row: dict) -> dict:
+    data = _unwrap_tool_data(tool_result)
+    coupon_name = str(coupon_row.get("cpn_nm") or "해당 쿠폰")
+    products: list[dict] = []
+    stores: list[dict] = []
+
+    for group in data.get("coupons") or []:
+        if isinstance(group, dict) and isinstance(group.get("items"), list):
+            products.extend(item for item in group["items"] if isinstance(item, dict))
+    for group in data.get("stores") or []:
+        if isinstance(group, dict) and isinstance(group.get("items"), list):
+            stores.extend(item for item in group["items"] if isinstance(item, dict))
+
+    total_products = int(data.get("total_products") or len(products))
+    total_stores = int(data.get("total_stores") or len(stores))
+
+    lines: list[str] = []
+    if products:
+        lines.append(f"‘{coupon_name}’ 적용 가능 상품은 {total_products}개예요.")
+        for item in products[:5]:
+            goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            if goods_nm:
+                lines.append(f"- {goods_nm}")
+        if total_products > 5:
+            lines.append(f"외 {total_products - 5}개 상품이 더 있어요.")
+    if stores:
+        store_names = [
+            str(item.get("shop_nm") or "").strip()
+            for item in stores[:5]
+            if str(item.get("shop_nm") or "").strip()
+        ]
+        if store_names:
+            lines.append(f"사용 가능 매장은 {', '.join(store_names)}예요.")
+            if total_stores > 5:
+                lines.append(f"외 {total_stores - 5}개 매장이 더 있어요.")
+
+    quick_replies = [
+        {"label": "상품 검색", "domain": "DISCOVERY"},
+        {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+    ]
+    predicted_domains = ["DISCOVERY", "TRANSACTION"]
+    if not lines:
+        lines.append("해당 쿠폰의 적용 정보를 찾을 수 없어요. 쿠폰함에서 적용 대상을 확인해 주세요.")
+        quick_replies = [dict(chip) for chip in _COUPON_BOX_CHIPS]
+        predicted_domains = ["TRANSACTION"]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_coupon_resolver",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": quick_replies,
+            "predictedDomains": predicted_domains,
+        },
+    }
+
+
+def _normalize_unmatched_coupon_quickreply(
+    event_data: dict[str, Any],
+    *,
+    called_tool_names: set[str],
+    source_domain: str,
+    last_user_text: str,
+) -> bool:
+    if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
+        return False
+    if "get_my_coupons_tool" not in called_tool_names:
+        return False
+    if "get_coupon_applicable_products_tool" in called_tool_names:
+        return False
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not _COUPON_UNMATCHED_TEXT_RE.search(assistant_text):
+        return False
+    if not _COUPON_APPLICABILITY_INTENT_RE.search(last_user_text):
+        return False
+
+    event_data["assistantResponse"] = (
+        "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+    )
+    event_data["quickReplies"] = [dict(chip) for chip in _COUPON_BOX_CHIPS]
+    event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
+
+
 def _looks_like_generic_dead_end_chips(chips: object) -> bool:
     if not isinstance(chips, list) or not chips:
         return False
@@ -2650,7 +3104,35 @@ def _looks_like_generic_dead_end_chips(chips: object) -> bool:
         for item in chips
         if isinstance(item, dict)
     }
-    return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS and _GENERIC_DEAD_END_LABELS <= labels
+    return bool(labels) and labels <= _GENERIC_DEAD_END_LABELS
+
+
+def _remove_home_quick_reply_chips(event_data: dict) -> bool:
+    """Strip the global home quick button from any FE payload before streaming."""
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+    filtered = [
+        chip for chip in chips
+        if not (
+            isinstance(chip, dict)
+            and str(chip.get("label") or "").strip() == _HOME_QUICK_REPLY_LABEL
+        )
+    ]
+    if len(filtered) == len(chips):
+        return False
+    event_data["quickReplies"] = filtered
+    if not any(
+        isinstance(chip, dict) and str(chip.get("domain") or "").upper() == "LEADING"
+        for chip in filtered
+    ):
+        predicted = event_data.get("predictedDomains")
+        if isinstance(predicted, list):
+            event_data["predictedDomains"] = [
+                domain for domain in predicted
+                if str(domain).upper() != "LEADING"
+            ]
+    return True
 
 
 def _discovery_recovery_chips_for_text(
@@ -3079,6 +3561,7 @@ class TStationChatServiceV2:
         tool_labels = {
             "get_products_recommendations_tool": "타이어 추천 결과",
             "search_product_tool": "상품 검색 결과",
+            "search_stores_tool": "매장 검색 결과",
             "get_nearby_stores_tool": "근처 매장 목록",
             "get_store_list_tool": "매장 검색 결과",
             "get_store_inventory_tool": "매장 재고 현황",
@@ -3475,7 +3958,7 @@ class TStationChatServiceV2:
              resolution when multiple stores share a substring like "한남점".
 
         Expected tool_context entry shape (from filter_for_context):
-            {"tool": "get_nearby_stores_tool" | "get_store_list_tool",
+            {"tool": "search_stores_tool" | "get_nearby_stores_tool" | "get_store_list_tool",
              "data": [{"shop_id": "F07782", "shop_nm": "티스테이션 한남점",
                        "distance_km": 4.59, "addr_base": "..."}],
              "input": {...}}
@@ -3483,7 +3966,7 @@ class TStationChatServiceV2:
         if not user_text or not prev_tool_data:
             return None
 
-        STORE_TOOLS = {"get_nearby_stores_tool", "get_store_list_tool"}
+        STORE_TOOLS = {"search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"}
         items: list[dict] = []
         for entry in prev_tool_data:
             if entry.get("tool") not in STORE_TOOLS:
@@ -3781,7 +4264,7 @@ class TStationChatServiceV2:
             )
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
-            classify_future = _speculative_classify_executor.submit(
+            classify_future = _try_submit_speculative(
                 _coordinator.classify_multi_intent,
                 classifier_messages,
                 session_id=request.session_id,
@@ -3943,7 +4426,7 @@ class TStationChatServiceV2:
                     logger.warning(f"[SLOTS] history tire_size resolver failed: {e}")
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
-            # the most recent get_nearby_stores_tool / get_store_list_tool result.
+            # the most recent search_stores_tool / get_nearby_stores_tool / get_store_list_tool result.
             # `_apply_tool_derived_slots` only auto-saves shop_id when the tool returned
             # exactly 1 store — multi-result lists (nearby stores within radius, region
             # searches) leave shop_id=None. When the user then picks a store from that
@@ -3963,7 +4446,7 @@ class TStationChatServiceV2:
                     store_tool_entries = [
                         e.get("tool")
                         for e in prev_tool_data
-                        if e.get("tool") in ("get_nearby_stores_tool", "get_store_list_tool")
+                        if e.get("tool") in ("search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool")
                     ]
                     logger.debug(
                         f"[SLOTS] shop_id resolver (tool path) no-match: "
@@ -4730,6 +5213,8 @@ class TStationChatServiceV2:
         next_quick_reply_domain_values: list[str] = []
         next_predicted_domain_values: list[str] = []
         pending_slots = None
+        deterministic_coupon_event: dict | None = None
+        coupon_resolver_ran = False
         # Hoisted so the trace summary at end-of-stream can reference QC verdict
         # even when the draft was empty and the QC block below never ran.
         _qc_passed = True
@@ -4765,6 +5250,135 @@ class TStationChatServiceV2:
             if msg.get("role") == "user":
                 user_query = msg.get("content", "")
                 break
+
+        def _tool_result_dict(raw: Any) -> dict:
+            if isinstance(raw, dict):
+                return raw
+            parsed = qc_verifier.parse_tool_output(raw)
+            return parsed or {
+                "status": "error",
+                "http_status": None,
+                "message": "Invalid tool response",
+                "data": {},
+            }
+
+        def _record_code_tool_result(tool_name: str, tool_input: dict, tool_result: dict) -> None:
+            called_tool_names.add(tool_name)
+            structured_sources.append((tool_name, tool_result))
+            filtered = filter_source_data(
+                tool_name,
+                json.dumps(tool_result, ensure_ascii=False),
+            )
+            source_data_chunks.append(
+                f"Tool [{tool_name}]:\n"
+                f"Input: {json.dumps(tool_input, ensure_ascii=False)}\n"
+                f"Output: {filtered}"
+            )
+
+        async def _resolve_coupon_applicability_with_code(
+            my_coupons_result: dict | None = None,
+        ) -> tuple[list[dict], dict]:
+            emitted_events: list[dict] = []
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_coupon_applicable_products_tool as _coupon_applicable_tool,
+                get_my_coupons_tool as _my_coupons_tool,
+            )
+
+            if my_coupons_result is None:
+                my_coupons_input = {"lang_cd": "ko"}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_my_coupons_tool",
+                    "display_name": "내 쿠폰 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_my_coupons = await asyncio.to_thread(
+                        _my_coupons_tool.invoke,
+                        my_coupons_input,
+                    )
+                    my_coupons_result = _tool_result_dict(raw_my_coupons)
+                except Exception as exc:
+                    logger.exception("[COUPON_RESOLVER] my coupons tool failed")
+                    my_coupons_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result("get_my_coupons_tool", my_coupons_input, my_coupons_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": my_coupons_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": my_coupons_input,
+                    "output": json.dumps(my_coupons_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_my_coupons_tool",
+                    "source_domain": "transaction",
+                })
+
+            matched_coupon = _find_coupon_from_owned_coupons(user_query, my_coupons_result)
+            if matched_coupon is None:
+                return emitted_events, _coupon_box_event(
+                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                )
+
+            matched_cpn_no = str(matched_coupon.get("cpn_no") or "").strip()
+            if not matched_cpn_no:
+                return emitted_events, _coupon_box_event(
+                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                )
+
+            followup_tool_name = "get_coupon_applicable_products_tool"
+            followup_input = {"cpn_no": [matched_cpn_no], "deal_no": None}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": followup_tool_name,
+                "display_name": "답변 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_followup = await asyncio.to_thread(
+                    _coupon_applicable_tool.invoke,
+                    followup_input,
+                )
+                followup_result = _tool_result_dict(raw_followup)
+            except Exception as exc:
+                logger.exception("[COUPON_RESOLVER] follow-up tool failed")
+                followup_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result(followup_tool_name, followup_input, followup_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Price AF]",
+                "agent_class": "Transaction Agent",
+                "status": followup_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": followup_input,
+                "output": json.dumps(followup_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": followup_tool_name,
+                "source_domain": "transaction",
+            })
+            return emitted_events, _build_coupon_applicability_event(
+                followup_result,
+                matched_coupon,
+            )
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
@@ -4867,6 +5481,19 @@ class TStationChatServiceV2:
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
 
+                    if (
+                        tool_name == "get_my_coupons_tool"
+                        and not coupon_resolver_ran
+                        and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
+                        and not _COUPON_ISSUE_INTENT_RE.search(user_query)
+                    ):
+                        coupon_resolver_ran = True
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_coupon_applicability_with_code(parsed_for_verifier)
+                        )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+
                 continue
 
             if event_type == "internal_slots":
@@ -4907,6 +5534,16 @@ class TStationChatServiceV2:
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
                     event_data = event.get("data", {})
+                coerced_event = _coerce_non_selection_listcar_to_quickreply(event)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] discovery listCar advice turn → quickReply"
+                    )
+                    event = coerced_event
+                    last_template = "quickReply"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_listcar_advice_guard"
+                    event_data = event.get("data", {})
                 for value in _quick_reply_domain_values_from_event(event):
                     if value not in next_quick_reply_domain_values:
                         next_quick_reply_domain_values.append(value)
@@ -4937,18 +5574,53 @@ class TStationChatServiceV2:
                         template_payload = {k: v for k, v in event_data.items() if k != "assistantResponse"}
                         if template_payload:
                             draft_for_qc += f"\n\n[Template: {last_template}]\n{json.dumps(template_payload, ensure_ascii=False)}"
+                if (
+                    isinstance(event_data, dict)
+                    and str(event.get("source_domain", "")).lower()
+                    == MultiAgentDomain.Domain.TRANSACTION.value
+                    and _COUPON_ISSUE_INTENT_RE.search(user_query)
+                ):
+                    event = _coupon_issue_event()
+                    last_template = "quickReply"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_coupon_issue_guard"
+                    event_data = event.get("data", {})
+                    assistant_response = str(event_data.get("assistantResponse") or "")
+                    draft_response = assistant_response
+                    draft_for_qc = assistant_response
+                    original_message_events = [{
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": "[TRANSACTION AGENT]",
+                    }]
+                coerced_event = _coerce_order_summary_quickreply_to_preorder(event, initial_slots)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] transaction order summary quickReply → preOrder"
+                    )
+                    event = coerced_event
+                    last_template = "preOrder"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_preorder_summary_guard"
+                    event_data = event.get("data", {})
+                    assistant_response = str(event_data.get("assistantResponse") or "")
+                    draft_response = assistant_response
+                    draft_for_qc = assistant_response
+                    original_message_events = [{
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": "[TRANSACTION AGENT]",
+                    }]
                 # Inject quickReplies into orderComplete (LLM-written path; mapper path injects via _map_order_complete).
                 if last_template == "orderComplete" and isinstance(event_data, dict) and "quickReplies" not in event_data:
                     if event_data.get("isSuccess"):
                         event_data["quickReplies"] = [
                             {"label": "주문 내역 확인", "domain": "TRANSACTION"},
                             {"label": "배송 상태 확인", "domain": "TRANSACTION"},
-                            {"label": "처음으로", "domain": "LEADING"},
                         ]
                     else:
                         event_data["quickReplies"] = [
                             {"label": "다시 시도", "domain": "TRANSACTION"},
-                            {"label": "처음으로", "domain": "LEADING"},
                         ]
                 # Defensive fallback for quickReply template: if LLM emitted empty quickReplies,
                 # inject context-aware chips so the user is never stranded. Skip when the turn
@@ -4958,6 +5630,55 @@ class TStationChatServiceV2:
                 # conversation context (e.g., order list → order-related chips, not a generic
                 # "1:1 문의" pair which makes the order flow look broken).
                 if last_template == "quickReply" and isinstance(event_data, dict):
+                    source_domain = str(event.get("source_domain", "ui_template")).lower()
+                    if (
+                        deterministic_coupon_event is None
+                        and not coupon_resolver_ran
+                        and source_domain == MultiAgentDomain.Domain.TRANSACTION.value
+                        and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
+                        and not _COUPON_ISSUE_INTENT_RE.search(user_query)
+                        and re.search(
+                            r"쿠폰\s*번호|cpn_no|기획전\s*번호|쿠폰함",
+                            str(event_data.get("assistantResponse") or ""),
+                            re.IGNORECASE,
+                        )
+                    ):
+                        coupon_resolver_ran = True
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_coupon_applicability_with_code()
+                        )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    if deterministic_coupon_event is not None:
+                        logger.info("[COUPON_RESOLVER] replacing LLM quickReply with code result")
+                        event = deterministic_coupon_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_coupon_resolver"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
+                    elif _normalize_unmatched_coupon_quickreply(
+                        event_data,
+                        called_tool_names=called_tool_names,
+                        source_domain=source_domain,
+                        last_user_text=user_query,
+                    ):
+                        logger.info("[COUPON_RESOLVER] normalized unmatched coupon quickReply")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
                     existing_chips = event_data.get("quickReplies")
                     chips_empty = not isinstance(existing_chips, list) or len(existing_chips) == 0
                     next_action = event.get("nextAction") or {}
@@ -4996,6 +5717,11 @@ class TStationChatServiceV2:
                                 for chip in recovery_chips
                                 if isinstance(chip, dict)
                             ])
+                if isinstance(event_data, dict) and _remove_home_quick_reply_chips(event_data):
+                    logger.info(
+                        "[QUICKREPLY_FILTER] removed home chip from %s template",
+                        last_template,
+                    )
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue

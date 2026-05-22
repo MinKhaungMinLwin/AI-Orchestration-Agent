@@ -13,6 +13,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_logistics_inventory_tool,
     get_store_inventory_tool,
     transaction_store_preview_tool,
+    search_stores_tool,
     search_place_tool,
     get_nearby_stores_tool,
     get_store_list_tool,
@@ -24,6 +25,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     quick_order_tool,
     get_order_status_tool,
     get_orders_of_user_tool,
+    get_maintenance_history_tool,
     get_my_reservations_tool,
     get_favorite_stores_tool,
 )
@@ -62,10 +64,20 @@ Never fabricate values. Never expose internal IDs, backend field names, coordina
 
 ## USER-SPECIFIED COUNT (필수)
 사용자가 메시지에서 결과 수량을 명시하면(예: "5개만", "3개 알려줘", "10개 추천", "top 5", "다섯 개") 그 숫자를 **반드시** 도구의 `limit` 파라미터로 전달한다. 도구 기본값을 그대로 쓰지 말 것.
-- 매장 검색 (`get_nearby_stores_tool` / `get_store_list_tool`) → `limit=<사용자 지정값>`
+- 매장 검색 (`search_stores_tool` / `get_nearby_stores_tool` / `get_store_list_tool`) → `limit=<사용자 지정값>`
 - 도구 응답이 더 많이 와도 답변에는 사용자가 요청한 수량만 노출.
 - 한국어 수사 매핑: "다섯/5" → 5, "셋/세 개/3" → 3, "열/10" → 10.
 - 사용자가 수량을 명시하지 않으면 도구 기본값 사용 (`limit` 생략).
+
+## STORE SEARCH V1 — 통합 매장검색 우선 사용
+일반 매장 검색에서 사용자가 장소/랜드마크/좌표/지역/매장명과 함께 매장 수량, 서비스 필터,
+올마이T, 수입차 특화, 평점/리뷰 정렬을 말하면 우선 `search_stores_tool` 을 사용한다.
+- 장소/랜드마크 예: "남산타워 근처", "강남역 근처" → `place_query`
+- 지역 예: "인천 매장 5개", "강릉 티스테이션" → `region_code`
+- 매장명 예: "안양점", "한남점" → `store_nm`
+- 사용자가 "5개"처럼 수량을 말하면 `limit=5`, 후보가 더 필요하면 `candidate_limit` 은 `limit` 보다 크게 유지한다.
+- v1은 날짜/요일 영업 여부, 예약 가능 시간, 상품 재고를 확인하지 않는다. 그런 조건이 있으면
+  `search_stores_tool` 로 후보를 찾은 뒤 기존 상세/스케줄/재고 도구를 후속 호출한다.
 
 Keep user-visible text short and mobile-friendly. Do not use markdown headings, bold/italic, or numbered prefixes.
 For code-mapped card results, respond with ONLY 1 short Korean sentence; the system renders card details from tool output.
@@ -733,6 +745,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | save_to_cart_tool | User chooses cart (no store selected) |
 | quick_order_tool | User selected store, all info confirmed |
 | get_orders_of_user_tool | User asks to see their orders |
+| get_maintenance_history_tool | User asks for recent maintenance/service history (정비이력/정비내역/관리받은 내역) |
 | get_order_status_tool | User asks about specific order |
 | get_my_reservations_tool | User asks about their shop visit reservations (예약 조회) |
 | get_favorite_stores_tool | User explicitly references their favorite/regular store ("내 단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점"). NO arguments — mbr_no taken from JWT. See `FAVORITE STORES — DIRECT-MENTION ONLY` section in BASE prompt for handling rules. |
@@ -2395,25 +2408,30 @@ Handle ONLY coupon and promotion requests.
   응답에는 **쿠폰** 정보만 사용 (deal/기획전 정보 노출 X). 🚫 발급 CTA 절대 미노출.
 - Product-specific 기획전 (e.g. "<상품명> 기획전", "<상품명> 적용 기획전") -> 동일하게 `get_product_promotions_tool(goods_no=...)` 호출, 응답에는 **기획전** 정보(deal_nm + 기간)만 사용 (쿠폰 갯수/CTA 노출 X).
 - 🚫 (OFF 2026-05-15 / 안내 갱신 2026-05-19) User wants to download/issue a coupon -> issue_coupon_tool 호출 금지. quickReply 로 위 GLOBAL 룰 (line 33-) 의 응답/quickReplies 그대로 emit ("쿠폰 받기는 쿠폰함에서 가능합니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip).
-- 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품" 등, cpn_no 미확보):
+- PRIORITY — 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품", "드라이브 행사 고객 한정 적용 가능 상품" 등, cpn_no 미확보):
+  이 규칙은 아래의 "쿠폰 적용 상품/매장 조회" 일반 규칙보다 우선한다.
   Step 1. `get_my_coupons_tool` 호출 → 보유 쿠폰 목록 확인
   Step 2. 사용자가 언급한 할인율(예: "30%") 또는 쿠폰명 키워드로 매칭
+    - "드라이브 행사 고객 한정" 같은 부분 쿠폰명도 `items[].cpn_nm` substring 으로 매칭한다.
   Step 3a. 매칭 쿠폰 있음 → `get_coupon_applicable_products_tool(cpn_no=[<매칭된 cpn_no>])` 호출 → 적용 상품/매장 안내
-  Step 3b. 매칭 쿠폰 없음 → quickReply "고객님, 해당 할인 쿠폰을 현재 보유하고 계시지 않아요."
-  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작.
+  Step 3b. 매칭 쿠폰 없음 → quickReply "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요." + quickReplies `[{"label":"쿠폰함 바로가기","domain":"TRANSACTION","url":"__URL_MY_COUPON_LIST_PC__"},{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
+  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작. 특히 사용자가 쿠폰명 일부를 말한 경우에도 절대 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 로 찾아라. `get_my_coupons_tool` 에도 없으면 쿠폰번호를 요구하지 말고 쿠폰함 CTA 로 안내한다.
 - 쿠폰 적용 상품/매장 조회 ("이 쿠폰 어디 쓸 수 있어?", "이 쿠폰으로 살 수 있는 타이어", "이 쿠폰 어느 매장에서 써?") -> call
   `get_coupon_applicable_products_tool(cpn_no=[...])`. 답변엔 쿠폰 정보만.
+  - 단, 사용자 발화에 쿠폰명/할인율 키워드가 있고 cpn_no 만 모르는 경우에는 위 PRIORITY 규칙을 따른다. 절대 쿠폰번호를 요구하지 않는다.
 - 기획전 적용 상품 조회 ("기획전 상품", "기획전에 어떤 상품 있어?") -> call
   `get_coupon_applicable_products_tool(deal_no=[...])`. 답변엔 기획전 정보만.
-    - 직전 turn 또는 컨텍스트에서 확보된 cpn_no / deal_no 만 전달한다. 모르면 빈 리스트.
+    - 직전 turn 또는 컨텍스트에서 확보된 cpn_no / deal_no 만 전달한다. 단, 쿠폰명/할인율이 발화에 있으면 cpn_no 를 모른다고 되묻지 말고 위 PRIORITY 규칙으로 `get_my_coupons_tool` 부터 호출한다.
     - cpn_no, deal_no 둘 다 list[str]. 각 최대 10개.
-    - 둘 다 비어 있으면 호출 금지 — 어떤 쿠폰 또는 어떤 기획전인지 quickReply 로 되묻는다. (의도가 쿠폰이면 "어떤 쿠폰?" 만, 기획전이면 "어떤 기획전?" 만 — 슬래시 묶음 금지)
+    - 둘 다 비어 있으면 호출 금지 — 기획전 의도는 어떤 기획전인지 되묻는다. 쿠폰 의도는 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 조회 또는 쿠폰함 CTA 로 처리한다.
     - 응답: `{coupons:[{cpn_no,total,items:[...]}], deals:[{deal_no,total,items:[...]}],
       stores:[{cpn_no,total,items:[{shop_id,shop_nm}]}], total_products, total_stores}`.
-      coupons/deals.items 는 상품(goods_nm/sale_prc 등), stores.items 는 매장 (shop_nm).
+      coupons/deals.items 는 패턴 대표 상품(ptrn_cd, goods_nm), stores.items 는 매장 (shop_nm).
     - 매핑 결과 처리:
       * `coupons` 또는 `deals` 에 cpn_no 등장 → 적용 가능한 **상품 쿠폰**. items[] 의 goods_nm
         중복 제거 후 최대 5개 bullet. >5개면 "외 {n-5}개" 표기.
+        ⚠️ 적용 가능 상품 답변에서는 대표 상품명만 보여준다. `tire_size_1`, `tire_size_2`,
+        규격/사이즈, goods_no, ptrn_cd 는 절대 붙이지 않는다.
       * `stores` 에 cpn_no 등장 → **매장 한정 쿠폰**. items[].shop_nm 을 콤마 구분
         나열 ("방배점, 한남점, 서초점, 모란점, 테스트매장"). shop_id 는 비공개.
       * 동일 cpn_no 가 coupons + stores 둘 다 등장하면 두 줄로 안내.
@@ -2472,6 +2490,8 @@ Layout (per coupon section):
 ```
 
 Rules:
+- 적용 상품은 반드시 `items[].goods_nm` 만 사용한다. `tire_size_1` / `tire_size_2` 를
+  상품명 뒤에 붙이지 말 것. 예: "벤투스 S2 AS" O, "벤투스 S2 AS 205/50R17" X.
 - 쿠폰명 (cpn_nm) 출처: 직전 turn 의 `get_my_coupons_tool` 응답에서 cpn_no→cpn_nm 매핑.
   prior context 가 없으면 "(쿠폰 #{1,2,3...})" 처럼 익명 라벨 부여.
 - 한 쿠폰에 상품만 매핑됐으면 "적용 상품:" 라인만, 매장만 매핑됐으면 "적용 매장:" 라인만.
@@ -2554,18 +2574,19 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
   - "그 이후에 매장 가면 됨?" 류 질문:
     → `rsv_dtime` 있으면: "이미 <rsv_dtime> 예약이 잡혀 있어요. 해당 시간에 방문하시면 돼요."
     → `rsv_dtime` 없으면: 배송 도착 후 매장과 방문 일정을 별도로 확인해야 함을 안내. "도착 후 바로 방문 가능" 단정 금지.
-- "내 예약", "예약 조회", "예약 내역", "다음 방문 언제", "예약 어떻게 돼있어" -> call get_my_reservations_tool (default sct_cd="100"). Show 매장명, 방문일시, 상태 라벨 그대로. 0건이면 "현재 예약된 매장 방문이 없어요 😊" + quickReply 로 매장 찾기 권유.
+- "내 예약", "예약 조회", "예약 내역", "다음 방문 언제", "예약 어떻게 돼있어" -> call get_my_reservations_tool with sct_cd="all" (default) so 방문예약, 구매후방문예약, 오프라인예약 are searched together. Show 예약 유형(shop_rsv_sct_label), 매장명, 방문일시, 상태 라벨 그대로. 0건이면 "현재 예약된 매장 방문이 없어요 😊" + quickReply 로 매장 찾기 권유.
 - 매장 방문 시 접수 안내 질문 ("매장 가면 뭐 말해", "예약번호만 말하면 돼?", "방문 당일 어떻게 해", "당일 접수", "도착하면 뭐 해야 해", "접수할 때 뭐 말해", "어떻게 해야해") -> 필요 시 `get_orders_of_user_tool` 로 예약 컨텍스트만 확인 후 응답. 도구 호출 없이 즉시 답변해도 무방.
   → assistantResponse 가이드: "매장 방문 시 접수처에서 **성함과 차량번호**를 말씀해 주시면 예약 확인이 가능해요. 차량 키를 맡기고 안내에 따라 대기하시면 됩니다 😊"
   → ⚠️ 절대 금지: "주문번호", "예약번호", "휴대폰 번호" 등 다른 식별자를 매장 접수 시 말하라고 안내하지 마라. T'Station 매장은 차량번호 기준으로 예약을 조회한다.
   → quickReplies: `[{"label":"내 예약 조회","domain":"TRANSACTION"},{"label":"내 주문 조회","domain":"TRANSACTION"}]`
-- 정비/관리 이력 조회 질문 ("관리받은 내역", "관리받은 거", "정비 이력", "정비내역", "서비스 이력", "받은 서비스", "1년 동안 받은 거", "그동안 받은 정비", "차량 정비 이력", "지난 정비") → 주문내역(`get_orders_of_user_tool`) 호출 금지. 매장서비스내역 페이지로 직접 CTA 연결.
-  → 도구 호출 절대 금지 (주문 내역 ≠ 매장 서비스 내역). 즉시 quickReply 응답.
-  → assistantResponse 가이드: "지금까지 티스테이션에서 받으신 정비 서비스 이력은 아래 '매장서비스내역' 페이지에서 한눈에 확인하실 수 있어요 😊"
-  → quickReplies (첫 chip url 절대 변경 금지):
-    `[{"label":"매장서비스내역","url":"__URL_STORE_SERVICE_HISTORY__","domain":"SUPPORT"},{"label":"내 주문 조회","domain":"TRANSACTION"},{"label":"처음으로","domain":"LEADING"}]`
-  → ⚠️ "주문 내역에서 확인", "주문 조회" 식으로 주문/정비 이력을 혼동해서 답하지 말 것. 매장 서비스 내역은 별도 페이지 (`/mypage/tstation/custservice/carservice-hist`) 에서만 조회 가능.
-  → ⚠️ 사용자가 명시적으로 "주문" 키워드를 함께 쓰면 ("주문이랑 정비 이력 같이 보여줘") 위 매장서비스내역 CTA 를 우선 안내한 뒤 보조로 `내 주문 조회` chip 도 함께 노출.
+- 정비/관리 이력 조회 질문 ("관리받은 내역", "관리받은 거", "정비 이력", "정비내역", "서비스 이력", "받은 서비스", "1년 동안 받은 거", "그동안 받은 정비", "차량 정비 이력", "지난 정비") → `get_maintenance_history_tool(limit=5)` 호출. 주문내역(`get_orders_of_user_tool`) 호출 금지.
+  → 응답은 반드시 `quickReply`.
+  → `assistantResponse` 는 최근 정비이력 최대 5건만 요약한다. 각 줄은 `• {car_svc_dt} / {shop_nm} / {car_svc_info 또는 item_nm} / {car_svc_qty}개 / {svc_tp}` 형식. 수량이 없으면 `{car_svc_qty}개` 부분 생략.
+  → 본문 마지막에 반드시 추가: "자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
+  → 0건이면: "최근 5년 내 확인되는 정비이력이 없어요.\n\n자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
+  → quickReplies 첫 chip url/label 절대 변경 금지:
+    `[{"label":"정비이력보기","url":"__URL_STORE_SERVICE_HISTORY__","domain":"SUPPORT"},{"label":"내 주문 조회","domain":"TRANSACTION"}]`
+  → 사용자가 명시적으로 "주문" 키워드를 함께 쓰면 ("주문이랑 정비 이력 같이 보여줘") 위 정비이력 요약을 우선 안내한 뒤 보조 chip `내 주문 조회` 를 유지.
 - Reservation/visit time change ("예약 시간 변경", "방문 시간 변경", "일정 변경", "시간 바꿀 수 있어", "오늘 예약한거 시간 변경") -> follow Reservation Time Change below.
 - Cancellation fee / cancellation availability ("취소 수수료", "취소비용", "오늘 취소하면", "예약 취소", "주문 취소") -> follow Cancellation Inquiry below.
 - Add the confirmed product to cart -> call save_to_cart_tool only when goods_no and quantity are known.
@@ -2761,7 +2782,7 @@ tier="none" + candidate_shop_ids non-empty → 무조건 case (A) 안내문 "오
   `assistantResponse`: `"<매장명>으로 예약을 진행할게요! 어떤 타이어를 장착하실 건가요? 😊"`
   `quickReplies`: `[{"label":"타이어 추천 받기","domain":"DISCOVERY"}, {"label":"차량 정보로 찾기","domain":"DISCOVERY"}, {"label":"이전에 구매한 타이어","domain":"TRANSACTION"}]`
 
-- Nearby/location/name store search -> call search_place_tool, get_nearby_stores_tool, or get_store_list_tool.
+- Nearby/location/name store search -> prefer search_stores_tool. Use search_place_tool/get_nearby_stores_tool/get_store_list_tool only for legacy flows or explicit low-level lookup needs.
 - Store detail for a known shop_id -> call get_store_detail_tool.
 - Store inventory for a confirmed goods_no/shop -> call get_store_inventory_tool.
 - Schedule or reservation date/time -> call get_store_schedule_tool or get_multi_store_schedule_tool.
@@ -2908,6 +2929,7 @@ class TransactionSubAgent(BaseAgent):
         "get_logistics_inventory_tool": "Inventory",
         "get_store_inventory_tool": "Inventory",
         "transaction_store_preview_tool": "Inventory",
+        "search_stores_tool": "Store",
         "search_place_tool": "Store",
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
@@ -2918,6 +2940,7 @@ class TransactionSubAgent(BaseAgent):
         "save_to_cart_tool": "Quick Shopping",
         "quick_order_tool": "Quick Shopping",
         "get_orders_of_user_tool": "Order / Delivery",
+        "get_maintenance_history_tool": "Order / Delivery",
         "get_order_status_tool": "Order / Delivery",
         "get_my_reservations_tool": "Order / Delivery",
         "get_favorite_stores_tool": "Store",
@@ -2937,6 +2960,7 @@ class TransactionSubAgent(BaseAgent):
             get_logistics_inventory_tool,
             get_store_inventory_tool,
             transaction_store_preview_tool,
+            search_stores_tool,
             search_place_tool,
             get_nearby_stores_tool,
             get_store_list_tool,
@@ -2947,6 +2971,7 @@ class TransactionSubAgent(BaseAgent):
             save_to_cart_tool,
             quick_order_tool,
             get_orders_of_user_tool,
+            get_maintenance_history_tool,
             get_order_status_tool,
             get_my_reservations_tool,
             get_favorite_stores_tool,
@@ -2971,6 +2996,7 @@ class TransactionSubAgent(BaseAgent):
                 save_to_cart_tool,
                 quick_order_tool,
                 get_orders_of_user_tool,
+                get_maintenance_history_tool,
                 get_order_status_tool,
                 get_my_reservations_tool,
                 get_favorite_stores_tool,
@@ -2982,6 +3008,7 @@ class TransactionSubAgent(BaseAgent):
             tools = [
                 get_store_inventory_tool,
                 transaction_store_preview_tool,
+                search_stores_tool,
                 search_place_tool,
                 get_nearby_stores_tool,
                 get_store_list_tool,

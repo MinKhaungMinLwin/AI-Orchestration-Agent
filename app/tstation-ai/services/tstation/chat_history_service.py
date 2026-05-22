@@ -14,6 +14,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from typing import List, Optional
 
 from schemas.tstation.slots import ConversationSlots
@@ -27,38 +28,28 @@ from config.env import settings
 
 logger = logging.getLogger(__name__)
 
-# Redis client for conversation management
-_redis_client: Optional[redis.Redis] = None
-_async_redis_client: Optional[async_redis.Redis] = None
+_redis_client: redis.Redis = redis.from_url(
+    settings.REDIS_CONVERSATION_MANAGEMENT_URL,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    decode_responses=True,
+    max_connections=50,
+)
+
+_async_redis_client: async_redis.Redis = async_redis.from_url(
+    settings.REDIS_CONVERSATION_MANAGEMENT_URL,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    decode_responses=True,
+    max_connections=50,
+)
 
 
 def get_redis_client() -> redis.Redis:
-    """Get Redis client for conversation management."""
-    global _redis_client
-    if _redis_client is None:
-        redis_url = settings.REDIS_CONVERSATION_MANAGEMENT_URL
-
-        # Parse URL: redis://:password@host:port/db
-        _redis_client = redis.from_url(
-            redis_url,
-            socket_timeout=5,
-            socket_connect_timeout=5,
-            decode_responses=True,
-        )
     return _redis_client
 
 
 def get_async_redis_client() -> async_redis.Redis:
-    """Get async Redis client for hot-path conversation operations."""
-    global _async_redis_client
-    if _async_redis_client is None:
-        redis_url = settings.REDIS_CONVERSATION_MANAGEMENT_URL
-        _async_redis_client = async_redis.from_url(
-            redis_url,
-            socket_timeout=5,
-            socket_connect_timeout=5,
-            decode_responses=True,
-        )
     return _async_redis_client
 
 
@@ -102,7 +93,18 @@ def _get_summary_key(session_id: str) -> str:
     return SUMMARY_KEY.format(session_id=session_id)
 
 
-def _decode_template_data(value, crypto):
+def _tool_context_dedup_key(item: dict) -> str:
+    dedup_input = item.get("_dedup_input", item.get("input", {}))
+    return json.dumps({"tool": item.get("tool", ""), "input": dedup_input}, sort_keys=True, ensure_ascii=False)
+
+
+@lru_cache(maxsize=1000)
+def _cached_decrypt(ciphertext: str) -> str:
+    """Cache decrypt results for immutable message content — same ciphertext always yields same plaintext."""
+    return get_crypto_service().decrypt(ciphertext)
+
+
+def _decode_template_data(value) -> dict | None:
     """Decode stored template_data into a dict.
 
     Handles three storage shapes during the migration window:
@@ -115,7 +117,7 @@ def _decode_template_data(value, crypto):
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
-        plaintext = crypto.decrypt(value)
+        plaintext = _cached_decrypt(value)
         try:
             return json.loads(plaintext)
         except (json.JSONDecodeError, TypeError):
@@ -274,9 +276,6 @@ class ChatHistoryService:
     def get_history(self, session_id: str) -> List[dict]:
         """Get all messages for a session from sorted set (decrypts content & template_data)."""
         messages = []
-        crypto = get_crypto_service()
-
-        # Get messages from custom template sorted set
         tmpl_key = _get_template_messages_key(session_id)
         tmpl_raw = self.redis.zrange(tmpl_key, 0, -1)
         for raw in tmpl_raw:
@@ -286,30 +285,20 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
                 logger.warning(f"[CHAT_HISTORY] Failed to parse message: {raw[:100]}")
                 continue
 
-        # Sort by created_at timestamp
-        def get_timestamp(msg):
-            try:
-                return datetime.fromisoformat(msg["created_at"]).timestamp()
-            except (ValueError, KeyError):
-                return 0
-        messages.sort(key=get_timestamp)
-
         return messages
 
     def get_history_range(self, session_id: str, start: int, end: int) -> List[dict]:
         """Get a specific range of messages from the sorted set to avoid full decryption."""
         messages = []
-        crypto = get_crypto_service()
-
         tmpl_key = _get_template_messages_key(session_id)
         tmpl_raw = self.redis.zrange(tmpl_key, start, end)
         for raw in tmpl_raw:
@@ -319,26 +308,20 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
                 continue
 
-        def get_timestamp(msg):
-            try:
-                return datetime.fromisoformat(msg["created_at"]).timestamp()
-            except (ValueError, KeyError):
-                return 0
-        messages.sort(key=get_timestamp)
         return messages
 
     def acquire_summary_lock(self, session_id: str) -> bool:
         """Acquire a lock for summarization to prevent concurrent race conditions."""
         key = f"chat:summary_lock:{session_id}"
-        return bool(self.redis.set(key, "1", nx=True, ex=30))
+        return bool(self.redis.set(key, "1", nx=True, ex=120))
 
     def release_summary_lock(self, session_id: str) -> None:
         """Release the summarization lock."""
@@ -432,18 +415,11 @@ class ChatHistoryService:
         # Dedup by (tool, full_input): newer results replace older ones for the same query.
         # Uses _dedup_input (full params including PII) for accurate dedup,
         # while "input" (PII-filtered) is what gets injected into the prompt.
-        def _dedup_key(item: dict) -> str:
-            dedup_input = item.get("_dedup_input", item.get("input", {}))
-            return json.dumps(
-                {"tool": item.get("tool", ""), "input": dedup_input},
-                sort_keys=True, ensure_ascii=False,
-            )
-
         seen = set()
         merged = []
         # New items first (reversed so last tool call = most recent), then existing
         for item in list(reversed(tool_data)) + existing:
-            dk = _dedup_key(item)
+            dk = _tool_context_dedup_key(item)
             if dk not in seen:
                 seen.add(dk)
                 merged.append(item)
@@ -522,7 +498,6 @@ class ChatHistoryService:
         if summary is None:
             return self.get_history_range(session_id, -20, -1)
 
-        crypto = get_crypto_service()
         tmpl_key = _get_template_messages_key(session_id)
         raw_items = self.redis.zrange(tmpl_key, summary["covered_count"], -1)
         recent = []
@@ -533,9 +508,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": data.get("role", "assistant"),
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
             except json.JSONDecodeError:
@@ -567,7 +542,6 @@ class ChatHistoryService:
         if limit <= 0:
             return []
 
-        crypto = get_crypto_service()
         tmpl_key = _get_template_messages_key(session_id)
         result = []
         start = 0
@@ -590,9 +564,9 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": "assistant",
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
-                    "template_data": _decode_template_data(data.get("template_data"), crypto),
+                    "template_data": _decode_template_data(data.get("template_data")),
                     "created_at": data.get("created_at", datetime.now().isoformat()),
                 })
                 if len(result) >= limit:
@@ -663,17 +637,10 @@ class ChatHistoryService:
         if tool_data:
             existing = await self.get_tool_context_async(session_id)
 
-            def _dedup_key(item: dict) -> str:
-                dedup_input = item.get("_dedup_input", item.get("input", {}))
-                return json.dumps(
-                    {"tool": item.get("tool", ""), "input": dedup_input},
-                    sort_keys=True, ensure_ascii=False,
-                )
-
             seen = set()
             merged = []
             for item in list(reversed(tool_data)) + existing:
-                dk = _dedup_key(item)
+                dk = _tool_context_dedup_key(item)
                 if dk not in seen:
                     seen.add(dk)
                     merged.append(item)
@@ -774,7 +741,7 @@ class ChatHistoryService:
             if not td_raw:
                 continue
 
-            td_decoded = _decode_template_data(td_raw, crypto)
+            td_decoded = _decode_template_data(td_raw)
 
             if td_decoded:
                 inner = td_decoded.get("data")
@@ -790,7 +757,7 @@ class ChatHistoryService:
                     "msg_id": data.get("msg_id", str(uuid.uuid4())),
                     "session_id": session_id,
                     "role": "assistant",
-                    "content": crypto.decrypt(data.get("content", "")) or "",
+                    "content": _cached_decrypt(data.get("content", "")) or "",
                     "status": "completed",
                     "template_data": td_decoded,
                     "created_at": data.get("created_at", datetime.now().isoformat()),

@@ -76,7 +76,7 @@ def summarize_tool(name: str, result: Any) -> str:
         qty = d.get("availableQty") or d.get("available_qty") or d.get("qty")
         return f"qty={qty}" if qty is not None else f"status={_status(result)}"
 
-    if name in ("get_nearby_stores_tool", "get_store_list_tool", "get_favorite_stores_tool"):
+    if name in ("search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool", "get_favorite_stores_tool"):
         items = _items(result)
         return f"{len(items)} stores"
 

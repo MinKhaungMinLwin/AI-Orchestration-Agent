@@ -53,6 +53,8 @@ class BestSellerItem:
         wage_today_prc (int | None | Unset): 오늘공임비 (WAGE_TODAY_PRC)
         free_guarantee_yn (None | str | Unset): 무상교환보증 여부 Y/N (FREE_GUARANTEE_YN)
         t_rlx_isn_yn (None | str | Unset): 안심보험 여부 Y/N (T_RLX_ISN_YN)
+        t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
+        oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
     """
 
     goods_no: str
@@ -93,6 +95,8 @@ class BestSellerItem:
     wage_today_prc: int | None | Unset = UNSET
     free_guarantee_yn: None | str | Unset = UNSET
     t_rlx_isn_yn: None | str | Unset = UNSET
+    t_oe_maker_1: None | str | Unset = UNSET
+    oe_badge_yn: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -320,6 +324,18 @@ class BestSellerItem:
         else:
             t_rlx_isn_yn = self.t_rlx_isn_yn
 
+        t_oe_maker_1: None | str | Unset
+        if isinstance(self.t_oe_maker_1, Unset):
+            t_oe_maker_1 = UNSET
+        else:
+            t_oe_maker_1 = self.t_oe_maker_1
+
+        oe_badge_yn: None | str | Unset
+        if isinstance(self.oe_badge_yn, Unset):
+            oe_badge_yn = UNSET
+        else:
+            oe_badge_yn = self.oe_badge_yn
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -401,6 +417,10 @@ class BestSellerItem:
             field_dict["free_guarantee_yn"] = free_guarantee_yn
         if t_rlx_isn_yn is not UNSET:
             field_dict["t_rlx_isn_yn"] = t_rlx_isn_yn
+        if t_oe_maker_1 is not UNSET:
+            field_dict["t_oe_maker_1"] = t_oe_maker_1
+        if oe_badge_yn is not UNSET:
+            field_dict["oe_badge_yn"] = oe_badge_yn
 
         return field_dict
 
@@ -742,6 +762,24 @@ class BestSellerItem:
 
         t_rlx_isn_yn = _parse_t_rlx_isn_yn(d.pop("t_rlx_isn_yn", UNSET))
 
+        def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        t_oe_maker_1 = _parse_t_oe_maker_1(d.pop("t_oe_maker_1", UNSET))
+
+        def _parse_oe_badge_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        oe_badge_yn = _parse_oe_badge_yn(d.pop("oe_badge_yn", UNSET))
+
         best_seller_item = cls(
             goods_no=goods_no,
             goods_nm=goods_nm,
@@ -781,6 +819,8 @@ class BestSellerItem:
             wage_today_prc=wage_today_prc,
             free_guarantee_yn=free_guarantee_yn,
             t_rlx_isn_yn=t_rlx_isn_yn,
+            t_oe_maker_1=t_oe_maker_1,
+            oe_badge_yn=oe_badge_yn,
         )
 
         best_seller_item.additional_properties = d

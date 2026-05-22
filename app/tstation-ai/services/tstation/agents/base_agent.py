@@ -79,16 +79,19 @@ def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
 
 
 def _sanitize_tool_output_for_sse(content: Any) -> Any:
-    """Return a copy of the tool result with internal-only keys removed.
+    """Return the tool result as a JSON string with internal-only keys removed.
 
-    Falls back to the original value on parse error so SSE delivery never
-    breaks even if a tool emits malformed JSON.
+    Accepts either a raw JSON string (parses it) or an already-parsed dict
+    (skips redundant json.loads). Falls back to the original value on error.
     """
-    if not isinstance(content, str):
-        return content
-    try:
-        parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return content
+    elif isinstance(content, dict):
+        parsed = content  # instruction_to_agent is internal-only; safe to strip from accumulated dict
+    else:
         return content
     _strip_keys_in_place(parsed, _SSE_TOOL_OUTPUT_STRIPPED_KEYS)
     try:
@@ -115,7 +118,6 @@ _VALIDATION_FALLBACK_MESSAGE = (
 _VALIDATION_FALLBACK_QUICK_REPLIES = [
     {"label": "다시 시도", "domain": "LEADING"},
     {"label": "상담사 연결", "domain": "SUPPORT"},
-    {"label": "처음으로", "domain": "LEADING"},
 ]
 
 
@@ -324,6 +326,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_my_coupons_tool": "내 쿠폰 조회 중...",
     "get_logistics_inventory_tool": "재고 확인 중...",
     "get_store_inventory_tool": "매장 재고 확인 중...",
+    "search_stores_tool": "매장 검색 중...",
     "search_place_tool": "위치 검색 중...",
     "get_nearby_stores_tool": "주변 매장 검색 중...",
     "get_store_list_tool": "매장 목록 조회 중...",
@@ -362,6 +365,7 @@ class BaseAgent(ABC):
     def _build_agent(self):
         prompt = self._system_prompt() if callable(self._system_prompt) else self._system_prompt
         self._system_prompt_chars = len(prompt or "")
+        logger.info("[AGENT] %s system_prompt_chars=%d", self.__class__.__name__, self._system_prompt_chars)
         return create_agent(
             model=self._model,
             tools=self._tools,
@@ -500,7 +504,9 @@ class BaseAgent(ABC):
                         yield {
                             "type": "tool",
                             "input": tool_input.get("args", {}),
-                            "output": _sanitize_tool_output_for_sse(message.content),
+                            "output": _sanitize_tool_output_for_sse(
+                                tool_result if tool_result is not None else message.content
+                            ),
                             "node": node,
                             "tool": message.name,
                         }

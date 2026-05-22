@@ -3,7 +3,7 @@
 Locks in the deterministic fallback: when the assistant emits a satisfaction /
 repurchase response AND the quickReplies contain any forbidden chip (구매하기,
 다시 시도, 상담사 연결, 1:1 문의하기), the validator replaces the entire chip
-set with the progress-oriented default `[상품 검색, 타이어 추천, 처음으로]`.
+set with the progress-oriented default `[상품 검색, 타이어 추천]`.
 
 Does NOT fire when:
   - assistantResponse has no satisfaction pattern.
@@ -23,8 +23,8 @@ from services.tstation.agents.templates.schemas import (
 )
 
 
-_DEFAULT_LABELS = ["상품 검색", "타이어 추천", "처음으로"]
-_DEFAULT_DOMAINS = ["DISCOVERY", "DISCOVERY", "LEADING"]
+_DEFAULT_LABELS = ["상품 검색", "타이어 추천"]
+_DEFAULT_DOMAINS = ["DISCOVERY", "DISCOVERY"]
 
 
 def _labels(tpl: QuickReplyTemplate) -> list[str]:
@@ -98,6 +98,30 @@ def test_satisfaction_with_only_1to1_inquiry_chip_is_replaced() -> None:
     assert _labels(tpl) == _DEFAULT_LABELS
 
 
+def test_satisfaction_with_url_cta_is_preserved() -> None:
+    tpl = QuickReplyTemplate(
+        assistantResponse=(
+            "좋은 응대를 받으셨다니 기쁘네요 🙏\n\n"
+            "고객님, 매장 리뷰는 마이페이지 > 매장서비스 내역에서 작성하실 수 있어요 😊\n\n"
+            "아래 버튼을 눌러 바로 이동해 주세요."
+        ),
+        quickReplies=[
+            QuickReplyChip(
+                label="바로가기",
+                url="https://www.tstation.com/mypage/tstation/custservice/carservice-hist",
+                domain="SUPPORT",
+            ),
+            QuickReplyChip(label="1:1 문의하기", domain="SUPPORT"),
+            QuickReplyChip(label="처음으로", domain="LEADING"),
+        ],
+        predictedDomains=["SUPPORT", "LEADING"],
+    )
+
+    assert _labels(tpl) == ["바로가기", "1:1 문의하기"]
+    assert _domains(tpl) == ["SUPPORT", "SUPPORT"]
+    assert tpl.predictedDomains == ["SUPPORT"]
+
+
 # --------------------------------------------------------------------------- #
 #  No-fire cases — validator must NOT touch the chips
 # --------------------------------------------------------------------------- #
@@ -111,7 +135,7 @@ def test_satisfaction_with_no_forbidden_chip_passes_through() -> None:
             QuickReplyChip(label=lbl, domain="DISCOVERY") for lbl in original_labels
         ],
     )
-    assert _labels(tpl) == original_labels
+    assert _labels(tpl) == ["상품 검색", "타이어 추천"]
 
 
 def test_satisfaction_with_매장찾기_only_passes_through() -> None:
@@ -122,7 +146,7 @@ def test_satisfaction_with_매장찾기_only_passes_through() -> None:
             QuickReplyChip(label="처음으로", domain="LEADING"),
         ],
     )
-    assert _labels(tpl) == ["매장 찾기", "처음으로"]
+    assert _labels(tpl) == ["매장 찾기"]
 
 
 def test_no_satisfaction_pattern_with_forbidden_chip_passes_through() -> None:

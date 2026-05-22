@@ -68,6 +68,8 @@ class RcmdGoodsItem:
         car_knd_nm (None | str | Unset): 차종 분류명 (CAR_KND_NM)
         prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 응답값: '프리미엄' (DB 원본 '프리미엄+' 도 응답 단계에서 '프리미엄'
             으로 정규화) / '스탠다드' / '이코노미'. 표시·답변용 — 추천 정렬/필터 기준 아님
+        t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
+        oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외. 정숙성 내부
             점수(t_silence/t_com_sil_avg)와 별개의 라벨 정보
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''. 라벨 표기 — 추천 정렬 기준
@@ -132,6 +134,8 @@ class RcmdGoodsItem:
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
+    t_oe_maker_1: None | str | Unset = UNSET
+    oe_badge_yn: None | str | Unset = UNSET
     label_pnwave: None | str | Unset = UNSET
     label_pnwave_nm: None | str | Unset = UNSET
     label_pndb: None | str | Unset = UNSET
@@ -421,6 +425,18 @@ class RcmdGoodsItem:
         else:
             prc_grd_nm = self.prc_grd_nm
 
+        t_oe_maker_1: None | str | Unset
+        if isinstance(self.t_oe_maker_1, Unset):
+            t_oe_maker_1 = UNSET
+        else:
+            t_oe_maker_1 = self.t_oe_maker_1
+
+        oe_badge_yn: None | str | Unset
+        if isinstance(self.oe_badge_yn, Unset):
+            oe_badge_yn = UNSET
+        else:
+            oe_badge_yn = self.oe_badge_yn
+
         label_pnwave: None | str | Unset
         if isinstance(self.label_pnwave, Unset):
             label_pnwave = UNSET
@@ -608,6 +624,10 @@ class RcmdGoodsItem:
             field_dict["car_knd_nm"] = car_knd_nm
         if prc_grd_nm is not UNSET:
             field_dict["prc_grd_nm"] = prc_grd_nm
+        if t_oe_maker_1 is not UNSET:
+            field_dict["t_oe_maker_1"] = t_oe_maker_1
+        if oe_badge_yn is not UNSET:
+            field_dict["oe_badge_yn"] = oe_badge_yn
         if label_pnwave is not UNSET:
             field_dict["label_pnwave"] = label_pnwave
         if label_pnwave_nm is not UNSET:
@@ -1051,6 +1071,24 @@ class RcmdGoodsItem:
 
         prc_grd_nm = _parse_prc_grd_nm(d.pop("prc_grd_nm", UNSET))
 
+        def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        t_oe_maker_1 = _parse_t_oe_maker_1(d.pop("t_oe_maker_1", UNSET))
+
+        def _parse_oe_badge_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        oe_badge_yn = _parse_oe_badge_yn(d.pop("oe_badge_yn", UNSET))
+
         def _parse_label_pnwave(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -1239,6 +1277,8 @@ class RcmdGoodsItem:
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             prc_grd_nm=prc_grd_nm,
+            t_oe_maker_1=t_oe_maker_1,
+            oe_badge_yn=oe_badge_yn,
             label_pnwave=label_pnwave,
             label_pnwave_nm=label_pnwave_nm,
             label_pndb=label_pndb,

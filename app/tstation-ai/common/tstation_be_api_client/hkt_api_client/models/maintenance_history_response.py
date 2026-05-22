@@ -9,31 +9,23 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.coupon_applicable_product_item import CouponApplicableProductItem
+    from ..models.maintenance_history_item import MaintenanceHistoryItem
 
 
-T = TypeVar("T", bound="CouponApplicableProductsGroup")
+T = TypeVar("T", bound="MaintenanceHistoryResponse")
 
 
 @_attrs_define
-class CouponApplicableProductsGroup:
+class MaintenanceHistoryResponse:
     """
     Attributes:
-        cpn_no (str): 쿠폰 번호
-        total (int): 해당 쿠폰에 적용 가능한 상품 수
-        items (list[CouponApplicableProductItem] | Unset): 해당 쿠폰에 적용 가능한 패턴 대표 상품 목록
+        items (list[MaintenanceHistoryItem] | Unset): 최근 정비이력 목록 (정비/장착일 내림차순)
     """
 
-    cpn_no: str
-    total: int
-    items: list[CouponApplicableProductItem] | Unset = UNSET
+    items: list[MaintenanceHistoryItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        cpn_no = self.cpn_no
-
-        total = self.total
-
         items: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.items, Unset):
             items = []
@@ -43,12 +35,7 @@ class CouponApplicableProductsGroup:
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "cpn_no": cpn_no,
-                "total": total,
-            }
-        )
+        field_dict.update({})
         if items is not UNSET:
             field_dict["items"] = items
 
@@ -56,30 +43,24 @@ class CouponApplicableProductsGroup:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.coupon_applicable_product_item import CouponApplicableProductItem
+        from ..models.maintenance_history_item import MaintenanceHistoryItem
 
         d = dict(src_dict)
-        cpn_no = d.pop("cpn_no")
-
-        total = d.pop("total")
-
         _items = d.pop("items", UNSET)
-        items: list[CouponApplicableProductItem] | Unset = UNSET
+        items: list[MaintenanceHistoryItem] | Unset = UNSET
         if _items is not UNSET:
             items = []
             for items_item_data in _items:
-                items_item = CouponApplicableProductItem.from_dict(items_item_data)
+                items_item = MaintenanceHistoryItem.from_dict(items_item_data)
 
                 items.append(items_item)
 
-        coupon_applicable_products_group = cls(
-            cpn_no=cpn_no,
-            total=total,
+        maintenance_history_response = cls(
             items=items,
         )
 
-        coupon_applicable_products_group.additional_properties = d
-        return coupon_applicable_products_group
+        maintenance_history_response.additional_properties = d
+        return maintenance_history_response
 
     @property
     def additional_keys(self) -> list[str]:

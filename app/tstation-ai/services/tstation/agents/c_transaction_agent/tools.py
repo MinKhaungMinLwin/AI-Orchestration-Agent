@@ -51,6 +51,7 @@ from common.tstation_be_api_client.hkt_api_client.models import SetOrderFormAIRe
 # ORDER & DELIVERY AF
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_order_delivery_api_orders_summary_get import sync_detailed as get_order_delivery
 from common.tstation_be_api_client.hkt_api_client.api.order_delivery_af_주문_및_배송_추적.get_orders_api_orders_get import sync_detailed as get_orders
+from common.tstation_be_api_client.hkt_api_client.api.maintenance_history_af_정비이력_조회.get_maintenance_history_api_member_maintenance_history_get import sync_detailed as get_maintenance_history
 
 # Reservation AF — 매장 방문 예약 조회
 from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방문_예약_조회.get_reservations_api_reservations_get import sync_detailed as get_reservations
@@ -384,14 +385,13 @@ def get_coupon_applicable_products_tool(
           "total_products": int,        # coupons[].items + deals[].items 합계
           "total_store_coupons": int,   # stores[] 그룹 수
           "total_stores": int,          # stores[].items 합계
-          "coupons": [{"cpn_no": str, "total": int, "items": [<product>...]}],
-          "deals":   [{"deal_no": str, "total": int, "items": [<product>...]}],
+          "coupons": [{"cpn_no": str, "total": int, "items": [{ptrn_cd, goods_nm}]}],
+          "deals":   [{"deal_no": str, "total": int, "items": [{ptrn_cd, goods_nm}]}],
           "stores":  [{"cpn_no": str, "total": int, "items": [{shop_id, shop_nm}]}]
         }
 
     매핑 타입:
-    - coupons[] / deals[].items: 패턴(PTRN_CD) 기준 상품 — goods_no / goods_nm /
-      sale_prc / extra_fvr_sale_prc / tire_size_1 등 포함.
+    - coupons[] / deals[].items: 패턴(PTRN_CD) 기준 대표 상품 — ptrn_cd / goods_nm 만 포함.
     - stores[].items: **매장 한정 쿠폰** — 특정 매장에서만 쓸 수 있는 쿠폰. shop_id +
       shop_nm 만 포함, 상품 정보 없음.
 
@@ -702,6 +702,40 @@ def get_nearby_stores_tool(
         return _error_response(None, str(e), "Failed to get nearby stores")
 
 
+def _clamp_int(value: int | None, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _sort_store_candidates(stores: list[dict], sort_by: str | None) -> list[dict]:
+    if sort_by in ("rating", "review_count"):
+        return sorted(stores, key=lambda s: not bool(s.get("is_all_my_t", False)))
+    return sorted(
+        stores,
+        key=lambda s: (
+            not bool(s.get("is_all_my_t", False)),
+            not bool(s.get("is_installable", False)),
+            s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
+        ),
+    )
+
+
+def _first_place_coordinates(place_data: dict) -> tuple[float | None, float | None, dict | None]:
+    items = place_data.get("items") or place_data.get("documents") or place_data.get("places")
+    if not isinstance(items, list) or not items:
+        return None, None, None
+    place = items[0] if isinstance(items[0], dict) else {}
+    x_raw = place.get("x") or place.get("longitude") or place.get("lng")
+    y_raw = place.get("y") or place.get("latitude") or place.get("lat")
+    try:
+        return float(x_raw), float(y_raw), place
+    except (TypeError, ValueError):
+        return None, None, None
+
+
 @tool_cache(ttl=1800)
 def _get_store_list_cached(
     region_code: str | None = None,
@@ -830,6 +864,165 @@ def get_store_list_tool(
             )
             return validation_override
     return result
+
+
+@tool
+@tool_cache(ttl=300)
+def search_stores_tool(
+    place_query: str | None = None,
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    xpos: float | None = None,
+    ypos: float | None = None,
+    radius_km: float = 20.0,
+    candidate_limit: int = 20,
+    limit: int = 10,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    chl_sct_cd: str | None = None,
+    sort_by: str | None = None,
+):
+    """
+    통합 매장 검색 v1. 장소명/좌표/지역명/매장명 검색을 한 번에 처리합니다.
+
+    v1 scope:
+    - place_query가 있으면 장소 검색으로 좌표를 얻은 뒤 주변 매장을 조회합니다.
+    - xpos/ypos가 있으면 좌표 기반 주변 매장을 조회합니다.
+    - 그 외에는 region_code/store_nm 기반 매장 목록을 조회합니다.
+    - 날짜/요일 영업 여부, 예약 슬롯, 재고 확인은 하지 않습니다. 해당 확인은
+      get_store_detail_tool/get_store_schedule_tool/재고 도구를 후속 호출하세요.
+
+    Args:
+        place_query (str | None): 랜드마크/장소명 (예: "남산타워", "강남역").
+        region_code (str | None): 지역명 키워드 (예: "인천", "강릉").
+        store_nm (str | None): 매장명 키워드 (예: "안양점").
+        xpos/ypos (float | None): 직접 전달된 좌표.
+        radius_km (float): 좌표 검색 반경 km.
+        candidate_limit (int): 내부 후보 조회 수 (1-30). 조건 적용 후 limit로 잘라 반환.
+        limit (int): 최종 반환 매장 수 (1-10). 사용자가 "N개"를 말하면 이 값에 반영.
+        svc_codes/all_my_t_only/imported_car_only/chl_sct_cd/sort_by: get_store_list_tool과 동일 필터.
+
+    Example: {"place_query": "남산타워", "limit": 5, "svc_codes": ["126"]}
+    """
+    final_limit = _clamp_int(limit, default=10, minimum=1, maximum=10)
+    candidate_cap = _clamp_int(candidate_limit, default=max(20, final_limit), minimum=final_limit, maximum=30)
+    normalized_store_nm = normalize_brand_name(store_nm) if store_nm else None
+
+    logger.debug(
+        "[TOOL][search_stores_tool] Called with: place_query=%s, region_code=%s, store_nm=%s, "
+        "xpos=%s, ypos=%s, radius_km=%s, candidate_limit=%s, limit=%s, svc_codes=%s, "
+        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        place_query, region_code, normalized_store_nm, xpos, ypos, radius_km, candidate_cap, final_limit,
+        svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
+    )
+
+    try:
+        search_meta: dict[str, Any] = {
+            "source": "list",
+            "filters": {
+                "svc_codes": svc_codes,
+                "all_my_t_only": all_my_t_only,
+                "imported_car_only": imported_car_only,
+                "chl_sct_cd": chl_sct_cd,
+                "sort_by": sort_by,
+            },
+            "requested_limit": final_limit,
+            "candidate_limit": candidate_cap,
+        }
+
+        if place_query:
+            place_response = search_place(client=get_client(), query=place_query, size=1)
+            if place_response.parsed is None:
+                return _error_response(
+                    place_response.status_code,
+                    f"HTTP {place_response.status_code}",
+                    place_response.content.decode(errors="ignore") or "Failed to search place",
+                )
+            place_data = _to_dict(place_response.parsed)
+            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
+            if found_xpos is None or found_ypos is None:
+                return _success_response(
+                    place_response.status_code,
+                    {"stores": [], "search": {**search_meta, "source": "place", "place_query": place_query}},
+                )
+            xpos, ypos = found_xpos, found_ypos
+            search_meta.update({
+                "source": "place",
+                "place_query": place_query,
+                "place": {
+                    "place_name": place.get("place_name") or place.get("name"),
+                    "address_name": place.get("address_name") or place.get("address"),
+                },
+            })
+
+        if xpos is not None and ypos is not None:
+            response = get_store_list(
+                client=get_client(),
+                xpos=xpos,
+                ypos=ypos,
+                radius_km=radius_km,
+                svc_codes=svc_codes,
+                all_my_t_only=all_my_t_only,
+                imported_car_only=imported_car_only,
+                chl_sct_cd=chl_sct_cd,
+                sort_by=sort_by,
+                limit=candidate_cap,
+            )
+            source_status = response.status_code
+            if response.parsed is None:
+                return _error_response(
+                    response.status_code,
+                    f"HTTP {response.status_code}",
+                    response.content.decode(errors="ignore") or "Failed to search stores",
+                )
+            data = _to_dict(response.parsed)
+            search_meta.setdefault("source", "coords")
+            if search_meta.get("source") == "list":
+                search_meta["source"] = "coords"
+        else:
+            result = _get_store_list_cached(
+                region_code=region_code,
+                store_nm=normalized_store_nm,
+                limit=candidate_cap,
+                svc_codes=svc_codes,
+                all_my_t_only=all_my_t_only,
+                imported_car_only=imported_car_only,
+                chl_sct_cd=chl_sct_cd,
+                sort_by=sort_by,
+            )
+            if normalized_store_nm and isinstance(result, dict) and result.get("status") == "success":
+                raw_data = result.get("data") or {}
+                stores_for_validation = raw_data.get("stores", []) if isinstance(raw_data, dict) else []
+                validation_override = _validate_store_nm_exact_match(
+                    user_input=normalized_store_nm,
+                    stores=stores_for_validation,
+                )
+                if validation_override is not None:
+                    logger.info(
+                        "[TOOL][search_stores_tool] store_nm validation override: status=%s, user_input=%s",
+                        validation_override.get("status"), normalized_store_nm,
+                    )
+                    return validation_override
+            if not isinstance(result, dict) or result.get("status") != "success":
+                return result
+            source_status = result.get("http_status") or 200
+            data = result.get("data") or {}
+
+        if not isinstance(data, dict):
+            return _success_response(source_status, data)
+
+        stores = data.get("stores")
+        if isinstance(stores, list):
+            sorted_stores = _sort_store_candidates([s for s in stores if isinstance(s, dict)], sort_by)
+            data["stores"] = sorted_stores[:final_limit]
+            search_meta["candidate_count"] = len(stores)
+            search_meta["returned_count"] = len(data["stores"])
+            data["search"] = search_meta
+        return _success_response(source_status, data)
+    except Exception as e:
+        logger.exception("[TOOL][search_stores_tool] Failed")
+        return _error_response(None, str(e), "Failed to search stores")
 
 
 @tool
@@ -1201,6 +1394,57 @@ def _shop_id(store: dict) -> str | None:
     return str(value) if value else None
 
 
+_PREFERRED_REGION_ADDRESS_TOKENS = {
+    "강남": ("강남구",),
+}
+
+
+def _filter_stores_by_preferred_region_address(region_code: str | None, stores: list[dict]) -> list[dict]:
+    """Prefer address matches for ambiguous region terms in booking preview.
+
+    `/api/store/list` also searches SHOP_NM for region_code to support cases
+    like "광교". In order/booking preview, ambiguous terms such as "강남"
+    should not pull in a remote branch whose name merely contains the token.
+    """
+    if not region_code or not stores:
+        return stores
+
+    tokens = _PREFERRED_REGION_ADDRESS_TOKENS.get(region_code.strip())
+    if not tokens:
+        return stores
+
+    matched: list[dict] = []
+    for store in stores:
+        address = " ".join(
+            str(store.get(key) or "")
+            for key in ("addr_base", "addr_dtl", "road_addr_base", "road_addr_dtl")
+        )
+        if any(token in address for token in tokens):
+            matched.append(store)
+
+    return matched or stores
+
+
+def _scheduled_shop_ids_with_slots(schedule_data: Any) -> list[str]:
+    if not isinstance(schedule_data, dict):
+        return []
+    stores = schedule_data.get("stores")
+    if not isinstance(stores, list):
+        return []
+
+    shop_ids: list[str] = []
+    for store in stores:
+        if not isinstance(store, dict):
+            continue
+        slots = store.get("slots")
+        if not isinstance(slots, list) or not slots:
+            continue
+        shop_id = store.get("shop_id") or store.get("shopId")
+        if shop_id:
+            shop_ids.append(str(shop_id))
+    return shop_ids
+
+
 def _extract_logistics_qty(data: Any) -> int:
     if not isinstance(data, dict):
         return 0
@@ -1281,6 +1525,7 @@ def transaction_store_preview_tool(
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
+            installable_only=True,
             chl_sct_cd=chl_sct_cd,
         )
     else:
@@ -1292,6 +1537,7 @@ def transaction_store_preview_tool(
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
+            installable_only=True,
             chl_sct_cd=chl_sct_cd,
         )
 
@@ -1304,6 +1550,8 @@ def transaction_store_preview_tool(
 
     store_data = _to_dict(store_response.parsed)
     stores = _extract_stores(store_data)
+    if has_region and not has_store and not has_coords:
+        stores = _filter_stores_by_preferred_region_address(region_code, stores)
 
     # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
     # 이게 없으면 LLM 이 silent "No store candidates found" 만 받고 generic 응답을
@@ -1387,12 +1635,18 @@ def transaction_store_preview_tool(
         tna_shop_ids=tna_shop_ids,
         has_logistics=logistics_qty > 0,
     )
+    schedule_data = schedule.get("data") if isinstance(schedule, dict) else schedule
+    scheduled_shop_ids = _scheduled_shop_ids_with_slots(schedule_data)
+    if scheduled_shop_ids:
+        scheduled_set = set(scheduled_shop_ids)
+        candidates = [store for store in candidates if (_shop_id(store) in scheduled_set)]
+        shop_ids = [sid for sid in shop_ids if sid in scheduled_set]
 
     result_data: dict[str, Any] = {
         "price": results.get("price"),
         "logistics": results.get("logistics"),
         "inventory": results.get("store_inventory"),
-        "schedule": schedule.get("data") if isinstance(schedule, dict) else schedule,
+        "schedule": schedule_data,
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
     }
@@ -1600,16 +1854,59 @@ def get_orders_of_user_tool():
 
 
 @tool
-def get_my_reservations_tool(sct_cd: str = "100"):
+def get_maintenance_history_tool(mbr_car_reg_seq: str | None = None, limit: int = 5):
+    """
+    Retrieve authenticated user's recent maintenance/service history.
+
+    Use when the user asks for 정비이력/정비내역/관리받은 내역/서비스 이력.
+    The backend unions offline completed maintenance history and online completed
+    installation history, sorted by service date descending.
+
+    Args:
+        mbr_car_reg_seq: Optional registered car sequence when a specific vehicle is selected.
+        limit: Number of recent history rows. Always use 5 unless user explicitly asks for fewer.
+
+    Returns:
+        {"items": [
+          {"car_svc_dt":"2026-05-20", "shop_nm":"티스테이션 ...",
+           "car_svc_info":"...", "car_svc_qty":"4", "svc_tp":"온라인/장착", ...}
+        ]}
+    """
+    safe_limit = max(1, min(int(limit or 5), 5))
+    logger.debug(
+        "[TOOL][get_maintenance_history_tool] Called mbr_car_reg_seq=%s limit=%s",
+        mbr_car_reg_seq, safe_limit,
+    )
+
+    try:
+        response = get_maintenance_history(
+            client=get_client(),
+            mbr_car_reg_seq=mbr_car_reg_seq,
+            limit=safe_limit,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to retrieve maintenance history",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_maintenance_history_tool] Failed")
+        return _error_response(None, str(e), "Failed to retrieve maintenance history")
+
+
+@tool
+def get_my_reservations_tool(sct_cd: str = "all"):
     """
     Retrieve authenticated user's shop visit reservations from ET_SHOP_RSV_INFO.
 
     Args:
-        sct_cd: Reservation category filter (default "100"). Values:
-            - "100": 방문예약 (simple shop visit reservation — default)
+        sct_cd: Reservation category filter (default "all"). Values:
+            - "100": 방문예약 (simple shop visit reservation)
             - "200": 구매후방문예약 (post-purchase visit, has ord_no)
             - "300": 오프라인예약 (offline reservation)
-            - "all": all categories
+            - "all": all categories — default for reservation-history lookup
 
     Returns response with `reservations` list. Each item includes:
         shop_rsv_seq, shop_rsv_no, ord_no, shop_id, shop_nm, tel_no,

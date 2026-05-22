@@ -9,7 +9,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.event_applicable_product_item import EventApplicableProductItem
+    from ..models.coupon_applicable_product_item import CouponApplicableProductItem
 
 
 T = TypeVar("T", bound="DealApplicableProductsGroup")
@@ -21,12 +21,12 @@ class DealApplicableProductsGroup:
     Attributes:
         deal_no (str): 기획전 번호
         total (int): 해당 기획전에 매핑된 쿠폰을 통해 적용 가능한 상품 수
-        items (list[EventApplicableProductItem] | Unset): 해당 기획전에 적용 가능한 상품 목록
+        items (list[CouponApplicableProductItem] | Unset): 해당 기획전에 적용 가능한 패턴 대표 상품 목록
     """
 
     deal_no: str
     total: int
-    items: list[EventApplicableProductItem] | Unset = UNSET
+    items: list[CouponApplicableProductItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,7 +56,7 @@ class DealApplicableProductsGroup:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.event_applicable_product_item import EventApplicableProductItem
+        from ..models.coupon_applicable_product_item import CouponApplicableProductItem
 
         d = dict(src_dict)
         deal_no = d.pop("deal_no")
@@ -64,11 +64,11 @@ class DealApplicableProductsGroup:
         total = d.pop("total")
 
         _items = d.pop("items", UNSET)
-        items: list[EventApplicableProductItem] | Unset = UNSET
+        items: list[CouponApplicableProductItem] | Unset = UNSET
         if _items is not UNSET:
             items = []
             for items_item_data in _items:
-                items_item = EventApplicableProductItem.from_dict(items_item_data)
+                items_item = CouponApplicableProductItem.from_dict(items_item_data)
 
                 items.append(items_item)
 

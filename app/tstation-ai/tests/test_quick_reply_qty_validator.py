@@ -104,7 +104,7 @@ def test_qty_confirm_with_arbitrary_chips_is_skipped() -> None:
         assistantResponse="수량은 2개 맞으시죠?",
         quickReplies=[QuickReplyChip(label="주문 진행"), QuickReplyChip(label="처음으로")],
     )
-    assert _labels(tpl) == ["주문 진행", "처음으로"]
+    assert _labels(tpl) == ["주문 진행"]
 
 
 def test_unrelated_quickreply_is_preserved() -> None:
@@ -126,7 +126,7 @@ def test_statement_mentioning_qty_does_not_trigger() -> None:
         assistantResponse="수량 4개로 주문이 완료되었어요.",
         quickReplies=[QuickReplyChip(label="주문 내역 보기"), QuickReplyChip(label="처음으로")],
     )
-    assert _labels(tpl) == ["주문 내역 보기", "처음으로"]
+    assert _labels(tpl) == ["주문 내역 보기"]
 
 
 # --------------------------------------------------------------------------- #
