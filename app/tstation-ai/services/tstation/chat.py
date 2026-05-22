@@ -5241,8 +5241,10 @@ class TStationChatServiceV2:
             current_return_visit_store_flow,
             current_store_date_availability,
         )
+        from services.tstation.agents.b_discovery_agent.tools import current_confirmed_tire_size
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
+        current_confirmed_tire_size.set(merged_slots.tire_size)
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)

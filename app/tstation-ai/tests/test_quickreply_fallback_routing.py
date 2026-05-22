@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -175,6 +176,60 @@ def test_followup_vehicle_pick_ignores_ev_model_in_listcar_when_user_context_is_
     ]
 
     assert _infer_followup_recommendation_context(messages, "34가4566") is None
+
+
+def test_recommendation_tool_autofills_confirmed_tire_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    class _Response:
+        status_code = 200
+        parsed = {"rcmd_type": "long_distance", "total": 0, "items": []}
+
+    def _fake_recommendations(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
+    token = discovery_tools.current_confirmed_tire_size.set("215/45R17")
+    try:
+        result = discovery_tools.get_products_recommendations_tool.func(
+            rcmd_type="long_distance",
+            limit=3,
+            brand_cd="HK",
+        )
+    finally:
+        discovery_tools.current_confirmed_tire_size.reset(token)
+
+    assert result["status"] == "success"
+    assert captured["tire_size"] == "215/45R17"
+
+
+def test_recommendation_tool_does_not_autofill_tire_size_for_price_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    class _Response:
+        status_code = 200
+        parsed = {"rcmd_type": "tstation", "total": 0, "items": []}
+
+    def _fake_recommendations(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
+    token = discovery_tools.current_confirmed_tire_size.set("215/45R17")
+    try:
+        result = discovery_tools.get_products_recommendations_tool.func(
+            rcmd_type="tstation",
+            limit=3,
+            brand_cd="HK",
+            min_price=100_000,
+            max_price=200_000,
+        )
+    finally:
+        discovery_tools.current_confirmed_tire_size.reset(token)
+
+    assert result["status"] == "no_results"
+    assert captured["tire_size"] is None
 
 
 def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None:

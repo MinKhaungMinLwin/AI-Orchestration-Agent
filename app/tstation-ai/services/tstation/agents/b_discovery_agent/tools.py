@@ -1,4 +1,5 @@
 import logging
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -11,8 +12,6 @@ from services.tstation.agents.b_discovery_agent._car_no_audit import (
     detect_car_no_mismatch,
     set_registered_car_nos,
 )
-
-logger = logging.getLogger(__name__)
 
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
@@ -45,6 +44,11 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 
 # Member Car Info
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
+
+logger = logging.getLogger(__name__)
+current_confirmed_tire_size: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_confirmed_tire_size", default=None
+)
 
 
 def get_client() -> AuthenticatedClient:
@@ -979,6 +983,15 @@ def get_products_recommendations_tool(
                 "등록된 차량 중에서 골라주시거나, 정확한 차량번호+소유주명을 다시 알려주세요 😊\""
             ),
         )
+
+    if tire_size is None and car_lnc_cd is None and not (min_price or max_price):
+        confirmed_tire_size = current_confirmed_tire_size.get()
+        if confirmed_tire_size:
+            tire_size = confirmed_tire_size
+            logger.info(
+                "[TOOL][get_products_recommendations_tool] Auto-filled tire_size=%s from confirmed slot",
+                tire_size,
+            )
 
     # Price filtering is now SQL-side on BE — no client-side post-filter.
     # newest_desc is a client-side sort BE doesn't support → still fetch >limit then re-sort.
