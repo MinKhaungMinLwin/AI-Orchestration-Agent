@@ -5055,6 +5055,7 @@ class TStationChatServiceV2:
             current_pending_intent,
             current_runflat_comparison,
             current_return_visit_store_flow,
+            current_store_date_availability,
         )
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
@@ -5069,6 +5070,21 @@ class TStationChatServiceV2:
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
         ))
+        has_store_availability_keyword = bool(
+            re.search(r"영업|운영|휴무|휴일|쉬어|열어|문\s*열|문\s*닫|예약|가능|스케줄|시간", last_user_text)
+        )
+        has_date_reference = bool(
+            re.search(
+                r"\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|"
+                r"오늘|내일|모레|이번\s*주|다음\s*주|다다음\s*주|이번\s*주말|주말|"
+                r"월요일|화요일|수요일|목요일|금요일|토요일|일요일|"
+                r"공휴일|휴일|연휴|"
+                r"설날|설\s*연휴|추석|현충일|광복절|개천절|한글날|성탄절|크리스마스|"
+                r"석가탄신일|부처님\s*오신\s*날|어린이날|삼일절|3\.1절",
+                last_user_text,
+            )
+        )
+        current_store_date_availability.set(has_store_availability_keyword and has_date_reference)
 
         _t_prestream = time.perf_counter()
         logger.debug(
