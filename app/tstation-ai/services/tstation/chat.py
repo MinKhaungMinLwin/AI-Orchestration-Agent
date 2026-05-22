@@ -342,7 +342,7 @@ Produce 6 outputs:
      ⚠️ "매장에서 예약 받아?" / "X일에 예약 가능한지" / "연휴에도 예약 받아" targeting a STORE → transaction_store (NOT transaction_order — those are for "내 예약" personal lookup)
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
-   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
@@ -411,6 +411,7 @@ DOMAIN ROUTING EXAMPLES
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "런플랫이 얼마나 더 비싸?", "225/45R18 런플랫 가격 차이", "이벤트", "리뷰 영상", "추천 가격 비교해줘"
+- "마일리지 타이어", "마일리지 플러스", "마일리지 플러스 2/3" → discovery_search. These are product/product-family terms. Do not classify them as mileage-attribute recommendations unless the user says "마일리지 좋은", "수명 긴", "오래 타는", "마모 적은" etc.
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
 - 가격 유사성 기반 추천 follow-up: 직전 대화에서 특정 상품의 가격이 표시된 후 그 가격대와 비슷한 다른 타이어를 요청하는 경우 — 이전 도메인이 TRANSACTION(가격 조회)이어도 반드시 DISCOVERY. 사용자 의도는 가격 포지셔닝 기반 새 추천이므로 TRANSACTION이 아님.
 - 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
@@ -599,6 +600,8 @@ EXAMPLES (tricky cases):
 - "225/45R18 런플랫은 일반 타이어보다 얼마나 비싸?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "다이나프로 HPX 할인된 가격이 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product + discount price = search, NOT recommendation)
 - "벤투스 S2 할인가 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product name → search for it, not discount ranking)
+- "마일리지 타이어" / "마일리지 플러스 2" → DISCOVERY, agent_prompt_profile=discovery_search (product/product-family term, NOT mileage recommendation)
+- "마일리지 좋은 타이어 추천" / "수명 긴 타이어" → DISCOVERY, agent_prompt_profile=discovery_recommendation (attribute recommendation)
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
 - "제일 최근에 나온 타이어 신제품이 뭐야?" → DISCOVERY, agent_prompt_profile=discovery_search
@@ -618,7 +621,7 @@ agent_prompt_profile:
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는"), newest products ("최신/신제품/최근 출시")
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는"), newest products ("최신/신제품/최근 출시")
 - discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
 - discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain
