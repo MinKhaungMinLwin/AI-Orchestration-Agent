@@ -13,7 +13,7 @@ import uuid
 
 import httpx
 from celery_app import celery_app
-from tasks.faq_sync_task import _persist_faq_data, _run_ingestion
+from tasks.faq_sync_task import _persist_faq_data, _run_incremental_sync
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def faq_fetch_task(self):
         return
 
     try:
-        result = _run_ingestion(documents, settings.QDRANT_COLLECTION_FAQ)
+        result = _run_incremental_sync(documents, settings.QDRANT_COLLECTION_FAQ)
     except Exception as exc:
         logger.exception("[faq_fetch_task] Ingestion failed")
         raise self.retry(exc=exc)
