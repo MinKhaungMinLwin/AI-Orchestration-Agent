@@ -3346,7 +3346,7 @@ _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS: tuple[tuple[str, str, str | None], ..
     (r"할인|세일|할인율", "할인", "discount"),
     (r"조용|정숙|소음|진동", "정숙/저진동", "low_vibration"),
     (r"빗길|젖은\s*노면|wet|비\s*오는", "빗길", "wet"),
-    (r"눈길|겨울|winter|스노우", "겨울/눈길", "snow"),
+    (r"눈길|겨울|윈터|winter|스노우", "겨울/눈길", "snow"),
     (r"사계절|올시즌", "사계절", "all_weather"),
     (r"올웨더|전천후|all[-\s]?weather", "올웨더", "all_weather"),
     (r"여름|summer", "여름", "summer"),
@@ -3398,7 +3398,7 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
         return None
 
     current_seen = False
-    recent_texts: list[str] = []
+    recent_messages: list[tuple[str, str]] = []
     for message in reversed(messages):
         role = str(message.get("role") or "")
         if role not in {"user", "assistant"}:
@@ -3409,20 +3409,30 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
         if not current_seen and role == "user" and content.endswith(last_user_text.strip()):
             current_seen = True
             continue
-        recent_texts.append(content)
-        if len(recent_texts) >= 8:
+        recent_messages.append((role, content))
+        if len(recent_messages) >= 8:
             break
 
-    if not recent_texts:
+    if not recent_messages:
         return None
-    context_blob = "\n".join(reversed(recent_texts))
+    ordered_messages = list(reversed(recent_messages))
+    context_blob = "\n".join(content for _, content in ordered_messages)
     if not _RECOMMENDATION_BRIDGE_RE.search(context_blob):
         return None
 
-    matches: list[tuple[str, str | None]] = []
-    for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED:
-        if pattern.search(context_blob):
-            matches.append((label, rcmd_type))
+    def _find_context_matches(blob: str) -> list[tuple[str, str | None]]:
+        return [
+            (label, rcmd_type)
+            for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED
+            if pattern.search(blob)
+        ]
+
+    # Prefer the user's own prior request over assistant-generated summaries.
+    # Product summaries can contain incidental categories ("경트럭&밴용") that
+    # must not override the actual user intent ("윈터 타이어 추천").
+    user_blob = "\n".join(content for role, content in ordered_messages if role == "user")
+    assistant_blob = "\n".join(content for role, content in ordered_messages if role == "assistant")
+    matches = _find_context_matches(user_blob) or _find_context_matches(assistant_blob)
     if not matches:
         return None
 
@@ -3441,6 +3451,8 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
     ]
     if rcmd_type:
         lines.append(f"- get_products_recommendations_tool 호출 시 rcmd_type='{rcmd_type}' 를 우선 사용하세요.")
+        if rcmd_type == "snow":
+            lines.append("- 겨울/윈터 의도이므로 season_nm='겨울' 도 함께 전달하세요.")
     else:
         lines.append(
             "- 해당 조건에 직접 대응하는 rcmd_type 이 없으면 rcmd_type='tstation' 으로 조회하되, "

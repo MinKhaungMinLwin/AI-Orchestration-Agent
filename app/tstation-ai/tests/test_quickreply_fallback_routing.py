@@ -97,6 +97,32 @@ def test_followup_size_input_preserves_non_ev_vehicle_category_context() -> None
     assert "rcmd_type='tstation'" in context
 
 
+def test_followup_size_input_prefers_user_winter_intent_over_assistant_vehicle_category() -> None:
+    messages = [
+        {"role": "user", "content": "윈터 타이어 추천"},
+        {
+            "role": "assistant",
+            "content": (
+                "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n\n"
+                "- 윈터 Radial DW04: 경트럭&밴용 겨울 컴포트 타이어입니다.\n"
+                "- 윈터 아이셉트 IZ2 A: 승용차용 겨울 컴포트 타이어입니다."
+            ),
+        },
+        {"role": "user", "content": "사이즈 직접 입력"},
+        {"role": "assistant", "content": "장착하실 타이어 사이즈를 입력해 주세요."},
+        {"role": "user", "content": "225/45R18"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "225/45R18")
+
+    assert context is not None
+    assert "겨울/눈길" in context
+    assert "rcmd_type='snow'" in context
+    assert "season_nm='겨울'" in context
+    assert "heavy_load" not in context
+    assert "하중 중심" not in context
+
+
 def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None:
     messages = [
         {"role": "user", "content": "안녕하세요"},
