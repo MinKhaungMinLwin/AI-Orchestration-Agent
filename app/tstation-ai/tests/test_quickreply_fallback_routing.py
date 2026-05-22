@@ -123,6 +123,33 @@ def test_followup_size_input_prefers_user_winter_intent_over_assistant_vehicle_c
     assert "하중 중심" not in context
 
 
+def test_followup_vehicle_pick_preserves_prior_winter_context() -> None:
+    messages = [
+        {"role": "user", "content": "윈터 타이어랑 사계절 타이어랑 어떤 의미야?"},
+        {
+            "role": "assistant",
+            "content": "윈터 타이어는 겨울용 타이어예요. 사계절 타이어는 일반 주행을 두루 고려한 타이어예요.",
+        },
+        {"role": "user", "content": "타이어 추천"},
+        {
+            "role": "assistant",
+            "content": (
+                "추천받으실 차량을 선택해 주세요.\n\n"
+                '{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"33가3333"}]}}'
+            ),
+        },
+        {"role": "user", "content": "33가3333"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "33가3333")
+
+    assert context is not None
+    assert "추천받을 차량을 선택한 후속 입력" in context
+    assert "겨울/눈길" in context
+    assert "rcmd_type='snow'" in context
+    assert "season_nm='겨울'" in context
+
+
 def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None:
     messages = [
         {"role": "user", "content": "안녕하세요"},

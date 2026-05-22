@@ -3332,6 +3332,7 @@ _VEHICLE_SUITABILITY_RE = re.compile(
 _EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
 _EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
+_VEHICLE_PLATE_ONLY_RE = re.compile(r"^\s*\d{2,3}[가-힣]\d{4}\s*$")
 _RECOMMENDATION_BRIDGE_RE = re.compile(
     r"추천|규격|사이즈|차종|차량|타이어|전용|적합|맞는|찾기|골라",
     re.IGNORECASE,
@@ -3385,14 +3386,15 @@ def _is_ev_suitability_turn(
 
 
 def _infer_followup_recommendation_context(messages: list[dict], last_user_text: str) -> str | None:
-    """Infer the scenario/category to preserve when the user replies with only a tire size.
+    """Infer the scenario/category to preserve when the user replies with only a tire size or car pick.
 
     This is deliberately generic: EV is just one supported scenario. The same
     bridge preserves SUV/compact/heavy-load categories and performance/season/
-    price scenarios when an intermediate chip like "규격으로 찾기" separates the
+    price scenarios when an intermediate chip like "규격으로 찾기" or a vehicle
+    selection step separates the
     original recommendation request from the final size input.
     """
-    if not last_user_text or not _SIZE_ONLY_RE.match(last_user_text):
+    if not last_user_text:
         return None
     if not messages:
         return None
@@ -3417,6 +3419,17 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
         return None
     ordered_messages = list(reversed(recent_messages))
     context_blob = "\n".join(content for _, content in ordered_messages)
+    is_size_followup = bool(_SIZE_ONLY_RE.match(last_user_text))
+    is_vehicle_pick_followup = bool(
+        _VEHICLE_PLATE_ONLY_RE.match(last_user_text)
+        and (
+            "추천받으실 차량을 선택" in context_blob
+            or "\"template\": \"listCar\"" in context_blob
+            or '"template":"listCar"' in context_blob
+        )
+    )
+    if not (is_size_followup or is_vehicle_pick_followup):
+        return None
     if not _RECOMMENDATION_BRIDGE_RE.search(context_blob):
         return None
 
@@ -3446,7 +3459,11 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
 
     lines = [
         "## 후속 추천 조건",
-        f"- 현재 사용자 입력은 타이어 규격만 제공한 후속 입력입니다: {last_user_text.strip()}",
+        (
+            f"- 현재 사용자 입력은 타이어 규격만 제공한 후속 입력입니다: {last_user_text.strip()}"
+            if is_size_followup
+            else f"- 현재 사용자 입력은 추천받을 차량을 선택한 후속 입력입니다: {last_user_text.strip()}"
+        ),
         f"- 직전 추천/적합성 상담의 조건을 유지하세요: {', '.join(labels[:3])}",
     ]
     if rcmd_type:
