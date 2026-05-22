@@ -150,6 +150,33 @@ def test_followup_vehicle_pick_preserves_prior_winter_context() -> None:
     assert "season_nm='겨울'" in context
 
 
+def test_followup_vehicle_pick_ignores_ev_model_in_listcar_when_user_context_is_product_search() -> None:
+    messages = [
+        {"role": "user", "content": "마일리지 타이어"},
+        {
+            "role": "assistant",
+            "content": (
+                "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n\n"
+                "- 마일리지 플러스2: 승용차용 사계절 컴포트 타이어입니다."
+            ),
+        },
+        {"role": "user", "content": "내 차량 보기"},
+        {
+            "role": "assistant",
+            "content": (
+                "고객님 등록 차량을 확인했어요. 어떤 차량으로 진행할까요? 😊\n\n"
+                '{"type":"data","template":"listCar","data":{"listCar":['
+                '{"licensePlate":"99구9999","info":"기아 EV3 (1세대) (2024 - )"},'
+                '{"licensePlate":"34가4566","info":"현대 뉴 i30(GD) (2015 - 2016)"}'
+                '],"metadata":[{"carNo":"34가4566","tireSize":"215/45R17"}]}}'
+            ),
+        },
+        {"role": "user", "content": "34가4566"},
+    ]
+
+    assert _infer_followup_recommendation_context(messages, "34가4566") is None
+
+
 def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None:
     messages = [
         {"role": "user", "content": "안녕하세요"},

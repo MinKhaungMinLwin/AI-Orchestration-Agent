@@ -3445,10 +3445,14 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
 
     # Prefer the user's own prior request over assistant-generated summaries.
     # Product summaries can contain incidental categories ("경트럭&밴용") that
-    # must not override the actual user intent ("윈터 타이어 추천").
+    # must not override the actual user intent ("윈터 타이어 추천"). For a
+    # vehicle-card pick, never infer from assistant/listCar text: registered
+    # vehicle lists can contain unrelated models such as "EV3", which would
+    # incorrectly turn a plain car selection into an EV recommendation.
     user_blob = "\n".join(content for role, content in ordered_messages if role == "user")
     assistant_blob = "\n".join(content for role, content in ordered_messages if role == "assistant")
-    matches = _find_context_matches(user_blob) or _find_context_matches(assistant_blob)
+    user_matches = _find_context_matches(user_blob)
+    matches = user_matches if is_vehicle_pick_followup else user_matches or _find_context_matches(assistant_blob)
     if not matches:
         return None
 
