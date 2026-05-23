@@ -7,11 +7,12 @@ from services.tstation.agents.e_support_agent.tools import (
     get_maintenance_dday_tool,
     get_my_cars_tool,
     get_my_coupons_tool,
+    get_my_warranties_tool,
+    get_product_warranties_tool,
+    search_faq_hybrid_tool,
     search_faq_rag_tool,
     search_product_tool,
     transfer_to_qna_tool,
-    get_product_warranties_tool,
-    get_my_warranties_tool,
 )
 from services.tstation.agents.templates import SupportDataEvent
 from services.tstation.common.cta_urls import expand_url_sentinels
@@ -554,8 +555,21 @@ Rules:
 """
 
 
-def get_support_system_prompt():
-    return expand_url_sentinels(SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE)
+_HYBRID_FAQ_OVERRIDE = """
+
+## [HYBRID MODE] FAQ Search Override
+Use `search_faq_hybrid_tool(query)` for ALL FAQ queries (Intent 1B, 1C, warranty policy questions).
+Do NOT call `get_faq_tool` or `search_faq_rag_tool` — `search_faq_hybrid_tool` handles retrieval internally.
+Interpret the returned items the same way as `get_faq_tool` results and apply the same score-based answer rules.
+"""
+
+
+def get_support_system_prompt() -> str:
+    from config.env import settings
+    base = expand_url_sentinels(SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE)
+    if getattr(settings, "FAQ_SEARCH_MODE", "legacy") == "hybrid":
+        return base + _HYBRID_FAQ_OVERRIDE
+    return base
 
 
 class SupportSubAgent(BaseAgent):
@@ -567,6 +581,7 @@ class SupportSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         "get_faq_tool": "FAQ",
         "search_faq_rag_tool": "FAQ",
+        "search_faq_hybrid_tool": "FAQ",
         "transfer_to_qna_tool": "Fallback / Escalation",
         "escalate_tool": "Fallback / Escalation",
         # Warranty 조회 도구도 정보성 응답이라 FAQ AF 로 묶는다 — 표준 AF 10개
@@ -599,6 +614,7 @@ class SupportSubAgent(BaseAgent):
             tools=[
                 get_faq_tool,
                 search_faq_rag_tool,
+                search_faq_hybrid_tool,
                 transfer_to_qna_tool,
                 get_product_warranties_tool,
                 get_my_warranties_tool,

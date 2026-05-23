@@ -310,6 +310,24 @@ class QdrantService:
         logger.info("Created multi-vector collection: %s (size=%d)", collection_name, vector_size)
         return True
 
+    def ensure_payload_text_index(self, collection_name: str, field_name: str) -> None:
+        """Create a full-text payload index on field_name. Idempotent — safe to call on existing collections."""
+        from qdrant_client.models import TextIndexParams, TokenizerType
+        try:
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=TextIndexParams(
+                    type="text",
+                    tokenizer=TokenizerType.WORD,
+                    min_token_len=2,
+                    lowercase=True,
+                ),
+            )
+            logger.info("[QdrantService] Text index ensured: %s.%s", collection_name, field_name)
+        except Exception as e:
+            logger.debug("[QdrantService] Text index already exists or skipped: %s", e)
+
     def get_alias_target(self, alias_name: str) -> str | None:
         """Return physical collection currently attached to alias, if any."""
         aliases = self.client.get_aliases().aliases

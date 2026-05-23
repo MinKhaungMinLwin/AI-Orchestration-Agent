@@ -356,6 +356,73 @@ class QdrantService:
         )
         return hits
 
+    def search_hybrid(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        query_text: str,
+        top_k: int = 5,
+    ) -> list[dict]:
+        """
+        Hybrid search: RRF fusion of dense multi-vector search and BM25 keyword search.
+
+        Dense leg (semantic): parallel question+answer vector search via search_multi_vector.
+        BM25 leg (lexical):   in-memory BM25 over question text; lazy-builds on first call.
+        Falls back to dense-only if BM25 is unavailable or raises.
+        """
+        from services.tstation.rag.bm25_index import get_bm25_index
+
+        fetch_k = max(top_k * 3, 15)
+
+        # BM25 leg — synchronous (in-memory, ~1ms after first build)
+        bm25_results: list[dict] = []
+        try:
+            bm25_idx = get_bm25_index()
+            bm25_idx.ensure_built(self.client, collection_name)
+            bm25_results = bm25_idx.search(query_text, top_k=fetch_k)
+        except Exception:
+            logger.warning("[QdrantService] BM25 leg failed — falling back to dense only")
+
+        # Dense leg — parallel question+answer vector search
+        dense_results = self.search_multi_vector(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            top_k=fetch_k,
+            score_threshold=0.0,
+        )
+
+        # RRF fusion: dense weight=0.7, BM25 weight=0.3, RRF_K=60
+        RRF_K = 60
+        scores: dict[str, float] = {}
+        payloads: dict[str, dict] = {}
+
+        for rank, r in enumerate(dense_results):
+            pid = str(r["id"])
+            scores[pid] = scores.get(pid, 0.0) + 0.7 / (RRF_K + rank + 1)
+            payloads[pid] = r["payload"]
+
+        for rank, r in enumerate(bm25_results):
+            pid = str(r["id"])
+            scores[pid] = scores.get(pid, 0.0) + 0.3 / (RRF_K + rank + 1)
+            if pid not in payloads:
+                payloads[pid] = r["payload"]
+
+        if not scores:
+            return []
+
+        sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
+        max_score = scores[sorted_ids[0]]
+        hits = [
+            {"id": pid, "score": scores[pid] / max_score, "payload": payloads[pid]}
+            for pid in sorted_ids[:top_k]
+        ]
+
+        logger.info(
+            "[QdrantService] Hybrid search %s: dense=%d bm25=%d merged=%d",
+            collection_name, len(dense_results), len(bm25_results), len(hits),
+        )
+        return hits
+
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""
         try:

@@ -89,6 +89,9 @@ tstation-ai = [
     # Override transitive dep for CVE fix
     "nltk>=3.9.3",
     "litellm>=1.83.0",
+
+    # BM25 lexical leg for hybrid FAQ search
+    "rank-bm25>=0.4.1",
 ]
 
 
