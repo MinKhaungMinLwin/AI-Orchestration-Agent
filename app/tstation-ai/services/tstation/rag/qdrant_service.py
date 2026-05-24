@@ -27,6 +27,9 @@ _COLLECTION_CACHE_TTL: float = 3600.0
 # Reused across all search_multi_vector calls — avoids per-request thread create/destroy overhead
 _search_executor = ThreadPoolExecutor(max_workers=2)
 
+# Candidates fetched per search type before outer RRF fusion
+_HYBRID_CANDIDATE_K: int = 50
+
 logger = logging.getLogger(__name__)
 
 
@@ -361,67 +364,64 @@ class QdrantService:
         collection_name: str,
         query_vector: list[float],
         query_text: str,
-        top_k: int = 5,
+        top_k: int = 20,
     ) -> list[dict]:
         """
-        Hybrid search: RRF fusion of dense multi-vector search and BM25 keyword search.
+        Hybrid search: pure RRF fusion of keyword search and semantic search.
 
-        Dense leg (semantic): parallel question+answer vector search via search_multi_vector.
-        BM25 leg (lexical):   in-memory BM25 over question text; lazy-builds on first call.
-        Falls back to dense-only if BM25 is unavailable or raises.
+        Keyword search:  BM25 on question + answer corpora, internal RRF → top _HYBRID_CANDIDATE_K.
+        Semantic search: parallel question + answer vector search, internal RRF → top _HYBRID_CANDIDATE_K.
+        Falls back to semantic-only if keyword search fails.
         """
         from services.tstation.rag.bm25_index import get_bm25_index
 
-        fetch_k = max(top_k * 3, 15)
-
-        # BM25 leg — synchronous (in-memory, ~1ms after first build)
-        bm25_results: list[dict] = []
+        # Keyword search — synchronous (in-memory, ~1ms after first build)
+        keyword_results: list[dict] = []
         try:
             bm25_idx = get_bm25_index()
             bm25_idx.ensure_built(self.client, collection_name)
-            bm25_results = bm25_idx.search(query_text, top_k=fetch_k)
+            keyword_results = bm25_idx.search(query_text, top_k=_HYBRID_CANDIDATE_K)
         except Exception:
-            logger.warning("[QdrantService] BM25 leg failed — falling back to dense only")
+            logger.warning("[QdrantService] Keyword search failed — falling back to semantic only")
 
-        # Dense leg — parallel question+answer vector search
-        dense_results = self.search_multi_vector(
+        # Semantic search — parallel question + answer vector search
+        semantic_results = self.search_multi_vector(
             collection_name=collection_name,
             query_vector=query_vector,
-            top_k=fetch_k,
+            top_k=_HYBRID_CANDIDATE_K,
             score_threshold=0.0,
         )
 
-        # RRF fusion: dense weight=0.7, BM25 weight=0.3, RRF_K=60
+        # Pure RRF fusion (k=60, equal weights)
         RRF_K = 60
-        scores: dict[str, float] = {}
+        rrf_scores: dict[str, float] = {}
         payloads: dict[str, dict] = {}
 
-        for rank, r in enumerate(dense_results):
+        for rank, r in enumerate(semantic_results):
             pid = str(r["id"])
-            scores[pid] = scores.get(pid, 0.0) + 0.7 / (RRF_K + rank + 1)
+            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1 / (RRF_K + rank + 1)
             payloads[pid] = r["payload"]
 
-        for rank, r in enumerate(bm25_results):
+        for rank, r in enumerate(keyword_results):
             pid = str(r["id"])
-            scores[pid] = scores.get(pid, 0.0) + 0.3 / (RRF_K + rank + 1)
+            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1 / (RRF_K + rank + 1)
             if pid not in payloads:
                 payloads[pid] = r["payload"]
 
-        if not scores:
+        if not rrf_scores:
             return []
 
-        sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
-        max_score = scores[sorted_ids[0]]
-        hits = [
-            {"id": pid, "score": scores[pid] / max_score, "payload": payloads[pid]}
-            for pid in sorted_ids[:top_k]
+        candidates = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:top_k]
+        results = [
+            {"id": pid, "score": rrf_scores[pid], "payload": payloads[pid]}
+            for pid in candidates
         ]
 
         logger.info(
-            "[QdrantService] Hybrid search %s: dense=%d bm25=%d merged=%d",
-            collection_name, len(dense_results), len(bm25_results), len(hits),
+            "[QdrantService] search_hybrid %s: keyword=%d semantic=%d candidates=%d",
+            collection_name, len(keyword_results), len(semantic_results), len(results),
         )
-        return hits
+        return results
 
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""

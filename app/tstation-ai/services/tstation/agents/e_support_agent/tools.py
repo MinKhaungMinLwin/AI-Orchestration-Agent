@@ -221,18 +221,18 @@ def search_faq_rag_tool(
         return _error_response(None, str(e), "Failed to search FAQs using RAG")
 
 @tool
-def search_faq_hybrid_tool(query: str, top_k: int = 5) -> dict:
+def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
     """
-    [HYBRID] FAQ search using dense + keyword retrieval, adaptive threshold, and reranking.
+    [HYBRID] FAQ search: keyword search + semantic search → RRF reranking → top_k items.
 
     Use instead of get_faq_tool + search_faq_rag_tool when FAQ_SEARCH_MODE=hybrid.
-    Returns top_k pre-ranked FAQ items — no retry needed.
+    Returns top_k FAQ items for the LLM to synthesise — no retry needed.
 
     Args:
         query (str): User question in Korean.
-        top_k (int): Max results to return (default 5).
+        top_k (int): Max results to return (default 20).
 
-    Example: {"query": "환불 정책이 어떻게 되나요?", "top_k": 5}
+    Example: {"query": "환불 정책이 어떻게 되나요?"}
     """
     logger.debug("[TOOL][search_faq_hybrid_tool] query=%s top_k=%s", query, top_k)
     try:
@@ -249,21 +249,12 @@ def search_faq_hybrid_tool(query: str, top_k: int = 5) -> dict:
         )
 
         query_vector = embedding_svc.embed_text_cached(query)
-        collection_size = qdrant_svc.get_collection_size_cached(settings.QDRANT_COLLECTION_FAQ)
-        fetch_k = RAGDynamicConfig.compute_fetch_k(collection_size=collection_size, final_top_k=top_k)
-
-        raw = qdrant_svc.search_hybrid(
+        candidates = qdrant_svc.search_hybrid(
             collection_name=settings.QDRANT_COLLECTION_FAQ,
             query_vector=query_vector,
             query_text=query,
-            top_k=fetch_k,
+            top_k=top_k,
         )
-
-        scores = [r["score"] for r in raw]
-        threshold = RAGDynamicConfig.adaptive_threshold(scores=scores, base_threshold=0.3)
-        filtered = [r for r in raw if r["score"] >= threshold]
-
-        reranked = get_reranker_service().rerank(query=query, results=filtered, top_k=top_k)
 
         items = [
             {
@@ -272,7 +263,7 @@ def search_faq_hybrid_tool(query: str, top_k: int = 5) -> dict:
                 "metadata": r["payload"].get("metadata", {}),
                 "source": "FAQ Hybrid",
             }
-            for r in reranked
+            for r in candidates
         ]
         logger.debug("[TOOL][search_faq_hybrid_tool] returned %d items", len(items))
         return _success_response(200, {"items": items})
