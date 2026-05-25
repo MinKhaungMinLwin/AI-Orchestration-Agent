@@ -58,7 +58,7 @@ class Bm25FaqIndex:
         return self._bm25_question is None or (time.monotonic() - self._built_at) >= _TTL
 
     def _build(self, qdrant_client, collection_name: str) -> None:
-        from rank_bm25 import BM25Okapi
+        from rank_bm25 import BM25Plus
 
         point_ids: list[str] = []
         payloads: dict[str, dict] = {}
@@ -89,15 +89,15 @@ class Bm25FaqIndex:
             logger.warning("[Bm25FaqIndex] No documents found in '%s'; index not built", collection_name)
             return
 
-        bm25_question = BM25Okapi(question_corpus)
-        bm25_answer = BM25Okapi(answer_corpus)
+        bm25_question = BM25Plus(question_corpus)
+        bm25_answer = BM25Plus(answer_corpus)
         # Atomic swap: assign all fields before updating _built_at
         self._bm25_question = bm25_question
         self._bm25_answer = bm25_answer
         self._point_ids = point_ids
         self._payloads = payloads
         self._built_at = time.monotonic()
-        logger.info("[Bm25FaqIndex] Built: %d documents from '%s'", len(question_corpus), collection_name)
+        logger.info("[Bm25FaqIndex] Built: %d documents from '%s' using %s", len(question_corpus), collection_name, type(bm25_question).__name__)
         sample_text = payloads[point_ids[0]].get("question", "") if point_ids else ""
         logger.info("[Bm25FaqIndex] tokenizer sample: %r → %s", sample_text[:40], question_corpus[0])
 
