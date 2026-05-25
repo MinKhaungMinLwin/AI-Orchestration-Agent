@@ -16,6 +16,7 @@ def _get_kwargs(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
@@ -33,6 +34,8 @@ def _get_kwargs(
     params["limit"] = limit
 
     params["brand_cd"] = brand_cd
+
+    params["allow_cross_brand_fill"] = allow_cross_brand_fill
 
     json_car_lnc_cd: None | str | Unset
     if isinstance(car_lnc_cd, Unset):
@@ -130,6 +133,7 @@ def sync_detailed(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
@@ -180,6 +184,8 @@ def sync_detailed(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
@@ -208,6 +214,7 @@ def sync_detailed(
         rcmd_type=rcmd_type,
         limit=limit,
         brand_cd=brand_cd,
+        allow_cross_brand_fill=allow_cross_brand_fill,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
         season_nm=season_nm,
@@ -230,6 +237,7 @@ def sync(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
@@ -280,6 +288,8 @@ def sync(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
@@ -309,6 +319,7 @@ def sync(
         rcmd_type=rcmd_type,
         limit=limit,
         brand_cd=brand_cd,
+        allow_cross_brand_fill=allow_cross_brand_fill,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
         season_nm=season_nm,
@@ -325,6 +336,7 @@ async def asyncio_detailed(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
@@ -375,6 +387,8 @@ async def asyncio_detailed(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
@@ -403,6 +417,7 @@ async def asyncio_detailed(
         rcmd_type=rcmd_type,
         limit=limit,
         brand_cd=brand_cd,
+        allow_cross_brand_fill=allow_cross_brand_fill,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
         season_nm=season_nm,
@@ -423,6 +438,7 @@ async def asyncio(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
@@ -473,6 +489,8 @@ async def asyncio(
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
@@ -503,6 +521,7 @@ async def asyncio(
             rcmd_type=rcmd_type,
             limit=limit,
             brand_cd=brand_cd,
+            allow_cross_brand_fill=allow_cross_brand_fill,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
             season_nm=season_nm,

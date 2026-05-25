@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import ClassVar, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -54,6 +54,9 @@ class ConversationSlots(BaseModel):
     user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
     goal_type: Optional[GoalType] = None  # e.g. "store_with_stock" — high-level destination, sticky across turns.
+    recommendation_variants: Optional[list[dict[str, Any]]] = None
+    recommendation_limit_per_variant: Optional[int] = None
+    recommendation_source_text: Optional[str] = None
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
@@ -158,7 +161,9 @@ class ConversationSlots(BaseModel):
             r"친절|여성|얼라인먼트|밸런스|워셔액|무료|깨끗|믿을|친근|편하|"
             r"잘\s*봐|꼼꼼|전문|특화|수입차|외제차|프리미엄|"
             r"평점|리뷰|평이?\s*좋|"
-            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반"
+            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반|"
+            r"리프트|질소\s*충전|질소|라운지|휴게실|수유실|파우더룸|"
+            r"청결|쾌적|분위기|숙련도|실력|정확도"
         ),
     ]
 

@@ -1,3 +1,4 @@
+import contextvars
 import logging
 from common.tool_cache import tool_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,8 +14,6 @@ from services.tstation.common.tstation_be_client import (
 )
 from langchain.tools import tool
 from common.brand_mapping import normalize_brand_name
-
-logger = logging.getLogger(__name__)
 
 # STORE AF
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
@@ -63,6 +62,47 @@ from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방�
 
 # Member AF — 회원 단골매장 조회
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_favorite_stores_api_member_favorite_stores_get import sync_detailed as get_favorite_stores
+
+logger = logging.getLogger(__name__)
+current_transaction_store_preview_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_transaction_store_preview_tool_patch", default={}
+)
+
+def _apply_store_preview_policy_patch(
+    *,
+    patch: dict[str, Any],
+    goods_no: str | None,
+    ord_qty: int | None,
+    region_code: str | None,
+    store_nm: str | None,
+    user_xpos: float | None,
+    user_ypos: float | None,
+) -> tuple[str | None, int | None, str | None, str | None, float | None, float | None]:
+    """Fill only missing preview args from the request-scoped Transaction ToolPlan."""
+    if not patch:
+        return goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos
+    if not goods_no and patch.get("goods_no"):
+        goods_no = str(patch["goods_no"])
+    if (ord_qty is None or ord_qty < 1) and (patch.get("ord_qty") or patch.get("quantity")):
+        try:
+            ord_qty = int(patch.get("ord_qty") or patch.get("quantity"))
+        except (TypeError, ValueError):
+            pass
+    if not region_code and patch.get("region"):
+        region_code = str(patch["region"])
+    if not store_nm and patch.get("store_name"):
+        store_nm = str(patch["store_name"])
+    if user_xpos is None and patch.get("user_xpos") is not None:
+        try:
+            user_xpos = float(patch["user_xpos"])
+        except (TypeError, ValueError):
+            pass
+    if user_ypos is None and patch.get("user_ypos") is not None:
+        try:
+            user_ypos = float(patch["user_ypos"])
+        except (TypeError, ValueError):
+            pass
+    return goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos
 
 
 _STORE_BRAND_PREFIXES = ("티스테이션 ", "더타이어샵 ")
@@ -151,6 +191,14 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
         return None
 
     candidate_names = [s.get("shop_nm", "") for s in stores]
+    candidate_stores = [
+        {
+            "shop_id": s.get("shop_id"),
+            "shop_nm": s.get("shop_nm", ""),
+        }
+        for s in stores
+        if isinstance(s, dict) and s.get("shop_nm")
+    ]
     if len(candidate_names) == 1:
         confirmation_msg = (
             f"고객님, 요청하신 '{user_input}'으로 검색한 결과 "
@@ -170,6 +218,7 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
         "data": {
             "user_input": user_input,
             "candidates": candidate_names,
+            "candidate_stores": candidate_stores,
             "stores": [],
             "validation_message": confirmation_msg,
             "instruction_to_agent": (
@@ -996,6 +1045,49 @@ def search_stores_tool(
                 return result
             source_status = result.get("http_status") or 200
             data = result.get("data") or {}
+            stores = data.get("stores") if isinstance(data, dict) else None
+            if (
+                isinstance(stores, list)
+                and not stores
+                and region_code
+                and not normalized_store_nm
+                and not place_query
+            ):
+                place_response = search_place(client=get_client(), query=region_code, size=1)
+                if place_response.parsed is not None:
+                    place_data = _to_dict(place_response.parsed)
+                    found_xpos, found_ypos, place = _first_place_coordinates(
+                        place_data if isinstance(place_data, dict) else {}
+                    )
+                    if found_xpos is not None and found_ypos is not None:
+                        response = get_store_list(
+                            client=get_client(),
+                            xpos=found_xpos,
+                            ypos=found_ypos,
+                            radius_km=radius_km,
+                            svc_codes=svc_codes,
+                            all_my_t_only=all_my_t_only,
+                            imported_car_only=imported_car_only,
+                            chl_sct_cd=chl_sct_cd,
+                            sort_by=sort_by,
+                            limit=candidate_cap,
+                        )
+                        if response.parsed is None:
+                            return _error_response(
+                                response.status_code,
+                                f"HTTP {response.status_code}",
+                                response.content.decode(errors="ignore") or "Failed to search stores",
+                            )
+                        source_status = response.status_code
+                        data = _to_dict(response.parsed)
+                        search_meta.update({
+                            "source": "region_place_fallback",
+                            "region_code": region_code,
+                            "place": {
+                                "place_name": place.get("place_name") or place.get("name"),
+                                "address_name": place.get("address_name") or place.get("address"),
+                            },
+                        })
 
         if not isinstance(data, dict):
             return _success_response(source_status, data)
@@ -1065,7 +1157,7 @@ def get_store_schedule_tool(shop_id: str, mode: str):
 
     | mode                          | When to use                                      |
     |-------------------------------|--------------------------------------------------|
-    | today_only                    | shop ∈ todayShopArray (오늘서비스만)             |
+    | today_only                    | 사용자가 오늘/당일 장착을 명시한 경우만         |
     | tna_only                      | shop ∈ tnaShopArray, NOT in todayShopArray       |
     | logistics_only                | 매장재고 X + 물류재고 O                          |
     | in_store_only                 | 매장재고 O + 물류재고 X (오늘 ∪ T바로배송)       |
@@ -1146,14 +1238,15 @@ def get_multi_store_schedule_tool(
 
     | Tier | Trigger condition                                       | mode used      |
     |------|---------------------------------------------------------|----------------|
-    | 1    | At least one candidate ∈ todayShopArray                 | today_only     |
-    | 2    | Tier 1 empty AND ≥1 candidate ∈ tnaShopArray            | tna_only       |
-    | 3    | Tiers 1–2 empty AND has_logistics=True                  | logistics_only |
+    | 1    | Candidate ∈ todayShopArray and has_logistics=True       | combined       |
+    | 2    | Candidate ∈ todayShopArray                              | in_store_only  |
+    | 3    | Tier 1–2 empty AND ≥1 candidate ∈ tnaShopArray          | tna_only       |
+    | 4    | Earlier tiers empty AND has_logistics=True              | logistics_only |
     | none | All tiers empty                                         | (no BE call)   |
 
-    Tier 1 queries the today_only intersection; tier 2 the tna intersection; tier 3
-    the remaining candidates not already in today/tna arrays. The first non-empty
-    tier is returned — earlier tiers always win (today > tna > 일반배송).
+    `todayShopArray` means "today is available", not "show only today". For normal
+    booking previews, today-capable stores use a broader schedule mode so customers
+    can choose other dates too. The first non-empty tier is returned.
 
     Caller MUST first run get_store_inventory_tool + get_logistics_inventory_tool
     so todayShopArray/tnaShopArray/logistics_qty are known.
@@ -1185,18 +1278,19 @@ def get_multi_store_schedule_tool(
     today_set = set(today_shop_ids or [])
     tna_set = set(tna_shop_ids or [])
 
-    # Tier 1 — today_only on candidates ∩ todayShopArray
+    # Tier 1/2 — today-capable stores, but show a broader booking range by default.
     tier1_shops = [sid for sid in candidates if sid in today_set]
     if tier1_shops:
-        results = _fetch_schedule_for_shops(tier1_shops, ScheduleMode.TODAY_ONLY)
+        mode = ScheduleMode.IN_STORE_LOGISTICS_COMBINED if has_logistics else ScheduleMode.IN_STORE_ONLY
+        results = _fetch_schedule_for_shops(tier1_shops, mode)
         if any(r.get("slots") for r in results.values()):
             return _success_response(200, {
-                "tier": "today_only",
+                "tier": mode.value,
                 "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier1_shops],
                 "candidate_shop_ids": candidates,
             })
 
-    # Tier 2 — tna_only on candidates ∩ tnaShopArray
+    # Tier 3 — tna_only on candidates ∩ tnaShopArray
     tier2_shops = [sid for sid in candidates if sid in tna_set]
     if tier2_shops:
         results = _fetch_schedule_for_shops(tier2_shops, ScheduleMode.TNA_ONLY)
@@ -1207,7 +1301,7 @@ def get_multi_store_schedule_tool(
                 "candidate_shop_ids": candidates,
             })
 
-    # Tier 3 — logistics_only on remaining candidates (not in today/tna sets)
+    # Tier 4 — logistics_only on remaining candidates (not in today/tna sets)
     if has_logistics:
         tier3_shops = [sid for sid in candidates if sid not in today_set and sid not in tna_set]
         # Fall back to all candidates if filtering removed every shop
@@ -1481,13 +1575,46 @@ def transaction_store_preview_tool(
     Use when goods_no and quantity are known and the user wants nearby/regional stores,
     stock, or available reservation dates. This is a preview only; never creates an order.
     """
+    policy_patch = current_transaction_store_preview_tool_patch.get()
+    if policy_patch:
+        before_policy = {
+            "goods_no": goods_no,
+            "ord_qty": ord_qty,
+            "region_code": region_code,
+            "store_nm": store_nm,
+            "user_xpos": user_xpos,
+            "user_ypos": user_ypos,
+        }
+        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
+            patch=policy_patch,
+            goods_no=goods_no,
+            ord_qty=ord_qty,
+            region_code=region_code,
+            store_nm=store_nm,
+            user_xpos=user_xpos,
+            user_ypos=user_ypos,
+        )
+        logger.info(
+            "[TOOL][transaction_store_preview_tool] Applied transaction policy patch=%s before=%s after=%s",
+            policy_patch,
+            before_policy,
+            {
+                "goods_no": goods_no,
+                "ord_qty": ord_qty,
+                "region_code": region_code,
+                "store_nm": store_nm,
+                "user_xpos": user_xpos,
+                "user_ypos": user_ypos,
+            },
+        )
+
     logger.debug(
         "[TOOL][transaction_store_preview_tool] Called with: goods_no=%s, ord_qty=%s, region_code=%s, "
         "store_nm=%s, user_xpos=%s, user_ypos=%s, include_price=%s",
         goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, include_price,
     )
 
-    if not goods_no or ord_qty < 1:
+    if not goods_no or ord_qty is None or ord_qty < 1:
         return _error_response(None, "invalid_input", "goods_no and ord_qty are required")
 
     has_region = bool(region_code and region_code.strip())
@@ -1538,7 +1665,41 @@ def transaction_store_preview_tool(
 
     store_data = _to_dict(store_response.parsed)
     stores = _extract_stores(store_data)
-    if has_region and not has_store and not has_coords:
+    place_fallback: dict[str, Any] | None = None
+    if has_region and not has_store and not has_coords and not stores:
+        place_response = search_place(client=get_client(), query=region_code.strip(), size=1)
+        if place_response.parsed is not None:
+            place_data = _to_dict(place_response.parsed)
+            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
+            if found_xpos is not None and found_ypos is not None:
+                store_response = get_store_list(
+                    client=get_client(),
+                    xpos=found_xpos,
+                    ypos=found_ypos,
+                    radius_km=10.0,
+                    svc_codes=svc_codes,
+                    all_my_t_only=all_my_t_only,
+                    imported_car_only=imported_car_only,
+                    installable_only=True,
+                    chl_sct_cd=chl_sct_cd,
+                )
+                if store_response.parsed is None:
+                    return _error_response(
+                        store_response.status_code,
+                        f"HTTP {store_response.status_code}",
+                        store_response.content.decode(errors="ignore") or "Failed to get nearby store candidates",
+                    )
+                store_data = _to_dict(store_response.parsed)
+                stores = _extract_stores(store_data)
+                place_fallback = {
+                    "source": "place_fallback",
+                    "query": region_code.strip(),
+                    "place": {
+                        "place_name": place.get("place_name") or place.get("name"),
+                        "address_name": place.get("address_name") or place.get("address"),
+                    } if isinstance(place, dict) else None,
+                }
+    if has_region and not has_store and not has_coords and place_fallback is None:
         stores = _filter_stores_by_preferred_region_address(region_code, stores)
 
     # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
@@ -1638,6 +1799,8 @@ def transaction_store_preview_tool(
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
     }
+    if place_fallback is not None:
+        result_data["search"] = place_fallback
 
     schedule_data = result_data["schedule"] if isinstance(result_data["schedule"], dict) else {}
     tier = schedule_data.get("tier")

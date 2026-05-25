@@ -85,3 +85,12 @@ def test_recommend_keyword_wins_over_qty_escalation() -> None:
 
 def test_reservation_keyword_wins_over_qty_escalation() -> None:
     assert _goal("벤투스 4개 예약하고 싶어") == "store_finder"
+
+
+def test_store_finder_captures_unverifiable_preference_text() -> None:
+    slots = ConversationSlots.extract_from_user_text("내 차 타스만인데 리프트 있어야 되더라고... 하남 지역에 리프트 있는 매장 있어?")
+
+    assert slots.goal_type == "store_finder"
+    assert slots.region == "하남"
+    assert slots.user_preferences_text is not None
+    assert "리프트" in slots.user_preferences_text

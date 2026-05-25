@@ -1,0 +1,332 @@
+"""Reservation/store template policy helpers.
+
+This module owns deterministic corrections around store booking templates:
+preview schedule slots should render as `datepick`, while stock-store contexts
+must stay on the location path.
+"""
+import datetime
+import json
+import re
+from typing import Any
+
+_RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
+_RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
+_WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
+_WEEKDAY_REQUEST_RE = re.compile(
+    r"(?:이번\s*주|다음\s*주|다다음\s*주)?\s*(월|화|수|목|금|토|일)\s*(?:요일|욜)"
+)
+_WEEKEND_REQUEST_RE = re.compile(r"(?:이번\s*주말|다음\s*주말|주말)")
+_STOCK_STORE_TEXT_RE = re.compile(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장")
+_OTHER_STORE_REQUEST_RE = re.compile(
+    r"(?:다른|추가|더)\s*(?:매장|지점)|(?:매장|지점)\s*(?:더|또|추가)"
+)
+_SCHEDULE_CONFIRMATION_RE = re.compile(
+    r"장착\s*가능\s*일정|가능\s*일정|예약\s*가능\s*(?:일정|시간)|"
+    r"선택\s*가능한\s*(?:장착\s*)?일정|예약\s*시간|일정\s*맞|시간\s*맞",
+    re.IGNORECASE,
+)
+
+
+def yyyymmdd_to_korean_date(s: str) -> str:
+    try:
+        dt = datetime.datetime.strptime(s, "%Y%m%d")
+    except (TypeError, ValueError):
+        return s
+    return f"{dt.year}년 {dt.month}월 {dt.day}일 ({_WEEKDAY_KO[dt.weekday()]})"
+
+
+def parse_slot_hour(tm: object, *, exclude_noon: bool = True) -> int | None:
+    s = str(tm or "").strip()
+    if not s.isdigit():
+        return None
+    if len(s) <= 2:
+        hour = int(s)
+    elif len(s) == 4:
+        hour = int(s[:2])
+    else:
+        return None
+    if exclude_noon and hour == 12:
+        return None
+    return hour if 0 <= hour <= 23 else None
+
+
+def extract_preview_payload(parsed: dict) -> dict | None:
+    if parsed.get("status") == "success" and isinstance(parsed.get("data"), dict):
+        return parsed["data"]
+    data = parsed.get("data")
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        return data["data"]
+    return parsed if isinstance(parsed, dict) else None
+
+
+def should_keep_stock_location(
+    *,
+    pending_intent: str | None,
+    goal_type: str | None,
+    assistant_text: str,
+    exact_order_preview: bool = False,
+) -> bool:
+    if exact_order_preview:
+        return False
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return True
+    return bool(_STOCK_STORE_TEXT_RE.search(assistant_text or ""))
+
+
+def is_other_store_request(user_text: str) -> bool:
+    """True when the user is asking for alternative store candidates."""
+    return bool(_OTHER_STORE_REQUEST_RE.search(user_text or ""))
+
+
+def latest_template_data_from_messages(messages: list[dict], template_name: str) -> dict | None:
+    """Return the newest template data payload from prefetched template history."""
+    for message in messages:
+        template_data = message.get("template_data")
+        if not isinstance(template_data, dict) or template_data.get("template") != template_name:
+            continue
+        data = template_data.get("data")
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def build_datepick_from_preview_payload(
+    preview_payload: dict,
+    *,
+    assistant_text: str,
+    source_domain: str | None = None,
+    assistant_response_source: str,
+    require_single_store: bool,
+) -> dict | None:
+    schedule = preview_payload.get("schedule")
+    if not isinstance(schedule, dict) or str(schedule.get("tier") or "").lower() == "none":
+        return None
+    schedule_stores = schedule.get("stores")
+    if not isinstance(schedule_stores, list):
+        return None
+    if require_single_store and len(schedule_stores) != 1:
+        return None
+
+    for store in schedule_stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = str(store.get("shop_id") or "").strip()
+        slots = store.get("slots")
+        if not shop_id or not isinstance(slots, list):
+            continue
+        by_day: dict[str, set[int]] = {}
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = str(slot.get("cal_day") or "").strip()
+            hour = parse_slot_hour(slot.get("tm"))
+            if cal_day and hour is not None:
+                by_day.setdefault(cal_day, set()).add(hour)
+        if not by_day:
+            continue
+
+        dates: list[dict] = []
+        selected_idx: int | None = None
+        for idx, cal_day in enumerate(sorted(by_day.keys())):
+            times = sorted(by_day[cal_day])
+            available = bool(times)
+            dates.append({
+                "date": yyyymmdd_to_korean_date(cal_day),
+                "available": available,
+                "availableTimes": times,
+                "index": idx,
+            })
+            if selected_idx is None and available:
+                selected_idx = idx
+        if selected_idx is None:
+            continue
+
+        metadata = {"shopId": shop_id}
+        shop_name = str(store.get("shop_nm") or "").strip()
+        if shop_name:
+            metadata["shopName"] = shop_name
+        event = {
+            "type": "data",
+            "template": "datepick",
+            "assistant_response_source": assistant_response_source,
+            "data": {
+                "assistantResponse": assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+                "dates": dates,
+                "selectedDate": selected_idx,
+                "metadata": metadata,
+            },
+        }
+        if source_domain is not None:
+            event["source_domain"] = source_domain
+        return event
+    return None
+
+
+def _date_label_has_weekday(date_item: dict, weekday: str) -> bool:
+    label = str(date_item.get("date") or "")
+    return f"({weekday})" in label or f"{weekday}요일" in label
+
+
+def _replace_datepick_dates(event_data: dict, dates: list[dict]) -> None:
+    normalized_dates = []
+    for idx, date_item in enumerate(dates):
+        normalized_item = dict(date_item)
+        normalized_item["index"] = idx
+        normalized_dates.append(normalized_item)
+    event_data["dates"] = normalized_dates
+    event_data["selectedDate"] = 0
+
+
+def _first_contiguous_weekend_dates(dates: list[dict]) -> list[dict]:
+    weekend_dates: list[dict] = []
+    for date_item in dates:
+        if not isinstance(date_item, dict):
+            continue
+        is_weekend = _date_label_has_weekday(date_item, "토") or _date_label_has_weekday(date_item, "일")
+        if is_weekend:
+            weekend_dates.append(date_item)
+            continue
+        if weekend_dates:
+            break
+    return weekend_dates
+
+
+def filter_datepick_to_requested_weekday(event: dict, user_text: str) -> dict | None:
+    """Narrow datepick dates when the user explicitly asks for a weekday or weekend."""
+    if event.get("template") != "datepick":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    dates = event_data.get("dates")
+    if not isinstance(dates, list) or len(dates) <= 1:
+        return None
+
+    if _WEEKEND_REQUEST_RE.search(user_text or ""):
+        weekend_dates = _first_contiguous_weekend_dates(dates)
+        if not weekend_dates:
+            return None
+        _replace_datepick_dates(event_data, weekend_dates)
+        has_default_response = (
+            not event_data.get("assistantResponse")
+            or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요."
+        )
+        if has_default_response:
+            event_data["assistantResponse"] = "이번 주말 예약 가능한 시간을 선택해 주세요."
+        return event
+
+    match = _WEEKDAY_REQUEST_RE.search(user_text or "")
+    if not match:
+        return None
+    requested_weekday = match.group(1)
+    for date_item in dates:
+        if not isinstance(date_item, dict):
+            continue
+        if not _date_label_has_weekday(date_item, requested_weekday):
+            continue
+        label = str(date_item.get("date") or "")
+        _replace_datepick_dates(event_data, [date_item])
+        has_default_response = (
+            not event_data.get("assistantResponse")
+            or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요."
+        )
+        if has_default_response:
+            event_data["assistantResponse"] = f"{label} 예약 가능한 시간을 선택해 주세요."
+        return event
+    return None
+
+
+def coerce_reservation_quickreply_to_datepick(
+    event: dict,
+    structured_sources: list[tuple[str, dict]],
+    slot_state: Any | None,
+) -> dict | None:
+    """Convert LLM reservation-time chips to the datepick template."""
+    if event.get("template") != "quickReply":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list) or not chips:
+        return None
+    labels = [
+        str(chip.get("label", "")).strip()
+        for chip in chips
+        if isinstance(chip, dict)
+    ]
+    has_reservation_time_chip = any(_RESERVATION_TIME_CHIP_RE.match(label) for label in labels)
+    has_only_reservation_chips = all(
+        _RESERVATION_TIME_CHIP_RE.match(label) or label in _RESERVATION_OTHER_TIME_LABELS
+        for label in labels
+    )
+    if not has_reservation_time_chip or not has_only_reservation_chips:
+        return None
+
+    pending_intent = getattr(slot_state, "pending_intent", None)
+    goal_type = getattr(slot_state, "goal_type", None)
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if should_keep_stock_location(
+        pending_intent=pending_intent,
+        goal_type=goal_type,
+        assistant_text=assistant_text,
+    ):
+        return None
+
+    preview_payload = None
+    for tool_name, parsed in reversed(structured_sources):
+        if tool_name != "transaction_store_preview_tool" or not isinstance(parsed, dict):
+            continue
+        preview_payload = extract_preview_payload(parsed)
+        if isinstance(preview_payload, dict):
+            break
+    if not isinstance(preview_payload, dict):
+        return None
+
+    return build_datepick_from_preview_payload(
+        preview_payload,
+        assistant_text=assistant_text,
+        source_domain=event.get("source_domain"),
+        assistant_response_source="code_mapper_preview_quickreply",
+        require_single_store=False,
+    )
+
+
+def coerce_schedule_confirmation_quickreply_to_datepick(
+    event: dict,
+    *,
+    user_text: str,
+    latest_datepick_data: dict | None,
+    default_source_domain: str = "transaction",
+) -> dict | None:
+    """Re-render the previous date picker for schedule clarification turns.
+
+    If the user asks "장착 가능일정이야?" right after a datepick card, the agent
+    may answer in prose with an empty quickReply. Generic fallback chips then
+    add "1:1 문의하기", contradicting the text that asks the user to select a
+    date/time. In that narrow case, reuse the latest datepick card.
+    """
+    if event.get("template") != "quickReply" or not isinstance(latest_datepick_data, dict):
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    dates = latest_datepick_data.get("dates")
+    if not isinstance(dates, list) or not dates:
+        return None
+    if not _SCHEDULE_CONFIRMATION_RE.search(user_text or ""):
+        return None
+
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    datepick_data = json.loads(json.dumps(latest_datepick_data, ensure_ascii=False))
+    if assistant_text:
+        datepick_data["assistantResponse"] = assistant_text
+    else:
+        datepick_data.setdefault("assistantResponse", "예약 가능한 날짜와 시간을 선택해 주세요.")
+    return {
+        "type": "data",
+        "template": "datepick",
+        "source_domain": event.get("source_domain") or default_source_domain,
+        "assistant_response_source": "code_mapper_schedule_confirmation",
+        "data": datepick_data,
+    }

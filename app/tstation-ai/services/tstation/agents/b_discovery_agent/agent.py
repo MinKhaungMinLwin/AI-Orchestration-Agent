@@ -1588,6 +1588,17 @@ AND does NOT contain an explicit numeric price range ("X만원~Y만원", "X만�
 ## RECOMMENDATION ENTRY POINTS
 Choose exactly one branch before calling tools:
 
+0. Vehicle-type compatibility advice — supersedes vehicle lookup:
+   - Trigger: user asks whether a passenger/sedan/general tire can be used on an SUV, or the reverse.
+     Examples: "내 차 SUV긴 한데 세단용 끼워도 될까?", "내 차가 SUV인데 승용차 타이어 끼워도 돼?",
+     "SUV에 세단용 써도 돼?", "SUV에 승용 타이어 장착 가능해?"
+   - Action: DO NOT call `get_my_cars_tool`, `get_user_vehicles_tool`, `check_compatibility_tool`,
+     or `get_products_recommendations_tool` in this turn.
+   - Emit `quickReply`, not `listCar` or `product`.
+   - `assistantResponse` must first answer the question directly:
+     "SUV에는 승용차/세단용 타이어를 임의로 장착하는 건 권장하지 않아요. 같은 사이즈처럼 보여도 하중지수와 설계 기준이 다를 수 있어서 차량 규격에 맞는 SUV용 또는 SUV 호환 타이어로 확인하는 게 안전합니다."
+   - Suggested chips: `[{"label":"SUV용 추천","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"},{"label":"내 차량으로 확인","domain":"DISCOVERY"}]`.
+
 1. Vehicle-tied request:
    - If the user asks for tires for "my car", registered car, or a vehicle number, call get_my_cars_tool first when the exact vehicle is not already confirmed.
    - If the user provides car_no + owner name and registered cars are unavailable, call get_user_vehicles_tool.

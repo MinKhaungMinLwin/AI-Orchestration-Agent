@@ -1,0 +1,302 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from services.tstation.policies.reservation_template_policy import (
+    build_datepick_from_preview_payload,
+    coerce_reservation_quickreply_to_datepick,
+    coerce_schedule_confirmation_quickreply_to_datepick,
+    filter_datepick_to_requested_weekday,
+    is_other_store_request,
+    latest_template_data_from_messages,
+)
+
+
+def _preview_source() -> tuple[str, dict]:
+    return (
+        "transaction_store_preview_tool",
+        {
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "tier": "today_only",
+                    "stores": [{
+                        "shop_id": "T02396",
+                        "shop_nm": "티스테이션 강릉강남점",
+                        "slots": [
+                            {"cal_day": "20260521", "tm": "09"},
+                            {"cal_day": "20260521", "tm": "10"},
+                            {"cal_day": "20260521", "tm": "12"},
+                            {"cal_day": "20260521", "tm": "13"},
+                        ],
+                    }],
+                },
+            },
+        },
+    )
+
+
+def _datepick_event() -> dict:
+    return {
+        "type": "data",
+        "template": "datepick",
+        "data": {
+            "assistantResponse": "예약 가능한 날짜와 시간을 선택해 주세요.",
+            "selectedDate": 0,
+            "dates": [
+                {"date": "2026년 5월 23일 (토)", "available": True, "availableTimes": [9], "index": 0},
+                {"date": "2026년 5월 24일 (일)", "available": True, "availableTimes": [10], "index": 1},
+                {"date": "2026년 5월 29일 (금)", "available": True, "availableTimes": [11], "index": 2},
+            ],
+        },
+    }
+
+
+def test_reservation_time_quickreply_is_coerced_to_datepick() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "강릉에서 장착 예약 가능한 시간을 확인했어요.",
+            "quickReplies": [
+                {"label": "09시 예약", "domain": "TRANSACTION"},
+                {"label": "13시 예약", "domain": "TRANSACTION"},
+                {"label": "다른 시간 선택", "domain": "TRANSACTION"},
+            ],
+        },
+    }
+
+    result = coerce_reservation_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="order", goal_type="place_order"),
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {
+        "shopId": "T02396",
+        "shopName": "티스테이션 강릉강남점",
+    }
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 21일 (목)",
+        "available": True,
+        "availableTimes": [9, 10, 13],
+        "index": 0,
+    }]
+
+
+def test_tc058_preview_datepick_excludes_blocked_noon_slot() -> None:
+    result = build_datepick_from_preview_payload(
+        _preview_source()[1]["data"],
+        assistant_text="12시에 작업 가능한 서울 지역 매장을 확인했어요.",
+        assistant_response_source="test",
+        require_single_store=True,
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 21일 (목)",
+        "available": True,
+        "availableTimes": [9, 10, 13],
+        "index": 0,
+    }]
+
+
+def test_tc233_preview_with_single_confirmed_store_builds_datepick() -> None:
+    result = build_datepick_from_preview_payload(
+        {
+            "schedule": {
+                "tier": "in_store_only",
+                "stores": [{
+                    "shop_id": "T01234",
+                    "shop_nm": "티스테이션 오목천점",
+                    "slots": [
+                        {"cal_day": "20260523", "tm": "0900"},
+                        {"cal_day": "20260523", "tm": "1000"},
+                    ],
+                }],
+            },
+        },
+        assistant_text="티스테이션 오목천점 예약 가능한 시간을 확인했어요.",
+        source_domain="transaction",
+        assistant_response_source="test",
+        require_single_store=True,
+    )
+
+    assert result is not None
+    assert result["source_domain"] == "transaction"
+    assert result["data"]["metadata"] == {
+        "shopId": "T01234",
+        "shopName": "티스테이션 오목천점",
+    }
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 23일 (토)",
+        "available": True,
+        "availableTimes": [9, 10],
+        "index": 0,
+    }]
+
+
+def test_reservation_time_quickreply_stock_context_is_not_coerced() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "강릉에서 재고가 확인된 매장입니다.",
+            "quickReplies": [{"label": "09시 예약", "domain": "TRANSACTION"}],
+        },
+    }
+
+    result = coerce_reservation_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="stock", goal_type="store_with_stock"),
+    )
+
+    assert result is None
+
+
+def test_non_time_quickreply_is_not_coerced() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "주문을 진행할까요?",
+            "quickReplies": [{"label": "주문하기", "domain": "TRANSACTION"}],
+        },
+    }
+
+    result = coerce_reservation_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="order", goal_type="place_order"),
+    )
+
+    assert result is None
+
+
+def test_weekend_request_keeps_first_weekend_block() -> None:
+    result = filter_datepick_to_requested_weekday(_datepick_event(), "이번주말 예약 가능해?")
+
+    assert result is not None
+    assert [item["date"] for item in result["data"]["dates"]] == [
+        "2026년 5월 23일 (토)",
+        "2026년 5월 24일 (일)",
+    ]
+    assert [item["index"] for item in result["data"]["dates"]] == [0, 1]
+
+
+def test_explicit_weekday_request_keeps_first_matching_day() -> None:
+    result = filter_datepick_to_requested_weekday(_datepick_event(), "금요일 예약할래")
+
+    assert result is not None
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 29일 (금)",
+        "available": True,
+        "availableTimes": [11],
+        "index": 0,
+    }]
+
+
+def test_incidental_weekday_character_does_not_filter_datepick() -> None:
+    assert filter_datepick_to_requested_weekday(_datepick_event(), "금액도 같이 알려줘") is None
+
+
+def test_other_store_request_detection() -> None:
+    assert is_other_store_request("다른 매장은 없어?") is True
+    assert is_other_store_request("지점 더 있어?") is True
+    assert is_other_store_request("이 매장 예약 가능해?") is False
+
+
+def test_schedule_confirmation_quickreply_reuses_latest_datepick() -> None:
+    latest_datepick = {
+        "assistantResponse": "티스테이션 방배점 예약 가능한 시간을 확인했어요.",
+        "dates": [
+            {
+                "date": "2026년 5월 23일 (토)",
+                "available": True,
+                "availableTimes": [9, 10, 11, 13],
+                "index": 0,
+            }
+        ],
+        "selectedDate": 0,
+        "metadata": {"shopId": "F07779", "shopName": "티스테이션 방배점"},
+    }
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "네, 선택 가능한 장착 일정이에요. 원하시는 날짜와 시간을 선택해 주세요.",
+            "quickReplies": [],
+        },
+    }
+
+    result = coerce_schedule_confirmation_quickreply_to_datepick(
+        event,
+        user_text="장착 가능일정이야?",
+        latest_datepick_data=latest_datepick,
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {"shopId": "F07779", "shopName": "티스테이션 방배점"}
+    assert result["data"]["dates"] == latest_datepick["dates"]
+    assert "quickReplies" not in result["data"]
+
+
+def test_schedule_confirmation_does_not_depend_on_assistant_copy() -> None:
+    latest_datepick = {
+        "dates": [{
+            "date": "2026년 5월 23일 (토)",
+            "available": True,
+            "availableTimes": [9],
+            "index": 0,
+        }],
+        "selectedDate": 0,
+        "metadata": {"shopId": "F07779"},
+    }
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "원하시는 날짜와 시간을 선택해 주세요.",
+            "quickReplies": [],
+        },
+    }
+
+    assert (
+        coerce_schedule_confirmation_quickreply_to_datepick(
+            event,
+            user_text="이건 다른 질문이야",
+            latest_datepick_data=latest_datepick,
+        )
+        is None
+    )
+
+
+def test_latest_template_data_from_messages_returns_newest_matching_template() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "template_data": {
+                "template": "datepick",
+                "data": {"metadata": {"shopId": "F07779"}, "dates": [{"date": "new"}]},
+            },
+        },
+        {
+            "role": "assistant",
+            "template_data": {
+                "template": "datepick",
+                "data": {"metadata": {"shopId": "OLD"}, "dates": [{"date": "old"}]},
+            },
+        },
+    ]
+
+    assert latest_template_data_from_messages(messages, "datepick") == {
+        "metadata": {"shopId": "F07779"},
+        "dates": [{"date": "new"}],
+    }
