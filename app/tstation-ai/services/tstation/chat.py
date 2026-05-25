@@ -4776,6 +4776,8 @@ def _build_product_attribute_event_from_search_results(
     user_text: str,
     search_results: list[tuple[str, dict]],
 ) -> dict | None:
+    if _is_ev_suitability_turn(user_text):
+        return None
     frame = build_discovery_intent_frame(user_text)
     if frame.sub_intent != "product_attribute_lookup":
         return None
@@ -4834,6 +4836,8 @@ def _is_product_comparison_query(user_text: str) -> bool:
 
 
 def _is_product_attribute_lookup_query(user_text: str) -> bool:
+    if _is_ev_suitability_turn(user_text):
+        return False
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)

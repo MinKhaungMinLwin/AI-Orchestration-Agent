@@ -39,6 +39,7 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_product_attribute_lookup_query,
     _is_store_holiday_period_info_query,
     _is_owned_coupon_best_discount_query,
     _coupon_target_product_name_for_query,
@@ -1687,6 +1688,11 @@ def test_tc098_price_policy_runtime_removes_internal_mapping_term() -> None:
 def test_ev_suitability_detects_explicit_ev_explanation_question() -> None:
     text = "내 차는 전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?"
     assert _is_ev_suitability_turn(text) is True
+
+
+def test_ev_suitability_is_not_product_attribute_lookup() -> None:
+    text = "내 차는 전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?"
+    assert _is_product_attribute_lookup_query(text) is False
 
 
 def test_vehicle_category_suitability_detects_non_ev_question() -> None:
