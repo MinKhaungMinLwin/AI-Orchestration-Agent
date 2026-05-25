@@ -174,11 +174,12 @@ def _fetch_langfuse_usage(tracing_id: str) -> dict:
         resp = requests.get(url, auth=(public_key, secret_key), timeout=10)
         resp.raise_for_status()
         trace_json = resp.json()
+        trace_metadata = trace_json.get("metadata") or {}
 
         all_usage = _extract_usage(trace_json, scope="all")
         support_usage = _extract_usage(trace_json, scope="support")
         if all_usage["total_tokens"] or support_usage["total_tokens"]:
-            return _format_usage_result(all_usage, support_usage)
+            return _format_usage_result(all_usage, support_usage, trace_metadata)
 
         # Langfuse often stores token usage on generation observations, not on
         # the trace summary. Fall back to summing observations for this trace.
@@ -193,18 +194,22 @@ def _fetch_langfuse_usage(tracing_id: str) -> dict:
         observations_json = obs_resp.json()
         all_usage = _extract_usage(observations_json, scope="all")
         support_usage = _extract_usage(observations_json, scope="support")
-        return _format_usage_result(all_usage, support_usage)
+        return _format_usage_result(all_usage, support_usage, trace_metadata)
     except Exception as exc:
         print(f"  [warn] Langfuse usage unavailable for {tracing_id}: {exc}")
         return _format_usage_result(
             {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "token_scope": "all"},
             {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "token_scope": "support"},
+            {},
         )
 
 
-def _format_usage_result(all_usage: dict, support_usage: dict) -> dict:
+def _format_usage_result(all_usage: dict, support_usage: dict, trace_metadata: dict) -> dict:
     """Flatten token usage while retaining both all-trace and support-only breakdowns."""
     return {
+        "route": trace_metadata.get("route"),
+        "template": trace_metadata.get("template"),
+        "tools": trace_metadata.get("tools", []),
         # Backward-compatible default: support agent only.
         "input_tokens": support_usage.get("input_tokens", 0),
         "output_tokens": support_usage.get("output_tokens", 0),
@@ -518,6 +523,12 @@ def judge(judge_lang: str) -> None:
                 "judge_prompt_lang": judge_lang,
                 "verdict": verdict,
                 "reason": reason,
+                "legacy_route": legacy_r.get("route"),
+                "hybrid_route": r.get("route"),
+                "legacy_template": legacy_r.get("template"),
+                "hybrid_template": r.get("template"),
+                "legacy_tools": legacy_r.get("tools", []),
+                "hybrid_tools": r.get("tools", []),
                 "legacy_latency_ms": legacy_r.get("latency_ms"),
                 "hybrid_latency_ms": r.get("latency_ms"),
                 "legacy_input_tokens": legacy_r.get("input_tokens"),
@@ -680,6 +691,8 @@ def _build_judge_summary(judgments: list[dict], *, judge_model: str, judge_lang:
         hybrid_total_key="hybrid_trace_total_tokens",
     )
 
+    summary["routes"] = _build_route_summary(judgments)
+
     mismatch_cases = [j for j in judgments if j["verdict"] == "MISMATCH"]
     if mismatch_cases:
         summary["mismatch_cases"] = [
@@ -692,6 +705,33 @@ def _build_judge_summary(judgments: list[dict], *, judge_model: str, judge_lang:
         ]
 
     return summary
+
+
+def _build_route_summary(judgments: list[dict]) -> dict:
+    def counts(key: str) -> dict:
+        result: dict[str, int] = {}
+        for row in judgments:
+            route = row.get(key) or "unknown"
+            result[route] = result.get(route, 0) + 1
+        return result
+
+    non_support = []
+    for row in judgments:
+        legacy_route = row.get("legacy_route") or "unknown"
+        hybrid_route = row.get("hybrid_route") or "unknown"
+        if legacy_route != "support" or hybrid_route != "support":
+            non_support.append({
+                "tc_id": row["tc_id"],
+                "query": row["query"],
+                "legacy_route": legacy_route,
+                "hybrid_route": hybrid_route,
+            })
+
+    return {
+        "legacy": counts("legacy_route"),
+        "hybrid": counts("hybrid_route"),
+        "non_support_cases": non_support,
+    }
 
 
 def _add_token_summary(
@@ -804,6 +844,14 @@ def _print_judge_summary(summary: dict, judgments: list[dict]) -> None:
                 f"output {tokens['hybrid']['output']:.0f}{output_pct_text}  |  "
                 f"total {tokens['hybrid']['total']:.0f}{total_pct_text}"
             )
+
+    if routes := summary.get("routes"):
+        print("\nRoutes")
+        print(f"  Legacy : {routes.get('legacy', {})}")
+        print(f"  Hybrid : {routes.get('hybrid', {})}")
+        non_support_count = len(routes.get("non_support_cases", []))
+        if non_support_count:
+            print(f"  Non-support cases: {non_support_count}")
 
     mismatch_cases = [j for j in judgments if j["verdict"] == "MISMATCH"]
     if mismatch_cases:
