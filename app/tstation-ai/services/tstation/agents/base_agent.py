@@ -952,8 +952,8 @@ class BaseAgent(ABC):
                                                 "상품 추천 조회 중...",
                                             ),
                                         }
-                                        recommendation_result = get_products_recommendations_tool.func(
-                                            **recommendation_args,
+                                        recommendation_result = get_products_recommendations_tool.invoke(
+                                            recommendation_args,
                                         )
                                         accumulated_tool_data.append({
                                             "tool": recommendation_tool_name,
