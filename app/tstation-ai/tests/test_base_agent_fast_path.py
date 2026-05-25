@@ -6,7 +6,9 @@ from services.tstation.agents.base_agent import (
     BaseAgent,
     _AssistantResponseStreamer,
     _is_explicit_vehicle_list_request,
+    _owner_lookup_vehicle_recommendation_args,
     _resolve_registered_vehicle_match,
+    _vehicle_owner_lookup_args_after_registered_mismatch,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 from services.tstation.template_mapper import current_transaction_response_decision, current_user_text
@@ -373,3 +375,60 @@ def test_explicit_vehicle_list_request_detected() -> None:
     assert _is_explicit_vehicle_list_request([{"role": "user", "content": "내차목록"}]) is True
     assert _is_explicit_vehicle_list_request([{"role": "user", "content": "보유차량 확인"}]) is True
     assert _is_explicit_vehicle_list_request([{"role": "user", "content": "235가3456 겨울용 타이어 추천"}]) is False
+
+
+def test_owner_lookup_args_when_plate_not_in_registered_cars() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {"items": [{"car_no": "29조3344", "tire_size_fr": "2254517"}]},
+    }
+
+    args = _vehicle_owner_lookup_args_after_registered_mismatch(
+        "get_my_cars_tool",
+        tool_result,
+        [{"role": "user", "content": "26저7922 황지훈"}],
+    )
+
+    assert args == {"car_no": "26저7922", "owner_nm": "황지훈"}
+
+
+def test_owner_lookup_args_skips_registered_plate_match() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {"items": [{"car_no": "26저7922", "tire_size_fr": "2254517"}]},
+    }
+
+    args = _vehicle_owner_lookup_args_after_registered_mismatch(
+        "get_my_cars_tool",
+        tool_result,
+        [{"role": "user", "content": "26저7922 황지훈"}],
+    )
+
+    assert args is None
+
+
+def test_owner_lookup_vehicle_recommendation_uses_car_code_directly() -> None:
+    owner_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "26저7922",
+                    "car_lnc_cd": "W011338",
+                    "tire_size_fr": "225/55R17",
+                }
+            ]
+        },
+    }
+
+    args = _owner_lookup_vehicle_recommendation_args(
+        owner_result,
+        [{"role": "user", "content": "26저7922 황지훈"}],
+    )
+
+    assert args == {
+        "rcmd_type": "tstation",
+        "limit": 3,
+        "brand_cd": "HK",
+        "car_lnc_cd": "W011338",
+    }

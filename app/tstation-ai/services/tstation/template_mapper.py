@@ -121,6 +121,8 @@ _DISCOVERY_POLICY_QUICKREPLY_CHIPS = [
     {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
 ]
+_VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
+_VEHICLE_OWNER_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}")
 _DISCOVERY_RESTOCK_CHIPS = [
     {"label": "지역 입력", "domain": "TRANSACTION"},
     {"label": "매장명 입력", "domain": "TRANSACTION"},
@@ -1984,6 +1986,47 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             })
     if not items:
         return None
+    user_text = current_user_text.get() or ""
+    plate_match = _VEHICLE_PLATE_RE.search(user_text)
+    if plate_match:
+        requested_plate = re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+        returned_plates = {
+            re.sub(r"[^0-9가-힣]", "", str(meta.get("carNo") or ""))
+            for meta in metadata
+            if isinstance(meta, dict)
+        }
+        if requested_plate and requested_plate not in returned_plates:
+            if _VEHICLE_OWNER_RE.search(user_text):
+                assistant_response = (
+                    f"입력하신 **{requested_plate}** 차량 정보를 확인하지 못했어요.\n"
+                    "차량번호와 소유주명을 다시 확인해 주세요."
+                )
+                quick_replies = [
+                    {"label": "차번+이름 다시 입력", "domain": "DISCOVERY"},
+                    {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                    {"label": "내 차량 보기", "domain": "DISCOVERY"},
+                ]
+            else:
+                assistant_response = (
+                    f"**{requested_plate}** 은(는) 등록된 차량 목록에 없어요.\n"
+                    "해당 차량으로 찾으시려면 **차량번호 + 소유주명**을 입력해 주세요. "
+                    "예: 12가3456 홍길동"
+                )
+                quick_replies = [
+                    {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+                    {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                    {"label": "내 차량 보기", "domain": "DISCOVERY"},
+                ]
+            return _build_event(
+                "quickReply",
+                {
+                    "assistantResponse": assistant_response,
+                    "quickReplies": quick_replies,
+                    "predictedDomains": ["DISCOVERY"],
+                },
+                assistant_response,
+                0,
+            )
     # 차량이 1대여도 자동 선택하지 않고 listCar 카드를 노출하여 유저가 직접 선택하도록 유도한다.
     return _build_event("listCar", {"listCar": items, "metadata": metadata}, assistant_text, len(items))
 

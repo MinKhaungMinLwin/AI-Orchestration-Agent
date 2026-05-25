@@ -69,6 +69,7 @@ T = TypeVar("T")
 # the raw guard text.
 _SSE_TOOL_OUTPUT_STRIPPED_KEYS: frozenset[str] = frozenset({"instruction_to_agent"})
 _CAR_NO_RE = re.compile(r"\d{2,3}\s?[가-힣]\s?\d{4}")
+_CAR_NO_OWNER_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
 _REGISTERED_VEHICLE_RECOMMEND_RE = re.compile(r"(타이어|상품).*(추천|맞|보여|찾|알려)|추천.*(타이어|상품)")
 _POSSESSIVE_VEHICLE_RE = re.compile(r"(내\s*차|내차|내\s+[0-9A-Za-z가-힣])")
 _VEHICLE_LIST_REQUEST_RE = re.compile(
@@ -131,6 +132,77 @@ def _recent_context_text(messages: list[dict], *, limit: int = 8) -> str:
 
 def _is_explicit_vehicle_list_request(messages: list[dict]) -> bool:
     return bool(_VEHICLE_LIST_REQUEST_RE.search(_latest_user_text(messages)))
+
+
+def _vehicle_owner_lookup_args_after_registered_mismatch(
+    tool_name: str,
+    tool_result: Any,
+    messages: list[dict],
+) -> dict | None:
+    if tool_name != "get_my_cars_tool":
+        return None
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return None
+    user_text = _latest_user_text(messages)
+    match = _CAR_NO_OWNER_RE.search(user_text or "")
+    if not match:
+        return None
+    rows = _extract_tool_rows(tool_result)
+    requested_plate = _normalize_vehicle_key(match.group("car_no"))
+    if any(_normalize_vehicle_key(row.get("car_no")) == requested_plate for row in rows):
+        return None
+    return {
+        "car_no": re.sub(r"\s+", "", match.group("car_no")),
+        "owner_nm": match.group("owner_nm").strip(),
+    }
+
+
+def _recommendation_type_from_vehicle_text(user_text: str) -> str:
+    text = user_text or ""
+    if re.search(r"세일|할인|할인율", text, re.IGNORECASE):
+        return "discount"
+    if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
+        return "value"
+    if re.search(r"가족|패밀리|승차감|컴포트", text, re.IGNORECASE):
+        return "family"
+    if re.search(r"전기차|EV|ev|아이온|iON", text, re.IGNORECASE):
+        return "ev"
+    if re.search(r"겨울|윈터|눈길", text, re.IGNORECASE):
+        return "snow"
+    if re.search(r"여름|썸머", text, re.IGNORECASE):
+        return "summer"
+    if re.search(r"올웨더|올시즌|전천후", text, re.IGNORECASE):
+        return "all_weather"
+    if re.search(r"빗길|젖은", text, re.IGNORECASE):
+        return "wet"
+    if re.search(r"정숙|조용|소음|진동", text, re.IGNORECASE):
+        return "low_vibration"
+    if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
+        return "performance"
+    return "tstation"
+
+
+def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: list[dict]) -> dict | None:
+    if not isinstance(owner_tool_result, dict) or owner_tool_result.get("status") != "success":
+        return None
+    rows = _extract_tool_rows(owner_tool_result)
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    car_lnc_cd = row.get("car_lnc_cd")
+    tire_size = row.get("tire_size_fr") or row.get("tire_size_re")
+    if not (car_lnc_cd or tire_size):
+        return None
+    args: dict[str, Any] = {
+        "rcmd_type": _recommendation_type_from_vehicle_text(_latest_user_text(messages)),
+        "limit": 3,
+        "brand_cd": "HK",
+    }
+    if car_lnc_cd:
+        args["car_lnc_cd"] = car_lnc_cd
+    else:
+        args["tire_size"] = tire_size
+    return args
 
 
 def _vehicle_aliases(row: dict) -> set[str]:
@@ -806,6 +878,120 @@ class BaseAgent(ABC):
                                 "node": node,
                                 "tool": message.name,
                             }
+                            owner_lookup_args = _vehicle_owner_lookup_args_after_registered_mismatch(
+                                message.name,
+                                tool_result,
+                                messages,
+                            )
+                            if owner_lookup_args is not None:
+                                try:
+                                    from services.tstation.agents.b_discovery_agent.tools import get_user_vehicles_tool
+
+                                    owner_tool_name = "get_user_vehicles_tool"
+                                    owner_tool_result = get_user_vehicles_tool.func(**owner_lookup_args)
+                                    accumulated_tool_data.append({
+                                        "tool": owner_tool_name,
+                                        "data": owner_tool_result,
+                                        "args": owner_lookup_args,
+                                    })
+                                    _emit_tool_summary_span(
+                                        config,
+                                        tool_name=owner_tool_name,
+                                        tool_input=owner_lookup_args,
+                                        tool_result=owner_tool_result,
+                                        tool_status=(
+                                            owner_tool_result.get("status", "success")
+                                            if isinstance(owner_tool_result, dict)
+                                            else "success"
+                                        ),
+                                    )
+                                    yield {
+                                        "type": "status",
+                                        "status": "tool_start",
+                                        "tool": owner_tool_name,
+                                        "display_name": TOOL_DISPLAY_NAMES.get(owner_tool_name, "차량 정보 조회 중..."),
+                                    }
+                                    yield {
+                                        "type": "agent_flow",
+                                        "agent": f"[{self.TOOL_TO_AF_MAP.get(owner_tool_name, 'Product Compatibility')} AF]",
+                                        "agent_class": self.name,
+                                        "status": (
+                                            owner_tool_result.get("status", "success")
+                                            if isinstance(owner_tool_result, dict)
+                                            else "success"
+                                        ),
+                                    }
+                                    yield {
+                                        "type": "tool",
+                                        "input": owner_lookup_args,
+                                        "output": _sanitize_tool_output_for_sse(owner_tool_result),
+                                        "node": "vehicle_owner_lookup_guard",
+                                        "tool": owner_tool_name,
+                                    }
+                                    logger.info(
+                                        "[%s] Ran owner vehicle lookup after registered-plate mismatch car_no=%s",
+                                        self.name,
+                                        owner_lookup_args.get("car_no"),
+                                    )
+                                    recommendation_args = _owner_lookup_vehicle_recommendation_args(
+                                        owner_tool_result,
+                                        messages,
+                                    )
+                                    if recommendation_args is not None:
+                                        from services.tstation.agents.b_discovery_agent.tools import (
+                                            get_products_recommendations_tool,
+                                        )
+
+                                        recommendation_tool_name = "get_products_recommendations_tool"
+                                        yield {
+                                            "type": "status",
+                                            "status": "tool_start",
+                                            "tool": recommendation_tool_name,
+                                            "display_name": TOOL_DISPLAY_NAMES.get(
+                                                recommendation_tool_name,
+                                                "상품 추천 조회 중...",
+                                            ),
+                                        }
+                                        recommendation_result = get_products_recommendations_tool.func(
+                                            **recommendation_args,
+                                        )
+                                        accumulated_tool_data.append({
+                                            "tool": recommendation_tool_name,
+                                            "data": recommendation_result,
+                                            "args": recommendation_args,
+                                        })
+                                        _emit_tool_summary_span(
+                                            config,
+                                            tool_name=recommendation_tool_name,
+                                            tool_input=recommendation_args,
+                                            tool_result=recommendation_result,
+                                            tool_status=(
+                                                recommendation_result.get("status", "success")
+                                                if isinstance(recommendation_result, dict)
+                                                else "success"
+                                            ),
+                                        )
+                                        yield {
+                                            "type": "agent_flow",
+                                            "agent": (
+                                                f"[{self.TOOL_TO_AF_MAP.get(recommendation_tool_name, 'Product Recommendation')} AF]"
+                                            ),
+                                            "agent_class": self.name,
+                                            "status": (
+                                                recommendation_result.get("status", "success")
+                                                if isinstance(recommendation_result, dict)
+                                                else "success"
+                                            ),
+                                        }
+                                        yield {
+                                            "type": "tool",
+                                            "input": recommendation_args,
+                                            "output": _sanitize_tool_output_for_sse(recommendation_result),
+                                            "node": "vehicle_owner_lookup_guard",
+                                            "tool": recommendation_tool_name,
+                                        }
+                                except Exception:
+                                    logger.exception("[%s] owner vehicle lookup guard failed", self.name)
                             if (
                                 message.name in {"get_my_cars_tool", "get_user_vehicles_tool"}
                                 and _is_explicit_vehicle_list_request(messages)

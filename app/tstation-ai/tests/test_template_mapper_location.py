@@ -2397,3 +2397,71 @@ def test_registered_vehicle_recommendation_error_does_not_render_listcar() -> No
     assert result["template"] == "quickReply"
     assert "235/55R19" in result["data"]["assistantResponse"]
     assert "등록된 차량" not in result["data"]["assistantResponse"]
+
+
+def test_unregistered_plate_only_prompts_owner_name_instead_of_listcar() -> None:
+    current_user_text.set("26저7922 에 맞는 타이어")
+
+    result = try_build_template(
+        [_registered_vehicle_entry()],
+        "등록된 차량 1대를 확인했어요. 안내받으실 차량을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assert "26저7922" in result["data"]["assistantResponse"]
+    assert "차량번호 + 소유주명" in result["data"]["assistantResponse"]
+
+
+def test_owner_lookup_result_with_recommendation_renders_product_not_listcar() -> None:
+    current_user_text.set("26저7922 황지훈")
+    user_vehicle_entry = {
+        "tool": "get_user_vehicles_tool",
+        "args": {"car_no": "26저7922", "owner_nm": "황지훈"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "car_no": "26저7922",
+                        "car_lnc_cd": "W011338",
+                        "car_nm": "올 뉴 K7 하이브리드 2.4 노블레스 A/T",
+                        "car_model_det": "올 뉴 K7 하이브리드(YG) (2017 - 2019)",
+                        "tire_size_fr": "225/55R17",
+                        "tire_size_re": "225/55R17",
+                    }
+                ]
+            },
+        },
+    }
+    recommendation_entry = _recommendation_entry(
+        args={"rcmd_type": "tstation", "limit": 3, "brand_cd": "HK", "car_lnc_cd": "W011338"},
+        data={
+            "items": [
+                {
+                    "goods_no": "G000000312684",
+                    "goods_nm": "키너지 4S2",
+                    "title": "키너지 4S2",
+                    "tire_size_1": "225/55R17",
+                    "brand_nm": "HANKOOK",
+                    "sale_prc": 179300,
+                    "price": 134500,
+                    "extra_fvr_sale_prc": 134500,
+                    "rating_avg": 4.4,
+                    "image_url": "https://example.com/tire.png",
+                    "prc_grd_nm": "스탠다드",
+                    "goods_pfm_nm": "COMFORT",
+                }
+            ],
+        },
+    )
+
+    result = try_build_template(
+        [_registered_vehicle_entry(), user_vehicle_entry, recommendation_entry],
+        "차량 코드 기준으로 추천해 드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "product"
+    assert result["data"]["metadata"][0]["goodsId"] == "G000000312684"
