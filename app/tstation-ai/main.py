@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
         f"gateway={settings.AI_GATEWAY_BASE_URL}"
     )
     # Warm up BM25 index so the first user request has no cold-start delay.
-    if getattr(settings, "FAQ_SEARCH_MODE", "legacy") == "hybrid":
+    if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
         from services.tstation.rag.bm25_index import get_bm25_index
         from services.tstation.rag.qdrant_service import get_qdrant_service
 

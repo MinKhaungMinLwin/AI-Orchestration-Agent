@@ -567,9 +567,35 @@ Interpret the returned items the same way as `get_faq_tool` results and apply th
 def get_support_system_prompt() -> str:
     from config.env import settings
     base = expand_url_sentinels(SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE)
-    if getattr(settings, "FAQ_SEARCH_MODE", "legacy") == "hybrid":
+    if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
         return base + _HYBRID_FAQ_OVERRIDE
     return base
+
+
+def get_support_tools() -> list:
+    from config.env import settings
+
+    faq_tools = [
+        get_faq_tool,
+        search_faq_rag_tool,
+        search_faq_hybrid_tool,
+    ]
+    if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
+        faq_tools = [search_faq_hybrid_tool]
+
+    return [
+        *faq_tools,
+        transfer_to_qna_tool,
+        get_product_warranties_tool,
+        get_my_warranties_tool,
+        get_maintenance_dday_tool,
+        get_my_cars_tool,
+        search_product_tool,
+        get_card_installments_tool,
+        check_coupon_stacking_tool,
+        get_my_coupons_tool,
+        get_deals_tool,
+    ]
 
 
 class SupportSubAgent(BaseAgent):
@@ -611,21 +637,7 @@ class SupportSubAgent(BaseAgent):
     def __init__(self, model):
         super().__init__(
             model=model,
-            tools=[
-                get_faq_tool,
-                search_faq_rag_tool,
-                search_faq_hybrid_tool,
-                transfer_to_qna_tool,
-                get_product_warranties_tool,
-                get_my_warranties_tool,
-                get_maintenance_dday_tool,
-                get_my_cars_tool,
-                search_product_tool,
-                get_card_installments_tool,
-                check_coupon_stacking_tool,
-                get_my_coupons_tool,
-                get_deals_tool,
-            ],
+            tools=get_support_tools(),
             system_prompt=get_support_system_prompt,
             name="Support Agent",
         )
