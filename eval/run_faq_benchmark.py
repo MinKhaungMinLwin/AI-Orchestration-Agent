@@ -33,6 +33,7 @@ import os
 import time
 import uuid
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
@@ -358,8 +359,10 @@ def _print_collect_summary(mode: str, tc_results: list) -> None:
     latencies = [q["latency_ms"] for q in all_q]
     input_tokens = [q.get("input_tokens", 0) for q in all_q]
     output_tokens = [q.get("output_tokens", 0) for q in all_q]
+    total_tokens = [q.get("total_tokens", 0) for q in all_q]
     trace_input_tokens = [q.get("trace_input_tokens", 0) for q in all_q]
     trace_output_tokens = [q.get("trace_output_tokens", 0) for q in all_q]
+    trace_total_tokens = [q.get("trace_total_tokens", 0) for q in all_q]
 
     print(f"\n{mode.upper()} summary:")
     print(f"  Queries      : {len(all_q)}")
@@ -374,9 +377,17 @@ def _print_collect_summary(mode: str, tc_results: list) -> None:
             f"min {min(latencies)}ms  |  max {max(latencies)}ms"
         )
     if any(input_tokens):
-        print(f"  Support tokens: input avg {sum(input_tokens)/len(input_tokens):.0f}  |  output avg {sum(output_tokens)/len(output_tokens):.0f}")
+        print(
+            f"  Support tokens: input avg {sum(input_tokens)/len(input_tokens):.0f}  |  "
+            f"output avg {sum(output_tokens)/len(output_tokens):.0f}  |  "
+            f"total avg {sum(total_tokens)/len(total_tokens):.0f}"
+        )
     if any(trace_input_tokens):
-        print(f"  Trace tokens  : input avg {sum(trace_input_tokens)/len(trace_input_tokens):.0f}  |  output avg {sum(trace_output_tokens)/len(trace_output_tokens):.0f}")
+        print(
+            f"  Trace tokens  : input avg {sum(trace_input_tokens)/len(trace_input_tokens):.0f}  |  "
+            f"output avg {sum(trace_output_tokens)/len(trace_output_tokens):.0f}  |  "
+            f"total avg {sum(trace_total_tokens)/len(trace_total_tokens):.0f}"
+        )
 
 
 # ── Judge ──────────────────────────────────────────────────────────────────────
@@ -384,7 +395,8 @@ def _print_collect_summary(mode: str, tc_results: list) -> None:
 # Korean prompt
 JUDGE_PROMPT_KO = """\
 당신은 T-Station(타이어/자동차 서비스) AI 챗봇의 응답 품질 평가자입니다.
-두 챗봇 응답이 사용자 질문의 의도에 동일하게 답하고 있는지 판단하세요.
+두 챗봇 응답이 사용자 질문의 의도에 대체로 같은 방향으로 답하고 있는지 판단하세요.
+이 평가는 strict factual audit 이 아니라 legacy/hybrid 응답의 동등성 비교입니다.
 
 [사용자 질문]
 {query}
@@ -396,15 +408,18 @@ JUDGE_PROMPT_KO = """\
 {hybrid}
 
 판단 기준:
-MATCH — 두 응답이 사용자 질문의 핵심 의도에 같은 방향으로 답함
-  - 표현·문장 구조가 달라도 무방
-  - B가 A보다 더 자세하더라도 핵심 정보가 일치하면 MATCH
-  - 정책·금액·조건·기간 등 핵심 사실이 동일하게 안내되면 MATCH
+MATCH — 두 응답이 사용자 질문의 핵심 의도에 비슷하게 답함
+  - 표현·문장 구조·톤이 달라도 무방
+  - 한쪽이 더 자세하거나 더 간단해도 핵심 방향이 같으면 MATCH
+  - 정책·조건·절차·다음 단계가 대체로 같으면 MATCH
+  - 한쪽은 "매장/차량 확인 필요", 다른 쪽은 "차량 선택/등록 후 확인"처럼 next-step 이 유사하면 MATCH
+  - 한쪽이 일부 부가 정보를 생략해도 사용자에게 주는 실질 안내가 같으면 MATCH
 
 MISMATCH — 두 응답이 서로 다른 정보를 전달하거나 한쪽이 질문 의도를 벗어남
-  - 한쪽은 올바른 정책을 안내하고 다른 쪽은 무관한 서비스를 안내
+  - 한쪽은 관련 정책/절차를 안내하고 다른 쪽은 무관한 서비스를 안내
   - 핵심 사실(금액·기간·조건 등)이 서로 다르게 안내됨
   - 한쪽이 질문과 무관한 내용으로만 답변
+  - 한쪽은 가능하다고 하고 다른 쪽은 불가능하다고 하는 등 사용자 행동이 달라질 정도로 충돌함
 
 반드시 아래 형식으로만 답변하세요:
 VERDICT: <MATCH|MISMATCH>
@@ -413,7 +428,8 @@ REASON: <한 문장>"""
 # English prompt
 JUDGE_PROMPT_EN = """\
 You are a quality evaluator for T-Station (tire/car service) AI chatbot responses.
-Determine whether both responses address the user's question with the same intent.
+Determine whether both responses address the user's question in roughly the same direction.
+This is a loose legacy-vs-hybrid equivalence check, not a strict factual audit.
 
 [User question]
 {query}
@@ -425,15 +441,18 @@ Determine whether both responses address the user's question with the same inten
 {hybrid}
 
 Criteria:
-MATCH — both responses answer the core intent of the question in the same direction
-  - wording or sentence structure may differ
-  - B being more detailed than A is still MATCH if the core information is consistent
-  - same policy, price, condition, or time period guidance → MATCH
+MATCH — both responses answer the core intent in a similar way
+  - wording, tone, and structure may differ
+  - one response may be shorter or more detailed
+  - same rough policy, condition, procedure, or next step → MATCH
+  - "store/vehicle confirmation is needed" and "select/register vehicle first" are similar enough → MATCH
+  - minor omissions are acceptable if the practical user guidance is the same
 
 MISMATCH — the responses convey different information, or one misses the user's intent
   - one correctly explains a policy while the other describes an unrelated service
   - key facts (price, duration, conditions) are stated differently
   - one response answers something unrelated to the question
+  - one says something is possible while the other says it is not, enough to change user behavior
 
 Reply in this exact format:
 VERDICT: <MATCH|MISMATCH>
@@ -469,7 +488,7 @@ def judge(judge_lang: str) -> None:
     }
 
     client = OpenAI(api_key=judge_api_key, base_url=judge_api_url)
-    print(f"Judge model: {judge_model}  |  api: {judge_api_url}  |  prompt lang: {judge_lang}")
+    print(f"Judge model: {judge_model}  |  prompt lang: {judge_lang}")
 
     judgments: list[dict] = []
     total = sum(len(tc["queries"]) for tc in hybrid_data)
@@ -496,7 +515,6 @@ def judge(judge_lang: str) -> None:
                 "title": tc["title"],
                 "query": query,
                 "judge_model": judge_model,
-                "judge_api_url": judge_api_url,
                 "judge_prompt_lang": judge_lang,
                 "verdict": verdict,
                 "reason": reason,
@@ -507,15 +525,19 @@ def judge(judge_lang: str) -> None:
                 "legacy_token_scope": legacy_r.get("token_scope", "support"),
                 "legacy_support_input_tokens": legacy_r.get("support_input_tokens", legacy_r.get("input_tokens")),
                 "legacy_support_output_tokens": legacy_r.get("support_output_tokens", legacy_r.get("output_tokens")),
+                "legacy_support_total_tokens": legacy_r.get("support_total_tokens", legacy_r.get("total_tokens")),
                 "legacy_trace_input_tokens": legacy_r.get("trace_input_tokens"),
                 "legacy_trace_output_tokens": legacy_r.get("trace_output_tokens"),
+                "legacy_trace_total_tokens": legacy_r.get("trace_total_tokens"),
                 "hybrid_input_tokens": r.get("input_tokens"),
                 "hybrid_output_tokens": r.get("output_tokens"),
                 "hybrid_token_scope": r.get("token_scope", "support"),
                 "hybrid_support_input_tokens": r.get("support_input_tokens", r.get("input_tokens")),
                 "hybrid_support_output_tokens": r.get("support_output_tokens", r.get("output_tokens")),
+                "hybrid_support_total_tokens": r.get("support_total_tokens", r.get("total_tokens")),
                 "hybrid_trace_input_tokens": r.get("trace_input_tokens"),
                 "hybrid_trace_output_tokens": r.get("trace_output_tokens"),
+                "hybrid_trace_total_tokens": r.get("trace_total_tokens"),
             })
 
     out_path = RESULTS_DIR / f"judgment_results_{judge_lang}.json"
@@ -523,7 +545,6 @@ def judge(judge_lang: str) -> None:
     summary = _build_judge_summary(
         judgments,
         judge_model=judge_model,
-        judge_api_url=judge_api_url,
         judge_lang=judge_lang,
     )
     summary_path = RESULTS_DIR / f"judgment_summary_{judge_lang}.json"
@@ -566,7 +587,13 @@ def _avg(values: list[int | float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def _build_judge_summary(judgments: list[dict], *, judge_model: str, judge_api_url: str, judge_lang: str) -> dict:
+def _pct_change(new_value: float, old_value: float) -> float | None:
+    if old_value == 0:
+        return None
+    return round((new_value - old_value) / old_value * 100, 2)
+
+
+def _build_judge_summary(judgments: list[dict], *, judge_model: str, judge_lang: str) -> dict:
     total = len(judgments)
     verdicts = [j["verdict"] for j in judgments]
 
@@ -575,18 +602,20 @@ def _build_judge_summary(judgments: list[dict], *, judge_model: str, judge_api_u
     error = verdicts.count("ERROR")
 
     summary: dict = {
-        "judge": {
-            "model": judge_model,
-            "api_url": judge_api_url,
-            "prompt_lang": judge_lang,
+        "metadata": {
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "judge_model": judge_model,
+            "judge_prompt_lang": judge_lang,
+            "legacy_file": "legacy_results.json",
+            "hybrid_file": "hybrid_results.json",
         },
-        "total": total,
-        "verdicts": {
-            "MATCH": match,
-            "MISMATCH": mismatch,
-            "ERROR": error,
-            "match_rate": round(match / total, 4) if total else 0.0,
-            "mismatch_rate": round(mismatch / total, 4) if total else 0.0,
+        "quality": {
+            "total": total,
+            "match": match,
+            "mismatch": mismatch,
+            "error": error,
+            "match_rate_pct": round(match / total * 100, 2) if total else 0.0,
+            "mismatch_rate_pct": round(mismatch / total * 100, 2) if total else 0.0,
         },
     }
 
@@ -594,45 +623,61 @@ def _build_judge_summary(judgments: list[dict], *, judge_model: str, judge_api_u
     if valid_lat:
         legacy_latencies = [j["legacy_latency_ms"] for j in valid_lat]
         hybrid_latencies = [j["hybrid_latency_ms"] for j in valid_lat]
-        avg_l = _avg(legacy_latencies)
-        avg_h = _avg(hybrid_latencies)
+        legacy_latency_stats = {
+            "avg": round(_avg(legacy_latencies)),
+            "p50": round(_percentile(legacy_latencies, 50)),
+            "p95": round(_percentile(legacy_latencies, 95)),
+            "p99": round(_percentile(legacy_latencies, 99)),
+            "min": min(legacy_latencies),
+            "max": max(legacy_latencies),
+        }
+        hybrid_latency_stats = {
+            "avg": round(_avg(hybrid_latencies)),
+            "p50": round(_percentile(hybrid_latencies, 50)),
+            "p95": round(_percentile(hybrid_latencies, 95)),
+            "p99": round(_percentile(hybrid_latencies, 99)),
+            "min": min(hybrid_latencies),
+            "max": max(hybrid_latencies),
+        }
+        latency_delta = {
+            key: hybrid_latency_stats[key] - legacy_latency_stats[key]
+            for key in legacy_latency_stats
+        }
+        latency_pct = {
+            key: _pct_change(hybrid_latency_stats[key], legacy_latency_stats[key])
+            for key in legacy_latency_stats
+        }
         summary["latency_ms"] = {
-            "legacy": {
-                "avg": round(avg_l),
-                "p50": round(_percentile(legacy_latencies, 50)),
-                "p95": round(_percentile(legacy_latencies, 95)),
-                "p99": round(_percentile(legacy_latencies, 99)),
-                "min": min(legacy_latencies),
-                "max": max(legacy_latencies),
-            },
-            "hybrid": {
-                "avg": round(avg_h),
-                "p50": round(_percentile(hybrid_latencies, 50)),
-                "p95": round(_percentile(hybrid_latencies, 95)),
-                "p99": round(_percentile(hybrid_latencies, 99)),
-                "min": min(hybrid_latencies),
-                "max": max(hybrid_latencies),
-            },
-            "hybrid_minus_legacy_avg": round(avg_h - avg_l),
+            "metrics": ["avg", "p50", "p95", "p99", "min", "max"],
+            "legacy": legacy_latency_stats,
+            "hybrid": hybrid_latency_stats,
+            "delta": latency_delta,
+            "delta_pct": latency_pct,
         }
 
     _add_token_summary(
         summary,
         judgments,
         key="support_agent",
+        description="Only LLM generations under agent:support.",
         legacy_input_key="legacy_support_input_tokens",
         legacy_output_key="legacy_support_output_tokens",
+        legacy_total_key="legacy_support_total_tokens",
         hybrid_input_key="hybrid_support_input_tokens",
         hybrid_output_key="hybrid_support_output_tokens",
+        hybrid_total_key="hybrid_support_total_tokens",
     )
     _add_token_summary(
         summary,
         judgments,
         key="all_trace",
+        description="Full trace including router/classifier/support.",
         legacy_input_key="legacy_trace_input_tokens",
         legacy_output_key="legacy_trace_output_tokens",
+        legacy_total_key="legacy_trace_total_tokens",
         hybrid_input_key="hybrid_trace_input_tokens",
         hybrid_output_key="hybrid_trace_output_tokens",
+        hybrid_total_key="hybrid_trace_total_tokens",
     )
 
     mismatch_cases = [j for j in judgments if j["verdict"] == "MISMATCH"]
@@ -654,10 +699,13 @@ def _add_token_summary(
     judgments: list[dict],
     *,
     key: str,
+    description: str,
     legacy_input_key: str,
     legacy_output_key: str,
+    legacy_total_key: str,
     hybrid_input_key: str,
     hybrid_output_key: str,
+    hybrid_total_key: str,
 ) -> None:
     valid = [j for j in judgments if j.get(legacy_input_key) is not None and j.get(hybrid_input_key) is not None]
     if not valid:
@@ -667,33 +715,45 @@ def _add_token_summary(
     avg_hi = _avg([j.get(hybrid_input_key, 0) or 0 for j in valid])
     avg_lo = _avg([j.get(legacy_output_key, 0) or 0 for j in valid])
     avg_ho = _avg([j.get(hybrid_output_key, 0) or 0 for j in valid])
-    summary.setdefault("tokens_avg", {})[key] = {
+    avg_lt = _avg([j.get(legacy_total_key, 0) or 0 for j in valid])
+    avg_ht = _avg([j.get(hybrid_total_key, 0) or 0 for j in valid])
+    summary.setdefault("tokens", {})[key] = {
+        "description": description,
         "legacy": {
             "input": round(avg_li),
             "output": round(avg_lo),
+            "total": round(avg_lt),
         },
         "hybrid": {
             "input": round(avg_hi),
             "output": round(avg_ho),
+            "total": round(avg_ht),
         },
-        "hybrid_minus_legacy": {
+        "delta": {
             "input": round(avg_hi - avg_li),
             "output": round(avg_ho - avg_lo),
+            "total": round(avg_ht - avg_lt),
+        },
+        "delta_pct": {
+            "input": _pct_change(avg_hi, avg_li),
+            "output": _pct_change(avg_ho, avg_lo),
+            "total": _pct_change(avg_ht, avg_lt),
         },
     }
 
 
 def _print_judge_summary(summary: dict, judgments: list[dict]) -> None:
-    total = summary["total"]
-    match = summary["verdicts"]["MATCH"]
-    mismatch = summary["verdicts"]["MISMATCH"]
-    error = summary["verdicts"]["ERROR"]
-    judge = summary["judge"]
+    quality = summary["quality"]
+    total = quality["total"]
+    match = quality["match"]
+    mismatch = quality["mismatch"]
+    error = quality["error"]
+    metadata = summary["metadata"]
 
     print("\n" + "=" * 50)
     print("BENCHMARK SUMMARY — Legacy vs Hybrid")
     print("=" * 50)
-    print(f"Judge  : {judge['model']}  |  api={judge['api_url']}  |  lang={judge['prompt_lang']}")
+    print(f"Judge  : {metadata['judge_model']}  |  lang={metadata['judge_prompt_lang']}")
     print(f"Total   : {total}")
     print(f"MATCH   : {match:2d}  ({match / total * 100:.0f}%)")
     print(f"MISMATCH: {mismatch:2d}  ({mismatch / total * 100:.0f}%)")
@@ -701,8 +761,14 @@ def _print_judge_summary(summary: dict, judgments: list[dict]) -> None:
         print(f"ERROR   : {error:2d}")
 
     if latency := summary.get("latency_ms"):
-        diff = latency["hybrid_minus_legacy_avg"]
-        sign = "+" if diff > 0 else ""
+        def fmt_metric(key: str) -> str:
+            value = latency["hybrid"][key]
+            diff = latency["delta"][key]
+            pct = latency["delta_pct"][key]
+            sign = "+" if diff > 0 else ""
+            pct_text = f", {pct:+.2f}%" if pct is not None else ""
+            return f"{value:.0f}ms ({sign}{diff:.0f}ms{pct_text})"
+
         print("\nAvg latency")
         print(
             f"  Legacy : avg {latency['legacy']['avg']:.0f}ms  |  "
@@ -711,20 +777,33 @@ def _print_judge_summary(summary: dict, judgments: list[dict]) -> None:
             f"p99 {latency['legacy']['p99']:.0f}ms"
         )
         print(
-            f"  Hybrid : avg {latency['hybrid']['avg']:.0f}ms  ({sign}{diff:.0f}ms)  |  "
-            f"p50 {latency['hybrid']['p50']:.0f}ms  |  "
-            f"p95 {latency['hybrid']['p95']:.0f}ms  |  "
-            f"p99 {latency['hybrid']['p99']:.0f}ms"
+            f"  Hybrid : avg {fmt_metric('avg')}  |  "
+            f"p50 {fmt_metric('p50')}  |  "
+            f"p95 {fmt_metric('p95')}  |  "
+            f"p99 {fmt_metric('p99')}"
         )
 
-    if tokens_by_scope := summary.get("tokens_avg"):
+    if tokens_by_scope := summary.get("tokens"):
         print("\nAvg token usage")
         for label, tokens in (("Support agent", tokens_by_scope.get("support_agent")), ("All trace", tokens_by_scope.get("all_trace"))):
             if not tokens:
                 continue
+            input_pct = tokens["delta_pct"]["input"]
+            output_pct = tokens["delta_pct"]["output"]
+            total_pct = tokens["delta_pct"]["total"]
+            input_pct_text = f" ({input_pct:+.2f}%)" if input_pct is not None else ""
+            output_pct_text = f" ({output_pct:+.2f}%)" if output_pct is not None else ""
+            total_pct_text = f" ({total_pct:+.2f}%)" if total_pct is not None else ""
             print(f"  {label}:")
-            print(f"    Legacy : input {tokens['legacy']['input']:.0f}  |  output {tokens['legacy']['output']:.0f}")
-            print(f"    Hybrid : input {tokens['hybrid']['input']:.0f}  |  output {tokens['hybrid']['output']:.0f}")
+            print(
+                f"    Legacy : input {tokens['legacy']['input']:.0f}  |  "
+                f"output {tokens['legacy']['output']:.0f}  |  total {tokens['legacy']['total']:.0f}"
+            )
+            print(
+                f"    Hybrid : input {tokens['hybrid']['input']:.0f}{input_pct_text}  |  "
+                f"output {tokens['hybrid']['output']:.0f}{output_pct_text}  |  "
+                f"total {tokens['hybrid']['total']:.0f}{total_pct_text}"
+            )
 
     mismatch_cases = [j for j in judgments if j["verdict"] == "MISMATCH"]
     if mismatch_cases:

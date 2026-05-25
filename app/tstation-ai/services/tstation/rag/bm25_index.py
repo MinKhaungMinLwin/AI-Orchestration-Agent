@@ -101,8 +101,8 @@ class Bm25FaqIndex:
         sample_text = payloads[point_ids[0]].get("question", "") if point_ids else ""
         logger.info("[Bm25FaqIndex] tokenizer sample: %r → %s", sample_text[:40], question_corpus[0])
 
-    def search(self, query: str, top_k: int) -> list[dict]:
-        """Return top_k [{id, score, payload}] via internal RRF of question + answer BM25."""
+    def search(self, query: str, top_k: int, fetch_k: int) -> list[dict]:
+        """Return top_k [{id, score, payload}] via internal RRF of top fetch_k question + answer BM25 candidates."""
         if self._bm25_question is None:
             return []
         tokens = self._tokenize(query)
@@ -127,10 +127,10 @@ class Bm25FaqIndex:
         )
 
         rrf_scores: dict[int, float] = {}
-        for rank, idx in enumerate(q_ranked):
+        for rank, idx in enumerate(q_ranked[:fetch_k]):
             if q_scores[idx] > 0.0:
                 rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1 / (_RRF_K + rank + 1)
-        for rank, idx in enumerate(a_ranked):
+        for rank, idx in enumerate(a_ranked[:fetch_k]):
             if a_scores[idx] > 0.0:
                 rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1 / (_RRF_K + rank + 1)
 
