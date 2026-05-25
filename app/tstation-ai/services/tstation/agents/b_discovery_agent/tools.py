@@ -4,7 +4,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response,
+    _to_dict,
+)
 from langchain.tools import tool
 from common.tool_cache import tool_cache
 
@@ -49,11 +54,6 @@ logger = logging.getLogger(__name__)
 current_confirmed_tire_size: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_confirmed_tire_size", default=None
 )
-
-
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
 
 
 DOMAIN_TOOL_MAP = {
@@ -111,18 +111,6 @@ DOMAIN_TOOL_MAP = {
         "escalate",
     }
 }
-
-
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
 
 
 # Whitelist of fields kept in product items returned to the LLM. Everything

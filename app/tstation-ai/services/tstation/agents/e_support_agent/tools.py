@@ -3,8 +3,12 @@ import os
 from typing import Any
 
 from common.qna_payload import make_qna_payload_urls
-from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response,
+    _to_dict,
+)
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync_detailed as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
 from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정비_d_day_안내.get_maintenance_dday_api_member_maintenance_dday_get import (
@@ -50,11 +54,6 @@ from config.env import settings
 logger = logging.getLogger(__name__)
 
 
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
-
-
 DOMAIN = {
     # FAQ
     "get_faq",
@@ -63,17 +62,6 @@ DOMAIN = {
     "escalate",
 }
 
-
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
 
 @tool
 @tool_cache(ttl=3600)
