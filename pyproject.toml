@@ -95,6 +95,8 @@ tstation-ai = [
 
     # BM25 lexical leg for hybrid FAQ search
     "rank-bm25>=0.2.2",
+    # Korean morphological tokenizer for BM25 (P1 improvement)
+    "kiwipiepy>=0.17.0",
 ]
 
 

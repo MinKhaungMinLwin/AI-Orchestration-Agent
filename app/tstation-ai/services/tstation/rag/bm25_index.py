@@ -5,10 +5,13 @@ import threading
 import time
 from typing import Optional
 
+from kiwipiepy import Kiwi
+
 logger = logging.getLogger(__name__)
 
 _TTL: float = 3600.0  # rebuild every hour; FAQ sync is weekly
 _RRF_K: int = 60
+_kiwi = Kiwi()
 
 
 class Bm25FaqIndex:
@@ -95,6 +98,8 @@ class Bm25FaqIndex:
         self._payloads = payloads
         self._built_at = time.monotonic()
         logger.info("[Bm25FaqIndex] Built: %d documents from '%s'", len(question_corpus), collection_name)
+        sample_text = payloads[point_ids[0]].get("question", "") if point_ids else ""
+        logger.info("[Bm25FaqIndex] tokenizer sample: %r → %s", sample_text[:40], question_corpus[0])
 
     def search(self, query: str, top_k: int) -> list[dict]:
         """Return top_k [{id, score, payload}] via internal RRF of question + answer BM25."""
@@ -146,8 +151,8 @@ class Bm25FaqIndex:
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:
-        """Whitespace tokenisation — correctly handles Korean space-separated words."""
-        return text.split()
+        """Korean morpheme tokenisation — extracts content words (noun/verb/adj) for BM25."""
+        return [t.form for t in _kiwi.tokenize(text) if t.tag in ("NNG", "NNP", "VV", "VA", "XR")]
 
 
 def get_bm25_index() -> Bm25FaqIndex:

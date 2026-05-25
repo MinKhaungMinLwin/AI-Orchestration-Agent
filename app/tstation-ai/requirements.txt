@@ -838,6 +838,21 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
+kiwipiepy==0.23.1 \
+    --hash=sha256:28964cd73f50be09137ab09d48b4c6c5d42c7f23b6bdbe6e4afdb1057c4e0e76 \
+    --hash=sha256:3d8467f9f4e79f130af79ae74fb7cd38316c2443a345c90b5c1fd68d719dc207 \
+    --hash=sha256:61ddc5bcd5ca728d85039e0c3b83ae5d6b4999188b7e170fa5ddb1adb0dce221 \
+    --hash=sha256:6800e64eefe09c9f00c08802a2facba7a84b6f2d8d32d3f5c811a29b451753d0 \
+    --hash=sha256:6f8afa82ed41eed61fa1f443cd92dc08a08476159e583b3e3f96119bf10decc9 \
+    --hash=sha256:91f066cbb3edcfcb773eb3f2007d397908756ce584a37a452830ad466863a458 \
+    --hash=sha256:bfd652e20874df476d5a1c890a6f7f0f4d9cbff4f7135cd80fb814c2cf4c0144 \
+    --hash=sha256:d9925c1a6e25b8fcadb064f70f72f4d809b6e88d1d09977b7dd5a7cf05169788 \
+    --hash=sha256:d9c088627153475b4192836ccada3f2684e6dd9e52d8c131b76defe946c2d159 \
+    --hash=sha256:de9e85442848038914b0a77b995c1b21131b1ac7ffba461e4fb6549e292be278 \
+    --hash=sha256:ead54b784fd2f08a559c03abf238e0046380b5dc5cda28b4020d6e73161fb58e
+kiwipiepy-model==0.23.0 \
+    --hash=sha256:498a22f5585e6c4a162423d7557eb3ee3f71cddc6e0aeb2650c50467e85933e2
+    # via kiwipiepy
 kombu==5.6.2 \
     --hash=sha256:8060497058066c6f5aed7c26d7cd0d3b574990b09de842a8c5aaed0b92cc5a55 \
     --hash=sha256:efcfc559da324d41d61ca311b0c64965ea35b4c55cc04ee36e55386145dace93
@@ -1210,6 +1225,7 @@ numpy==2.4.4 \
     --hash=sha256:f9e75681b59ddaa5e659898085ae0eaea229d054f2ac0c7e563a62205a700121 \
     --hash=sha256:fbc356aae7adf9e6336d336b9c8111d390a05df88f1805573ebb0807bd06fd1d
     # via
+    #   kiwipiepy
     #   langchain-community
     #   llama-index-core
     #   pandas
@@ -2111,6 +2127,7 @@ tqdm==4.67.3 \
     --hash=sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf
     # via
     #   huggingface-hub
+    #   kiwipiepy
     #   llama-index-core
     #   nltk
     #   openai
