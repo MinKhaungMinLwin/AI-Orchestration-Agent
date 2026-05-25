@@ -524,6 +524,11 @@ def _preview_tool_requires_location(tool_data_list: list[dict]) -> bool:
         stores = raw.get("stores")
         if not isinstance(stores, list) or not stores:
             continue
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+        candidate_ids = schedule.get("candidate_shop_ids") or raw.get("candidate_shop_ids") or []
+        if isinstance(args, dict) and args.get("store_nm") and len(stores) == 1 and candidate_ids:
+            continue
         instruction = _get_str(raw, "instruction_to_agent")
         if not instruction or "location" in instruction.lower() or "stores" in instruction.lower():
             return True
@@ -2534,17 +2539,19 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             # agent to STOP and render `location`. Fall through to the
             # location render below so the candidate list reaches the FE.
             stores = raw.get("stores")
-            if isinstance(stores, list) and stores:
+            args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+            candidate_ids = schedule.get("candidate_shop_ids") or raw.get("candidate_shop_ids") or []
+            if isinstance(stores, list) and stores and not (
+                isinstance(args, dict) and args.get("store_nm") and len(stores) == 1 and candidate_ids
+            ):
                 break
             if raw.get("instruction_to_agent"):
                 break
             # candidate_shop_ids non-empty (single named-store case) means future
             # slots may exist — let the agent call get_store_schedule_tool for a
             # datepick instead of dead-ending here.
-            candidate_ids = schedule.get("candidate_shop_ids") or raw.get("candidate_shop_ids") or []
             if candidate_ids:
                 return None
-            args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
             store_nm = _get_str(args, "store_nm") if isinstance(args, dict) else ""
             short = (assistant_text or "").strip()
             if not short or len(short) > 120:

@@ -2288,6 +2288,32 @@ def test_preview_instruction_allows_location_even_with_missing_store_policy() ->
     assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 센텀점"
 
 
+def test_named_store_preview_single_candidate_defers_to_schedule_followup() -> None:
+    current_pending_intent.set("order")
+    entry = {
+        "tool": "transaction_store_preview_tool",
+        "args": {"goods_no": "G000000309977", "ord_qty": 2, "store_nm": "티스테이션 센텀점", "include_price": True},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": [_stub_store("F00035", "티스테이션 센텀점")],
+                "inventory": {"todayShopArray": [], "tnaShopArray": []},
+                "schedule": {
+                    "tier": "none",
+                    "stores": [],
+                    "candidate_shop_ids": ["F00035"],
+                },
+                "candidate_shop_ids": ["F00035"],
+            },
+        },
+    }
+
+    result = _map_location([entry], "티스테이션 센텀점을 확인했어요.")
+
+    assert result is None
+
+
 def test_transaction_policy_invalid_store_blocks_datepick() -> None:
     current_transaction_response_decision.set(ResponseDecision(
         response_shape=ResponseShape.CLARIFY,
