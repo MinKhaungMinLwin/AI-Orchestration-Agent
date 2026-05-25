@@ -27,6 +27,10 @@ class FavoriteStoreItem:
             is_installable (bool | Unset): 쇼핑 장착 가능 매장 여부 (SMART_CARE_SHOP_YN IN ('Y','E')) Default: False.
             is_imported_car (bool | Unset): 수입차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default:
                 False.
+            is_ev_specialty (bool | Unset): 전기차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '214' 보유 매장) Default:
+                False.
+            is_ev_charge_available (bool | Unset): 전기차 충전 가능 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '215' 보유 매장)
+                Default: False.
             svc_codes (list[str] | None | Unset): 매장이 보유한 서비스 구분 코드 목록 (ET_SHOP_ITEM_SVC_INFO.SHOP_ITEM_SVC_SCT_CD). 노출 코드:
                 '113'=타이어(온라인), '116'=배터리(온라인), '119'=타이어 보관서비스(윈터타이어 주문 시 113과 함께 필요), '120'=수입타이어 취급(수입차 특화점은 별도
                 is_imported_car 플래그), '121'=경정비-온라인(엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비), '122'=경정비 오늘장착(당일 경정비), '124'=휠얼라이먼트-오프라인,
@@ -56,6 +60,8 @@ class FavoriteStoreItem:
     is_all_my_t: bool | Unset = False
     is_installable: bool | Unset = False
     is_imported_car: bool | Unset = False
+    is_ev_specialty: bool | Unset = False
+    is_ev_charge_available: bool | Unset = False
     svc_codes: list[str] | None | Unset = UNSET
     addr_base: None | str | Unset = UNSET
     addr_dtl: None | str | Unset = UNSET
@@ -94,6 +100,10 @@ class FavoriteStoreItem:
         is_installable = self.is_installable
 
         is_imported_car = self.is_imported_car
+
+        is_ev_specialty = self.is_ev_specialty
+
+        is_ev_charge_available = self.is_ev_charge_available
 
         svc_codes: list[str] | None | Unset
         if isinstance(self.svc_codes, Unset):
@@ -211,6 +221,10 @@ class FavoriteStoreItem:
             field_dict["is_installable"] = is_installable
         if is_imported_car is not UNSET:
             field_dict["is_imported_car"] = is_imported_car
+        if is_ev_specialty is not UNSET:
+            field_dict["is_ev_specialty"] = is_ev_specialty
+        if is_ev_charge_available is not UNSET:
+            field_dict["is_ev_charge_available"] = is_ev_charge_available
         if svc_codes is not UNSET:
             field_dict["svc_codes"] = svc_codes
         if addr_base is not UNSET:
@@ -274,6 +288,10 @@ class FavoriteStoreItem:
         is_installable = d.pop("is_installable", UNSET)
 
         is_imported_car = d.pop("is_imported_car", UNSET)
+
+        is_ev_specialty = d.pop("is_ev_specialty", UNSET)
+
+        is_ev_charge_available = d.pop("is_ev_charge_available", UNSET)
 
         def _parse_svc_codes(data: object) -> list[str] | None | Unset:
             if data is None:
@@ -434,6 +452,8 @@ class FavoriteStoreItem:
             is_all_my_t=is_all_my_t,
             is_installable=is_installable,
             is_imported_car=is_imported_car,
+            is_ev_specialty=is_ev_specialty,
+            is_ev_charge_available=is_ev_charge_available,
             svc_codes=svc_codes,
             addr_base=addr_base,
             addr_dtl=addr_dtl,

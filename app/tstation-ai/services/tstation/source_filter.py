@@ -15,9 +15,27 @@ MAX_LIST_ITEMS = 10
 # ─── Shared field sets — single source of truth for tools in both dicts ───────
 # When BE adds a new field, update the base set here; both QC and CTX pick it up.
 
-_STORE_BASE_FIELDS: set[str] = {"shop_id", "shop_nm", "addr_base", "addr_dtl", "tel_no", "svc_codes"}
+_STORE_BASE_FIELDS: set[str] = {
+    "shop_id",
+    "shop_seq",
+    "shop_nm",
+    "addr_base",
+    "addr_dtl",
+    "road_addr_base",
+    "road_addr_dtl",
+    "tel_no",
+    "shop_biz_strt_time",
+    "shop_biz_end_time",
+    "shop_biz_strt_wday",
+    "shop_biz_end_wday",
+    "holiday",
+    "svc_codes",
+    "rating_idx",
+    "review_count",
+}
 _NEARBY_STORE_FIELDS: set[str] = _STORE_BASE_FIELDS | {"distance_km"}
-_FAVORITE_STORE_FIELDS: set[str] = {"shop_id", "shop_seq", "shop_nm", "addr_base", "addr_dtl", "tel_no", "favored_at"}
+_FAVORITE_STORE_FIELDS: set[str] = _STORE_BASE_FIELDS | {"shop_seq", "favored_at"}
+_STORE_DETAIL_FIELDS: set[str] = _STORE_BASE_FIELDS | {"is_all_my_t", "is_installable", "is_tna_delivery"}
 
 _PRODUCT_WARRANTY_FIELDS: set[str] = {"wrt_tp_cd", "wrt_nm", "is_plus"}
 _MY_WARRANTY_FIELDS: set[str] = {
@@ -315,6 +333,16 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
         if items:
             filtered_items = _filter_list(items, keep)
             result = {"tool": tool_name, "data": filtered_items}
+            if tool_input:
+                result["input"] = _filter_input(tool_input)
+                result["_dedup_input"] = _dedup_input(tool_input)
+            return result
+
+    # Single-object store detail, preserved for follow-up CTA/detail summaries.
+    if tool_name == "get_store_detail_tool" and isinstance(inner, dict):
+        compact = {k: v for k, v in inner.items() if k in _STORE_DETAIL_FIELDS and v is not None}
+        if compact:
+            result = {"tool": tool_name, "data": compact}
             if tool_input:
                 result["input"] = _filter_input(tool_input)
                 result["_dedup_input"] = _dedup_input(tool_input)

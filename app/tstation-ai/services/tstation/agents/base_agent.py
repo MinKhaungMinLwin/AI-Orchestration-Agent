@@ -11,6 +11,10 @@ from langchain.agents import create_agent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+from services.tstation.policies.schedule_tool_gate import (
+    build_blocked_schedule_event,
+    decide_schedule_tool_gate,
+)
 from services.tstation.tool_summaries import summarize_tool
 
 
@@ -64,6 +68,204 @@ T = TypeVar("T")
 # copy is sanitized so analysts / browser dev tools / log streams never expose
 # the raw guard text.
 _SSE_TOOL_OUTPUT_STRIPPED_KEYS: frozenset[str] = frozenset({"instruction_to_agent"})
+_CAR_NO_RE = re.compile(r"\d{2,3}\s?[가-힣]\s?\d{4}")
+_CAR_NO_OWNER_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
+_REGISTERED_VEHICLE_RECOMMEND_RE = re.compile(r"(타이어|상품).*(추천|맞|보여|찾|알려)|추천.*(타이어|상품)")
+_POSSESSIVE_VEHICLE_RE = re.compile(r"(내\s*차|내차|내\s+[0-9A-Za-z가-힣])")
+_VEHICLE_LIST_REQUEST_RE = re.compile(
+    r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
+    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여",
+    re.IGNORECASE,
+)
+
+
+def _normalize_vehicle_key(value: Any) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _extract_tool_rows(tool_result: Any) -> list[dict]:
+    data = tool_result.get("data") if isinstance(tool_result, dict) else tool_result
+    if isinstance(data, dict):
+        rows = data.get("items") if "items" in data else [data]
+    elif isinstance(data, list):
+        rows = data
+    else:
+        rows = []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _latest_user_text(messages: list[dict]) -> str:
+    try:
+        from services.tstation.template_mapper import current_user_text
+
+        context_text = current_user_text.get()
+        if context_text:
+            for line in reversed(context_text.splitlines()):
+                stripped = line.strip()
+                if stripped:
+                    return stripped
+    except Exception:
+        pass
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = str(msg.get("content") or "")
+            if "# Respond in Korean language" in content:
+                content = content.split("# Respond in Korean language", 1)[-1]
+            return content.strip()
+    return ""
+
+
+def _recent_context_text(messages: list[dict], *, limit: int = 8) -> str:
+    lines: list[str] = []
+    for msg in messages[-limit:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "")
+        content = str(msg.get("content") or "").strip()
+        if not content:
+            continue
+        if "# Respond in Korean language" in content:
+            content = content.split("# Respond in Korean language", 1)[-1].strip()
+        lines.append(f"{role}: {content[:500]}")
+    return "\n".join(lines)
+
+
+def _is_explicit_vehicle_list_request(messages: list[dict]) -> bool:
+    return bool(_VEHICLE_LIST_REQUEST_RE.search(_latest_user_text(messages)))
+
+
+def _vehicle_owner_lookup_args_after_registered_mismatch(
+    tool_name: str,
+    tool_result: Any,
+    messages: list[dict],
+) -> dict | None:
+    if tool_name != "get_my_cars_tool":
+        return None
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return None
+    user_text = _latest_user_text(messages)
+    match = _CAR_NO_OWNER_RE.search(user_text or "")
+    if not match:
+        return None
+    rows = _extract_tool_rows(tool_result)
+    requested_plate = _normalize_vehicle_key(match.group("car_no"))
+    if any(_normalize_vehicle_key(row.get("car_no")) == requested_plate for row in rows):
+        return None
+    return {
+        "car_no": re.sub(r"\s+", "", match.group("car_no")),
+        "owner_nm": match.group("owner_nm").strip(),
+    }
+
+
+def _recommendation_type_from_vehicle_text(user_text: str) -> str:
+    text = user_text or ""
+    if re.search(r"세일|할인|할인율", text, re.IGNORECASE):
+        return "discount"
+    if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
+        return "value"
+    if re.search(r"가족|패밀리|승차감|컴포트", text, re.IGNORECASE):
+        return "family"
+    if re.search(r"전기차|EV|ev|아이온|iON", text, re.IGNORECASE):
+        return "ev"
+    if re.search(r"겨울|윈터|눈길", text, re.IGNORECASE):
+        return "snow"
+    if re.search(r"여름|썸머", text, re.IGNORECASE):
+        return "summer"
+    if re.search(r"올웨더|올시즌|전천후", text, re.IGNORECASE):
+        return "all_weather"
+    if re.search(r"빗길|젖은", text, re.IGNORECASE):
+        return "wet"
+    if re.search(r"정숙|조용|소음|진동", text, re.IGNORECASE):
+        return "low_vibration"
+    if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
+        return "performance"
+    return "tstation"
+
+
+def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: list[dict]) -> dict | None:
+    if not isinstance(owner_tool_result, dict) or owner_tool_result.get("status") != "success":
+        return None
+    rows = _extract_tool_rows(owner_tool_result)
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    car_lnc_cd = row.get("car_lnc_cd")
+    tire_size = row.get("tire_size_fr") or row.get("tire_size_re")
+    if not (car_lnc_cd or tire_size):
+        return None
+    args: dict[str, Any] = {
+        "rcmd_type": _recommendation_type_from_vehicle_text(_latest_user_text(messages)),
+        "limit": 3,
+        "brand_cd": "HK",
+    }
+    if car_lnc_cd:
+        args["car_lnc_cd"] = car_lnc_cd
+    else:
+        args["tire_size"] = tire_size
+    return args
+
+
+def _vehicle_aliases(row: dict) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("car_nm", "car_model_det", "car_engine", "ver_opt_choc", "car_maker"):
+        normalized = _normalize_vehicle_key(row.get(key))
+        if len(normalized) >= 2:
+            aliases.add(normalized)
+    # Short model identifiers like GV70 / EV3 / K7 are often embedded at the
+    # beginning of the full model/trim string. Add them as aliases so
+    # "내 GV70" can resolve without requiring the full trim name.
+    for key in ("car_nm", "car_model_det", "car_engine"):
+        value = str(row.get(key) or "")
+        for token in re.findall(r"[A-Za-z가-힣]*\d+[A-Za-z가-힣]*|[A-Za-z]{2,}|[가-힣]{2,}", value):
+            normalized = _normalize_vehicle_key(token)
+            if len(normalized) >= 2:
+                aliases.add(normalized)
+    maker = _normalize_vehicle_key(row.get("car_maker"))
+    model = _normalize_vehicle_key(row.get("car_model_det") or row.get("car_nm"))
+    if maker and model:
+        aliases.add(f"{maker}{model}")
+    return aliases
+
+
+def _resolve_registered_vehicle_match(tool_name: str, tool_result: Any, messages: list[dict]) -> dict | None:
+    """Resolve a user-named registered vehicle to a unique registered-car row.
+
+    Auto-selection is intentionally narrow:
+      1. the current message contains an explicit license plate, or
+      2. the current message uses a possessive vehicle expression ("내 GV70",
+         "내차 GV70") and exactly one registered vehicle name matches.
+
+    Plain model mentions like "GV70 타이어" must not auto-select a registered
+    car, because they can be generic model inquiries.
+    """
+    if tool_name not in {"get_my_cars_tool", "get_user_vehicles_tool"}:
+        return None
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return None
+    user_text = _latest_user_text(messages)
+    if not user_text or not _REGISTERED_VEHICLE_RECOMMEND_RE.search(user_text):
+        return None
+    rows = _extract_tool_rows(tool_result)
+    if not rows:
+        return None
+
+    normalized_user = _normalize_vehicle_key(user_text)
+    requested_plates = {_normalize_vehicle_key(match) for match in _CAR_NO_RE.findall(user_text)}
+    matched: list[dict] = []
+    if requested_plates:
+        matched = [row for row in rows if _normalize_vehicle_key(row.get("car_no")) in requested_plates]
+    elif _POSSESSIVE_VEHICLE_RE.search(user_text):
+        for row in rows:
+            if any(alias and alias in normalized_user for alias in _vehicle_aliases(row)):
+                matched.append(row)
+    else:
+        return None
+
+    if len(matched) != 1:
+        return None
+    row = matched[0]
+    tire_size = row.get("tire_size_fr") or row.get("tire_size_re")
+    return row if tire_size else None
 
 
 def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
@@ -76,6 +278,89 @@ def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
     elif isinstance(node, list):
         for item in node:
             _strip_keys_in_place(item, keys)
+
+
+def _stock_preview_guard_context(messages: list[dict]) -> tuple[str, int] | None:
+    """Return (goods_no, qty) when the current turn is an active stock flow."""
+    joined = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict))
+    last_user_text = ""
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            last_user_text = str(msg.get("content") or "")
+            break
+    if re.search(r"영업|운영|전화|주소|휴무|서비스|몇\s*시", last_user_text):
+        return None
+
+    has_stock_context = (
+        "진행 중인 요청: 재고 확인" in joined
+        or "pending_intent=stock" in joined
+        or "goal_type=store_with_stock" in joined
+        or ("재고 확인" in joined and "상품번호" in joined)
+    )
+    has_stock_followup_text = (
+        bool(re.search(r"재고|장착|당장|오늘|근처|주변|으로", last_user_text))
+        or len(last_user_text.strip()) <= 20
+    )
+    if not has_stock_context or not has_stock_followup_text:
+        return None
+
+    goods_match = re.search(r"G\d{12}", joined)
+    qty_match = re.search(r"(?:수량|ord_qty|quantity)\D{0,20}(\d+)", joined, re.IGNORECASE)
+    if not goods_match or not qty_match:
+        return None
+
+    try:
+        qty = int(qty_match.group(1))
+    except ValueError:
+        return None
+    if qty < 1:
+        return None
+    return goods_match.group(0), qty
+
+
+def _build_stock_preview_guard_args(
+    accumulated_tool_data: list[dict],
+    messages: list[dict],
+) -> dict | None:
+    if any(e.get("tool") == "transaction_store_preview_tool" for e in accumulated_tool_data):
+        return None
+
+    context = _stock_preview_guard_context(messages)
+    if context is None:
+        return None
+    goods_no, qty = context
+
+    store_entries = [
+        e for e in accumulated_tool_data
+        if e.get("tool") in {"search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"}
+    ]
+    if not store_entries:
+        return None
+    args = store_entries[-1].get("args")
+    if not isinstance(args, dict):
+        return None
+
+    region_code = args.get("region_code") or args.get("place_query")
+    store_nm = args.get("store_nm")
+    xpos = args.get("xpos") or args.get("user_xpos")
+    ypos = args.get("ypos") or args.get("user_ypos")
+    if not (region_code or store_nm or (xpos is not None and ypos is not None)):
+        return None
+
+    preview_args = {
+        "goods_no": goods_no,
+        "ord_qty": qty,
+        "region_code": region_code,
+        "store_nm": store_nm,
+        "user_xpos": xpos,
+        "user_ypos": ypos,
+        "include_price": True,
+        "svc_codes": args.get("svc_codes"),
+        "all_my_t_only": bool(args.get("all_my_t_only", False)),
+        "imported_car_only": bool(args.get("imported_car_only", False)),
+        "chl_sct_cd": args.get("chl_sct_cd"),
+    }
+    return {k: v for k, v in preview_args.items() if v is not None}
 
 
 def _sanitize_tool_output_for_sse(content: Any) -> Any:
@@ -354,6 +639,18 @@ class BaseAgent(ABC):
     TOOL_TO_AF_MAP: dict[str, str] = {}
     TOOL_TO_TEMPLATE_MAP: dict[str, str] = {}
     OUTPUT_TEMPLATE: Any = None
+    _FAST_PATH_CODE_MAPPER_TOOLS: frozenset[str] = frozenset({
+        "get_my_cars_tool",
+        "get_user_vehicles_tool",
+        "get_store_inventory_tool",
+        "get_store_schedule_tool",
+        "get_stores_with_time_filter_tool",
+        "search_product_tool",
+        "get_products_recommendations_tool",
+        "get_newest_products_tool",
+        "get_best_selling_products_tool",
+        "transaction_store_preview_tool",
+    })
 
     def __init__(self, model, tools: list | None = None, system_prompt: str | Callable[[], str] = "", name: str = ""):
         self.name = name
@@ -436,80 +733,381 @@ class BaseAgent(ABC):
 
             elif mode == "updates":
                 for node, update in chunk.items():
-                    if "messages" not in update:
+                    update_messages = update.get("messages")
+                    if not isinstance(update_messages, list):
                         continue
-                    message = update["messages"][-1]
-                    if isinstance(message, AIMessage):
-                        if hasattr(message, "tool_calls") and message.tool_calls:
-                            for tc in message.tool_calls:
-                                tool_name = tc["name"]
-                                tool_calls_map[tc["id"]] = {"name": tool_name, "args": tc.get("args", {})}
-                                if confirm_event is not None and tool_name in mutating_tools and not confirm_event.is_set():
-                                    logger.info("[%s] Waiting for speculative confirmation before %s", self.name, tool_name)
-                                    if wait_for_confirmation is not None and not wait_for_confirmation():
-                                        logger.info("[%s] Speculative route rejected before %s", self.name, tool_name)
+                    for message in update_messages:
+                        if isinstance(message, AIMessage):
+                            if hasattr(message, "tool_calls") and message.tool_calls:
+                                for tc in message.tool_calls:
+                                    tool_name = tc["name"]
+                                    tool_calls_map[tc["id"]] = {"name": tool_name, "args": tc.get("args", {})}
+                                    if tool_name == "get_store_schedule_tool":
+                                        gate_decision = decide_schedule_tool_gate(
+                                            user_text=_latest_user_text(messages),
+                                            tool_args=tc.get("args", {}),
+                                            recent_context=_recent_context_text(messages),
+                                        )
+                                        cfgable = (
+                                            (config or {}).get("configurable", {})
+                                            if isinstance(config, dict)
+                                            else {}
+                                        )
+                                        trace_id = cfgable.get("tstation_trace_id")
+                                        parent_span_id = cfgable.get("tstation_parent_span_id")
+                                        if trace_id:
+                                            with _trace_span(
+                                                "🛡️ schedule_tool_gate",
+                                                trace_id=trace_id,
+                                                parent_span_id=parent_span_id,
+                                                input={
+                                                    "user_text": _latest_user_text(messages),
+                                                    "tool_args": tc.get("args", {}),
+                                                },
+                                            ) as _ts:
+                                                _ts.update(output=gate_decision.model_dump())
+                                        logger.info(
+                                            "[SCHEDULE_TOOL_GATE] allow=%s action=%s reason=%s",
+                                            gate_decision.allow,
+                                            gate_decision.action,
+                                            gate_decision.reason,
+                                        )
+                                        if not gate_decision.allow:
+                                            blocked_event = build_blocked_schedule_event(
+                                                decision=gate_decision,
+                                                user_text=_latest_user_text(messages),
+                                            )
+                                            for event in self._code_template_events(
+                                                blocked_event,
+                                                response_streamer,
+                                                answering_emitted,
+                                            ):
+                                                yield event
+                                            return
+                                    blocked_event = self._transaction_policy_blocked_event(tool_name)
+                                    if blocked_event is not None:
+                                        logger.info(
+                                            "[%s] Transaction policy blocked tool=%s required_slots=%s",
+                                            self.name,
+                                            tool_name,
+                                            blocked_event.get("data", {}).get("requiredSlots"),
+                                        )
+                                        for event in self._code_template_events(
+                                            blocked_event,
+                                            response_streamer,
+                                            answering_emitted,
+                                        ):
+                                            yield event
                                         return
-                                    if wait_for_confirmation is None:
-                                        confirm_event.wait()
-                                display_name = TOOL_DISPLAY_NAMES.get(tool_name, "답변 중...")
-                                yield {
-                                    "type": "status",
-                                    "status": "tool_start",
-                                    "tool": tool_name,
-                                    "display_name": display_name,
-                                }
-                        if suppress_tokens:
-                            continue
-                        yield {
-                            "type": "message",
-                            "content": message.content,
-                            "node": node,
-                            "agent": self.name,
-                        }
-                    elif isinstance(message, ToolMessage):
-                        af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
-                        tool_status = "success"
-                        tool_result: Any = None
-                        try:
-                            tool_result = (
-                                json.loads(message.content) if isinstance(message.content, str) else message.content
+                                    if (
+                                        confirm_event is not None
+                                        and tool_name in mutating_tools
+                                        and not confirm_event.is_set()
+                                    ):
+                                        logger.info(
+                                            "[%s] Waiting for speculative confirmation before %s",
+                                            self.name,
+                                            tool_name,
+                                        )
+                                        if wait_for_confirmation is not None and not wait_for_confirmation():
+                                            logger.info("[%s] Speculative route rejected before %s", self.name, tool_name)
+                                            return
+                                        if wait_for_confirmation is None:
+                                            confirm_event.wait()
+                                    display_name = TOOL_DISPLAY_NAMES.get(tool_name, "답변 중...")
+                                    yield {
+                                        "type": "status",
+                                        "status": "tool_start",
+                                        "tool": tool_name,
+                                        "display_name": display_name,
+                                    }
+                            if suppress_tokens:
+                                continue
+                            yield {
+                                "type": "message",
+                                "content": message.content,
+                                "node": node,
+                                "agent": self.name,
+                            }
+                        elif isinstance(message, ToolMessage):
+                            af = self.TOOL_TO_AF_MAP.get(message.name, "Unknown")
+                            tool_status = "success"
+                            tool_result: Any = None
+                            try:
+                                tool_result = (
+                                    json.loads(message.content) if isinstance(message.content, str) else message.content
+                                )
+                                if isinstance(tool_result, dict):
+                                    tool_status = tool_result.get("status", "success")
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                            tool_input = tool_calls_map.get(message.tool_call_id, {})
+                            if tool_result is not None:
+                                # Capture input args alongside the result so the
+                                # template mapper can correlate same-turn tool calls
+                                # by shop_id / cal_day (e.g., merge get_store_detail
+                                # data into a get_store_list location card).
+                                accumulated_tool_data.append({
+                                    "tool": message.name,
+                                    "data": tool_result,
+                                    "args": tool_input.get("args", {}),
+                                })
+                            # Manual Langfuse span with a one-line summary so the
+                            # trace tree shows what the tool returned at a glance.
+                            # Raw output is still captured by LangChain's auto-span;
+                            # this layer is purely for analyst readability.
+                            _emit_tool_summary_span(
+                                config,
+                                tool_name=message.name,
+                                tool_input=tool_input.get("args", {}),
+                                tool_result=tool_result,
+                                tool_status=tool_status,
                             )
-                            if isinstance(tool_result, dict):
-                                tool_status = tool_result.get("status", "success")
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                        tool_input = tool_calls_map.get(message.tool_call_id, {})
-                        if tool_result is not None:
-                            # Capture input args alongside the result so the
-                            # template mapper can correlate same-turn tool calls
-                            # by shop_id / cal_day (e.g., merge get_store_detail
-                            # data into a get_store_list location card).
-                            accumulated_tool_data.append({
+                            yield {
+                                "type": "agent_flow",
+                                "agent": f"[{af} AF]",
+                                "agent_class": self.name,
+                                "status": tool_status,
+                            }
+                            yield {
+                                "type": "tool",
+                                "input": tool_input.get("args", {}),
+                                "output": _sanitize_tool_output_for_sse(
+                                    tool_result if tool_result is not None else message.content
+                                ),
+                                "node": node,
                                 "tool": message.name,
-                                "data": tool_result,
-                                "args": tool_input.get("args", {}),
-                            })
-                        # Manual Langfuse span with a one-line summary so the
-                        # trace tree shows what the tool returned at a glance.
-                        # Raw output is still captured by LangChain's auto-span;
-                        # this layer is purely for analyst readability.
-                        _emit_tool_summary_span(
-                            config,
-                            tool_name=message.name,
-                            tool_input=tool_input.get("args", {}),
-                            tool_result=tool_result,
-                            tool_status=tool_status,
-                        )
-                        yield {"type": "agent_flow", "agent": f"[{af} AF]", "agent_class": self.name, "status": tool_status}
-                        yield {
-                            "type": "tool",
-                            "input": tool_input.get("args", {}),
-                            "output": _sanitize_tool_output_for_sse(
-                                tool_result if tool_result is not None else message.content
-                            ),
-                            "node": node,
-                            "tool": message.name,
-                        }
+                            }
+                            owner_lookup_args = _vehicle_owner_lookup_args_after_registered_mismatch(
+                                message.name,
+                                tool_result,
+                                messages,
+                            )
+                            if owner_lookup_args is not None:
+                                try:
+                                    from services.tstation.agents.b_discovery_agent.tools import get_user_vehicles_tool
+
+                                    owner_tool_name = "get_user_vehicles_tool"
+                                    owner_tool_result = get_user_vehicles_tool.func(**owner_lookup_args)
+                                    accumulated_tool_data.append({
+                                        "tool": owner_tool_name,
+                                        "data": owner_tool_result,
+                                        "args": owner_lookup_args,
+                                    })
+                                    _emit_tool_summary_span(
+                                        config,
+                                        tool_name=owner_tool_name,
+                                        tool_input=owner_lookup_args,
+                                        tool_result=owner_tool_result,
+                                        tool_status=(
+                                            owner_tool_result.get("status", "success")
+                                            if isinstance(owner_tool_result, dict)
+                                            else "success"
+                                        ),
+                                    )
+                                    yield {
+                                        "type": "status",
+                                        "status": "tool_start",
+                                        "tool": owner_tool_name,
+                                        "display_name": TOOL_DISPLAY_NAMES.get(owner_tool_name, "차량 정보 조회 중..."),
+                                    }
+                                    yield {
+                                        "type": "agent_flow",
+                                        "agent": f"[{self.TOOL_TO_AF_MAP.get(owner_tool_name, 'Product Compatibility')} AF]",
+                                        "agent_class": self.name,
+                                        "status": (
+                                            owner_tool_result.get("status", "success")
+                                            if isinstance(owner_tool_result, dict)
+                                            else "success"
+                                        ),
+                                    }
+                                    yield {
+                                        "type": "tool",
+                                        "input": owner_lookup_args,
+                                        "output": _sanitize_tool_output_for_sse(owner_tool_result),
+                                        "node": "vehicle_owner_lookup_guard",
+                                        "tool": owner_tool_name,
+                                    }
+                                    logger.info(
+                                        "[%s] Ran owner vehicle lookup after registered-plate mismatch car_no=%s",
+                                        self.name,
+                                        owner_lookup_args.get("car_no"),
+                                    )
+                                    recommendation_args = _owner_lookup_vehicle_recommendation_args(
+                                        owner_tool_result,
+                                        messages,
+                                    )
+                                    if recommendation_args is not None:
+                                        from services.tstation.agents.b_discovery_agent.tools import (
+                                            get_products_recommendations_tool,
+                                        )
+
+                                        recommendation_tool_name = "get_products_recommendations_tool"
+                                        yield {
+                                            "type": "status",
+                                            "status": "tool_start",
+                                            "tool": recommendation_tool_name,
+                                            "display_name": TOOL_DISPLAY_NAMES.get(
+                                                recommendation_tool_name,
+                                                "상품 추천 조회 중...",
+                                            ),
+                                        }
+                                        recommendation_result = get_products_recommendations_tool.invoke(
+                                            recommendation_args,
+                                        )
+                                        accumulated_tool_data.append({
+                                            "tool": recommendation_tool_name,
+                                            "data": recommendation_result,
+                                            "args": recommendation_args,
+                                        })
+                                        _emit_tool_summary_span(
+                                            config,
+                                            tool_name=recommendation_tool_name,
+                                            tool_input=recommendation_args,
+                                            tool_result=recommendation_result,
+                                            tool_status=(
+                                                recommendation_result.get("status", "success")
+                                                if isinstance(recommendation_result, dict)
+                                                else "success"
+                                            ),
+                                        )
+                                        yield {
+                                            "type": "agent_flow",
+                                            "agent": (
+                                                f"[{self.TOOL_TO_AF_MAP.get(recommendation_tool_name, 'Product Recommendation')} AF]"
+                                            ),
+                                            "agent_class": self.name,
+                                            "status": (
+                                                recommendation_result.get("status", "success")
+                                                if isinstance(recommendation_result, dict)
+                                                else "success"
+                                            ),
+                                        }
+                                        yield {
+                                            "type": "tool",
+                                            "input": recommendation_args,
+                                            "output": _sanitize_tool_output_for_sse(recommendation_result),
+                                            "node": "vehicle_owner_lookup_guard",
+                                            "tool": recommendation_tool_name,
+                                        }
+                                        code_event = self._try_code_template(
+                                            accumulated_tool_data,
+                                            response_streamer,
+                                            accumulated_text,
+                                        )
+                                        if self._is_fast_path_code_event(recommendation_tool_name, code_event):
+                                            logger.info(
+                                                "[%s] Owner vehicle lookup recommendation resolved via code fast-path",
+                                                self.name,
+                                            )
+                                            for event in self._code_template_events(
+                                                code_event,
+                                                response_streamer,
+                                                answering_emitted,
+                                            ):
+                                                yield event
+                                            return
+                                except Exception:
+                                    logger.exception("[%s] owner vehicle lookup guard failed", self.name)
+                            if (
+                                message.name in {"get_my_cars_tool", "get_user_vehicles_tool"}
+                                and _is_explicit_vehicle_list_request(messages)
+                            ):
+                                code_event = self._try_code_template(
+                                    accumulated_tool_data,
+                                    response_streamer,
+                                    accumulated_text,
+                                )
+                                if self._is_fast_path_code_event(message.name, code_event):
+                                    logger.info(
+                                        "[%s] Force listCar fast-path for explicit vehicle-list request",
+                                        self.name,
+                                    )
+                                    for event in self._code_template_events(
+                                        code_event,
+                                        response_streamer,
+                                        answering_emitted,
+                                    ):
+                                        yield event
+                                    return
+                            registered_vehicle_match = _resolve_registered_vehicle_match(
+                                message.name,
+                                tool_result,
+                                messages,
+                            )
+                            if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
+                                # When the user already named a unique registered vehicle in a
+                                # recommendation turn, do not terminate at listCar here. Let the
+                                # main Discovery loop continue and issue exactly one
+                                # scenario-aware recommendation call.
+                                if (
+                                    registered_vehicle_match is not None
+                                    and message.name in {"get_my_cars_tool", "get_user_vehicles_tool"}
+                                ):
+                                    logger.info(
+                                        "[%s] Skip listCar fast-path after unique registered-vehicle match car_no=%s",
+                                        self.name,
+                                        registered_vehicle_match.get("car_no"),
+                                    )
+                                    continue
+                                code_event = self._try_code_template(
+                                    accumulated_tool_data,
+                                    response_streamer,
+                                    accumulated_text,
+                                )
+                                if self._is_fast_path_code_event(message.name, code_event):
+                                    logger.info(
+                                        "[%s] Deterministic template fast-path after tool=%s template=%s",
+                                        self.name,
+                                        message.name,
+                                        code_event.get("template"),
+                                    )
+                                    for event in self._code_template_events(
+                                        code_event,
+                                        response_streamer,
+                                        answering_emitted,
+                                    ):
+                                        yield event
+                                    return
+
+        stock_preview_args = _build_stock_preview_guard_args(accumulated_tool_data, messages)
+        if stock_preview_args is not None:
+            try:
+                from services.tstation.agents.c_transaction_agent.tools import transaction_store_preview_tool
+
+                tool_name = "transaction_store_preview_tool"
+                tool_result = transaction_store_preview_tool.func(**stock_preview_args)
+                accumulated_tool_data.append({
+                    "tool": tool_name,
+                    "data": tool_result,
+                    "args": stock_preview_args,
+                })
+                _emit_tool_summary_span(
+                    config,
+                    tool_name=tool_name,
+                    tool_input=stock_preview_args,
+                    tool_result=tool_result,
+                    tool_status=tool_result.get("status", "success") if isinstance(tool_result, dict) else "success",
+                )
+                yield {
+                    "type": "agent_flow",
+                    "agent": f"[{self.TOOL_TO_AF_MAP.get(tool_name, 'Unknown')} AF]",
+                    "agent_class": self.name,
+                    "status": tool_result.get("status", "success") if isinstance(tool_result, dict) else "success",
+                }
+                yield {
+                    "type": "tool",
+                    "input": stock_preview_args,
+                    "output": _sanitize_tool_output_for_sse(tool_result),
+                    "node": "stock_preview_guard",
+                    "tool": tool_name,
+                }
+                logger.warning(
+                    "[STOCK_PREVIEW_GUARD] Re-ran generic store search as inventory preview: %s",
+                    stock_preview_args,
+                )
+            except Exception:
+                logger.exception("[STOCK_PREVIEW_GUARD] Failed to run transaction_store_preview_tool")
 
         # Phase 2B: prefer code-based template mapping over LLM fenced JSON.
         # When a deterministically-mappable tool was used, build the data event
@@ -517,22 +1115,8 @@ class BaseAgent(ABC):
         # full FE JSON payload (the dominant 2nd-call output token cost).
         code_event = self._try_code_template(accumulated_tool_data, response_streamer, accumulated_text)
         if code_event is not None:
-            code_event["template_source"] = "code_mapper"
-            assistant_response = self._get_assistant_response(code_event)
-            already_streamed = response_streamer is not None and response_streamer.streamed_any
-            if assistant_response:
-                if not answering_emitted:
-                    yield {"type": "status", "status": "답변 중..."}
-                    answering_emitted = True
-                if not already_streamed:
-                    yield {"type": "token", "content": assistant_response}
-                yield {
-                    "type": "message",
-                    "content": assistant_response,
-                    "agent": self.name,
-                }
-            yield code_event
-            yield {"type": "token", "content": "\n\n"}
+            for event in self._code_template_events(code_event, response_streamer, answering_emitted):
+                yield event
             return
 
         if prompt_template is not None and accumulated_text:
@@ -541,9 +1125,12 @@ class BaseAgent(ABC):
             if data_event is not None:
                 # LLM 이 product 템플릿을 직접 emit 한 경우, tags 결정형 주입 +
                 # 스키마 외 hallucinated 필드 (comfort 등) 제거. 다른 템플릿은 no-op.
-                from services.tstation.template_mapper import inject_product_tags_and_sanitize
+                from services.tstation.template_mapper import inject_product_tags_and_sanitize, sanitize_user_facing_response
                 inject_product_tags_and_sanitize(data_event, accumulated_tool_data)
                 assistant_response = self._get_assistant_response(data_event)
+                if assistant_response:
+                    assistant_response = sanitize_user_facing_response(assistant_response)
+                    data_event["data"]["assistantResponse"] = assistant_response
                 if assistant_response:
                     if not answering_emitted:
                         yield {"type": "status", "status": "답변 중..."}
@@ -658,6 +1245,36 @@ class BaseAgent(ABC):
             ),
             "nextAction": {"type": "stop", "domain": None},
         }
+
+    def _code_template_events(
+        self,
+        code_event: dict,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict]:
+        """Return the standard SSE sequence for a deterministic template event."""
+        code_event["template_source"] = "code_mapper"
+        assistant_response = self._get_assistant_response(code_event)
+        if assistant_response:
+            from services.tstation.template_mapper import sanitize_user_facing_response
+
+            assistant_response = sanitize_user_facing_response(assistant_response)
+            code_event["data"]["assistantResponse"] = assistant_response
+        already_streamed = response_streamer is not None and response_streamer.streamed_any
+        events: list[dict] = []
+        if assistant_response:
+            if not answering_emitted:
+                events.append({"type": "status", "status": "답변 중..."})
+            if not already_streamed:
+                events.append({"type": "token", "content": assistant_response})
+            events.append({
+                "type": "message",
+                "content": assistant_response,
+                "agent": self.name,
+            })
+        events.append(code_event)
+        events.append({"type": "token", "content": "\n\n"})
+        return events
 
     def _build_data_event(self, structured_response: BaseModel | dict | None) -> dict | None:
         """Convert structured response into the FE `data` event shape."""
@@ -801,15 +1418,18 @@ class BaseAgent(ABC):
         # code mapper so the structured card (`location`) reaches the FE.
         if not has_force_code_mapper_tool:
             for entry in accumulated_tool_data:
-                output = entry.get("output")
-                if isinstance(output, str) and '"instruction_to_agent"' in output:
-                    has_force_code_mapper_tool = True
-                    break
-                if isinstance(output, dict):
+                for output in (entry.get("output"), entry.get("data")):
+                    if isinstance(output, str) and '"instruction_to_agent"' in output:
+                        has_force_code_mapper_tool = True
+                        break
+                    if not isinstance(output, dict):
+                        continue
                     data = output.get("data") if isinstance(output.get("data"), dict) else output
                     if isinstance(data, dict) and data.get("instruction_to_agent"):
                         has_force_code_mapper_tool = True
                         break
+                if has_force_code_mapper_tool:
+                    break
         if not has_force_code_mapper_tool and BaseAgent._extract_fenced_json(accumulated_text) is not None:
             return None
         from services.tstation.template_mapper import _MAPPERS, try_build_template
@@ -821,6 +1441,101 @@ class BaseAgent(ABC):
             else accumulated_text
         )
         return try_build_template(accumulated_tool_data, prose)
+
+    @classmethod
+    def _is_fast_path_code_event(cls, tool_name: str, code_event: dict | None) -> bool:
+        """Return true when a tool result can terminate the turn without post-tool LLM."""
+        if tool_name not in cls._FAST_PATH_CODE_MAPPER_TOOLS:
+            return False
+        if not isinstance(code_event, dict) or code_event.get("type") != "data":
+            return False
+        template = code_event.get("template")
+        if not isinstance(template, str):
+            return False
+
+        terminal_templates_by_tool = {
+            "get_my_cars_tool": {"listCar"},
+            "get_user_vehicles_tool": {"listCar"},
+            "get_store_inventory_tool": {"location", "quickReply"},
+            "get_store_schedule_tool": {"datepick"},
+            "get_stores_with_time_filter_tool": {"location", "quickReply"},
+            "search_product_tool": {"product", "quickReply"},
+            "get_products_recommendations_tool": {"product", "quickReply"},
+            "get_newest_products_tool": {"product", "quickReply"},
+            "get_best_selling_products_tool": {"product", "quickReply"},
+            "transaction_store_preview_tool": {"location", "datepick", "quickReply"},
+        }
+        return template in terminal_templates_by_tool.get(tool_name, set())
+
+    @staticmethod
+    def _transaction_policy_blocked_event(tool_name: str) -> dict | None:
+        """Return a deterministic clarification when Transaction lacks required slots."""
+        transaction_tools_requiring_slots = {
+            "search_stores_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+            "get_store_inventory_tool",
+            "get_store_schedule_tool",
+            "get_multi_store_schedule_tool",
+            "transaction_store_preview_tool",
+            "save_to_cart_tool",
+            "quick_order_tool",
+        }
+        if tool_name not in transaction_tools_requiring_slots:
+            return None
+        try:
+            from services.tstation.policies.response_decision import TemplateName
+            from services.tstation.template_mapper import current_transaction_response_decision
+        except Exception:
+            return None
+
+        decision = current_transaction_response_decision.get()
+        if (
+            decision is None
+            or decision.template != TemplateName.QUICK_REPLY
+            or not decision.required_slots
+        ):
+            return None
+
+        slot_labels = {
+            "product": "상품",
+            "tire_size": "타이어 사이즈",
+            "quantity": "수량",
+            "store": "매장",
+            "location": "지역",
+        }
+        labels = [slot_labels.get(slot, slot) for slot in decision.required_slots]
+        if decision.required_slots == ("tire_size",):
+            assistant_response = "재고와 장착 가능 여부를 확인하려면 타이어 사이즈가 필요해요."
+        else:
+            assistant_response = f"{', '.join(labels)} 정보를 먼저 확인해야 다음 단계로 진행할 수 있어요."
+        quick_replies = []
+        if "tire_size" in decision.required_slots:
+            quick_replies.extend([
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "차량번호로 확인", "domain": "DISCOVERY"},
+            ])
+        if "store" in decision.required_slots or "location" in decision.required_slots:
+            quick_replies.append({"label": "근처 매장 찾기", "domain": "TRANSACTION"})
+        if "quantity" in decision.required_slots:
+            quick_replies.extend([
+                {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "4개", "domain": "TRANSACTION"},
+            ])
+        if not quick_replies:
+            quick_replies = [{"label": "조건 다시 입력", "domain": "TRANSACTION"}]
+
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "assistant_response_source": "transaction_policy_guard",
+            "data": {
+                "assistantResponse": assistant_response,
+                "quickReplies": quick_replies,
+                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+                "requiredSlots": list(decision.required_slots),
+            },
+        }
 
     def stream_template(self, messages: list[dict], config: dict | None = None):
         """

@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import ClassVar, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -54,6 +54,9 @@ class ConversationSlots(BaseModel):
     user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
     goal_type: Optional[GoalType] = None  # e.g. "store_with_stock" — high-level destination, sticky across turns.
+    recommendation_variants: Optional[list[dict[str, Any]]] = None
+    recommendation_limit_per_variant: Optional[int] = None
+    recommendation_source_text: Optional[str] = None
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
@@ -158,7 +161,9 @@ class ConversationSlots(BaseModel):
             r"친절|여성|얼라인먼트|밸런스|워셔액|무료|깨끗|믿을|친근|편하|"
             r"잘\s*봐|꼼꼼|전문|특화|수입차|외제차|프리미엄|"
             r"평점|리뷰|평이?\s*좋|"
-            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반"
+            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반|"
+            r"리프트|질소\s*충전|질소|라운지|휴게실|수유실|파우더룸|"
+            r"청결|쾌적|분위기|숙련도|실력|정확도"
         ),
     ]
 
@@ -283,9 +288,11 @@ class ConversationSlots(BaseModel):
         re.compile(
             # Korean brands (primary user input)
             r"벤투스|키네르기|키너지|옵티모|다이나프로|아이온|라우펜|"
+            r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|마일리지\s*타이어|"
             r"미쉐린|피렐리|브리지스톤|콘티넨탈|굿이어|한국타이어|"
             # English brands
             r"Ventus|Kinergy|Optimo|Dynapro|iON|Laufenn|"
+            r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|Mileage\s*Tire|"
             r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|Hankook|"
             # Bare model names (brand omitted by user)
             r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
@@ -294,6 +301,16 @@ class ConversationSlots(BaseModel):
             re.IGNORECASE,
         ),
     ]
+    _MILEAGE_PRODUCT_LIKE_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|마일리지\s*타이어|"
+        r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|Mileage\s*Tire",
+        re.IGNORECASE,
+    )
+    _MILEAGE_ATTRIBUTE_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"마일리지\s*(?:좋|높|긴|길|성능|중심|우수|뛰어난)|"
+        r"오래\s*타|수명|마모|내구|장거리|주행거리",
+        re.IGNORECASE,
+    )
 
     def merge(self, new_slots: "ConversationSlots") -> "ConversationSlots":
         """Merge new slots into existing slots with dependency reset logic.
@@ -422,6 +439,12 @@ class ConversationSlots(BaseModel):
         is_view_only = any(p.search(user_text) for p in cls._GOAL_VIEW_ONLY_PATTERNS)
         if is_view_only:
             pass
+        elif cls.has_mileage_product_search_intent(user_text):
+            # "마일리지" is both a product-name token (마일리지 플러스 2/3)
+            # and a recommendation attribute. Product-like forms should be
+            # searched first; attribute forms such as "마일리지 좋은 타이어" keep
+            # the normal recommendation path below.
+            slots.goal_type = "product_search"
         elif cls.has_recommend_intent(user_text):
             slots.goal_type = "product_recommend"
         elif slots.pending_intent == "stock":
@@ -573,6 +596,13 @@ class ConversationSlots(BaseModel):
         instead of auto-chaining to Transaction).
         """
         return any(pattern.search(user_text) for pattern in cls._PRODUCT_KEYWORD_PATTERNS)
+
+    @classmethod
+    def has_mileage_product_search_intent(cls, user_text: str) -> bool:
+        """Return True for product-like Mileage queries, not mileage attributes."""
+        if not cls._MILEAGE_PRODUCT_LIKE_PATTERN.search(user_text):
+            return False
+        return not cls._MILEAGE_ATTRIBUTE_PATTERN.search(user_text)
 
     def to_prompt_context(self, include_pending_intent: bool = True) -> str:
         """Format slots as a system prompt context string for agent injection.

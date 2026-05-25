@@ -7,11 +7,12 @@ from services.tstation.agents.e_support_agent.tools import (
     get_maintenance_dday_tool,
     get_my_cars_tool,
     get_my_coupons_tool,
+    get_my_warranties_tool,
+    get_product_warranties_tool,
+    search_faq_hybrid_tool,
     search_faq_rag_tool,
     search_product_tool,
     transfer_to_qna_tool,
-    get_product_warranties_tool,
-    get_my_warranties_tool,
 )
 from services.tstation.agents.templates import SupportDataEvent
 from services.tstation.common.cta_urls import expand_url_sentinels
@@ -51,6 +52,9 @@ Respond in Korean by default; English if the user writes in English.
 → 도구 호출 금지. 아래 고정 문구로 즉시 답변한다.
 → quickReply 응답 (assistantResponse):
     "5% 할인쿠폰은 마케팅 활용 동의 한 all my T 회원에 한하여, 타이어, 경정비 상품 주문 결제 시 사용 가능한 쿠폰으로 연 내 최대 4회 다운로드 가능합니다."
+→ 단, 사용자가 "방금 가입했는데 all my T 5% 할인쿠폰은 어디서 받아?", "all my T 5% 쿠폰 어디서 다운로드해?" 처럼 수령/다운로드 경로를 묻는 경우에는 아래처럼 경로를 포함해 답한다:
+    "all my T 5% 할인쿠폰은 마케팅 활용에 동의한 all my T 회원 대상 혜택이며, 쿠폰함에서 확인 후 다운로드해 사용할 수 있어요. 방금 가입하셨다면 먼저 마케팅 활용 동의 상태를 확인한 뒤 아래 '쿠폰함 바로가기'에서 쿠폰 노출 여부를 확인해 주세요."
+  이 케이스는 임의 쿠폰 발급 요청이 아니므로 "챗봇에서 직접 발급할 수 없어요" 라고 답하지 않는다.
 → quickReplies (url 절대 변경 금지 — 그대로 복사):
     [
       {"label":"쿠폰함 바로가기","url":"__URL_MY_COUPON_LIST_PC__","domain":"TRANSACTION"},
@@ -267,6 +271,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 **도서산간/제주 배송비 및 온라인 가격 정책 answer rules:**
 - Trigger: 사용자가 제주/서귀포/도서산간/도서 지역/산간 지역의 온라인 가격, 배송비, 추가 배송비, 추가 비용, 매장 가격과 온라인 가격 차이를 묻는 경우.
   예: "제주도 매장에서도 온라인 가격이랑 똑같아?", "서귀포시인데 배송비 더 들어?", "제주 배송비 추가돼?", "도서산간은 배송비 얼마야?".
+- Follow-up trigger: 직전 대화가 배송비/추가 배송비/도서산간/온라인 가격 정책 문맥이면, 현재 발화가 "제주도는?", "제주는?", "서귀포는?" 처럼 지역명만 있는 짧은 후속 질문이어도 본 룰을 동일하게 적용한다. 이때 지역 선택이나 매장 찾기로 돌리지 말고 배송비 정책을 확정형으로 안내한다.
 - Step 1 — FAQ 근거 (필수): `get_faq_tool` 을 `lrcl_cd=None`, `limit=100` 으로 호출한다. 제주/도서산간/배송비/주문·결제 페이지 관련 FAQ 를 우선 사용한다. 관련 결과가 없으면 `limit=200` 재시도 후 `search_faq_rag_tool` 로 "제주 도서산간 배송비 추가 타이어 1본 1만원 주문 결제 페이지" 를 검색한다.
 - 응답 본문 (FAQ 배송비 정책 기반, 아래 3가지 포인트를 모두 포함):
   1. **무료배송/무료장착 원칙**: 티스테이션닷컴은 기본적으로 무료배송·무료장착 원칙으로 운영된다.
@@ -554,8 +559,47 @@ Rules:
 """
 
 
-def get_support_system_prompt():
-    return expand_url_sentinels(SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE)
+_HYBRID_FAQ_OVERRIDE = """
+
+## [HYBRID MODE] FAQ Search Override
+Use `search_faq_hybrid_tool(query)` for ALL FAQ queries (Intent 1B, 1C, warranty policy questions).
+Do NOT call `get_faq_tool` or `search_faq_rag_tool` — `search_faq_hybrid_tool` handles retrieval internally.
+Interpret the returned items the same way as `get_faq_tool` results and apply the same score-based answer rules.
+"""
+
+
+def get_support_system_prompt() -> str:
+    from config.env import settings
+    base = expand_url_sentinels(SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE)
+    if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
+        return base + _HYBRID_FAQ_OVERRIDE
+    return base
+
+
+def get_support_tools() -> list:
+    from config.env import settings
+
+    faq_tools = [
+        get_faq_tool,
+        search_faq_rag_tool,
+        search_faq_hybrid_tool,
+    ]
+    if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
+        faq_tools = [search_faq_hybrid_tool]
+
+    return [
+        *faq_tools,
+        transfer_to_qna_tool,
+        get_product_warranties_tool,
+        get_my_warranties_tool,
+        get_maintenance_dday_tool,
+        get_my_cars_tool,
+        search_product_tool,
+        get_card_installments_tool,
+        check_coupon_stacking_tool,
+        get_my_coupons_tool,
+        get_deals_tool,
+    ]
 
 
 class SupportSubAgent(BaseAgent):
@@ -567,6 +611,7 @@ class SupportSubAgent(BaseAgent):
     TOOL_TO_AF_MAP = {
         "get_faq_tool": "FAQ",
         "search_faq_rag_tool": "FAQ",
+        "search_faq_hybrid_tool": "FAQ",
         "transfer_to_qna_tool": "Fallback / Escalation",
         "escalate_tool": "Fallback / Escalation",
         # Warranty 조회 도구도 정보성 응답이라 FAQ AF 로 묶는다 — 표준 AF 10개
@@ -596,20 +641,7 @@ class SupportSubAgent(BaseAgent):
     def __init__(self, model):
         super().__init__(
             model=model,
-            tools=[
-                get_faq_tool,
-                search_faq_rag_tool,
-                transfer_to_qna_tool,
-                get_product_warranties_tool,
-                get_my_warranties_tool,
-                get_maintenance_dday_tool,
-                get_my_cars_tool,
-                search_product_tool,
-                get_card_installments_tool,
-                check_coupon_stacking_tool,
-                get_my_coupons_tool,
-                get_deals_tool,
-            ],
+            tools=get_support_tools(),
             system_prompt=get_support_system_prompt,
             name="Support Agent",
         )

@@ -105,6 +105,7 @@ def upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc):
         collection_name=target_collection,
         vector_size=vector_size,
     )
+    qdrant_svc.ensure_payload_text_index(target_collection, "question")
 
     slim_docs = []
     point_ids = []
@@ -135,6 +136,8 @@ def upsert_to_qdrant(qdrant_svc, documents, q_vecs, a_vecs, embedding_svc):
     )
 
     old_collection = qdrant_svc.swap_alias(alias_name, target_collection)
+    if old_collection and old_collection != target_collection:
+        qdrant_svc.delete_collection(old_collection)
     logger.info(
         "Indexed %d documents and moved alias %s: %s -> %s",
         result["upserted_count"],

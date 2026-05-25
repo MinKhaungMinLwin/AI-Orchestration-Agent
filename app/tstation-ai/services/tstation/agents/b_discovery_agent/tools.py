@@ -1,9 +1,15 @@
 import logging
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response,
+    _to_dict,
+)
 from langchain.tools import tool
 from common.tool_cache import tool_cache
 
@@ -11,8 +17,6 @@ from services.tstation.agents.b_discovery_agent._car_no_audit import (
     detect_car_no_mismatch,
     set_registered_car_nos,
 )
-
-logger = logging.getLogger(__name__)
 
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
@@ -46,10 +50,57 @@ from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인
 # Member Car Info
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
 
+logger = logging.getLogger(__name__)
+current_confirmed_tire_size: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_confirmed_tire_size", default=None
+)
+current_discovery_recommendation_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_discovery_recommendation_tool_patch", default={}
+)
 
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
+def _apply_recommendation_policy_patch(
+    *,
+    patch: dict[str, Any],
+    rcmd_type: RcmdType,
+    brand_cd: str,
+    tire_size: str | None,
+    sort_by: str | None,
+    season_nm: str | None,
+    pfm_nm: str | None,
+    prc_grd: str | None,
+    car_lnc_cd: str | None,
+) -> tuple[RcmdType, str, str | None, str | None, str | None, str | None, str | None]:
+    """Apply deterministic Discovery policy arguments to recommendation calls.
+
+    This is intentionally conservative: only Discovery policy keys produced
+    from the current user text are considered, and tire_size is not injected
+    over an explicit vehicle/size argument.
+    """
+    if not patch:
+        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd
+
+    patched_rcmd_type = patch.get("rcmd_type")
+    if patched_rcmd_type:
+        rcmd_type = patched_rcmd_type if isinstance(patched_rcmd_type, RcmdType) else RcmdType(str(patched_rcmd_type))
+    if patch.get("brand_cd"):
+        brand_cd = str(patch["brand_cd"])
+    if not tire_size and not car_lnc_cd and patch.get("tire_size"):
+        tire_size = str(patch["tire_size"])
+    if not sort_by and patch.get("sort_by"):
+        sort_by = str(patch["sort_by"])
+    if not season_nm and patch.get("season_nm"):
+        season_nm = str(patch["season_nm"])
+    if not pfm_nm and patch.get("pfm_nm"):
+        pfm_nm = str(patch["pfm_nm"])
+    if not prc_grd and patch.get("prc_grd"):
+        prc_grd = str(patch["prc_grd"])
+    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd
+
+
+_WINTER_RECOMMENDATION_FALLBACKS: tuple[tuple[RcmdType, str, str], ...] = (
+    (RcmdType.ALL_WEATHER, "올웨더", "올웨더"),
+    (RcmdType.TSTATION, "사계절", "사계절"),
+)
 
 
 DOMAIN_TOOL_MAP = {
@@ -107,18 +158,6 @@ DOMAIN_TOOL_MAP = {
         "escalate",
     }
 }
-
-
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
 
 
 # Whitelist of fields kept in product items returned to the LLM. Everything
@@ -819,6 +858,7 @@ def get_products_recommendations_tool(
     rcmd_type: RcmdType,
     limit: int = 3,
     brand_cd: str = "HK",
+    allow_cross_brand_fill: bool = True,
     car_lnc_cd: str | None = None,
     tire_size: str | None = None,
     sort_by: str | None = None,
@@ -827,6 +867,7 @@ def get_products_recommendations_tool(
     prc_grd: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
+    ignore_policy_patch: bool = False,
 ):
     """
     Product Recommendation — top N products by rcmd_type.
@@ -867,6 +908,8 @@ def get_products_recommendations_tool(
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
+        allow_cross_brand_fill (bool, optional): HK 추천 결과가 부족할 때 타 브랜드로 보충할지 여부.
+            기본값은 True. 멀티 브랜드/브랜드별 추천처럼 요청 브랜드를 엄격히 분리해야 할 때만 False 사용.
         car_lnc_cd (str | None, optional): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
         tire_size (str | None, optional): 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
         sort_by (str | None, optional): 사용자 의도 기반 정렬. rcmd_type 과 독립적으로 동작하며,
@@ -980,25 +1023,78 @@ def get_products_recommendations_tool(
             ),
         )
 
+    policy_patch = {} if ignore_policy_patch else current_discovery_recommendation_tool_patch.get()
+    if policy_patch:
+        before_policy = {
+            "rcmd_type": rcmd_type,
+            "brand_cd": brand_cd,
+            "tire_size": tire_size,
+            "sort_by": sort_by,
+            "season_nm": season_nm,
+            "pfm_nm": pfm_nm,
+            "prc_grd": prc_grd,
+        }
+        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd = _apply_recommendation_policy_patch(
+            patch=policy_patch,
+            rcmd_type=rcmd_type,
+            brand_cd=brand_cd,
+            tire_size=tire_size,
+            sort_by=sort_by,
+            season_nm=season_nm,
+            pfm_nm=pfm_nm,
+            prc_grd=prc_grd,
+            car_lnc_cd=car_lnc_cd,
+        )
+        logger.info(
+            "[TOOL][get_products_recommendations_tool] Applied discovery policy patch=%s before=%s after=%s",
+            policy_patch,
+            before_policy,
+            {
+                "rcmd_type": rcmd_type,
+                "brand_cd": brand_cd,
+                "tire_size": tire_size,
+                "sort_by": sort_by,
+                "season_nm": season_nm,
+                "pfm_nm": pfm_nm,
+                "prc_grd": prc_grd,
+            },
+        )
+
+    if tire_size is None and car_lnc_cd is None and not (min_price or max_price):
+        confirmed_tire_size = current_confirmed_tire_size.get()
+        if confirmed_tire_size:
+            tire_size = confirmed_tire_size
+            logger.info(
+                "[TOOL][get_products_recommendations_tool] Auto-filled tire_size=%s from confirmed slot",
+                tire_size,
+            )
+
     # Price filtering is now SQL-side on BE — no client-side post-filter.
     # newest_desc is a client-side sort BE doesn't support → still fetch >limit then re-sort.
     has_price_filter = bool(min_price or max_price)
     has_newest_sort = sort_by == "newest_desc"
     fetch_limit = max(limit, 100) if has_newest_sort else limit
+    requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
+    requested_season_nm = season_nm
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, min_price=%s, max_price=%s",
         rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, min_price, max_price,
     )
 
-    try:
+    def _fetch_recommendation_once(
+        *,
+        call_rcmd_type: RcmdType,
+        call_season_nm: str | None,
+    ) -> dict:
         response = get_products_recommendations(
             client=get_client(),
-            rcmd_type=rcmd_type,
+            rcmd_type=call_rcmd_type,
             limit=fetch_limit,
             brand_cd=brand_cd,
+            allow_cross_brand_fill=allow_cross_brand_fill,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
-            season_nm=season_nm,
+            season_nm=call_season_nm,
             pfm_nm=pfm_nm,
             prc_grd=prc_grd,
             min_price=min_price,
@@ -1008,20 +1104,77 @@ def get_products_recommendations_tool(
             return _error_response(
                 response.status_code,
                 f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get product recommendations"
+                response.content.decode(errors="ignore") or "Failed to get product recommendations",
             )
-        # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
+
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             if has_price_filter and not data["items"]:
-                return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
-            if str(rcmd_type) == "discount":
+                return {
+                    "status": "no_results",
+                    "reason": "no_products_in_price_range",
+                    "min_price": min_price,
+                    "max_price": max_price,
+                }
+            if str(call_rcmd_type) == "discount":
                 data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
             if has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
+
+    try:
+        result = _fetch_recommendation_once(call_rcmd_type=rcmd_type, call_season_nm=season_nm)
+        if result.get("status") != "success":
+            return result
+
+        data = result.get("data")
+        items = data.get("items") if isinstance(data, dict) else None
+        should_try_winter_fallback = (
+            not has_price_filter
+            and isinstance(items, list)
+            and not items
+            and requested_season_nm == "겨울"
+            and requested_rcmd_type in {"snow", "tstation"}
+        )
+        if not should_try_winter_fallback:
+            return result
+
+        for fallback_rcmd_type, fallback_season_nm, fallback_label in _WINTER_RECOMMENDATION_FALLBACKS:
+            fallback_result = _fetch_recommendation_once(
+                call_rcmd_type=fallback_rcmd_type,
+                call_season_nm=fallback_season_nm,
+            )
+            if fallback_result.get("status") != "success":
+                continue
+
+            fallback_data = fallback_result.get("data")
+            fallback_items = fallback_data.get("items") if isinstance(fallback_data, dict) else None
+            if not isinstance(fallback_items, list) or not fallback_items:
+                continue
+
+            fallback_data["recommendation_fallback"] = {
+                "requested_rcmd_type": requested_rcmd_type,
+                "requested_season_nm": requested_season_nm,
+                "applied_rcmd_type": fallback_rcmd_type.value,
+                "applied_season_nm": fallback_season_nm,
+                "assistant_response_hint": (
+                    "겨울용 상품은 현재 확인되지 않아 "
+                    f"같은 사이즈의 {fallback_label} 대안을 먼저 추천했습니다."
+                ),
+            }
+            logger.info(
+                "[TOOL][get_products_recommendations_tool] Applied winter fallback requested=%s/%s fallback=%s/%s items=%s",
+                requested_rcmd_type,
+                requested_season_nm,
+                fallback_rcmd_type.value,
+                fallback_season_nm,
+                len(fallback_items),
+            )
+            return fallback_result
+
+        return result
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
         return _error_response(None, str(e), "Failed to get product recommendations")

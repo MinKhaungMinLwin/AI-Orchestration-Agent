@@ -3,8 +3,12 @@ import os
 from typing import Any
 
 from common.qna_payload import make_qna_payload_urls
-from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response,
+    _to_dict,
+)
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync_detailed as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
 from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정비_d_day_안내.get_maintenance_dday_api_member_maintenance_dday_get import (
@@ -50,11 +54,6 @@ from config.env import settings
 logger = logging.getLogger(__name__)
 
 
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
-
-
 DOMAIN = {
     # FAQ
     "get_faq",
@@ -63,17 +62,6 @@ DOMAIN = {
     "escalate",
 }
 
-
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
 
 @tool
 @tool_cache(ttl=3600)
@@ -219,6 +207,60 @@ def search_faq_rag_tool(
     except Exception as e:
         logger.exception("[TOOL][search_faq_rag_tool] Failed")
         return _error_response(None, str(e), "Failed to search FAQs using RAG")
+
+@tool
+def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
+    """
+    [HYBRID] FAQ search: keyword search + semantic search → RRF reranking → top_k items.
+
+    Use instead of get_faq_tool + search_faq_rag_tool when FAQ_SEARCH_MODE=hybrid.
+    Returns top_k FAQ items for the LLM to synthesise — no retry needed.
+
+    Args:
+        query (str): User question in Korean.
+        top_k (int): Max results to return (default 20).
+
+    Example: {"query": "환불 정책이 어떻게 되나요?"}
+    """
+    logger.debug("[TOOL][search_faq_hybrid_tool] query=%s top_k=%s", query, top_k)
+    try:
+        openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+        embedding_svc = get_embedding_service(
+            model=settings.EMBEDDING_MODEL,
+            provider=settings.EMBEDDING_PROVIDER,
+            api_key=openai_api_key,
+        )
+        qdrant_svc = get_qdrant_service(
+            host=settings.QDRANT_HOST,
+            port=settings.QDRANT_PORT,
+            api_key=settings.QDRANT_API_KEY or None,
+        )
+
+        query_vector = embedding_svc.embed_text_cached(query)
+        candidates = qdrant_svc.search_hybrid(
+            collection_name=settings.QDRANT_COLLECTION_FAQ,
+            query_vector=query_vector,
+            query_text=query,
+            top_k=top_k,
+        )
+
+        items = [
+            {
+                "question": r["payload"].get("question", ""),
+                "answer": r["payload"].get("answer", ""),
+                "metadata": r["payload"].get("metadata", {}),
+                "source": "FAQ Hybrid",
+            }
+            for r in candidates
+        ]
+        logger.info("[TOOL][search_faq_hybrid_tool] returned %d items:", len(items))
+        for i, item in enumerate(items):
+            logger.info("  [%d] %s", i + 1, item.get("question", "")[:80])
+        return _success_response(200, {"items": items})
+    except Exception as e:
+        logger.exception("[TOOL][search_faq_hybrid_tool] Failed")
+        return _error_response(None, str(e), "Failed to search FAQs")
+
 
 @tool
 def escalate_tool(
