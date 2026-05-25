@@ -74,6 +74,9 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - 사용자가 한글로 "벤투스 에어 S" (공백 포함)처럼 입력해도 keyword는 "벤투스 에어S" (공백 제거)로 전달. BE LIKE 매칭이 공백 차이로 실패하기 때문.
 - 모델 코드(S1, S2, evo, evo3, HPX, EX, AS 등)는 원형 유지 (한글로 옮기지 않음)
 - 미쉐린 CrossClimate 2: 사용자가 "CrossClimate 2" / "크로스클라이밋 2" / "cc2" 등으로 입력하면 `search_product_tool(keyword="cc2", brand_cd="MC")` 로 호출한다. BE alias.json 이 `cc2` 와 `크로스클라이밋` 을 영문 GOODS_NM 으로 자동 확장한다.
+- "마일리지 플러스", "마일리지 플러스 2", "마일리지 플러스 3", "마일리지 타이어" 는 상품명/상품군 검색 의도로 우선 처리한다.
+  `search_product_tool(keyword="마일리지", brand_cd="HK")` 를 호출한다.
+  단, "마일리지 좋은 타이어", "수명 긴 타이어", "오래 타는 타이어", "마모 적은 타이어" 처럼 수명/내구 속성을 말하면 추천 의도다.
 - ❌ NEVER translate Korean → English (BE의 한글 매칭이 실패해 빈 결과를 반환함)
 - ❌ NEVER put a brand-only word into `keyword` ("브리지스톤", "미쉐린", "피렐리", "콘티넨탈", "굿이어", "라우펜", "한국타이어"). brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않아 keyword 에 넣으면 0건이 된다.
   - 사용자 "브리지스톤 235/55R19" → `search_product_tool(size="235/55R19", brand_cd="BS")` (keyword 생략)
@@ -94,6 +97,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 ✅ CORRECT — 즉시 도구 호출 → 결과로 응답:
 - 사용자 "키너지 GT 205/55R16 가격 얼마야?" → 컨펌 없이 search_product_tool(keyword="키너지 GT", size="205/55R16") 호출
+- 사용자 "마일리지 타이어" / "마일리지 플러스 3" → 컨펌 없이 search_product_tool(keyword="마일리지", brand_cd="HK") 호출
 - 사용자 "벤투스 S2 225/45R17 주문할게" → 컨펌 없이 search_product_tool(keyword="벤투스 S2", size="225/45R17") 호출 (Flow D)
 - 사용자 "벤투스 S2 AS 4개 판교점에서 예약해줘" (사이즈 없음) → 사이즈를 묻지 않고 즉시 search_product_tool(keyword="벤투스 S2 AS") 호출. 여러 결과 → shortlist 제시 후 사용자 사이즈 선택 대기. 1건 → 바로 declarative handoff (Flow D).
 - 사용자 "kinergy GT 2055516 사이즈 주문하면 동광주 매장에 도착하는 날짜가 언제야?" → 컨펌 없이 search_product_tool(keyword="키너지 GT", size="205/55R16") 호출. 1건 resolved → "**[goods_nm]** (205/55R16) 상품 확인했어요. 동광주 매장 도착 일정으로 이어갑니다 😊" declarative handoff. Coordinator 가 같은 턴에 Transaction 으로 자동 체이닝하여 매장/재고/도착일을 처리한다 (수량은 Transaction 흐름에서 받는다 — Discovery 가 묻지 말 것).
@@ -680,6 +684,15 @@ Trigger: User searches by name/keyword
      the BE has already done the optimal lookup with member-type branching).
    - `get_final_price_tool` is reserved for cases that need WAGE_PRC (공임비) or
      a single canonical price for an order preview. Don't fan it out per card.
+   - ⚠️ Answer according to the user's product-search purpose:
+     • If the user asks "사이즈/규격/호환 사이즈/어떤 사이즈 있어" for a searched product family,
+       answer from `search_product_tool.data.items[*].tire_size_1` grouped by `goods_nm`.
+       Do NOT answer from prior recommendation results.
+       Example: "마일리지 타이어 사이즈가 뭐야?", "아니 추천 말고 마일리지 타이어 말야",
+       "호환 사이즈가 뭐냐고" after a Mileage product search → search `keyword="마일리지"` if needed,
+       then list the Mileage Plus product sizes.
+     • If the user asks price/rating/review/newest, use the corresponding fields/sort.
+     • If the user just names the product family, show the search results and guide selection.
 8. Render `product` template with the in-context prices. STOP and wait for user to SELECT a product.
 
 
@@ -1528,6 +1541,7 @@ Handle ONLY tire recommendation flows by registered vehicle, tire size, or drivi
 - Do NOT handle events/deals/YouTube here. If the request is about those topics, answer with a short quickReply asking the user to clarify.
 - Do NOT handle product-name search as the primary flow. Product-name search belongs to discovery_search.
 - Do NOT handle price or discount queries for a specific named product (e.g. "벤투스 S2 할인가", "다이나프로 HPX 가격"). Those belong to discovery_search.
+- Product-name collision rule: "마일리지 플러스", "마일리지 플러스 2", "마일리지 플러스 3", "마일리지 타이어" are product search terms, not mileage-attribute recommendations. Use discovery_search/search_product_tool for them. Only treat "마일리지 좋은/수명 긴/오래 타는/마모 적은" as recommendation attributes.
 
 
 ## CONFIRMED SLOTS
@@ -1933,6 +1947,9 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 - 사용자가 한글로 "벤투스 에어 S" (공백 포함)처럼 입력해도 keyword는 "벤투스 에어S" (공백 제거)로 전달. BE LIKE 매칭이 공백 차이로 실패하기 때문.
 - 모델 코드(S1, S2, evo, evo3, HPX, EX, AS 등)는 원형 유지 (한글로 옮기지 않음)
 - 미쉐린 CrossClimate 2: 사용자가 "CrossClimate 2" / "크로스클라이밋 2" / "cc2" 등으로 입력하면 `search_product_tool(keyword="cc2", brand_cd="MC")` 로 호출한다. BE alias.json 이 `cc2` 와 `크로스클라이밋` 을 영문 GOODS_NM 으로 자동 확장한다.
+- "마일리지 플러스", "마일리지 플러스 2", "마일리지 플러스 3", "마일리지 타이어" 는 상품명/상품군 검색 의도로 우선 처리한다.
+  `search_product_tool(keyword="마일리지", brand_cd="HK")` 를 호출한다.
+  단, "마일리지 좋은 타이어", "수명 긴 타이어", "오래 타는 타이어", "마모 적은 타이어" 처럼 수명/내구 속성을 말하면 추천 의도다.
 - ❌ NEVER translate Korean → English (BE의 한글 매칭이 실패해 빈 결과를 반환함)
 - ❌ NEVER put a brand-only word into `keyword` ("브리지스톤", "미쉐린", "피렐리", "콘티넨탈", "굿이어", "라우펜", "한국타이어"). brand_cd 가 이미 브랜드 필터링을 담당하며, GOODS_NM 에는 한글 브랜드명이 저장돼 있지 않아 keyword 에 넣으면 0건이 된다.
   - 사용자 "브리지스톤 235/55R19" → `search_product_tool(size="235/55R19", brand_cd="BS")` (keyword 생략)
@@ -1950,6 +1967,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 ✅ CORRECT — 즉시 도구 호출 → 결과로 응답:
 - 사용자 "키너지 GT 205/55R16 가격 얼마야?" → 컨펌 없이 search_product_tool(keyword="키너지 GT", size="205/55R16") 호출
+- 사용자 "마일리지 타이어" / "마일리지 플러스 3" → 컨펌 없이 search_product_tool(keyword="마일리지", brand_cd="HK") 호출
 - 사용자 "벤투스 S2 225/45R17 주문할게" → 컨펌 없이 search_product_tool(keyword="벤투스 S2", size="225/45R17") 호출 (Flow D)
 - 사용자 "kinergy GT 2055516 사이즈 주문하면 동광주 매장에 도착하는 날짜가 언제야?" → 컨펌 없이 search_product_tool(keyword="키너지 GT", size="205/55R16") 호출. 1건 resolved → declarative handoff. Coordinator 가 같은 턴에 Transaction 으로 자동 체이닝한다.
 
@@ -2047,6 +2065,11 @@ Trigger: User searches by name/keyword
      - 예: "한국타이어 20만원~30만원" → search_product_tool(brand_cd="HK", min_price=200_000, max_price=300_000)
      - 예: "벤투스 S2 30만원 이하" → search_product_tool(keyword="벤투스 S2", max_price=300_000)
      - 예: "미쉐린 225/45R17 30만원 이하" → search_product_tool(size="225/45R17", brand_cd="MC", max_price=300_000)
+   ⚠️ 상품 검색 결과는 사용자 발화의 목적에 맞춰 답한다:
+     - 사이즈/규격/호환 사이즈 질문 → `items[*].tire_size_1` 를 `goods_nm` 별로 묶어서 안내. 이전 추천 결과의 사이즈를 답하지 말 것.
+     - 가격/최저가 질문 → 가격 필드 기준으로 안내.
+     - 단순 상품명 검색 → 상품 목록/카드로 선택 유도.
+     - "추천 말고 [상품명] 말야" 는 직전 추천을 참조하지 말고 `[상품명]` 상품 검색 결과 기준으로 답한다.
 6. If tool returns `{"status": "no_results", "reason": "no_products_in_price_range"}` → "해당 가격 범위에서 조건에 맞는 상품이 없어요." 안내 + 예산 확장 제안 + quickReply chips: ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"].
    If 0 results (기타 이유) → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
 7. If 1+ results → use the **`extra_fvr_sale_prc`** field for each item. Put that integer into `products[i].price`.

@@ -23,6 +23,7 @@ from services.tstation.template_mapper import (
     current_goal_type,
     current_pending_intent,
     current_store_date_availability,
+    current_user_text,
     try_build_template,
 )
 
@@ -39,7 +40,9 @@ def _reset_pending_intent():
     goal_token = current_goal_type.set(None)
     ev_token = current_ev_suitability_comparison.set(False)
     store_date_token = current_store_date_availability.set(False)
+    user_text_token = current_user_text.set("")
     yield
+    current_user_text.reset(user_text_token)
     current_store_date_availability.reset(store_date_token)
     current_ev_suitability_comparison.reset(ev_token)
     current_pending_intent.reset(pending_token)
@@ -220,6 +223,45 @@ def _unsized_recommendation_entry() -> dict:
     }
 
 
+def _mileage_search_entry() -> dict:
+    return {
+        "tool": "search_product_tool",
+        "args": {"keyword": "마일리지", "brand_cd": "HK", "limit": 10},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000309815",
+                        "goods_nm": "마일리지 플러스2",
+                        "tire_size_1": "195/65R15",
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    },
+                    {
+                        "goods_no": "G000000310545",
+                        "goods_nm": "마일리지 플러스3",
+                        "tire_size_1": "205/70R15",
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    },
+                    {
+                        "goods_no": "G000000310546",
+                        "goods_nm": "마일리지 플러스3",
+                        "tire_size_1": "215/60R16",
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    },
+                ]
+            },
+        },
+    }
+
+
 def test_unsized_recommendation_maps_to_text_summary_not_product_cards() -> None:
     result = try_build_template([_unsized_recommendation_entry()], "전기차용 타이어를 추천해 드릴게요.")
 
@@ -235,6 +277,32 @@ def test_unsized_recommendation_maps_to_text_summary_not_product_cards() -> None
     assert "265/35R21" not in assistant_response
     assert "패턴" not in assistant_response
     assert "products" not in result["data"]
+
+
+def test_product_search_size_question_answers_sizes_instead_of_generic_unsized_summary() -> None:
+    current_user_text.set("마일리지 타이어 사이즈가 뭐야?\n아니 추천 말고 마일리지 타이어 말야")
+
+    result = try_build_template([_mileage_search_entry()], "마일리지 타이어를 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "검색된 상품은 현재 아래 사이즈로 확인돼요." in assistant_response
+    assert "- 마일리지 플러스2: 195/65R15" in assistant_response
+    assert "- 마일리지 플러스3: 205/70R15, 215/60R16" in assistant_response
+    assert "사이즈가 아직 확인되지 않아" not in assistant_response
+
+
+def test_product_search_without_size_question_keeps_generic_unsized_summary() -> None:
+    current_user_text.set("마일리지 타이어")
+
+    result = try_build_template([_mileage_search_entry()], "마일리지 타이어를 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "사이즈가 아직 확인되지 않아" in assistant_response
+    assert "검색된 상품은 현재 아래 사이즈로 확인돼요." not in assistant_response
 
 
 def test_unsized_transaction_flow_still_maps_to_product_cards() -> None:
