@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     RAG_SEARCH_TOP_K: int = Field(default=5)
     RAG_SEARCH_SCORE_THRESHOLD: float = Field(default=0.7)
     FAQ_SEARCH_MODE: str = Field(
-        default="legacy",
+        default="hybrid",
         description="FAQ retrieval mode: 'legacy' (get_faq_tool chain) or 'hybrid' (dense+keyword search)",
     )
 
