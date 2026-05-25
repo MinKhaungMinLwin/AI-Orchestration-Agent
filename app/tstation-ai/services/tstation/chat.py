@@ -3264,6 +3264,31 @@ def _coerce_vehicle_type_compatibility_listcar_to_quickreply(event: dict, user_q
     }
 
 
+def _vehicle_type_compatibility_guard_event(user_text: str) -> dict | None:
+    """Answer vehicle-category tire compatibility as general guidance before car-list lookup."""
+    if not _VEHICLE_TYPE_COMPATIBILITY_TEXT_RE.search(user_text or ""):
+        return None
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_vehicle_type_compatibility_guard",
+        "data": {
+            "assistantResponse": (
+                "SUV에는 승용차/세단용 타이어를 임의로 장착하는 건 권장하지 않아요. "
+                "같은 사이즈처럼 보여도 하중지수와 설계 기준이 다를 수 있어서, "
+                "차량 규격에 맞는 SUV용 또는 SUV 호환 타이어로 확인하는 게 안전합니다."
+            ),
+            "quickReplies": [
+                {"label": "SUV용 추천", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "내 차량으로 확인", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
     """Suppress direct listCar JSON when the answer is plain advice.
 
@@ -6600,6 +6625,25 @@ class TStationChatServiceV2:
             if request.stream:
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(reservation_date_guard),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=guard_text)
+
+        vehicle_type_compatibility_guard = _vehicle_type_compatibility_guard_event(last_user_msg)
+        if vehicle_type_compatibility_guard is not None:
+            logger.info(
+                "[CHAT_V2] Vehicle type compatibility fast-path intercept: %s",
+                last_user_msg[:80],
+            )
+            guard_text = str((vehicle_type_compatibility_guard.get("data") or {}).get("assistantResponse") or "")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(vehicle_type_compatibility_guard),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",

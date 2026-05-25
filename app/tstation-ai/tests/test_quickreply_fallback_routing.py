@@ -32,6 +32,7 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
     _is_oe_replacement_context,
@@ -1661,6 +1662,16 @@ def test_suv_passenger_tire_question_does_not_render_listcar() -> None:
     assert coerced["template"] == "quickReply"
     assert "권장하지 않아요" in coerced["data"]["assistantResponse"]
     assert _labels(coerced["data"]["quickReplies"]) == ["SUV용 추천", "사이즈 직접 입력", "내 차량으로 확인"]
+
+
+def test_suv_passenger_tire_question_fast_path_returns_guidance() -> None:
+    event = _vehicle_type_compatibility_guard_event("내 차 SUV긴 한데 세단용 끼워도 될까?")
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_vehicle_type_compatibility_guard"
+    assert "권장하지 않아요" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["SUV용 추천", "사이즈 직접 입력", "내 차량으로 확인"]
 
 
 def test_tc098_price_policy_runtime_removes_internal_mapping_term() -> None:
