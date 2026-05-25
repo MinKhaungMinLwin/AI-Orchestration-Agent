@@ -5,7 +5,12 @@ from datetime import datetime, timedelta
 from typing import Any, List, Dict
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response,
+    _to_dict,
+)
 from langchain.tools import tool
 from common.brand_mapping import normalize_brand_name
 
@@ -58,23 +63,6 @@ from common.tstation_be_api_client.hkt_api_client.api.reservation_af_매장_방�
 
 # Member AF — 회원 단골매장 조회
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_favorite_stores_api_member_favorite_stores_get import sync_detailed as get_favorite_stores
-
-
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
-
-
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
 
 
 _STORE_BRAND_PREFIXES = ("티스테이션 ", "더타이어샵 ")

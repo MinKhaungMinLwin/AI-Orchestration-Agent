@@ -131,3 +131,26 @@ def get_tstation_be_client(token: str | None = None) -> AuthenticatedClient:
 def close_tstation_be_client() -> None:
     """Close shared backend HTTP resources."""
     _tstation_be_client.close()
+
+
+# ---------------------------------------------------------------------------
+# Shared tool helpers — used by all domain agent tools.py files.
+# Centralised here to avoid copy-paste across b_discovery, c_transaction,
+# and e_support tool modules.
+# ---------------------------------------------------------------------------
+
+def get_client() -> AuthenticatedClient:
+    """Get authenticated client for tstation-be API."""
+    return get_tstation_be_client()
+
+
+def _to_dict(res: Any) -> Any:
+    return res.to_dict() if hasattr(res, "to_dict") else (res.model_dump() if hasattr(res, "model_dump") else res)
+
+
+def _error_response(http_status: int | None, reason: str, message: str) -> dict:
+    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
+
+
+def _success_response(http_status: int, data: Any) -> dict:
+    return {"status": "success", "http_status": http_status, "data": data}
