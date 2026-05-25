@@ -149,6 +149,7 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
         collection_name=target_collection,
         vector_size=embedding_svc.get_embedding_dimension(),
     )
+    qdrant_svc.ensure_payload_text_index(target_collection, "question")
 
     # Build slim payloads + deterministic point IDs
     slim_docs: list[dict] = []
@@ -189,6 +190,9 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
         )
 
     old_collection = qdrant_svc.swap_alias(alias_name, target_collection)
+    if old_collection and old_collection != target_collection:
+        qdrant_svc.delete_collection(old_collection)
+        logger.info("[_run_ingestion] Deleted old collection: %s", old_collection)
     result.update(
         {
             "alias_name": alias_name,
@@ -227,6 +231,8 @@ def _run_incremental_sync(documents: list[dict], collection_name: str) -> dict:
             logger.info("[incremental_sync] Collection absent — running full ingestion")
             return _run_ingestion(documents, collection_name)
         live_collection = collection_name
+
+    qdrant_svc.ensure_payload_text_index(live_collection, "question")
 
     # Normalize documents
     documents = [DocumentProcessor._normalize_document(doc, idx) for idx, doc in enumerate(documents)]

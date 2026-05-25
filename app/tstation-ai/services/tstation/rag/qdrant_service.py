@@ -27,6 +27,9 @@ _COLLECTION_CACHE_TTL: float = 3600.0
 # Reused across all search_multi_vector calls — avoids per-request thread create/destroy overhead
 _search_executor = ThreadPoolExecutor(max_workers=2)
 
+# Candidates fetched per search type before outer RRF fusion
+_HYBRID_CANDIDATE_K: int = 50
+
 logger = logging.getLogger(__name__)
 
 
@@ -355,6 +358,82 @@ class QdrantService:
             f"score_threshold={score_threshold}, returned={len(hits)}"
         )
         return hits
+
+    def search_hybrid(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        query_text: str,
+        top_k: int = 20,
+    ) -> list[dict]:
+        """
+        Hybrid search: pure RRF fusion of keyword search and semantic search.
+
+        Keyword search:  BM25 on question + answer corpora, internal RRF → top _HYBRID_CANDIDATE_K.
+        Semantic search: parallel question + answer vector search, internal RRF → top _HYBRID_CANDIDATE_K.
+        Falls back to semantic-only if keyword search fails.
+        """
+        from services.tstation.rag.bm25_index import get_bm25_index
+
+        # Keyword search — synchronous (in-memory, ~1ms after first build)
+        keyword_results: list[dict] = []
+        try:
+            bm25_idx = get_bm25_index()
+            bm25_idx.ensure_built(self.client, collection_name)
+            keyword_results = bm25_idx.search(query_text, top_k=_HYBRID_CANDIDATE_K)
+        except Exception:
+            logger.warning("[QdrantService] Keyword search failed — falling back to semantic only")
+
+        # Semantic search — parallel question + answer vector search
+        semantic_results = self.search_multi_vector(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            top_k=_HYBRID_CANDIDATE_K,
+            score_threshold=0.0,
+        )
+
+        # Pure RRF fusion (k=60, equal weights)
+        RRF_K = 60
+        rrf_scores: dict[str, float] = {}
+        payloads: dict[str, dict] = {}
+
+        for rank, r in enumerate(semantic_results):
+            pid = str(r["id"])
+            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1 / (RRF_K + rank + 1)
+            payloads[pid] = r["payload"]
+
+        for rank, r in enumerate(keyword_results):
+            pid = str(r["id"])
+            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1 / (RRF_K + rank + 1)
+            if pid not in payloads:
+                payloads[pid] = r["payload"]
+
+        if not rrf_scores:
+            return []
+
+        candidates = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:top_k]
+        results = [
+            {"id": pid, "score": rrf_scores[pid], "payload": payloads[pid]}
+            for pid in candidates
+        ]
+
+        logger.info(
+            "[QdrantService] search_hybrid %s: keyword=%d semantic=%d candidates=%d",
+            collection_name, len(keyword_results), len(semantic_results), len(results),
+        )
+        logger.info(
+            "[QdrantService] top3 keyword:  %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in keyword_results[:3]],
+        )
+        logger.info(
+            "[QdrantService] top3 semantic: %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in semantic_results[:3]],
+        )
+        logger.info(
+            "[QdrantService] top5 final:    %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in results[:5]],
+        )
+        return results
 
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""
