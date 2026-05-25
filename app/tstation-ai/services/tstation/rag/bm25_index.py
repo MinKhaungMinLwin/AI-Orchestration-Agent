@@ -104,11 +104,22 @@ class Bm25FaqIndex:
         if not tokens:
             return []
 
+        logger.info("[Bm25FaqIndex] tokens=%s", tokens)
+
         q_scores = self._bm25_question.get_scores(tokens)
         a_scores = self._bm25_answer.get_scores(tokens)
 
         q_ranked = sorted(range(len(q_scores)), key=lambda i: q_scores[i], reverse=True)
         a_ranked = sorted(range(len(a_scores)), key=lambda i: a_scores[i], reverse=True)
+
+        logger.info(
+            "[Bm25FaqIndex] top3 question-BM25: %s",
+            [(self._payloads[self._point_ids[i]].get("question", "")[:50], round(float(q_scores[i]), 3)) for i in q_ranked[:3] if q_scores[i] > 0],
+        )
+        logger.info(
+            "[Bm25FaqIndex] top3 answer-BM25:   %s",
+            [(self._payloads[self._point_ids[i]].get("question", "")[:50], round(float(a_scores[i]), 3)) for i in a_ranked[:3] if a_scores[i] > 0],
+        )
 
         rrf_scores: dict[int, float] = {}
         for rank, idx in enumerate(q_ranked):
@@ -119,10 +130,16 @@ class Bm25FaqIndex:
                 rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1 / (_RRF_K + rank + 1)
 
         top_indices = sorted(rrf_scores, key=lambda i: rrf_scores[i], reverse=True)[:top_k]
-        return [
+
+        results = [
             {"id": self._point_ids[i], "score": rrf_scores[i], "payload": self._payloads[self._point_ids[i]]}
             for i in top_indices
         ]
+        logger.info(
+            "[Bm25FaqIndex] top3 after RRF: %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in results[:3]],
+        )
+        return results
 
     def is_ready(self) -> bool:
         return self._bm25_question is not None

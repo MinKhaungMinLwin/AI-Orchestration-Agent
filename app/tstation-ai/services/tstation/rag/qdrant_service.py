@@ -421,6 +421,18 @@ class QdrantService:
             "[QdrantService] search_hybrid %s: keyword=%d semantic=%d candidates=%d",
             collection_name, len(keyword_results), len(semantic_results), len(results),
         )
+        logger.info(
+            "[QdrantService] top3 keyword:  %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in keyword_results[:3]],
+        )
+        logger.info(
+            "[QdrantService] top3 semantic: %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in semantic_results[:3]],
+        )
+        logger.info(
+            "[QdrantService] top5 final:    %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in results[:5]],
+        )
         return results
 
     def delete_collection(self, collection_name: str) -> bool:

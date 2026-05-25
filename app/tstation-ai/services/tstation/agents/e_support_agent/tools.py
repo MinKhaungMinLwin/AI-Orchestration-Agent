@@ -265,7 +265,9 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
             }
             for r in candidates
         ]
-        logger.debug("[TOOL][search_faq_hybrid_tool] returned %d items", len(items))
+        logger.info("[TOOL][search_faq_hybrid_tool] returned %d items:", len(items))
+        for i, item in enumerate(items):
+            logger.info("  [%d] %s", i + 1, item.get("question", "")[:80])
         return _success_response(200, {"items": items})
     except Exception as e:
         logger.exception("[TOOL][search_faq_hybrid_tool] Failed")
