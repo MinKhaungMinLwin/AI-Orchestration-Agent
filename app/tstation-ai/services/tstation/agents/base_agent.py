@@ -990,6 +990,23 @@ class BaseAgent(ABC):
                                             "node": "vehicle_owner_lookup_guard",
                                             "tool": recommendation_tool_name,
                                         }
+                                        code_event = self._try_code_template(
+                                            accumulated_tool_data,
+                                            response_streamer,
+                                            accumulated_text,
+                                        )
+                                        if self._is_fast_path_code_event(recommendation_tool_name, code_event):
+                                            logger.info(
+                                                "[%s] Owner vehicle lookup recommendation resolved via code fast-path",
+                                                self.name,
+                                            )
+                                            for event in self._code_template_events(
+                                                code_event,
+                                                response_streamer,
+                                                answering_emitted,
+                                            ):
+                                                yield event
+                                            return
                                 except Exception:
                                     logger.exception("[%s] owner vehicle lookup guard failed", self.name)
                             if (
