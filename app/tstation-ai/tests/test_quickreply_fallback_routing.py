@@ -1435,6 +1435,29 @@ def test_store_holiday_period_event_answers_operation_query_from_detail_slots() 
     assert "티스테이션 한남점은 일요일에 영업 중인 것으로 확인돼요." in data["assistantResponse"]
 
 
+def test_store_holiday_period_event_answers_operation_query_with_holiday_as_closed() -> None:
+    event = _build_store_holiday_period_event(
+        "한남점 이번주 일요일 영업해?",
+        {"shop_seq": "F204423537", "shop_nm": "티스테이션 한남점"},
+        {
+            "status": "success",
+            "data": {
+                "shop_seq": "F204423537",
+                "shop_nm": "티스테이션 한남점",
+                "holiday": "일요일",
+                "available_slots": [],
+                "tel_no": "027902921",
+                "shop_biz_strt_time": "09",
+                "shop_biz_end_time": "19",
+            },
+        },
+    )
+
+    data = event["data"]
+    assert event["template"] == "quickReply"
+    assert "티스테이션 한남점은 일요일에 휴무로 확인돼요." in data["assistantResponse"]
+
+
 def test_store_holiday_period_detail_uses_requested_cal_day_when_present() -> None:
     assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 5/29 예약 가능해?") == "20260529"
 
