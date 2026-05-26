@@ -70,6 +70,7 @@ from services.tstation.chat import (
     _reservation_date_range_guard_event,
     _qc_skip_reason,
     _select_vehicle_from_listcar_event,
+    _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
     MultiAgentDomain,
@@ -658,6 +659,14 @@ def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
 
     assert _is_product_attribute_lookup_query(text) is True
     assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
+
+
+def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
+    assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 설명좀") is True
+
+
+def test_product_attribute_query_keeps_context_when_same_turn_size_is_explicit() -> None:
+    assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 225/55R17 설명좀") is False
 
 
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:

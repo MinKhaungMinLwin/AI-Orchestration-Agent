@@ -4870,6 +4870,16 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
 
 
+def _should_suppress_inherited_recommendation_context_for_product_attribute(user_text: str) -> bool:
+    if _is_ev_suitability_turn(user_text):
+        return False
+    frame = build_discovery_intent_frame(user_text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    if frame.intent != "product_description" or not product_names:
+        return False
+    return normalize_tire_size(user_text) is None
+
+
 def _should_replace_listcar_with_product_attribute_lookup(event: dict | None, user_text: str) -> bool:
     """Return true when a vehicle-list card is an accidental detour for a product attribute question."""
     if not isinstance(event, dict) or event.get("template") != "listCar":
@@ -7160,6 +7170,21 @@ class TStationChatServiceV2:
             # 4) Save merged slots to Redis without blocking the async request path.
             await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
 
+            suppress_inherited_recommendation_context = (
+                _should_suppress_inherited_recommendation_context_for_product_attribute(last_user_text)
+            )
+            prompt_slots = merged_slots.model_copy() if merged_slots is not None else None
+            if prompt_slots is not None and suppress_inherited_recommendation_context:
+                prompt_slots.tire_size = None
+                if prompt_slots.goal_type == "product_recommend":
+                    prompt_slots.goal_type = None
+                prompt_slots.recommendation_variants = None
+                prompt_slots.recommendation_limit_per_variant = None
+                prompt_slots.recommendation_source_text = None
+                logger.debug(
+                    "[SLOTS] Suppressed inherited recommendation context for product attribute lookup turn"
+                )
+
             # 5) Build slot context strings for agent injection.
             # `slot_context` (no pending_intent) is the default for all agents — Discovery,
             # Support, and Leading must route purely from prior conversation context, never
@@ -7167,14 +7192,24 @@ class TStationChatServiceV2:
             # earlier turn does not silently force a Transaction handoff on a recommendation
             # pick. `slot_context_with_intent` is the full version, injected ONLY for the
             # Transaction agent which acts directly on the intent (Flow 1 / 2 / 6 routing).
-            slot_context = merged_slots.to_prompt_context(include_pending_intent=False) if merged_slots.has_any() else None
-            slot_context_with_intent = merged_slots.to_prompt_context(include_pending_intent=True) if merged_slots.has_any() else None
+            slot_context = (
+                prompt_slots.to_prompt_context(include_pending_intent=False)
+                if prompt_slots is not None and prompt_slots.has_any()
+                else None
+            )
+            slot_context_with_intent = (
+                prompt_slots.to_prompt_context(include_pending_intent=True)
+                if prompt_slots is not None and prompt_slots.has_any()
+                else None
+            )
             # When pending_intent is unset both strings are equal — collapse so the
             # downstream coordinator only injects one block.
             if slot_context_with_intent == slot_context:
                 slot_context_with_intent = None
 
-            followup_recommendation_context = _infer_followup_recommendation_context(messages, last_user_text)
+            followup_recommendation_context = None
+            if not suppress_inherited_recommendation_context:
+                followup_recommendation_context = _infer_followup_recommendation_context(messages, last_user_text)
             if followup_recommendation_context:
                 slot_context = (
                     f"{slot_context}\n\n{followup_recommendation_context}"
@@ -7190,17 +7225,20 @@ class TStationChatServiceV2:
 
             # 6) Format tool context for prompt injection
             if prev_tool_data:
-                prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(prev_tool_data, merged_slots)
-                tool_context = TStationChatServiceV2._format_tool_context(prompt_tool_data)
-                # Cap tool context to avoid consuming too much of the context window
-                if len(tool_context) > 4000:
-                    tool_context = tool_context[:4000] + "\n... (일부 생략)"
-                logger.debug(
-                    "[TOOL_CTX] Loaded %d tool results, injected %d (%d chars)",
-                    len(prev_tool_data),
-                    len(prompt_tool_data),
-                    len(tool_context),
-                )
+                if suppress_inherited_recommendation_context:
+                    logger.debug("[TOOL_CTX] Skipped recent tool context for product attribute lookup turn")
+                else:
+                    prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(prev_tool_data, merged_slots)
+                    tool_context = TStationChatServiceV2._format_tool_context(prompt_tool_data)
+                    # Cap tool context to avoid consuming too much of the context window
+                    if len(tool_context) > 4000:
+                        tool_context = tool_context[:4000] + "\n... (일부 생략)"
+                    logger.debug(
+                        "[TOOL_CTX] Loaded %d tool results, injected %d (%d chars)",
+                        len(prev_tool_data),
+                        len(prompt_tool_data),
+                        len(tool_context),
+                    )
 
         except Exception as e:
             logger.exception(f"[SLOTS] Slot processing failed, continuing without slots: {e}")
@@ -9445,6 +9483,38 @@ class TStationChatServiceV2:
                     str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.DISCOVERY.value
                     and event.get("template") in {"product", "quickReply"}
                 ):
+                    deterministic_attribute_event = _build_product_attribute_event_from_search_results(
+                        user_query,
+                        search_product_tool_results,
+                    )
+                    if (
+                        _is_product_attribute_lookup_query(user_query)
+                        and (
+                            event.get("template") == "product"
+                            or deterministic_attribute_event is None
+                            or _is_product_attribute_fallback_event(event)
+                        )
+                    ):
+                        product_attribute_resolution = await _resolve_product_attribute_with_code()
+                        if product_attribute_resolution is not None:
+                            code_events, deterministic_attribute_event = product_attribute_resolution
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    if deterministic_attribute_event is not None:
+                        logger.info("[PRODUCT_ATTRIBUTE] replacing discovery event with search result summary")
+                        event = deterministic_attribute_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_product_attribute_resolver"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
                     stored_context = None
                     if initial_slots is not None:
                         stored_variants = getattr(initial_slots, "recommendation_variants", None)
@@ -9553,37 +9623,6 @@ class TStationChatServiceV2:
                 if last_template == "quickReply" and isinstance(event_data, dict):
                     source_domain = str(event.get("source_domain", "ui_template")).lower()
                     if source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
-                        deterministic_attribute_event = _build_product_attribute_event_from_search_results(
-                            user_query,
-                            search_product_tool_results,
-                        )
-                        if (
-                            _is_product_attribute_lookup_query(user_query)
-                            and (
-                                deterministic_attribute_event is None
-                                or _is_product_attribute_fallback_event(event)
-                            )
-                        ):
-                            product_attribute_resolution = await _resolve_product_attribute_with_code()
-                            if product_attribute_resolution is not None:
-                                code_events, deterministic_attribute_event = product_attribute_resolution
-                                for code_event in code_events:
-                                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
-                        if deterministic_attribute_event is not None:
-                            logger.info("[PRODUCT_ATTRIBUTE] replacing quickReply with search result summary")
-                            event = deterministic_attribute_event
-                            last_template = "quickReply"
-                            last_template_source = "code_mapper"
-                            last_assistant_response_source = "code_product_attribute_resolver"
-                            event_data = event.get("data", {})
-                            assistant_response = str(event_data.get("assistantResponse") or "")
-                            draft_response = assistant_response
-                            draft_for_qc = assistant_response
-                            original_message_events = [{
-                                "type": "message",
-                                "content": assistant_response,
-                                "agent": "[DISCOVERY AGENT]",
-                            }]
                         deterministic_compare_event = _build_product_comparison_event_from_search_results(
                             user_query,
                             search_product_tool_results,
