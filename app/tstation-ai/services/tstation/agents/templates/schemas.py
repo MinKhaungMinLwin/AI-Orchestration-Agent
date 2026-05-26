@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # 이 두 번 보강된 뒤에도 재발해서 schema 측에서 결정적으로 차단.
 _QTY_QUESTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"몇\s*개"),
+    re.compile(r"몇\s*본"),
     re.compile(r"(?:타이어\s*)?수량.{0,15}?(?:알려|말씀|선택|골라|어떻게)"),
 )
 _QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
