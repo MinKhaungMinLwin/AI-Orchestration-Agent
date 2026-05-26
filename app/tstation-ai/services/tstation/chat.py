@@ -6461,6 +6461,64 @@ class TStationChatServiceV2:
         return None
 
     @staticmethod
+    def _resolve_recent_product_search_keyword(prev_tool_data: list[dict]) -> str | None:
+        """Return the most recent search_product_tool keyword from context."""
+        if not prev_tool_data:
+            return None
+
+        for entry in prev_tool_data:
+            if entry.get("tool") != "search_product_tool":
+                continue
+            tool_input = entry.get("input")
+            if not isinstance(tool_input, dict):
+                continue
+            keyword = (tool_input.get("keyword") or "").strip()
+            if keyword:
+                return keyword
+        return None
+
+    @staticmethod
+    def _resolve_goods_no_from_recent_product_context(
+        prev_tool_data: list[dict],
+        tire_size: str | None,
+    ) -> str | None:
+        """Resolve goods_no from the latest product-list context using tire size.
+
+        This is used when a stock/order flow first asked for vehicle/size, and
+        the user then selected a registered vehicle from listCar. At that point
+        the current-turn text is only a plate number, but the immediately prior
+        product-search context may already contain the target family/model.
+        """
+        target_size = normalize_tire_size(tire_size)
+        if not target_size or not prev_tool_data:
+            return None
+
+        items: list[dict] = []
+        PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
+        for entry in prev_tool_data:
+            if entry.get("tool") not in PRODUCT_LIST_TOOLS:
+                continue
+            data = entry.get("data")
+            if isinstance(data, list):
+                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+                break
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                items = [it for it in data["items"] if isinstance(it, dict)]
+                break
+        if not items:
+            return None
+
+        same_size = [
+            item
+            for item in items
+            if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
+        ]
+        if len(same_size) != 1:
+            return None
+        goods_no = same_size[0].get("goods_no")
+        return goods_no if goods_no else None
+
+    @staticmethod
     def _resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
         """Match a user's list-selection reply against the prior
         get_nearby_stores_tool / get_store_list_tool result and return the
@@ -7181,6 +7239,7 @@ class TStationChatServiceV2:
             # subsequent "구매할게" / "매장 선택 후 주문" turns then fail the
             # goal-router's `size` step and route to Discovery instead of
             # Transaction.
+            tire_size_resolved_from_vehicle_selection = False
             if merged_slots.tire_size is None:
                 try:
                     resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
@@ -7188,12 +7247,35 @@ class TStationChatServiceV2:
                     )
                     if resolved_tire_size:
                         merged_slots.tire_size = resolved_tire_size
+                        tire_size_resolved_from_vehicle_selection = True
                         logger.debug(
                             f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
                             f"vehicle-selection against last `listCar` template metadata"
                         )
                 except Exception as e:
                     logger.warning(f"[SLOTS] history tire_size resolver failed: {e}")
+
+            if tire_size_resolved_from_vehicle_selection and prev_tool_data:
+                recovered_keyword = TStationChatServiceV2._resolve_recent_product_search_keyword(prev_tool_data)
+                if recovered_keyword and not merged_slots.tire_model:
+                    merged_slots.tire_model = recovered_keyword
+                    logger.debug(
+                        f"[SLOTS] Recovered tire_model={recovered_keyword!r} from recent search_product_tool "
+                        "after vehicle selection"
+                    )
+
+                if merged_slots.goods_no is None:
+                    resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_recent_product_context(
+                        prev_tool_data,
+                        merged_slots.tire_size,
+                    )
+                    if resolved_goods_no:
+                        merged_slots.goods_no = resolved_goods_no
+                        goods_no_resolved_this_turn = True
+                        logger.debug(
+                            f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from recent product context "
+                            f"using vehicle-selected tire_size={merged_slots.tire_size!r}"
+                        )
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
             # the most recent search_stores_tool / get_nearby_stores_tool / get_store_list_tool result.

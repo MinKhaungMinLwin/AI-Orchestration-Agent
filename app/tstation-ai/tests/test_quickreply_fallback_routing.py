@@ -1691,6 +1691,41 @@ def test_fuel_efficiency_sort_prefers_higher_score_then_lower_rr() -> None:
     assert [item["goods_no"] for item in sorted_items] == ["C", "B", "A"]
 
 
+def test_recent_product_search_keyword_is_recovered_after_vehicle_selection() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "input": {"keyword": "옵티모", "brand_cd": "HK"},
+            "data": [
+                {"goods_no": "G1", "goods_nm": "옵티모 H426", "tire_size_1": "245/50R18"},
+                {"goods_no": "G2", "goods_nm": "옵티모 H418", "tire_size_1": "215/65R16"},
+            ],
+        }
+    ]
+
+    assert TStationChatServiceV2._resolve_recent_product_search_keyword(prev_tool_data) == "옵티모"
+    assert TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "235/55R19") is None
+
+
+def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tire_size() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "input": {"keyword": "벤투스 S2 AS", "brand_cd": "HK"},
+            "data": [
+                {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/45R17"},
+                {"goods_no": "G2", "goods_nm": "벤투스 S2 AS", "tire_size_1": "235/55R19"},
+                {"goods_no": "G3", "goods_nm": "벤투스 S2 AS", "tire_size_1": "245/45R18"},
+            ],
+        }
+    ]
+
+    assert (
+        TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
+        == "G2"
+    )
+
+
 def test_vehicle_information_event_answers_staggered_fitment_question() -> None:
     event = _build_vehicle_information_event(
         {
