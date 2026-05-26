@@ -3944,15 +3944,17 @@ def _build_store_holiday_period_event(
     has_slot_data = isinstance(available_slots, list) and any(str(slot).strip() for slot in available_slots)
     holiday_normalized = re.sub(r"\s+", "", holiday)
     period_normalized = re.sub(r"\s+", "", period_label)
+    holiday_matches_period = bool(holiday) and (
+        holiday_normalized == period_normalized or period_normalized in holiday_normalized
+    )
 
     if is_operation_query:
-        if has_slot_data:
+        if holiday_matches_period:
+            lines = [f"{store_name}은 {period_label}에 휴무로 확인돼요."]
+        elif has_slot_data:
             lines = [f"{store_name}은 {period_label}에 영업 중인 것으로 확인돼요."]
         elif holiday:
-            if holiday_normalized == period_normalized or period_normalized in holiday_normalized:
-                lines = [f"{store_name}은 {period_label}에 휴무로 확인돼요."]
-            else:
-                lines = [f"{store_name}은 {period_label}에 `{holiday}`로 확인돼요."]
+            lines = [f"{store_name}은 {period_label}에 `{holiday}`로 확인돼요."]
         else:
             lines = [f"{store_name}의 {period_label} 영업 여부는 매장 상세 정보 기준으로 확인해 주세요."]
     else:
