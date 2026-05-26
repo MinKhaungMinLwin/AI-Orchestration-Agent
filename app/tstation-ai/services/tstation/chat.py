@@ -70,6 +70,7 @@ from services.tstation.policies.delivery_policy_gate import (
 )
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 from services.tstation.policies.store_confirmation_policy import (
+    is_store_confirmation_reply,
     is_store_confirmation_prompt,
     resolve_store_followup_from_messages,
     resolve_store_followup_from_quickreply_template,
@@ -4029,6 +4030,52 @@ def _reservation_context_from_messages(user_text: str, messages: list[dict] | No
             content += " " + json.dumps(template_data, ensure_ascii=False)
         if _RESERVATION_CONTEXT_RE.search(content):
             return True
+    return False
+
+
+def _has_store_date_availability_signal(text: str | None) -> bool:
+    if not text:
+        return False
+    has_store_availability_keyword = bool(
+        re.search(r"영업|운영|휴무|휴일|쉬어|열어|문\s*열|문\s*닫|예약|가능|스케줄|시간", text)
+    )
+    has_date_reference = bool(
+        re.search(
+            r"\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|"
+            r"오늘|내일|모레|이번\s*주|다음\s*주|다다음\s*주|이번\s*주말|주말|"
+            r"월요일|화요일|수요일|목요일|금요일|토요일|일요일|"
+            r"공휴일|휴일|연휴|"
+            r"설날|설\s*연휴|추석|현충일|광복절|개천절|한글날|성탄절|크리스마스|"
+            r"석가탄신일|부처님\s*오신\s*날|어린이날|삼일절|3\.1절",
+            text,
+        )
+    )
+    return has_store_availability_keyword and has_date_reference
+
+
+def _should_preserve_store_date_availability_context(
+    last_user_text: str,
+    messages: list[dict] | None = None,
+) -> bool:
+    if _has_store_date_availability_signal(last_user_text):
+        return True
+    if not is_store_confirmation_reply(last_user_text):
+        return False
+    if not messages:
+        return False
+
+    saw_confirmation_prompt = False
+    for message in reversed(messages[-8:]):
+        if message.get("role") == "assistant":
+            content = str(message.get("content") or "")
+            if is_store_confirmation_prompt(content):
+                saw_confirmation_prompt = True
+                continue
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "")
+        if _has_store_date_availability_signal(content):
+            return saw_confirmation_prompt
     return False
 
 
@@ -8004,21 +8051,9 @@ class TStationChatServiceV2:
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
         ))
-        has_store_availability_keyword = bool(
-            re.search(r"영업|운영|휴무|휴일|쉬어|열어|문\s*열|문\s*닫|예약|가능|스케줄|시간", last_user_text)
+        current_store_date_availability.set(
+            _should_preserve_store_date_availability_context(last_user_text, request.messages)
         )
-        has_date_reference = bool(
-            re.search(
-                r"\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|"
-                r"오늘|내일|모레|이번\s*주|다음\s*주|다다음\s*주|이번\s*주말|주말|"
-                r"월요일|화요일|수요일|목요일|금요일|토요일|일요일|"
-                r"공휴일|휴일|연휴|"
-                r"설날|설\s*연휴|추석|현충일|광복절|개천절|한글날|성탄절|크리스마스|"
-                r"석가탄신일|부처님\s*오신\s*날|어린이날|삼일절|3\.1절",
-                last_user_text,
-            )
-        )
-        current_store_date_availability.set(has_store_availability_keyword and has_date_reference)
 
         _t_prestream = time.perf_counter()
         logger.debug(

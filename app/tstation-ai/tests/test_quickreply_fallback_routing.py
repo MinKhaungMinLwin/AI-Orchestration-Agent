@@ -70,6 +70,7 @@ from services.tstation.chat import (
     _reservation_date_range_guard_event,
     _qc_skip_reason,
     _select_vehicle_from_listcar_event,
+    _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
@@ -667,6 +668,30 @@ def test_product_attribute_query_suppresses_inherited_recommendation_context_wit
 
 def test_product_attribute_query_keeps_context_when_same_turn_size_is_explicit() -> None:
     assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 225/55R17 설명좀") is False
+
+
+def test_store_date_availability_context_preserved_on_store_confirmation_reply() -> None:
+    messages = [
+        {"role": "user", "content": "티스테이션 성남 IC점 5/29 오후 16시 예약 돼?"},
+        {
+            "role": "assistant",
+            "content": "고객님, 요청하신 '성남 IC점'으로 검색한 결과 '티스테이션 성남IC점' 매장이 있는데 이 매장이 맞을까요?",
+        },
+    ]
+
+    assert _should_preserve_store_date_availability_context("네, 맞아요", messages) is True
+
+
+def test_store_date_availability_context_not_preserved_for_generic_store_confirmation() -> None:
+    messages = [
+        {"role": "user", "content": "티스테이션 성남 IC점 전화번호 알려줘"},
+        {
+            "role": "assistant",
+            "content": "고객님, 요청하신 '성남 IC점'으로 검색한 결과 '티스테이션 성남IC점' 매장이 있는데 이 매장이 맞을까요?",
+        },
+    ]
+
+    assert _should_preserve_store_date_availability_context("네, 맞아요", messages) is False
 
 
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
