@@ -1014,7 +1014,8 @@ def _product_search_policy_fallback_response(tool_data_list: list[dict] | None =
             if _STOCK_OR_INSTALL_REQUEST_RE.search(current_user_text.get() or "") and keyword and size:
                 return (
                     f"입력하신 {keyword} {size} 상품은 현재 확인되지 않아요.\n"
-                    "다른 사이즈를 다시 찾거나, 대체 가능한 상품 기준으로 매장 도착 일정을 확인해 드릴게요."
+                    "상품명이나 규격을 다시 확인해 주세요.\n"
+                    "정확한 상품이 확인되면 그 기준으로 장착 가능 여부를 안내해 드릴게요."
                 )
             if keyword and size:
                 return (
@@ -3309,7 +3310,8 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
     info card instead of an unwanted reservation picker.
     """
     called_tools = {e.get("tool", "") for e in tool_data_list}
-    if not (called_tools & _BOOKING_SIGNAL_TOOLS) and not current_store_date_availability.get():
+    treat_as_datepick = _should_treat_store_detail_slots_as_datepick()
+    if not (called_tools & _BOOKING_SIGNAL_TOOLS) and not treat_as_datepick:
         return None
     for entry in _find_entries(tool_data_list, "get_store_detail_tool"):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
@@ -3337,7 +3339,7 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         metadata: dict = {"shopId": shop_id}
         if shop_nm:
             metadata["shopName"] = shop_nm
-        if current_store_date_availability.get():
+        if treat_as_datepick:
             date_label = yyyymmdd_to_korean_date(cal_day)
             shop_label = f"{shop_nm}은" if shop_nm else "해당 매장은"
             short = f"{date_label} {shop_label} 영업하며 예약 가능한 시간이 있습니다."
@@ -3359,7 +3361,7 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
                 "metadata": metadata,
             },
         }
-        if current_store_date_availability.get():
+        if treat_as_datepick:
             event["assistant_response_source"] = response_source
             event["data"]["assistantResponse"] = short
             return event
@@ -3717,6 +3719,19 @@ _TODAY_SERVICE_DATEPICK_RE = re.compile(
     r"오늘\s*서비스|오늘서비스|오늘\s*장착|당일\s*장착|오늘\s*가능|당일|지금|바로|당장",
     re.IGNORECASE,
 )
+_STORE_BOOKING_FOLLOWUP_SIGNAL_RE = re.compile(
+    r"예약|장착|방문|스케줄|시간표|가능\s*(?:해|하|한|하냐|하냐고|하나요|여부)?|돼\??|되\??",
+    re.IGNORECASE,
+)
+_STORE_OPERATION_INFO_SIGNAL_RE = re.compile(
+    r"영업|운영|휴무|휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    re.IGNORECASE,
+)
+_STORE_DATE_REFERENCE_RE = re.compile(
+    r"\d{1,2}\s*/\s*\d{1,2}|(?:\d{2,4}\s*년\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일|"
+    r"오늘|내일|모레|이번\s*주|다음\s*주|주말|월요일|화요일|수요일|목요일|금요일|토요일|일요일",
+    re.IGNORECASE,
+)
 
 
 def _parse_korean_date_label(label: str) -> datetime.date | None:
@@ -3758,6 +3773,22 @@ def _today_service_datepick_response(event: dict) -> str | None:
     if earliest_date <= datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date():
         return None
     return f"오늘서비스는 어렵고, 가장 빠른 예약 가능 일정은 {earliest_label}부터예요. 가능한 날짜와 시간을 선택해 주세요."
+
+
+def _should_treat_store_detail_slots_as_datepick() -> bool:
+    user_text = current_user_text.get() or ""
+    if user_text and _STORE_OPERATION_INFO_SIGNAL_RE.search(user_text) and not _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(
+        user_text
+    ):
+        return False
+    if current_store_date_availability.get():
+        return True
+    if not user_text:
+        return False
+    return bool(
+        _STORE_DATE_REFERENCE_RE.search(user_text)
+        and _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(user_text)
+    )
 
 
 def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:

@@ -4,8 +4,8 @@ Celery Beat task: faq_fetch_task
 Periodically fetches all FAQ data from tstation-be (Oracle DB source of truth)
 and re-ingests it into Qdrant, keeping vector search in sync automatically.
 
-Schedule is controlled by FAQ_SYNC_INTERVAL_SECONDS (default: 3600).
-Requires TSTATION_BE_BASE_URL to be set; skips silently if missing.
+Schedule is controlled by FAQ_SYNC_INTERVAL_SECONDS (default: 25200).
+Requires TSTATION_BE_API to be set; skips silently if missing.
 """
 
 import logging
@@ -27,7 +27,7 @@ def _stable_faq_id(question: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, question))
 
 
-def _fetch_faq_from_be(base_url: str, token: str = "") -> list[dict]:
+def _fetch_faq_from_be(base_url: str, token: str = "") -> tuple[list[dict], bool]:
     """
     Fetch all FAQ items from tstation-be and map to the ingestion schema expected
     by _run_ingestion (same format as faq_data.json documents).
@@ -43,7 +43,10 @@ def _fetch_faq_from_be(base_url: str, token: str = "") -> list[dict]:
     response = httpx.get(url, params={"limit": _FAQ_FETCH_LIMIT}, timeout=_FAQ_FETCH_TIMEOUT, headers=headers)
     response.raise_for_status()
 
-    items = response.json().get("items", [])
+    payload = response.json()
+    items = payload.get("items", [])
+    total = payload.get("total", len(items))
+    is_partial = isinstance(total, int) and total > len(items)
     documents = []
     for item in items:
         question = (item.get("cust_quest") or "").strip()
@@ -64,8 +67,20 @@ def _fetch_faq_from_be(base_url: str, token: str = "") -> list[dict]:
             }
         )
 
-    logger.info("[faq_fetch_task] Fetched %d FAQ documents from %s", len(documents), url)
-    return documents
+    logger.info(
+        "[faq_fetch_task] Fetched %d/%s FAQ documents from %s",
+        len(documents),
+        total,
+        url,
+    )
+    if is_partial:
+        logger.warning(
+            "[faq_fetch_task] Partial FAQ response detected (total=%s, items=%d); "
+            "missing-document deletes will be disabled for this sync",
+            total,
+            len(items),
+        )
+    return documents, is_partial
 
 
 @celery_app.task(
@@ -87,7 +102,7 @@ def faq_fetch_task(self):
     logger.info("[faq_fetch_task] Starting periodic FAQ sync from %s", base_url)
 
     try:
-        documents = _fetch_faq_from_be(base_url, token=settings.JWT_TOKEN)
+        documents, is_partial = _fetch_faq_from_be(base_url, token=settings.JWT_TOKEN)
     except Exception as exc:
         logger.exception("[faq_fetch_task] Failed to fetch FAQ from tstation-be")
         raise self.retry(exc=exc)
@@ -97,7 +112,11 @@ def faq_fetch_task(self):
         return
 
     try:
-        result = _run_incremental_sync(documents, settings.QDRANT_COLLECTION_FAQ)
+        result = _run_incremental_sync(
+            documents,
+            settings.QDRANT_COLLECTION_FAQ,
+            delete_missing=not is_partial,
+        )
     except Exception as exc:
         logger.exception("[faq_fetch_task] Ingestion failed")
         raise self.retry(exc=exc)

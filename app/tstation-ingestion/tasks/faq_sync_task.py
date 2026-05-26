@@ -207,9 +207,13 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
 # Incremental sync (periodic fetch: only embed/upsert what changed)
 # ---------------------------------------------------------------------------
 
-def _run_incremental_sync(documents: list[dict], collection_name: str) -> dict:
+def _run_incremental_sync(
+    documents: list[dict],
+    collection_name: str,
+    delete_missing: bool = True,
+) -> dict:
     """
-    Incremental FAQ sync: only embed and upsert changed/new docs, delete removed ones.
+    Incremental FAQ sync: only embed and upsert changed/new docs, delete removed ones when safe.
     Falls back to full _run_ingestion if the target collection does not exist yet.
     """
     from config.env import settings
@@ -261,11 +265,15 @@ def _run_incremental_sync(documents: list[dict], collection_name: str) -> dict:
     # Compare with existing hashes in Qdrant
     existing_hashes = qdrant_svc.get_all_content_hashes(live_collection)
     to_upsert = [pid for pid, v in incoming.items() if existing_hashes.get(pid) != v["content_hash"]]
-    to_delete = [pid for pid in existing_hashes if pid not in incoming]
+    to_delete = [pid for pid in existing_hashes if pid not in incoming] if delete_missing else []
 
     logger.info(
-        "[incremental_sync] total=%d upsert=%d delete=%d unchanged=%d",
-        len(incoming), len(to_upsert), len(to_delete), len(incoming) - len(to_upsert),
+        "[incremental_sync] total=%d upsert=%d delete=%d unchanged=%d delete_missing=%s",
+        len(incoming),
+        len(to_upsert),
+        len(to_delete),
+        len(incoming) - len(to_upsert),
+        delete_missing,
     )
 
     if not to_upsert and not to_delete:

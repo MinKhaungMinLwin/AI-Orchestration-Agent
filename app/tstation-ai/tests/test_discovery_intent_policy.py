@@ -233,6 +233,17 @@ def test_mileage_attribute_recommendation_remains_attribute_recommendation() -> 
     assert plan.preferred_tool == "get_products_recommendations_tool"
 
 
+def test_fuel_efficiency_recommendation_uses_recommendation_flow_not_explanation() -> None:
+    frame = build_discovery_intent_frame("연비 좋은 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert frame.entities["recommendation_metric"] == "fuel_efficiency"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "fuel_efficiency"}
+
+
 def test_tc216_kinergy_ex_and_ventus_air_s_are_recognized_for_grade_compare() -> None:
     frame = build_discovery_intent_frame("키너지 EX가 벤투스 air S 보다 프리미엄 등급 맞지?")
 

@@ -43,8 +43,8 @@ def test_tc049_invalid_gangnam_store_does_not_show_datepick() -> None:
 
     assert decision.template == TemplateName.QUICK_REPLY
     assert decision.response_shape == ResponseShape.CLARIFY
-    assert decision.metadata["response_shape_key"] == "invalid_store_confirmation"
-    assert decision.required_slots == ("store",)
+    assert decision.metadata["response_shape_key"] == "unverified_store_schedule_lookup"
+    assert decision.required_slots == ()
     assert "datepick_for_unverified_store" in decision.forbidden_behaviors
     assert "pretend_store_exists" in decision.forbidden_behaviors
 

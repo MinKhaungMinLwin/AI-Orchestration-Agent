@@ -1,5 +1,6 @@
 import contextvars
 import logging
+import re
 from common.tool_cache import tool_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -12,6 +13,7 @@ from services.tstation.common.tstation_be_client import (
     _success_response,
     _to_dict,
 )
+from services.tstation.policies.domestic_region_gate import decide_domestic_search_area
 from langchain.tools import tool
 from common.brand_mapping import normalize_brand_name
 
@@ -67,6 +69,24 @@ logger = logging.getLogger(__name__)
 current_transaction_store_preview_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "current_transaction_store_preview_tool_patch", default={}
 )
+
+_KOREA_ADDRESS_PREFIX_RE = re.compile(
+    r"^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)"
+)
+_FOREIGN_REGION_QUERY_RE = re.compile(
+    r"^(평양|북한|베이징|북경|상하이|상해|러시아|일본|중국|미국|대만|타이완|홍콩|마카오|"
+    r"싱가포르|베트남|태국|방콕|도쿄|동경|오사카|교토|후쿠오카|파리|런던|독일|프랑스|유럽)$",
+    re.IGNORECASE,
+)
+_BUSINESS_PLACE_SUFFIX_RE = re.compile(
+    r"(주유소|충전소|식당|반점|냉면|카페|커피|병원|의원|약국|마트|상사|모텔|호텔|"
+    r"부동산|공인중개사|교회|성당|학원|학교|아파트|빌라|오피스텔|공장)$"
+)
+_LANDMARK_REGION_SUFFIX_RE = re.compile(
+    r"(역|구청|시청|군청|도청|터미널|공항|항구|IC|나들목|대교|시장|광장|공원|타워|몰|시티)$",
+    re.IGNORECASE,
+)
+
 
 def _apply_store_preview_policy_patch(
     *,
@@ -773,6 +793,75 @@ def _first_place_coordinates(place_data: dict) -> tuple[float | None, float | No
         return None, None, None
 
 
+def _place_title(place: dict | None) -> str:
+    if not isinstance(place, dict):
+        return ""
+    return str(
+        place.get("place_name")
+        or place.get("title")
+        or place.get("name")
+        or ""
+    ).strip()
+
+
+def _place_address(place: dict | None) -> str:
+    if not isinstance(place, dict):
+        return ""
+    return str(
+        place.get("road_addr")
+        or place.get("road_address_name")
+        or place.get("address_name")
+        or place.get("address")
+        or ""
+    ).strip()
+
+
+def _place_meta(place: dict | None) -> dict[str, str | None]:
+    title = _place_title(place)
+    address = _place_address(place)
+    return {
+        "place_name": title or None,
+        "address_name": address or None,
+    }
+
+
+def _compact_place_text(value: str | None) -> str:
+    return re.sub(r"\s+", "", value or "").lower()
+
+
+def _is_usable_region_place_fallback(query: str | None, place: dict | None) -> bool:
+    """Return True when a zero-result region query can safely use Kakao place coordinates.
+
+    Region fallback exists for domestic aliases/landmarks such as "광교" or "강남구청".
+    Kakao also returns business POIs for unsupported/out-of-country names like "평양"
+    ("평양주유소") or "베이징" ("베이징반점"). Those must not become store-search
+    coordinates unless the user explicitly used the place-query path.
+    """
+    query_text = (query or "").strip()
+    if not query_text:
+        return False
+    query_key = _compact_place_text(query_text)
+    if _FOREIGN_REGION_QUERY_RE.fullmatch(query_key):
+        return False
+
+    title = _place_title(place)
+    address = _place_address(place)
+    if not title or not address or _KOREA_ADDRESS_PREFIX_RE.search(address) is None:
+        return False
+
+    title_key = _compact_place_text(title)
+    address_key = _compact_place_text(address)
+    if query_key in address_key:
+        return True
+    if title_key == query_key:
+        return True
+    if _LANDMARK_REGION_SUFFIX_RE.search(query_text):
+        return query_key in title_key
+    if query_key in title_key and _BUSINESS_PLACE_SUFFIX_RE.search(title):
+        return False
+    return False
+
+
 @tool_cache(ttl=1800)
 def _get_store_list_cached(
     region_code: str | None = None,
@@ -987,10 +1076,7 @@ def search_stores_tool(
             search_meta.update({
                 "source": "place",
                 "place_query": place_query,
-                "place": {
-                    "place_name": place.get("place_name") or place.get("name"),
-                    "address_name": place.get("address_name") or place.get("address"),
-                },
+                "place": _place_meta(place),
             })
 
         if xpos is not None and ypos is not None:
@@ -1053,41 +1139,60 @@ def search_stores_tool(
                 and not normalized_store_nm
                 and not place_query
             ):
-                place_response = search_place(client=get_client(), query=region_code, size=1)
-                if place_response.parsed is not None:
-                    place_data = _to_dict(place_response.parsed)
-                    found_xpos, found_ypos, place = _first_place_coordinates(
-                        place_data if isinstance(place_data, dict) else {}
-                    )
-                    if found_xpos is not None and found_ypos is not None:
-                        response = get_store_list(
-                            client=get_client(),
-                            xpos=found_xpos,
-                            ypos=found_ypos,
-                            radius_km=radius_km,
-                            svc_codes=svc_codes,
-                            all_my_t_only=all_my_t_only,
-                            imported_car_only=imported_car_only,
-                            chl_sct_cd=chl_sct_cd,
-                            sort_by=sort_by,
-                            limit=candidate_cap,
+                domestic_decision = decide_domestic_search_area(region_code)
+                if not domestic_decision.is_domestic_search_area:
+                    search_meta.update({
+                        "source": "region_place_fallback_blocked",
+                        "region_code": region_code,
+                        "reason": "not_domestic_search_area",
+                        "gate": domestic_decision.model_dump(),
+                    })
+                else:
+                    place_response = search_place(client=get_client(), query=region_code, size=1)
+                    if place_response.parsed is not None:
+                        place_data = _to_dict(place_response.parsed)
+                        found_xpos, found_ypos, place = _first_place_coordinates(
+                            place_data if isinstance(place_data, dict) else {}
                         )
-                        if response.parsed is None:
-                            return _error_response(
-                                response.status_code,
-                                f"HTTP {response.status_code}",
-                                response.content.decode(errors="ignore") or "Failed to search stores",
+                        if (
+                            found_xpos is not None
+                            and found_ypos is not None
+                            and _is_usable_region_place_fallback(region_code, place)
+                        ):
+                            response = get_store_list(
+                                client=get_client(),
+                                xpos=found_xpos,
+                                ypos=found_ypos,
+                                radius_km=radius_km,
+                                svc_codes=svc_codes,
+                                all_my_t_only=all_my_t_only,
+                                imported_car_only=imported_car_only,
+                                chl_sct_cd=chl_sct_cd,
+                                sort_by=sort_by,
+                                limit=candidate_cap,
                             )
-                        source_status = response.status_code
-                        data = _to_dict(response.parsed)
-                        search_meta.update({
-                            "source": "region_place_fallback",
-                            "region_code": region_code,
-                            "place": {
-                                "place_name": place.get("place_name") or place.get("name"),
-                                "address_name": place.get("address_name") or place.get("address"),
-                            },
-                        })
+                            if response.parsed is None:
+                                return _error_response(
+                                    response.status_code,
+                                    f"HTTP {response.status_code}",
+                                    response.content.decode(errors="ignore") or "Failed to search stores",
+                                )
+                            source_status = response.status_code
+                            data = _to_dict(response.parsed)
+                            search_meta.update({
+                                "source": "region_place_fallback",
+                                "region_code": region_code,
+                                "place": _place_meta(place),
+                                "gate": domestic_decision.model_dump(),
+                            })
+                        elif found_xpos is not None and found_ypos is not None:
+                            search_meta.update({
+                                "source": "region_place_fallback_blocked",
+                                "region_code": region_code,
+                                "place": _place_meta(place),
+                                "reason": "place_result_not_region_or_domestic_landmark",
+                                "gate": domestic_decision.model_dump(),
+                            })
 
         if not isinstance(data, dict):
             return _success_response(source_status, data)
@@ -1667,38 +1772,59 @@ def transaction_store_preview_tool(
     stores = _extract_stores(store_data)
     place_fallback: dict[str, Any] | None = None
     if has_region and not has_store and not has_coords and not stores:
-        place_response = search_place(client=get_client(), query=region_code.strip(), size=1)
-        if place_response.parsed is not None:
-            place_data = _to_dict(place_response.parsed)
-            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
-            if found_xpos is not None and found_ypos is not None:
-                store_response = get_store_list(
-                    client=get_client(),
-                    xpos=found_xpos,
-                    ypos=found_ypos,
-                    radius_km=10.0,
-                    svc_codes=svc_codes,
-                    all_my_t_only=all_my_t_only,
-                    imported_car_only=imported_car_only,
-                    installable_only=True,
-                    chl_sct_cd=chl_sct_cd,
+        domestic_decision = decide_domestic_search_area(region_code)
+        if not domestic_decision.is_domestic_search_area:
+            place_fallback = {
+                "source": "place_fallback_blocked",
+                "query": region_code.strip(),
+                "reason": "not_domestic_search_area",
+                "gate": domestic_decision.model_dump(),
+            }
+        else:
+            place_response = search_place(client=get_client(), query=region_code.strip(), size=1)
+            if place_response.parsed is not None:
+                place_data = _to_dict(place_response.parsed)
+                found_xpos, found_ypos, place = _first_place_coordinates(
+                    place_data if isinstance(place_data, dict) else {}
                 )
-                if store_response.parsed is None:
-                    return _error_response(
-                        store_response.status_code,
-                        f"HTTP {store_response.status_code}",
-                        store_response.content.decode(errors="ignore") or "Failed to get nearby store candidates",
+                if (
+                    found_xpos is not None
+                    and found_ypos is not None
+                    and _is_usable_region_place_fallback(region_code, place)
+                ):
+                    store_response = get_store_list(
+                        client=get_client(),
+                        xpos=found_xpos,
+                        ypos=found_ypos,
+                        radius_km=10.0,
+                        svc_codes=svc_codes,
+                        all_my_t_only=all_my_t_only,
+                        imported_car_only=imported_car_only,
+                        installable_only=True,
+                        chl_sct_cd=chl_sct_cd,
                     )
-                store_data = _to_dict(store_response.parsed)
-                stores = _extract_stores(store_data)
-                place_fallback = {
-                    "source": "place_fallback",
-                    "query": region_code.strip(),
-                    "place": {
-                        "place_name": place.get("place_name") or place.get("name"),
-                        "address_name": place.get("address_name") or place.get("address"),
-                    } if isinstance(place, dict) else None,
-                }
+                    if store_response.parsed is None:
+                        return _error_response(
+                            store_response.status_code,
+                            f"HTTP {store_response.status_code}",
+                            store_response.content.decode(errors="ignore") or "Failed to get nearby store candidates",
+                        )
+                    store_data = _to_dict(store_response.parsed)
+                    stores = _extract_stores(store_data)
+                    place_fallback = {
+                        "source": "place_fallback",
+                        "query": region_code.strip(),
+                        "place": _place_meta(place),
+                        "gate": domestic_decision.model_dump(),
+                    }
+                elif found_xpos is not None and found_ypos is not None:
+                    place_fallback = {
+                        "source": "place_fallback_blocked",
+                        "query": region_code.strip(),
+                        "place": _place_meta(place),
+                        "reason": "place_result_not_region_or_domestic_landmark",
+                        "gate": domestic_decision.model_dump(),
+                    }
     if has_region and not has_store and not has_coords and place_fallback is None:
         stores = _filter_stores_by_preferred_region_address(region_code, stores)
 
@@ -1731,14 +1857,17 @@ def transaction_store_preview_tool(
     )[:3]
     shop_ids = [sid for store in candidates if (sid := _shop_id(store))]
     if not shop_ids:
-        return _success_response(store_response.status_code, {
+        empty_data = {
             "stores": [],
             "message": "No store candidates found",
             "price": None,
             "logistics": None,
             "inventory": None,
             "schedule": None,
-        })
+        }
+        if place_fallback is not None:
+            empty_data["search"] = place_fallback
+        return _success_response(store_response.status_code, empty_data)
 
     goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
     shop_id_list = [{"shopId": sid} for sid in shop_ids]

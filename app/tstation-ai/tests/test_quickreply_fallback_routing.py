@@ -68,8 +68,12 @@ from services.tstation.chat import (
     _recommendation_type_for_vehicle_auto_continue,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
+    _parse_requested_reservation_date,
+    _requested_reservation_cal_day_or_today,
     _qc_skip_reason,
     _select_vehicle_from_listcar_event,
+    _should_preserve_store_date_availability_context,
+    _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
     MultiAgentDomain,
@@ -421,6 +425,18 @@ def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates(
     assert _reservation_date_range_guard_event("8월 이벤트 알려줘", today=today) is None
 
 
+def test_parse_requested_reservation_date_preserves_day_30_for_slash_format() -> None:
+    today = datetime.date(2026, 5, 26)
+
+    assert _parse_requested_reservation_date("5/30은?", today=today) == datetime.date(2026, 5, 30)
+
+
+def test_parse_requested_reservation_date_preserves_day_31_for_month_day_format() -> None:
+    today = datetime.date(2026, 5, 26)
+
+    assert _parse_requested_reservation_date("5월 31일 예약 돼?", today=today) == datetime.date(2026, 5, 31)
+
+
 def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_template() -> None:
     store_name, region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
         "네, 맞아요",
@@ -660,6 +676,41 @@ def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
     assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
 
 
+<<<<<<< HEAD
+=======
+def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
+    assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 설명좀") is True
+
+
+def test_product_attribute_query_keeps_context_when_same_turn_size_is_explicit() -> None:
+    assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 225/55R17 설명좀") is False
+
+
+def test_store_date_availability_context_preserved_on_store_confirmation_reply() -> None:
+    messages = [
+        {"role": "user", "content": "티스테이션 성남 IC점 5/29 오후 16시 예약 돼?"},
+        {
+            "role": "assistant",
+            "content": "고객님, 요청하신 '성남 IC점'으로 검색한 결과 '티스테이션 성남IC점' 매장이 있는데 이 매장이 맞을까요?",
+        },
+    ]
+
+    assert _should_preserve_store_date_availability_context("네, 맞아요", messages) is True
+
+
+def test_store_date_availability_context_not_preserved_for_generic_store_confirmation() -> None:
+    messages = [
+        {"role": "user", "content": "티스테이션 성남 IC점 전화번호 알려줘"},
+        {
+            "role": "assistant",
+            "content": "고객님, 요청하신 '성남 IC점'으로 검색한 결과 '티스테이션 성남IC점' 매장이 있는데 이 매장이 맞을까요?",
+        },
+    ]
+
+    assert _should_preserve_store_date_availability_context("네, 맞아요", messages) is False
+
+
+>>>>>>> dev
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
     assert _preferred_product_search_keyword("Kinergy EX") == "키너지 EX"
     assert _preferred_product_search_keyword("kinergy ex") == "키너지 EX"
@@ -1328,6 +1379,12 @@ def test_store_holiday_period_query_detects_named_and_specific_holidays() -> Non
     assert _is_store_holiday_period_info_query('티스테이션 한남점 "추석 연휴에도 타이어 교체 예약 받아?"')
     assert _is_store_holiday_period_info_query("티스테이션 한남점 석가탄신일에 영업해?")
     assert _is_store_holiday_period_info_query("티스테이션 한남점 5/1에 문 열어?")
+    assert _is_store_holiday_period_info_query("한남점 이번주 일요일 영업해?")
+
+
+def test_store_holiday_period_query_does_not_hijack_reservation_slot_question() -> None:
+    assert _is_store_holiday_period_info_query("티스테이션 성남IC점 5/29 오후 16시 예약 돼?") is False
+    assert _is_store_holiday_period_info_query("티스테이션 성남IC점 5/29 예약 가능 시간 보여줘") is False
 
 
 def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
@@ -1356,6 +1413,84 @@ def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
     assert "매장명: 티스테이션 한남점" in data["assistantResponse"]
     assert data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
     assert data["quickReplies"][0]["url"].endswith("/store/locals/F204423537")
+
+
+def test_store_holiday_period_event_answers_operation_query_from_detail_slots() -> None:
+    event = _build_store_holiday_period_event(
+        "한남점 이번주 일요일 영업해?",
+        {"shop_seq": "F204423537", "shop_nm": "티스테이션 한남점"},
+        {
+            "status": "success",
+            "data": {
+                "shop_seq": "F204423537",
+                "shop_nm": "티스테이션 한남점",
+                "holiday": None,
+                "available_slots": ["09", "10", "11"],
+                "tel_no": "027902921",
+                "shop_biz_strt_time": "09",
+                "shop_biz_end_time": "19",
+            },
+        },
+    )
+
+    data = event["data"]
+    assert event["template"] == "quickReply"
+    assert "티스테이션 한남점은 일요일에 영업 중인 것으로 확인돼요." in data["assistantResponse"]
+
+
+def test_store_holiday_period_event_answers_operation_query_with_holiday_as_closed() -> None:
+    event = _build_store_holiday_period_event(
+        "한남점 이번주 일요일 영업해?",
+        {"shop_seq": "F204423537", "shop_nm": "티스테이션 한남점"},
+        {
+            "status": "success",
+            "data": {
+                "shop_seq": "F204423537",
+                "shop_nm": "티스테이션 한남점",
+                "holiday": "일요일",
+                "available_slots": [],
+                "tel_no": "027902921",
+                "shop_biz_strt_time": "09",
+                "shop_biz_end_time": "19",
+            },
+        },
+    )
+
+    data = event["data"]
+    assert event["template"] == "quickReply"
+    assert "티스테이션 한남점은 일요일에 휴무로 확인돼요." in data["assistantResponse"]
+
+
+def test_store_holiday_period_detail_uses_requested_cal_day_when_present() -> None:
+    assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 5/29 예약 가능해?") == "20260529"
+
+
+def test_store_holiday_period_detail_falls_back_to_today_when_no_requested_date() -> None:
+    now_utc = datetime.datetime(2026, 5, 26, 0, 0, tzinfo=datetime.UTC)
+
+    assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 오늘 영업해?", now_utc=now_utc) == "20260526"
+
+
+def test_store_date_availability_context_is_preserved_for_date_only_followup_after_datepick() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": "2026년 5월 29일 (금) 티스테이션 성남IC점은 영업하며 예약 가능한 시간이 있습니다.",
+            "template_data": {
+                "template": "datepick",
+                "data": {
+                    "dates": [{
+                        "date": "2026년 5월 29일 (금)",
+                        "available": True,
+                        "availableTimes": [9, 10, 11, 13, 14, 15, 16, 17],
+                        "index": 0,
+                    }],
+                },
+            },
+        },
+    ]
+
+    assert _should_preserve_store_date_availability_context("5/30은?", messages) is True
 
 
 def test_store_context_preserves_shop_seq_for_detail_cta() -> None:
@@ -1404,6 +1539,34 @@ def test_store_detail_context_preserves_summary_fields_for_contact_cta() -> None
     assert result["data"]["shop_seq"] == "F203675962"
     assert result["data"]["road_addr_base"] == "부산광역시 연제구 거제대로"
     assert result["data"]["tel_no"] == "0515038585"
+
+
+def test_store_schedule_context_preserves_slots_for_followup_datepick_recovery() -> None:
+    result = filter_for_context(
+        "get_store_schedule_tool",
+        {
+            "status": "success",
+            "data": {
+                "shop_id": "F07782",
+                "shop_nm": "티스테이션 한남점",
+                "mode": "general",
+                "slots": [
+                    {"cal_day": "20260530", "tm": "09"},
+                    {"cal_day": "20260530", "tm": "13"},
+                ],
+            },
+        },
+        {"shop_id": "F07782", "mode": "general"},
+    )
+
+    assert result is not None
+    assert result["data"]["shop_id"] == "F07782"
+    assert result["data"]["shop_nm"] == "티스테이션 한남점"
+    assert result["data"]["mode"] == "general"
+    assert result["data"]["slots"] == [
+        {"cal_day": "20260530", "tm": "09"},
+        {"cal_day": "20260530", "tm": "13"},
+    ]
 
 
 def test_recent_single_store_context_can_carry_shop_id_from_detail_input() -> None:
@@ -1530,6 +1693,46 @@ def test_vehicle_owner_lookup_force_routes_to_discovery_recommendation() -> None
     assert result.agent_prompt_profile == "discovery_recommendation"
 
 
+def test_reservation_time_change_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("5/29 예약한거 시간 변경하고 싶은데")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_owned_reservation_lookup_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("내 예약 어떻게 돼있어?")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_order_history_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("내 주문내역 알려줘")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_store_schedule_question_force_routes_to_transaction_store() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("강남점에서 5/29 예약 가능해?")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_store"
+
+
+def test_reservation_change_with_store_name_stays_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("성남IC점 예약한거 5/29 16시에서 17시로 바꾸고 싶어")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
 def test_pickup_service_force_routes_to_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("차 가지러 올 수 있어?")
 
@@ -1609,6 +1812,57 @@ def test_vehicle_auto_select_keeps_listcar_when_model_match_is_ambiguous() -> No
 
 def test_vehicle_auto_select_preserves_discount_recommendation_intent() -> None:
     assert _recommendation_type_for_vehicle_auto_continue("내 gv70 세일 많이 하는 타이어 추천") == "discount"
+
+
+def test_vehicle_auto_select_maps_fuel_efficiency_query_to_tstation_context() -> None:
+    assert _recommendation_type_for_vehicle_auto_continue("연비 좋은 타이어 추천") == "fuel_efficiency"
+
+
+def test_fuel_efficiency_sort_prefers_higher_score_then_lower_rr() -> None:
+    items = [
+        {"goods_no": "A", "t_fuel_eff_convert": 21.0, "rr": "2"},
+        {"goods_no": "B", "t_fuel_eff_convert": 27.3, "rr": "3"},
+        {"goods_no": "C", "t_fuel_eff_convert": 27.3, "rr": "2"},
+    ]
+
+    sorted_items = discovery_tools._sort_items(items, "fuel_efficiency_desc")
+
+    assert [item["goods_no"] for item in sorted_items] == ["C", "B", "A"]
+
+
+def test_recent_product_search_keyword_is_recovered_after_vehicle_selection() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "input": {"keyword": "옵티모", "brand_cd": "HK"},
+            "data": [
+                {"goods_no": "G1", "goods_nm": "옵티모 H426", "tire_size_1": "245/50R18"},
+                {"goods_no": "G2", "goods_nm": "옵티모 H418", "tire_size_1": "215/65R16"},
+            ],
+        }
+    ]
+
+    assert TStationChatServiceV2._resolve_recent_product_search_keyword(prev_tool_data) == "옵티모"
+    assert TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "235/55R19") is None
+
+
+def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tire_size() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "input": {"keyword": "벤투스 S2 AS", "brand_cd": "HK"},
+            "data": [
+                {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/45R17"},
+                {"goods_no": "G2", "goods_nm": "벤투스 S2 AS", "tire_size_1": "235/55R19"},
+                {"goods_no": "G3", "goods_nm": "벤투스 S2 AS", "tire_size_1": "245/45R18"},
+            ],
+        }
+    ]
+
+    assert (
+        TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
+        == "G2"
+    )
 
 
 def test_vehicle_information_event_answers_staggered_fitment_question() -> None:
@@ -1947,6 +2201,26 @@ def test_followup_vehicle_pick_preserves_prior_winter_context() -> None:
     assert "겨울/눈길" in context
     assert "rcmd_type='snow'" in context
     assert "season_nm='겨울'" in context
+
+
+def test_followup_vehicle_pick_preserves_prior_fuel_efficiency_context() -> None:
+    messages = [
+        {"role": "user", "content": "연비 좋은 타이어 추천해줘"},
+        {"role": "assistant", "content": "차량을 선택해 주세요."},
+        {
+            "role": "assistant",
+            "content": (
+                '{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"205소4214"}]}}'
+            ),
+        },
+        {"role": "user", "content": "205소4214"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "205소4214")
+
+    assert context is not None
+    assert "연비" in context
+    assert "rcmd_type='fuel_efficiency'" in context
 
 
 def test_followup_vehicle_pick_ignores_ev_model_in_listcar_when_user_context_is_product_search() -> None:

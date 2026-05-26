@@ -88,12 +88,14 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
 def _decide_store_schedule(*, text: str, slots: dict[str, Any]) -> ResponseDecision:
     if slots.get("store_exact_match") is False:
         return _decision(
-            response_shape_key="invalid_store_confirmation",
+            response_shape_key="unverified_store_schedule_lookup",
             response_shape=ResponseShape.CLARIFY,
             template=TemplateName.QUICK_REPLY,
-            required_slots=("store",),
             forbidden_behaviors=("datepick_for_unverified_store", "pretend_store_exists"),
-            assistant_guidance="입력 매장명이 정확히 확인되지 않으면 예약 슬롯을 보여주지 말고 매장 확인부터 진행한다.",
+            assistant_guidance=(
+                "입력 매장명이 정확히 확인되지 않으면 매장 확인을 먼저 진행한다. "
+                "다만 generic missing-store 가드로 막지 말고 get_store_list_tool 로 후보를 확인한다."
+            ),
         )
 
     if _asks_noon(text):

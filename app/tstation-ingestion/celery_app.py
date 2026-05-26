@@ -28,7 +28,7 @@ celery_app.conf.update(
     beat_schedule={
         "faq-fetch-periodic": {
             "task": "faq_fetch_task",
-            "schedule": int(os.getenv("FAQ_SYNC_INTERVAL_SECONDS", "3600")),
+            "schedule": int(os.getenv("FAQ_SYNC_INTERVAL_SECONDS", "25200")),
             "options": {"queue": "faq_sync"},
         },
     },

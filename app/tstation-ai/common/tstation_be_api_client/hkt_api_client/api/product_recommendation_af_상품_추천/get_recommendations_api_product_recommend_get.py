@@ -151,6 +151,7 @@ def sync_detailed(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -255,6 +256,7 @@ def sync(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -354,6 +356,7 @@ async def asyncio_detailed(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -456,6 +459,7 @@ async def asyncio(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)

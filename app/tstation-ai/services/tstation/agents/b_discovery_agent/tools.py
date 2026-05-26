@@ -222,6 +222,26 @@ _SORT_KEY_FUNCS: dict[str, Any] = {
 }
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fuel_efficiency_sort_key(item: dict[str, Any]) -> tuple[float, float, str]:
+    """Prefer higher fuel-efficiency score, then lower RR grade."""
+    fuel_score = _float_or_none(item.get("t_fuel_eff_convert"))
+    rr_grade = _float_or_none(item.get("rr"))
+    return (
+        -(fuel_score if fuel_score is not None else -1.0),
+        rr_grade if rr_grade is not None else float("inf"),
+        str(item.get("goods_no") or ""),
+    )
+
+
 def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
     """Sort product items based on user intent.
 
@@ -239,6 +259,8 @@ def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
         return items
     if sort_by == "newest_desc":
         return sorted(items, key=lambda x: x.get("sys_reg_dtime") or "", reverse=True)
+    if sort_by == "fuel_efficiency_desc":
+        return sorted(items, key=_fuel_efficiency_sort_key)
     key_func = _SORT_KEY_FUNCS.get(sort_by)
     if key_func is None:
         logger.warning("[_sort_items] Unknown sort_by=%s; passing through", sort_by)

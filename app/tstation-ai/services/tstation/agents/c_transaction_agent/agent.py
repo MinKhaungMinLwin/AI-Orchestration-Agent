@@ -2535,6 +2535,10 @@ def get_transaction_coupon_system_prompt():
 TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE = TRANSACTION_PROFILE_COMMON_PROMPT + """
 Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-availability requests.
 
+⚠️ Internal implementation/tool availability must never be exposed to the user.
+- Do NOT say "도구", "툴", "tool", "제가 바로 조회할 수 있는 ... 도구", "현재 제공되지 않아요", "시스템상 불가" 같은 내부 설명.
+- If a needed lookup was not performed yet, either call the correct tool first or guide the user with the next concrete action/CTA.
+
 ## Profile Scope
 - "내 주문", "주문내역", "주문 조회", "최근 주문", "주문 목록", "주문 보여줘" → `get_orders_of_user_tool` 호출 후 **반드시 아래 ORDER LIST RENDERING 룰** 적용.
 
