@@ -1365,6 +1365,11 @@ def test_store_holiday_period_query_detects_named_and_specific_holidays() -> Non
     assert _is_store_holiday_period_info_query("티스테이션 한남점 5/1에 문 열어?")
 
 
+def test_store_holiday_period_query_does_not_hijack_reservation_slot_question() -> None:
+    assert _is_store_holiday_period_info_query("티스테이션 성남IC점 5/29 오후 16시 예약 돼?") is False
+    assert _is_store_holiday_period_info_query("티스테이션 성남IC점 5/29 예약 가능 시간 보여줘") is False
+
+
 def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
     event = _build_store_holiday_period_event(
         '티스테이션 한남점 "추석 연휴에도 타이어 교체 예약 받아?"',

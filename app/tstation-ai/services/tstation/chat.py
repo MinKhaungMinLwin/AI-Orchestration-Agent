@@ -2478,12 +2478,23 @@ _SHOP_SEQ_RE = re.compile(r'"shop[_\s]*seq"\s*:\s*"([A-Z]?\d{4,})"', re.IGNORECA
 _STORE_NAME_RE = re.compile(r"티스테이션\s*[가-힣A-Za-z0-9]+\s*점")
 _STORE_HOLIDAY_PERIOD_INFO_RE = re.compile(
     r"(?=.*(?:티스테이션|더타이어샵).{0,20}점)"
-    r"(?=.*(?:연휴|공휴일|휴일|휴무|명절|[가-힣]{2,12}(?:날|절|일)|\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일))"
-    r"(?=.*(?:예약|장착|교체|영업|운영|열어|문\s*열|받아|가능))",
+    r"(?=.*(?:연휴|공휴일|휴일|휴무|명절|[가-힣]{2,12}(?:날|절|일)|\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일))",
     re.IGNORECASE,
 )
 _STORE_HOLIDAY_STORE_NAME_RE = re.compile(
     r"((?:티스테이션|더타이어샵)\s*[가-힣A-Za-z0-9]+\s*점)",
+    re.IGNORECASE,
+)
+_STORE_HOLIDAY_OPERATION_RE = re.compile(
+    r"영업|운영|휴무|휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    re.IGNORECASE,
+)
+_STORE_HOLIDAY_RESERVATION_RE = re.compile(
+    r"예약|장착|교체|받아|가능",
+    re.IGNORECASE,
+)
+_STORE_SCHEDULE_TIME_RE = re.compile(
+    r"예약\s*가능|예약\s*돼|예약되|몇\s*시|시간표|스케줄|오전|오후|AM|PM|\d{1,2}\s*시",
     re.IGNORECASE,
 )
 _STORE_HOLIDAY_LABEL_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -3885,7 +3896,14 @@ def _build_store_detail_summary_from_context(tool_data_list: list[dict]) -> str 
 
 
 def _is_store_holiday_period_info_query(user_text: str | None) -> bool:
-    return bool(_STORE_HOLIDAY_PERIOD_INFO_RE.search(user_text or ""))
+    text = user_text or ""
+    if not _STORE_HOLIDAY_PERIOD_INFO_RE.search(text):
+        return False
+    if _STORE_HOLIDAY_OPERATION_RE.search(text):
+        return True
+    if _STORE_HOLIDAY_RESERVATION_RE.search(text) and not _STORE_SCHEDULE_TIME_RE.search(text):
+        return True
+    return False
 
 
 def _extract_store_holiday_store_name(user_text: str | None) -> str | None:
