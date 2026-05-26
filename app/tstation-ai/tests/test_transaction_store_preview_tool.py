@@ -20,6 +20,18 @@ class _Response:
         self.content = b""
 
 
+class _GateDecision:
+    def __init__(self, allowed: bool):
+        self.is_domestic_search_area = allowed
+
+    def model_dump(self) -> dict:
+        return {
+            "is_domestic_search_area": self.is_domestic_search_area,
+            "kind": "domestic_region" if self.is_domestic_search_area else "foreign_region",
+            "reason": "test decision",
+        }
+
+
 def test_transaction_store_preview_reuses_authenticated_client_in_worker_threads(monkeypatch):
     clients: list[str] = []
     subcall_clients: dict[str, str] = {}
@@ -112,6 +124,7 @@ def test_transaction_store_preview_falls_back_to_place_coordinates_for_landmark_
     monkeypatch.setattr(tools, "get_client", fake_get_client)
     monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
     monkeypatch.setattr(tools, "search_place", fake_search_place)
+    monkeypatch.setattr(tools, "decide_domestic_search_area", lambda query: _GateDecision(True))
     monkeypatch.setattr(tools, "get_logistics_inventory", lambda **kwargs: _Response({"logistics_qty": 0}))
     monkeypatch.setattr(
         tools,
@@ -136,6 +149,48 @@ def test_transaction_store_preview_falls_back_to_place_coordinates_for_landmark_
     assert result["data"]["stores"][0]["shop_id"] == "F10001"
     assert result["data"]["search"]["source"] == "place_fallback"
     assert [call.get("region_code") for call in store_calls] == ["강남구청", None]
+
+
+def test_transaction_store_preview_blocks_foreign_region_business_place_fallback(monkeypatch):
+    store_calls: list[dict] = []
+
+    def fake_get_client():
+        return "client"
+
+    def fake_get_store_list(**kwargs):
+        store_calls.append(kwargs)
+        if kwargs.get("region_code") == "평양":
+            return _Response({"stores": []})
+        raise AssertionError("Blocked region fallback must not search nearby stores by POI coordinates")
+
+    def fake_search_place(**kwargs):
+        assert kwargs["query"] == "평양"
+        return _Response({
+            "items": [{
+                "title": "평양주유소",
+                "road_addr": "충북 청주시 서원구 사운로 69",
+                "x": "127.47909877093",
+                "y": "36.6351814518454",
+            }]
+        })
+
+    monkeypatch.setattr(tools, "get_client", fake_get_client)
+    monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
+    monkeypatch.setattr(tools, "search_place", fake_search_place)
+    monkeypatch.setattr(tools, "decide_domestic_search_area", lambda query: _GateDecision(False))
+
+    result = tools.transaction_store_preview_tool.func(
+        goods_no="G000000319448",
+        ord_qty=2,
+        region_code="평양",
+        include_price=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["stores"] == []
+    assert result["data"]["search"]["source"] == "place_fallback_blocked"
+    assert result["data"]["search"]["reason"] == "not_domestic_search_area"
+    assert [call.get("region_code") for call in store_calls] == ["평양"]
 
 
 def test_search_stores_region_zero_result_falls_back_to_place_coordinates(monkeypatch):
@@ -170,6 +225,7 @@ def test_search_stores_region_zero_result_falls_back_to_place_coordinates(monkey
     monkeypatch.setattr(tools, "get_client", fake_get_client)
     monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
     monkeypatch.setattr(tools, "search_place", fake_search_place)
+    monkeypatch.setattr(tools, "decide_domestic_search_area", lambda query: _GateDecision(True))
 
     result = tools.search_stores_tool.func(region_code="광교", limit=5)
 
@@ -178,6 +234,43 @@ def test_search_stores_region_zero_result_falls_back_to_place_coordinates(monkey
     assert result["data"]["search"]["source"] == "region_place_fallback"
     assert result["data"]["search"]["returned_count"] == 1
     assert [call.get("region_code") for call in store_calls] == ["광교", None]
+
+
+def test_search_stores_blocks_foreign_region_business_place_fallback(monkeypatch):
+    store_calls: list[dict] = []
+
+    def fake_get_client():
+        return "client"
+
+    def fake_get_store_list(**kwargs):
+        store_calls.append(kwargs)
+        if kwargs.get("region_code") == "베이징":
+            return _Response({"stores": []})
+        raise AssertionError("Blocked region fallback must not search nearby stores by POI coordinates")
+
+    def fake_search_place(**kwargs):
+        assert kwargs["query"] == "베이징"
+        return _Response({
+            "items": [{
+                "title": "베이징반점",
+                "road_addr": "서울 중구 세종대로",
+                "x": "126.9769",
+                "y": "37.5665",
+            }]
+        })
+
+    monkeypatch.setattr(tools, "get_client", fake_get_client)
+    monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
+    monkeypatch.setattr(tools, "search_place", fake_search_place)
+    monkeypatch.setattr(tools, "decide_domestic_search_area", lambda query: _GateDecision(False))
+
+    result = tools.search_stores_tool.func(region_code="베이징", limit=5)
+
+    assert result["status"] == "success"
+    assert result["data"]["stores"] == []
+    assert result["data"]["search"]["source"] == "region_place_fallback_blocked"
+    assert result["data"]["search"]["reason"] == "not_domestic_search_area"
+    assert [call.get("region_code") for call in store_calls] == ["베이징"]
 
 
 def test_multi_store_schedule_uses_broader_mode_for_today_shop_without_logistics(monkeypatch):
