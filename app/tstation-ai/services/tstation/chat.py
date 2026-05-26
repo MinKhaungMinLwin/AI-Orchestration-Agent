@@ -4868,6 +4868,13 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
 
 
+def _should_replace_listcar_with_product_attribute_lookup(event: dict | None, user_text: str) -> bool:
+    """Return true when a vehicle-list card is an accidental detour for a product attribute question."""
+    if not isinstance(event, dict) or event.get("template") != "listCar":
+        return False
+    return _is_product_attribute_lookup_query(user_text)
+
+
 def _is_product_attribute_fallback_event(event: dict | None) -> bool:
     if not isinstance(event, dict):
         return False
@@ -9321,8 +9328,20 @@ class TStationChatServiceV2:
                     last_assistant_response_source = event_response_source
                 event_data = event.get("data", {})
                 if event.get("template") == "listCar":
+                    if _should_replace_listcar_with_product_attribute_lookup(event, user_query):
+                        product_attribute_resolution = await _resolve_product_attribute_with_code()
+                        if product_attribute_resolution is not None:
+                            code_events, attribute_event = product_attribute_resolution
+                            logger.info("[PRODUCT_ATTRIBUTE] replacing accidental listCar with search result summary")
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                            event = attribute_event
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_product_attribute_resolver"
+                            event_data = event.get("data", {})
                     code_events, auto_selected_event = await _auto_continue_selected_vehicle(event)
-                    if auto_selected_event is not None:
+                    if event.get("template") == "listCar" and auto_selected_event is not None:
                         logger.info("[VEHICLE_AUTO_SELECT] replacing listCar with continued vehicle flow")
                         for code_event in code_events:
                             yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"

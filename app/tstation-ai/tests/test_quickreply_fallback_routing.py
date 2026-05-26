@@ -41,6 +41,7 @@ from services.tstation.chat import (
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
     _is_product_attribute_lookup_query,
+    _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
     _is_owned_coupon_best_discount_query,
     _coupon_target_product_name_for_query,
@@ -644,6 +645,19 @@ def test_product_attribute_uses_existing_search_results_for_load_question() -> N
     assert "- 옵티모 H426: 하중지수 99 775KG" in assistant_response
     assert "- 옵티모 K406: 하중지수 108 1000KG" in assistant_response
     assert "상품명을 알려주시면" not in assistant_response
+
+
+def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
+    text = "내 차 하중이 좀 무거워. 짐을 많이 싣고 다니거든.. optimo 가 하중 버틸 수 있음?"
+    event = {
+        "type": "data",
+        "template": "listCar",
+        "source_domain": "discovery",
+        "data": {"assistantResponse": "등록된 차량 7대를 확인했어요.", "listCar": []},
+    }
+
+    assert _is_product_attribute_lookup_query(text) is True
+    assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
 
 
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
