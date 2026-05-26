@@ -1014,7 +1014,8 @@ def _product_search_policy_fallback_response(tool_data_list: list[dict] | None =
             if _STOCK_OR_INSTALL_REQUEST_RE.search(current_user_text.get() or "") and keyword and size:
                 return (
                     f"입력하신 {keyword} {size} 상품은 현재 확인되지 않아요.\n"
-                    "다른 사이즈를 다시 찾거나, 대체 가능한 상품 기준으로 매장 도착 일정을 확인해 드릴게요."
+                    "상품명이나 규격을 다시 확인해 주세요.\n"
+                    "정확한 상품이 확인되면 그 기준으로 장착 가능 여부를 안내해 드릴게요."
                 )
             if keyword and size:
                 return (

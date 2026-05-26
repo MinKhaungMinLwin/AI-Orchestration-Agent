@@ -10135,20 +10135,22 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
-                    coerced_event = coerce_schedule_confirmation_quickreply_to_datepick(
-                        event,
-                        user_text=user_query,
-                        latest_datepick_data=latest_datepick_tmpl,
-                        structured_sources=[
-                            *[
-                                (str(entry.get("tool") or ""), entry.get("data"))
-                                for entry in (prev_tool_data or [])
-                                if isinstance(entry, dict) and isinstance(entry.get("data"), dict)
+                    coerced_event = None
+                    if last_assistant_response_source != "discovery_policy":
+                        coerced_event = coerce_schedule_confirmation_quickreply_to_datepick(
+                            event,
+                            user_text=user_query,
+                            latest_datepick_data=latest_datepick_tmpl,
+                            structured_sources=[
+                                *[
+                                    (str(entry.get("tool") or ""), entry.get("data"))
+                                    for entry in (prev_tool_data or [])
+                                    if isinstance(entry, dict) and isinstance(entry.get("data"), dict)
+                                ],
+                                *structured_sources,
                             ],
-                            *structured_sources,
-                        ],
-                        default_source_domain=MultiAgentDomain.Domain.TRANSACTION.value,
-                    )
+                            default_source_domain=MultiAgentDomain.Domain.TRANSACTION.value,
+                        )
                     if coerced_event is not None:
                         logger.warning(
                             "[TEMPLATE_COERCE] schedule confirmation quickReply → latest datepick"

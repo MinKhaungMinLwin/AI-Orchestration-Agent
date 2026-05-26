@@ -492,7 +492,8 @@ def test_product_search_policy_fallback_does_not_ask_for_size_when_keyword_and_s
 
     assert message == (
         "입력하신 키너지 EX 205/55R16 상품은 현재 확인되지 않아요.\n"
-        "다른 사이즈를 다시 찾거나, 대체 가능한 상품 기준으로 매장 도착 일정을 확인해 드릴게요."
+        "상품명이나 규격을 다시 확인해 주세요.\n"
+        "정확한 상품이 확인되면 그 기준으로 장착 가능 여부를 안내해 드릴게요."
     )
 
 

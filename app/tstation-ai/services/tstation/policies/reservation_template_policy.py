@@ -403,6 +403,8 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
     """
     if event.get("template") != "quickReply":
         return None
+    if str(event.get("assistant_response_source") or "") == "discovery_policy":
+        return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):
         return None

@@ -266,6 +266,41 @@ def test_schedule_confirmation_quickreply_reuses_latest_datepick() -> None:
     assert "quickReplies" not in result["data"]
 
 
+def test_discovery_policy_quickreply_does_not_reuse_latest_datepick() -> None:
+    latest_datepick = {
+        "assistantResponse": "2026년 5월 31일 (일) 티스테이션 한남점은 영업하며 예약 가능한 시간이 있습니다.",
+        "dates": [{
+            "date": "2026년 5월 31일 (일)",
+            "available": True,
+            "availableTimes": [9, 10, 11, 13],
+            "index": 0,
+        }],
+        "selectedDate": 0,
+        "metadata": {"shopId": "F07782", "shopName": "티스테이션 한남점"},
+    }
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "discovery_policy",
+        "data": {
+            "assistantResponse": "입력하신 벤투스 에어S 235/55R19 상품은 현재 확인되지 않아요.\n상품명이나 규격을 다시 확인해 주세요.",
+            "quickReplies": [
+                {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
+                {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+
+    result = coerce_schedule_confirmation_quickreply_to_datepick(
+        event,
+        user_text="이번 주 토요일 13시에 ventus air s 2355519 2개 장착 가능할까?",
+        latest_datepick_data=latest_datepick,
+        structured_sources=[],
+    )
+
+    assert result is None
+
+
 def test_schedule_confirmation_does_not_depend_on_assistant_copy() -> None:
     latest_datepick = {
         "dates": [{
