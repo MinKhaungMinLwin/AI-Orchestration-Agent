@@ -6841,6 +6841,21 @@ class TStationChatServiceV2:
             merged_slots = existing_slots.merge(regex_slots)
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
+            # Region-only follow-ups ("성남은?", "서울은?") are candidate searches,
+            # not a store selection. Even if the region string matches an existing
+            # slot, the current turn should not let a stale shop_id complete the
+            # order/store checklist.
+            if regex_slots.region is not None and (merged_slots.shop_id is not None or merged_slots.shop_name is not None):
+                logger.debug(
+                    "[SLOTS] Current turn supplied region=%r — clearing stale store identity "
+                    "shop_id=%r shop_name=%r",
+                    regex_slots.region,
+                    merged_slots.shop_id,
+                    merged_slots.shop_name,
+                )
+                merged_slots.shop_id = None
+                merged_slots.shop_name = None
+
             # 3.5) If the user explicitly asked for a recommendation in THIS turn
             # AND did not also include a fresh transactional keyword, clear any
             # stale transactional pending_intent from earlier turns.
