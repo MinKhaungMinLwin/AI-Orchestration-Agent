@@ -1564,6 +1564,36 @@ def test_vehicle_owner_lookup_force_routes_to_discovery_recommendation() -> None
     assert result.agent_prompt_profile == "discovery_recommendation"
 
 
+def test_reservation_time_change_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("5/29 예약한거 시간 변경하고 싶은데")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_owned_reservation_lookup_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("내 예약 어떻게 돼있어?")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_order_history_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("내 주문내역 알려줘")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_store_schedule_question_does_not_force_route_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("강남점에서 5/29 예약 가능해?")
+
+    assert result is None
+
+
 def test_pickup_service_force_routes_to_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("차 가지러 올 수 있어?")
 

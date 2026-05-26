@@ -1008,6 +1008,46 @@ class StreamingMultiAgentCoordinator:
     _CAR_NO_OWNER_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"^\s*\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}\s*$"
     )
+    _TRANSACTION_ORDER_HISTORY_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"내\s*주문|주문\s*내역|주문내역|주문\s*조회|최근\s*주문|주문\s*목록|주문\s*보여줘",
+        re.IGNORECASE,
+    )
+    _TRANSACTION_RESERVATION_LOOKUP_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"내\s*예약|예약\s*조회|예약\s*내역|다음\s*방문|예약\s*어떻게\s*돼|예약\s*어떻게돼",
+        re.IGNORECASE,
+    )
+    _TRANSACTION_RESERVATION_CHANGE_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?:예약한\s*거|예약한거|잡힌\s*예약|예약인데|방문\s*예약|예약|방문|일정|시간).{0,18}"
+        r"(?:변경|바꾸|바꿔|미루|당기)"
+        r"|시간\s*변경|방문\s*시간\s*변경|예약\s*시간\s*변경|일정\s*변경|시간\s*바꿀\s*수\s*있",
+        re.IGNORECASE,
+    )
+    _TRANSACTION_MAINTENANCE_HISTORY_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"정비\s*이력|정비이력|정비\s*내역|정비내역|관리받은\s*(?:내역|거)|관리\s*받은\s*(?:내역|거)"
+        r"|서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)",
+        re.IGNORECASE,
+    )
+    _TRANSACTION_CANCELLATION_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"취소\s*수수료|취소비용|왕복\s*배송비|반품\s*비용|반품수수료|택배비\s*물어내|취소하면\s*택배비"
+        r"|예약\s*취소|주문\s*취소|부분\s*취소|수량\s*변경",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_transaction_order_current_turn_query(cls, text: str) -> bool:
+        normalized = (text or "").strip()
+        if not normalized:
+            return False
+        return any(
+            pattern.search(normalized)
+            for pattern in (
+                cls._TRANSACTION_ORDER_HISTORY_RE,
+                cls._TRANSACTION_RESERVATION_LOOKUP_RE,
+                cls._TRANSACTION_RESERVATION_CHANGE_RE,
+                cls._TRANSACTION_MAINTENANCE_HISTORY_RE,
+                cls._TRANSACTION_CANCELLATION_RE,
+            )
+        )
 
     @staticmethod
     def _extract_current_user_input(message_content: str) -> str:
@@ -1062,6 +1102,16 @@ class StreamingMultiAgentCoordinator:
                 ],
                 user_behavior="providing vehicle number and owner name to identify the vehicle",
                 agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+                flow="hardcoded regex routing — bypassed LLM router",
+            )
+
+        if cls._is_transaction_order_current_turn_query(text):
+            return MultiAgentDomain(
+                reason="regex routing matched current-turn transaction order-management intent",
+                domains=[MultiAgentDomain.Domain.TRANSACTION],
+                execution_plan=["Run TRANSACTION order-management flow for the matched current-turn request"],
+                user_behavior="asking about own order, reservation, maintenance history, or cancellation handling",
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
                 flow="hardcoded regex routing — bypassed LLM router",
             )
 
@@ -1209,6 +1259,19 @@ class StreamingMultiAgentCoordinator:
                     result.agent_prompt_profile,
                 )
                 result.agent_prompt_profile = AgentPromptProfile.FULL
+
+            if (
+                last_user_text
+                and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
+                and self.__class__._is_transaction_order_current_turn_query(last_user_text)
+                and result.agent_prompt_profile != AgentPromptProfile.TRANSACTION_ORDER
+            ):
+                logger.info(
+                    "[MULTI-DOMAIN] Transaction order-management pattern detected — forcing profile %s → %s",
+                    result.agent_prompt_profile,
+                    AgentPromptProfile.TRANSACTION_ORDER,
+                )
+                result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_ORDER
 
             logger.debug(
                 f"[MULTI-DOMAIN] Classification result: domain={result.domains}, "
