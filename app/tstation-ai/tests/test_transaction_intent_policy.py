@@ -107,8 +107,9 @@ def test_tc049_store_visit_schedule_for_unverified_store_keeps_store_schedule_in
     assert frame.known_slots["store_exact_match"] is False
     assert plan.preferred_tool == "get_store_schedule_tool"
     assert "transaction_store_preview_tool" in plan.forbidden_tools
-    assert decision.metadata["response_shape_key"] == "invalid_store_confirmation"
+    assert decision.metadata["response_shape_key"] == "unverified_store_schedule_lookup"
     assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.required_slots == ()
 
 
 def test_tc058_noon_schedule_request_preserves_noon_entity() -> None:
