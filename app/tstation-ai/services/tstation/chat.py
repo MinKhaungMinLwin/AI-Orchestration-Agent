@@ -1032,6 +1032,7 @@ class StreamingMultiAgentCoordinator:
         r"|예약\s*취소|주문\s*취소|부분\s*취소|수량\s*변경",
         re.IGNORECASE,
     )
+    _STORE_NAME_CURRENT_TURN_RE: ClassVar[re.Pattern[str]] = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 
     @classmethod
     def _is_transaction_order_current_turn_query(cls, text: str) -> bool:
@@ -1039,6 +1040,27 @@ class StreamingMultiAgentCoordinator:
         if not normalized:
             return False
         return any(
+            pattern.search(normalized)
+            for pattern in (
+                cls._TRANSACTION_ORDER_HISTORY_RE,
+                cls._TRANSACTION_RESERVATION_LOOKUP_RE,
+                cls._TRANSACTION_RESERVATION_CHANGE_RE,
+                cls._TRANSACTION_MAINTENANCE_HISTORY_RE,
+                cls._TRANSACTION_CANCELLATION_RE,
+            )
+        )
+
+    @classmethod
+    def _is_store_schedule_current_turn_query(cls, text: str) -> bool:
+        normalized = (text or "").strip()
+        if not normalized:
+            return False
+        has_store_name = bool(cls._STORE_NAME_CURRENT_TURN_RE.search(normalized))
+        if not has_store_name:
+            return False
+        if not _has_store_date_availability_signal(normalized):
+            return False
+        return not any(
             pattern.search(normalized)
             for pattern in (
                 cls._TRANSACTION_ORDER_HISTORY_RE,
@@ -1102,6 +1124,16 @@ class StreamingMultiAgentCoordinator:
                 ],
                 user_behavior="providing vehicle number and owner name to identify the vehicle",
                 agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+                flow="hardcoded regex routing — bypassed LLM router",
+            )
+
+        if cls._is_store_schedule_current_turn_query(text):
+            return MultiAgentDomain(
+                reason="regex routing matched current-turn store schedule availability intent",
+                domains=[MultiAgentDomain.Domain.TRANSACTION],
+                execution_plan=["Run TRANSACTION store-schedule flow for the matched store/date request"],
+                user_behavior="asking whether a named store has reservation or visit slots on a specific date/time",
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
                 flow="hardcoded regex routing — bypassed LLM router",
             )
 
@@ -1259,6 +1291,19 @@ class StreamingMultiAgentCoordinator:
                     result.agent_prompt_profile,
                 )
                 result.agent_prompt_profile = AgentPromptProfile.FULL
+
+            if (
+                last_user_text
+                and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
+                and self.__class__._is_store_schedule_current_turn_query(last_user_text)
+                and result.agent_prompt_profile != AgentPromptProfile.TRANSACTION_STORE
+            ):
+                logger.info(
+                    "[MULTI-DOMAIN] Store schedule availability pattern detected — forcing profile %s → %s",
+                    result.agent_prompt_profile,
+                    AgentPromptProfile.TRANSACTION_STORE,
+                )
+                result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_STORE
 
             if (
                 last_user_text
@@ -4072,6 +4117,9 @@ def _coupon_issue_event() -> dict:
 
 
 _RESERVATION_CONTEXT_RE = re.compile(r"예약|장착|방문|갈\s*건데|가려|갈래|시간\s*선택|예약\s*가능", re.IGNORECASE)
+_FUTURE_SLASH_MONTH_DAY_RE = re.compile(
+    r"(?:(?P<year>20\d{2})\s*[./-]\s*)?(?P<month>1[0-2]|0?[1-9])\s*/\s*(?P<day>[12]?\d|3[01])"
+)
 _FUTURE_MONTH_DAY_RE = re.compile(
     r"(?:(?P<year>20\d{2})\s*년\s*)?(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>[12]?\d|3[01])\s*일)?"
 )
@@ -4144,7 +4192,7 @@ def _should_preserve_store_date_availability_context(
 
 def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | None = None) -> datetime.date | None:
     today = today or _kst_today()
-    match = _FUTURE_MONTH_DAY_RE.search(user_text or "")
+    match = _FUTURE_SLASH_MONTH_DAY_RE.search(user_text or "") or _FUTURE_MONTH_DAY_RE.search(user_text or "")
     if not match:
         return None
     month = int(match.group("month"))
@@ -4158,6 +4206,18 @@ def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | 
     if not year_text and requested < today:
         requested = datetime.date(today.year + 1, month, day)
     return requested
+
+
+def _requested_reservation_cal_day_or_today(
+    user_text: str,
+    *,
+    now_utc: datetime.datetime | None = None,
+) -> str:
+    requested = _parse_requested_reservation_date(user_text)
+    if requested is not None:
+        return requested.strftime("%Y%m%d")
+    now_utc = now_utc or datetime.datetime.now(datetime.UTC)
+    return (now_utc + datetime.timedelta(hours=9)).strftime("%Y%m%d")
 
 
 def _reservation_date_range_guard_event(
@@ -8601,8 +8661,7 @@ class TStationChatServiceV2:
             if not shop_id:
                 return None
 
-            today = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=9)).strftime("%Y%m%d")
-            detail_input = {"shop_id": shop_id, "cal_day": today}
+            detail_input = {"shop_id": shop_id, "cal_day": _requested_reservation_cal_day_or_today(user_query)}
             emitted_events.append({
                 "type": "status",
                 "status": "tool_start",

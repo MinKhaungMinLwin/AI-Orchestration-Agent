@@ -68,6 +68,7 @@ from services.tstation.chat import (
     _recommendation_type_for_vehicle_auto_continue,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
+    _requested_reservation_cal_day_or_today,
     _qc_skip_reason,
     _select_vehicle_from_listcar_event,
     _should_preserve_store_date_availability_context,
@@ -1392,6 +1393,16 @@ def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
     assert data["quickReplies"][0]["url"].endswith("/store/locals/F204423537")
 
 
+def test_store_holiday_period_detail_uses_requested_cal_day_when_present() -> None:
+    assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 5/29 예약 가능해?") == "20260529"
+
+
+def test_store_holiday_period_detail_falls_back_to_today_when_no_requested_date() -> None:
+    now_utc = datetime.datetime(2026, 5, 26, 0, 0, tzinfo=datetime.UTC)
+
+    assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 오늘 영업해?", now_utc=now_utc) == "20260526"
+
+
 def test_store_context_preserves_shop_seq_for_detail_cta() -> None:
     result = filter_for_context(
         "get_store_list_tool",
@@ -1616,10 +1627,20 @@ def test_order_history_force_routes_to_transaction_order() -> None:
     assert result.agent_prompt_profile == "transaction_order"
 
 
-def test_store_schedule_question_does_not_force_route_to_transaction_order() -> None:
+def test_store_schedule_question_force_routes_to_transaction_store() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("강남점에서 5/29 예약 가능해?")
 
-    assert result is None
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_store"
+
+
+def test_reservation_change_with_store_name_stays_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("성남IC점 예약한거 5/29 16시에서 17시로 바꾸고 싶어")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
 
 
 def test_pickup_service_force_routes_to_support() -> None:
