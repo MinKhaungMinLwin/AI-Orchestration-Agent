@@ -43,6 +43,9 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("season", re.compile(r"계절|사계절|겨울용|여름용|올웨더|올시즌", re.IGNORECASE)),
     ("car_type", re.compile(r"차종|승용차|suv|전기차용|전기차", re.IGNORECASE)),
 )
+_RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
+    {"fuel_efficiency", "wet", "load", "speed"}
+)
 
 _PRODUCT_ALIASES: tuple[tuple[str, str], ...] = (
     ("ventus air s", "Ventus air S"),
@@ -254,6 +257,14 @@ def build_discovery_intent_frame(
     elif attribute_metrics and products:
         intent = "product_description"
         sub_intent = "product_attribute_lookup"
+    elif standalone_attribute_metrics and _RECOMMEND_RE.search(text) and any(
+        metric in _RECOMMENDATION_ATTRIBUTE_METRICS for metric in standalone_attribute_metrics
+    ):
+        intent = "product_recommendation"
+        sub_intent = "condition_recommendation"
+        entities["recommendation_metric"] = next(
+            metric for metric in standalone_attribute_metrics if metric in _RECOMMENDATION_ATTRIBUTE_METRICS
+        )
     elif standalone_attribute_metrics:
         intent = "product_description"
         sub_intent = "product_attribute_explanation"
@@ -336,6 +347,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     args = {}
     if entities.get("performance") == "performance":
         args["rcmd_type"] = "performance"
+    if entities.get("recommendation_metric") == "fuel_efficiency":
+        args["sort_by"] = "fuel_efficiency_desc"
     if entities.get("season") == "winter":
         args.update({"rcmd_type": "snow", "season_nm": "겨울"})
     elif entities.get("season") == "all_weather":

@@ -1611,6 +1611,22 @@ def test_vehicle_auto_select_preserves_discount_recommendation_intent() -> None:
     assert _recommendation_type_for_vehicle_auto_continue("내 gv70 세일 많이 하는 타이어 추천") == "discount"
 
 
+def test_vehicle_auto_select_maps_fuel_efficiency_query_to_tstation_context() -> None:
+    assert _recommendation_type_for_vehicle_auto_continue("연비 좋은 타이어 추천") == "tstation"
+
+
+def test_fuel_efficiency_sort_prefers_higher_score_then_lower_rr() -> None:
+    items = [
+        {"goods_no": "A", "t_fuel_eff_convert": 21.0, "rr": "2"},
+        {"goods_no": "B", "t_fuel_eff_convert": 27.3, "rr": "3"},
+        {"goods_no": "C", "t_fuel_eff_convert": 27.3, "rr": "2"},
+    ]
+
+    sorted_items = discovery_tools._sort_items(items, "fuel_efficiency_desc")
+
+    assert [item["goods_no"] for item in sorted_items] == ["C", "B", "A"]
+
+
 def test_vehicle_information_event_answers_staggered_fitment_question() -> None:
     event = _build_vehicle_information_event(
         {
@@ -1947,6 +1963,26 @@ def test_followup_vehicle_pick_preserves_prior_winter_context() -> None:
     assert "겨울/눈길" in context
     assert "rcmd_type='snow'" in context
     assert "season_nm='겨울'" in context
+
+
+def test_followup_vehicle_pick_preserves_prior_fuel_efficiency_context() -> None:
+    messages = [
+        {"role": "user", "content": "연비 좋은 타이어 추천해줘"},
+        {"role": "assistant", "content": "차량을 선택해 주세요."},
+        {
+            "role": "assistant",
+            "content": (
+                '{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"205소4214"}]}}'
+            ),
+        },
+        {"role": "user", "content": "205소4214"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "205소4214")
+
+    assert context is not None
+    assert "연비" in context
+    assert "rcmd_type='tstation'" in context
 
 
 def test_followup_vehicle_pick_ignores_ev_model_in_listcar_when_user_context_is_product_search() -> None:

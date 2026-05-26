@@ -2994,6 +2994,8 @@ def _select_vehicle_from_listcar_event(user_text: str, event_data: dict[str, Any
 
 def _recommendation_type_for_vehicle_auto_continue(user_text: str) -> str:
     text = user_text or ""
+    if re.search(r"연비|회전\s*저항|rr\b", text, re.IGNORECASE):
+        return "tstation"
     if re.search(r"세일|할인|할인율", text, re.IGNORECASE):
         return "discount"
     if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
@@ -5261,6 +5263,7 @@ _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS: tuple[tuple[str, str, str | None], ..
     (r"경차|소형차", "경차/소형차용", None),
     (r"화물차|트럭|밴|승합차|고하중|무거운\s*짐", "하중 중심 차량용", "heavy_load"),
     (r"가성비|저렴|싼|cheap|value", "가성비", "value"),
+    (r"연비|회전\s*저항|rr\b", "연비", None),
     (r"할인|세일|할인율", "할인", "discount"),
     (r"조용|정숙|소음|진동", "정숙/저진동", "low_vibration"),
     (r"빗길|젖은\s*노면|wet|비\s*오는", "빗길", "wet"),
@@ -5326,6 +5329,19 @@ def _build_discovery_policy_context(
                     sub_intent="product_attribute_lookup",
                     entities=entities,
                 )
+        elif discovery_frame.intent == "product_recommendation":
+            context_frame = build_discovery_intent_frame(
+                context_text,
+                known_slots={"tire_size": tire_size} if tire_size else {},
+            )
+            if (
+                context_frame.intent == "product_recommendation"
+                and context_frame.entities.get("recommendation_metric")
+                and not discovery_frame.entities.get("recommendation_metric")
+            ):
+                merged_entities = dict(discovery_frame.entities)
+                merged_entities["recommendation_metric"] = context_frame.entities["recommendation_metric"]
+                discovery_frame = replace(discovery_frame, entities=merged_entities)
         discovery_tool_plan = plan_discovery_tools(discovery_frame)
         discovery_response_decision = decide_discovery_response(discovery_frame)
         discovery_tool_patch = (
