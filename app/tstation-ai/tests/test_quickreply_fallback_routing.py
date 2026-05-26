@@ -1421,6 +1421,28 @@ def test_store_holiday_period_detail_falls_back_to_today_when_no_requested_date(
     assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 오늘 영업해?", now_utc=now_utc) == "20260526"
 
 
+def test_store_date_availability_context_is_preserved_for_date_only_followup_after_datepick() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": "2026년 5월 29일 (금) 티스테이션 성남IC점은 영업하며 예약 가능한 시간이 있습니다.",
+            "template_data": {
+                "template": "datepick",
+                "data": {
+                    "dates": [{
+                        "date": "2026년 5월 29일 (금)",
+                        "available": True,
+                        "availableTimes": [9, 10, 11, 13, 14, 15, 16, 17],
+                        "index": 0,
+                    }],
+                },
+            },
+        },
+    ]
+
+    assert _should_preserve_store_date_availability_context("5/30은?", messages) is True
+
+
 def test_store_context_preserves_shop_seq_for_detail_cta() -> None:
     result = filter_for_context(
         "get_store_list_tool",

@@ -4188,6 +4188,16 @@ def _should_preserve_store_date_availability_context(
 ) -> bool:
     if _has_store_date_availability_signal(last_user_text):
         return True
+    if _parse_requested_reservation_date(last_user_text) is not None and messages:
+        for message in reversed(messages[-8:]):
+            content = str(message.get("content") or "")
+            template_data = message.get("template_data")
+            if isinstance(template_data, dict):
+                if str(template_data.get("template") or "") == "datepick":
+                    return True
+                content += " " + json.dumps(template_data, ensure_ascii=False)
+            if _has_store_date_availability_signal(content):
+                return True
     if not is_store_confirmation_reply(last_user_text):
         return False
     if not messages:
