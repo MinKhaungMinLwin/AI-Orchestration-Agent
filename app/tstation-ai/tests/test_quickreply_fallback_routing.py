@@ -71,11 +71,13 @@ from services.tstation.chat import (
     _parse_requested_reservation_date,
     _requested_reservation_cal_day_or_today,
     _qc_skip_reason,
+    _rule_based_classify,
     _select_vehicle_from_listcar_event,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
+    _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
@@ -1766,10 +1768,40 @@ def test_pickup_service_force_routes_to_support() -> None:
     assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
 
 
+def test_delivery_policy_force_routes_to_support() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("서귀포시인데 배송비 더 들어?")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
+
+
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("신청 방법 안내해줘")
 
     assert result is None
+
+
+def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
+    assert _support_fast_path("픽업서비스 어떻게 신청해?") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("타이어 집으로 걍 배송받고 싶어") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
+    assert _support_fast_path("신청 방법 알려줘") is None
+
+
+def test_rule_based_classify_keeps_pickup_and_delivery_policy_gates_even_when_disabled() -> None:
+    merged_slots = SimpleNamespace(goods_no=None)
+
+    assert _rule_based_classify("차 가지러 올 수 있어?", merged_slots) == [MultiAgentDomain.Domain.SUPPORT]
+    assert _rule_based_classify("타이어 집으로 걍 배송받고 싶어", merged_slots) == [MultiAgentDomain.Domain.SUPPORT]
+    assert _rule_based_classify("서귀포시인데 배송비 더 들어?", merged_slots) == [MultiAgentDomain.Domain.SUPPORT]
+    assert _rule_based_classify("제주도 매장에서도 온라인 가격이랑 똑같아?", merged_slots) == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _rule_based_classify("신청 방법 알려줘", merged_slots) is None
 
 
 def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:

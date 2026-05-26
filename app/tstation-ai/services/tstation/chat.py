@@ -879,31 +879,6 @@ class StreamingMultiAgentCoordinator:
                 "매장에서도 구매",
                 "온라인에서만",
                 "온라인에서만 사야",
-                # generic online vs in-store price difference queries
-                "매장에서 구매하는거랑 온라인",
-                "매장 구매랑 온라인",
-                "온라인 주문이랑 매장",
-                "온라인이랑 매장 가격 차이",
-                "매장 가격 온라인 가격",
-                "매장에서 사는 거랑 온라인",
-                "매장 가서 직접 사는 거랑 온라인",
-                "매장 가서 직접 사는",
-                "매장에서 사는거랑 온라인",
-            ],
-            MultiAgentDomain.Domain.SUPPORT,
-        ),
-        # SUPPORT — Jeju/island-mountain shipping-fee policy (TC-057).
-        # Policy questions about regional surcharge should use FAQ guidance, not store search.
-        (
-            [
-                "도서산간",
-                "제주도 매장에서도 온라인 가격",
-                "제주 배송비",
-                "제주도 배송비",
-                "서귀포시인데 배송비",
-                "서귀포 배송비",
-                "배송비 더 들어",
-                "추가 배송비",
             ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
@@ -1112,6 +1087,16 @@ class StreamingMultiAgentCoordinator:
                 user_behavior="asking about Smart Pickup / pickup service",
                 agent_prompt_profile=AgentPromptProfile.FULL,
                 flow="pickup service intent gate — bypassed LLM router",
+            )
+        delivery_decision = decide_delivery_policy_gate(user_text=text)
+        if delivery_decision.is_actionable:
+            return MultiAgentDomain(
+                reason=f"delivery policy gate matched {delivery_decision.intent}",
+                domains=[MultiAgentDomain.Domain.SUPPORT],
+                execution_plan=["Run SUPPORT for delivery/shipping-fee policy guidance"],
+                user_behavior="asking about direct delivery, shipping fee, or online/store price policy",
+                agent_prompt_profile=AgentPromptProfile.FULL,
+                flow="delivery policy intent gate — bypassed LLM router",
             )
 
         # Regex force — license plate + owner name → DISCOVERY_RECOMMENDATION profile.
@@ -5483,6 +5468,14 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             pickup_decision.reason,
         )
         return [MultiAgentDomain.Domain.SUPPORT]
+    delivery_decision = decide_delivery_policy_gate(user_text=text)
+    if delivery_decision.is_actionable:
+        logger.debug(
+            "[SUPPORT_FAST_PATH] delivery gate → SUPPORT: intent=%s reason=%s",
+            delivery_decision.intent,
+            delivery_decision.reason,
+        )
+        return [MultiAgentDomain.Domain.SUPPORT]
     if _SUPPORT_FAST_RE.search(text):
         logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
@@ -5900,19 +5893,9 @@ def _rule_based_classify(
       3. goods_no in slots + transactional keyword in text → [TRANSACTION]
       4. goods_no pattern in text + transactional keyword  → [TRANSACTION]
     """
-    # DISABLED — set to True to re-enable rule-based routing
-    _RULE_BASED_ROUTING_ENABLED = False
-    if not _RULE_BASED_ROUTING_ENABLED:
-        return None
-
     text = last_user_text.strip()
     if not text:
         return None
-
-    # Case 1: Pure greeting (short, no additional intent)
-    if _GREETING_ONLY_RE.match(text):
-        logger.debug("[RULE_ROUTER] Greeting fast-path → LEADING")
-        return [MultiAgentDomain.Domain.LEADING]
 
     pickup_decision = decide_pickup_service_gate(user_text=text)
     if pickup_decision.is_pickup:
@@ -5922,6 +5905,25 @@ def _rule_based_classify(
             pickup_decision.reason,
         )
         return [MultiAgentDomain.Domain.SUPPORT]
+
+    delivery_decision = decide_delivery_policy_gate(user_text=text)
+    if delivery_decision.is_actionable:
+        logger.debug(
+            "[RULE_ROUTER] Delivery gate fast-path → SUPPORT: intent=%s reason=%s",
+            delivery_decision.intent,
+            delivery_decision.reason,
+        )
+        return [MultiAgentDomain.Domain.SUPPORT]
+
+    # DISABLED — set to True to re-enable rule-based routing
+    _RULE_BASED_ROUTING_ENABLED = False
+    if not _RULE_BASED_ROUTING_ENABLED:
+        return None
+
+    # Case 1: Pure greeting (short, no additional intent)
+    if _GREETING_ONLY_RE.match(text):
+        logger.debug("[RULE_ROUTER] Greeting fast-path → LEADING")
+        return [MultiAgentDomain.Domain.LEADING]
 
     # Case 2: Clear support / escalation keywords
     if _SUPPORT_FAST_RE.search(text):
