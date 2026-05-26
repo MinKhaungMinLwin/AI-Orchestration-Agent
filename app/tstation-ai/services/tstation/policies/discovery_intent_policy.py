@@ -346,8 +346,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         )
     args = {}
     if entities.get("recommendation_metric") == "fuel_efficiency":
-        args["rcmd_type"] = "tstation"
-        args["sort_by"] = "fuel_efficiency_desc"
+        args["rcmd_type"] = "fuel_efficiency"
     elif entities.get("performance") == "performance":
         args["rcmd_type"] = "performance"
     if entities.get("season") == "winter":

@@ -1612,7 +1612,7 @@ def test_vehicle_auto_select_preserves_discount_recommendation_intent() -> None:
 
 
 def test_vehicle_auto_select_maps_fuel_efficiency_query_to_tstation_context() -> None:
-    assert _recommendation_type_for_vehicle_auto_continue("연비 좋은 타이어 추천") == "tstation"
+    assert _recommendation_type_for_vehicle_auto_continue("연비 좋은 타이어 추천") == "fuel_efficiency"
 
 
 def test_fuel_efficiency_sort_prefers_higher_score_then_lower_rr() -> None:
@@ -1982,7 +1982,7 @@ def test_followup_vehicle_pick_preserves_prior_fuel_efficiency_context() -> None
 
     assert context is not None
     assert "연비" in context
-    assert "rcmd_type='tstation'" in context
+    assert "rcmd_type='fuel_efficiency'" in context
 
 
 def test_followup_vehicle_pick_ignores_ev_model_in_listcar_when_user_context_is_product_search() -> None:

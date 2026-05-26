@@ -7,6 +7,7 @@ class RcmdType(str, Enum):
     DISCOUNT = "discount"
     EV = "ev"
     FAMILY = "family"
+    FUEL_EFFICIENCY = "fuel_efficiency"
     HANDLING = "handling"
     HEAVY_LOAD = "heavy_load"
     HIGH_SPEED = "high_speed"
