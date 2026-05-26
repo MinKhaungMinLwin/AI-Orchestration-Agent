@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from services.tstation.policies.reservation_template_policy import (
     build_datepick_from_preview_payload,
+    build_datepick_from_schedule_payload,
     coerce_reservation_quickreply_to_datepick,
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
@@ -276,6 +277,78 @@ def test_schedule_confirmation_does_not_depend_on_assistant_copy() -> None:
         )
         is None
     )
+
+
+def test_schedule_payload_builds_datepick_from_tool_result() -> None:
+    result = build_datepick_from_schedule_payload(
+        {
+            "status": "success",
+            "data": {
+                "shop_id": "F07782",
+                "shop_nm": "티스테이션 한남점",
+                "mode": "general",
+                "slots": [
+                    {"cal_day": "20260530", "tm": "09"},
+                    {"cal_day": "20260530", "tm": "10"},
+                    {"cal_day": "20260530", "tm": "13"},
+                ],
+            },
+        },
+        assistant_text="예약 가능한 날짜와 시간을 선택해 주세요.",
+        assistant_response_source="test",
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {"shopId": "F07782", "shopName": "티스테이션 한남점"}
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 30일 (토)",
+        "available": True,
+        "availableTimes": [9, 10, 13],
+        "index": 0,
+    }]
+
+
+def test_schedule_request_quickreply_uses_schedule_tool_context_when_latest_datepick_missing() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "이번 주 토요일 13시 예약 가능 시간도 확인됐어요.",
+            "quickReplies": [
+                {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
+                {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+
+    result = coerce_schedule_confirmation_quickreply_to_datepick(
+        event,
+        user_text="이번 주 토요일 13시에 ventus air s 2553519 2개 장착 가능할까?",
+        latest_datepick_data=None,
+        structured_sources=[(
+            "get_store_schedule_tool",
+            {
+                "status": "success",
+                "data": {
+                    "shop_id": "F07782",
+                    "shop_nm": "티스테이션 한남점",
+                    "mode": "general",
+                    "slots": [
+                        {"cal_day": "20260530", "tm": "09"},
+                        {"cal_day": "20260530", "tm": "10"},
+                        {"cal_day": "20260530", "tm": "13"},
+                    ],
+                },
+            },
+        )],
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["metadata"] == {"shopId": "F07782", "shopName": "티스테이션 한남점"}
+    assert result["data"]["assistantResponse"] == "이번 주 토요일 13시 예약 가능 시간도 확인됐어요."
 
 
 def test_latest_template_data_from_messages_returns_newest_matching_template() -> None:

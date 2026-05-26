@@ -25,6 +25,14 @@ _SCHEDULE_CONFIRMATION_RE = re.compile(
     r"선택\s*가능한\s*(?:장착\s*)?일정|예약\s*시간|일정\s*맞|시간\s*맞",
     re.IGNORECASE,
 )
+_SCHEDULE_REQUEST_RE = re.compile(
+    r"예약\s*(?:가능|해|시간|일정|스케줄)|"
+    r"장착\s*(?:가능|예약|시간|일정)|"
+    r"방문\s*(?:예약|시간|일정)|"
+    r"가능한\s*(?:날짜|시간|일정)|"
+    r"스케줄(?:표)?|시간표",
+    re.IGNORECASE,
+)
 
 
 def yyyymmdd_to_korean_date(s: str) -> str:
@@ -162,6 +170,71 @@ def build_datepick_from_preview_payload(
     return None
 
 
+def build_datepick_from_schedule_payload(
+    schedule_payload: dict,
+    *,
+    assistant_text: str,
+    source_domain: str | None = None,
+    assistant_response_source: str,
+) -> dict | None:
+    """Build a datepick event from `get_store_schedule_tool` payload/context."""
+    raw = schedule_payload.get("data") if isinstance(schedule_payload.get("data"), dict) else schedule_payload
+    if not isinstance(raw, dict):
+        return None
+
+    shop_id = str(raw.get("shop_id") or raw.get("shopId") or "").strip()
+    slots = raw.get("slots")
+    if not shop_id or not isinstance(slots, list):
+        return None
+
+    by_day: dict[str, set[int]] = {}
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        cal_day = str(slot.get("cal_day") or slot.get("calDay") or "").strip()
+        hour = parse_slot_hour(slot.get("tm"))
+        if cal_day and hour is not None:
+            by_day.setdefault(cal_day, set()).add(hour)
+    if not by_day:
+        return None
+
+    dates: list[dict] = []
+    selected_idx: int | None = None
+    for idx, cal_day in enumerate(sorted(by_day.keys())):
+        times = sorted(by_day[cal_day])
+        available = bool(times)
+        dates.append({
+            "date": yyyymmdd_to_korean_date(cal_day),
+            "available": available,
+            "availableTimes": times,
+            "index": idx,
+        })
+        if selected_idx is None and available:
+            selected_idx = idx
+    if selected_idx is None:
+        return None
+
+    metadata = {"shopId": shop_id}
+    shop_name = str(raw.get("shop_nm") or raw.get("shopName") or "").strip()
+    if shop_name:
+        metadata["shopName"] = shop_name
+
+    event = {
+        "type": "data",
+        "template": "datepick",
+        "assistant_response_source": assistant_response_source,
+        "data": {
+            "assistantResponse": assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+            "dates": dates,
+            "selectedDate": selected_idx,
+            "metadata": metadata,
+        },
+    }
+    if source_domain is not None:
+        event["source_domain"] = source_domain
+    return event
+
+
 def _date_label_has_weekday(date_item: dict, weekday: str) -> bool:
     label = str(date_item.get("date") or "")
     return f"({weekday})" in label or f"{weekday}요일" in label
@@ -297,6 +370,7 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
     *,
     user_text: str,
     latest_datepick_data: dict | None,
+    structured_sources: list[tuple[str, dict]] | None = None,
     default_source_domain: str = "transaction",
 ) -> dict | None:
     """Re-render the previous date picker for schedule clarification turns.
@@ -306,27 +380,44 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
     add "1:1 문의하기", contradicting the text that asks the user to select a
     date/time. In that narrow case, reuse the latest datepick card.
     """
-    if event.get("template") != "quickReply" or not isinstance(latest_datepick_data, dict):
+    if event.get("template") != "quickReply":
         return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):
         return None
-    dates = latest_datepick_data.get("dates")
-    if not isinstance(dates, list) or not dates:
-        return None
-    if not _SCHEDULE_CONFIRMATION_RE.search(user_text or ""):
+    is_schedule_followup = bool(
+        _SCHEDULE_CONFIRMATION_RE.search(user_text or "")
+        or _SCHEDULE_REQUEST_RE.search(user_text or "")
+    )
+    if not is_schedule_followup:
         return None
 
     assistant_text = str(event_data.get("assistantResponse") or "")
-    datepick_data = json.loads(json.dumps(latest_datepick_data, ensure_ascii=False))
-    if assistant_text:
-        datepick_data["assistantResponse"] = assistant_text
-    else:
-        datepick_data.setdefault("assistantResponse", "예약 가능한 날짜와 시간을 선택해 주세요.")
-    return {
-        "type": "data",
-        "template": "datepick",
-        "source_domain": event.get("source_domain") or default_source_domain,
-        "assistant_response_source": "code_mapper_schedule_confirmation",
-        "data": datepick_data,
-    }
+    if isinstance(latest_datepick_data, dict):
+        dates = latest_datepick_data.get("dates")
+        if isinstance(dates, list) and dates:
+            datepick_data = json.loads(json.dumps(latest_datepick_data, ensure_ascii=False))
+            if assistant_text:
+                datepick_data["assistantResponse"] = assistant_text
+            else:
+                datepick_data.setdefault("assistantResponse", "예약 가능한 날짜와 시간을 선택해 주세요.")
+            return {
+                "type": "data",
+                "template": "datepick",
+                "source_domain": event.get("source_domain") or default_source_domain,
+                "assistant_response_source": "code_mapper_schedule_confirmation",
+                "data": datepick_data,
+            }
+
+    for tool_name, parsed in reversed(structured_sources or []):
+        if tool_name != "get_store_schedule_tool" or not isinstance(parsed, dict):
+            continue
+        rebuilt = build_datepick_from_schedule_payload(
+            parsed,
+            assistant_text=assistant_text,
+            source_domain=event.get("source_domain") or default_source_domain,
+            assistant_response_source="code_mapper_schedule_confirmation",
+        )
+        if rebuilt is not None:
+            return rebuilt
+    return None

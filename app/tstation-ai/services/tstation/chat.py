@@ -10041,6 +10041,14 @@ class TStationChatServiceV2:
                         event,
                         user_text=user_query,
                         latest_datepick_data=latest_datepick_tmpl,
+                        structured_sources=[
+                            *[
+                                (str(entry.get("tool") or ""), entry.get("data"))
+                                for entry in (prev_tool_data or [])
+                                if isinstance(entry, dict) and isinstance(entry.get("data"), dict)
+                            ],
+                            *structured_sources,
+                        ],
                         default_source_domain=MultiAgentDomain.Domain.TRANSACTION.value,
                     )
                     if coerced_event is not None:

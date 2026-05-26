@@ -1440,6 +1440,34 @@ def test_store_detail_context_preserves_summary_fields_for_contact_cta() -> None
     assert result["data"]["tel_no"] == "0515038585"
 
 
+def test_store_schedule_context_preserves_slots_for_followup_datepick_recovery() -> None:
+    result = filter_for_context(
+        "get_store_schedule_tool",
+        {
+            "status": "success",
+            "data": {
+                "shop_id": "F07782",
+                "shop_nm": "티스테이션 한남점",
+                "mode": "general",
+                "slots": [
+                    {"cal_day": "20260530", "tm": "09"},
+                    {"cal_day": "20260530", "tm": "13"},
+                ],
+            },
+        },
+        {"shop_id": "F07782", "mode": "general"},
+    )
+
+    assert result is not None
+    assert result["data"]["shop_id"] == "F07782"
+    assert result["data"]["shop_nm"] == "티스테이션 한남점"
+    assert result["data"]["mode"] == "general"
+    assert result["data"]["slots"] == [
+        {"cal_day": "20260530", "tm": "09"},
+        {"cal_day": "20260530", "tm": "13"},
+    ]
+
+
 def test_recent_single_store_context_can_carry_shop_id_from_detail_input() -> None:
     prev_tool_data = [
         {

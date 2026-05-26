@@ -36,6 +36,7 @@ _STORE_BASE_FIELDS: set[str] = {
 _NEARBY_STORE_FIELDS: set[str] = _STORE_BASE_FIELDS | {"distance_km"}
 _FAVORITE_STORE_FIELDS: set[str] = _STORE_BASE_FIELDS | {"shop_seq", "favored_at"}
 _STORE_DETAIL_FIELDS: set[str] = _STORE_BASE_FIELDS | {"is_all_my_t", "is_installable", "is_tna_delivery"}
+_STORE_SCHEDULE_FIELDS: set[str] = {"shop_id", "shop_nm", "mode", "is_installable", "is_tna_delivery", "slots"}
 
 _PRODUCT_WARRANTY_FIELDS: set[str] = {"wrt_tp_cd", "wrt_nm", "is_plus"}
 _MY_WARRANTY_FIELDS: set[str] = {
@@ -341,6 +342,20 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
     # Single-object store detail, preserved for follow-up CTA/detail summaries.
     if tool_name == "get_store_detail_tool" and isinstance(inner, dict):
         compact = {k: v for k, v in inner.items() if k in _STORE_DETAIL_FIELDS and v is not None}
+        if compact:
+            result = {"tool": tool_name, "data": compact}
+            if tool_input:
+                result["input"] = _filter_input(tool_input)
+                result["_dedup_input"] = _dedup_input(tool_input)
+            return result
+
+    # Store schedule results must survive into follow-up turns so "예약 가능 시간 보여줘"
+    # can rebuild a datepick even if the previous turn rendered as a quickReply.
+    if tool_name == "get_store_schedule_tool" and isinstance(inner, dict):
+        compact = {k: v for k, v in inner.items() if k in _STORE_SCHEDULE_FIELDS and v is not None}
+        slots = compact.get("slots")
+        if isinstance(slots, list):
+            compact["slots"] = _filter_list([slot for slot in slots if isinstance(slot, dict)], keep={"cal_day", "tm"})
         if compact:
             result = {"tool": tool_name, "data": compact}
             if tool_input:
