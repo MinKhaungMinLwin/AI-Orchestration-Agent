@@ -241,6 +241,7 @@ def test_fuel_efficiency_recommendation_uses_recommendation_flow_not_explanation
     assert frame.sub_intent == "condition_recommendation"
     assert frame.entities["recommendation_metric"] == "fuel_efficiency"
     assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["rcmd_type"] == "tstation"
     assert plan.tool_args_patch["sort_by"] == "fuel_efficiency_desc"
 
 

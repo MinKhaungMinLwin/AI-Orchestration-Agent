@@ -345,10 +345,11 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("generic_noise_recommendation",),
         )
     args = {}
-    if entities.get("performance") == "performance":
-        args["rcmd_type"] = "performance"
     if entities.get("recommendation_metric") == "fuel_efficiency":
+        args["rcmd_type"] = "tstation"
         args["sort_by"] = "fuel_efficiency_desc"
+    elif entities.get("performance") == "performance":
+        args["rcmd_type"] = "performance"
     if entities.get("season") == "winter":
         args.update({"rcmd_type": "snow", "season_nm": "겨울"})
     elif entities.get("season") == "all_weather":
