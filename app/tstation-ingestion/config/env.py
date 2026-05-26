@@ -61,7 +61,7 @@ class Settings(BaseSettings):
         description="Bearer JWT token used by the ingestion service to authenticate against tstation-be /api/faq.",
     )
     FAQ_SYNC_INTERVAL_SECONDS: int = Field(
-        default=3600,
+        default=25200,
         description="Interval in seconds between periodic FAQ fetches from tstation-be into Qdrant.",
     )
 
