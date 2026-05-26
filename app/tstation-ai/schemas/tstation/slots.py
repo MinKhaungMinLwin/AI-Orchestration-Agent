@@ -67,10 +67,11 @@ class ConversationSlots(BaseModel):
         "shop_name": ["shop_id"],
         "car_model": ["tire_size", "goods_no", "payment_amount"],
         # When the goal flips, drop free-form store preferences (they are session-specific).
-        # region is intentionally NOT reset here: purchase goals (store_with_stock, place_order)
-        # still need region to filter store results, and a stale region is a better default
-        # than forcing the user to re-state it mid-purchase.
+        # Region changes mean the user is searching a new area, not confirming the
+        # previous store. Clear store identity so a stale shop_id cannot satisfy
+        # the "매장 선택" step after a region-only follow-up like "성남은?".
         "goal_type": ["user_preferences_text"],
+        "region": ["shop_id", "shop_name"],
     }
 
     # Regex patterns for extracting slots from user messages
@@ -180,7 +181,7 @@ class ConversationSlots(BaseModel):
         r"강남|강북|강동|강서|관악|광진|구로|금천|노원|도봉|동대문|동작|마포"
         r"|서대문|서초|성동|성북|송파|양천|영등포|용산|은평|종로|중랑"
         # Seoul districts/landmarks
-        r"|잠실|판교|역삼|논현|압구정|신사|청담|반포|방배|이태원|홍대|연남"
+        r"|서울|잠실|판교|역삼|논현|압구정|신사|청담|반포|방배|이태원|홍대|연남"
         r"|성수|왕십리|건대|선릉|삼성"
         # Gyeonggi
         r"|분당|수정|중원|수원|영통|성남|용인|기흥|수지|처인"

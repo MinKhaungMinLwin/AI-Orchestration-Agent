@@ -94,3 +94,29 @@ def test_store_finder_captures_unverifiable_preference_text() -> None:
     assert slots.region == "하남"
     assert slots.user_preferences_text is not None
     assert "리프트" in slots.user_preferences_text
+
+
+def test_region_change_clears_stale_store_identity() -> None:
+    existing = ConversationSlots(
+        goods_no="G000000312970",
+        ord_qty=2,
+        shop_id="F00302",
+        shop_name="성남 선택 매장",
+        region="부산",
+        goal_type="place_order",
+    )
+    new_region = ConversationSlots.extract_from_user_text("성남은?")
+
+    merged = existing.merge(new_region)
+
+    assert merged.region == "성남"
+    assert merged.shop_id is None
+    assert merged.shop_name is None
+    assert merged.goods_no == "G000000312970"
+    assert merged.ord_qty == 2
+
+
+def test_seoul_region_followup_is_extracted() -> None:
+    slots = ConversationSlots.extract_from_user_text("서울은?")
+
+    assert slots.region == "서울"
