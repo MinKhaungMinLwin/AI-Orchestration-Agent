@@ -2478,12 +2478,12 @@ _TIRE_PRODUCT_CONTEXT_RE = re.compile(
 _SHOP_SEQ_RE = re.compile(r'"shop[_\s]*seq"\s*:\s*"([A-Z]?\d{4,})"', re.IGNORECASE)
 _STORE_NAME_RE = re.compile(r"티스테이션\s*[가-힣A-Za-z0-9]+\s*점")
 _STORE_HOLIDAY_PERIOD_INFO_RE = re.compile(
-    r"(?=.*(?:티스테이션|더타이어샵).{0,20}점)"
+    r"(?=.*(?:(?:티스테이션|더타이어샵)\s*)?[가-힣A-Za-z0-9]{2,20}\s*점)"
     r"(?=.*(?:연휴|공휴일|휴일|휴무|명절|[가-힣]{2,12}(?:날|절|일)|\d{1,2}\s*/\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일))",
     re.IGNORECASE,
 )
 _STORE_HOLIDAY_STORE_NAME_RE = re.compile(
-    r"((?:티스테이션|더타이어샵)\s*[가-힣A-Za-z0-9]+\s*점)",
+    r"(((?:티스테이션|더타이어샵)\s*)?[가-힣A-Za-z0-9]{2,20}\s*점)",
     re.IGNORECASE,
 )
 _STORE_HOLIDAY_OPERATION_RE = re.compile(
@@ -3937,19 +3937,30 @@ def _build_store_holiday_period_event(
     ).strip()
     store_name = str(detail_data.get("shop_nm") or store_row.get("shop_nm") or "선택하신 매장").strip()
     holiday = str(detail_data.get("holiday") or store_row.get("holiday") or "").strip()
+    available_slots = detail_data.get("available_slots") if isinstance(detail_data, dict) else None
 
     period_label = _store_holiday_label_from_text(user_text)
+    is_operation_query = bool(_STORE_HOLIDAY_OPERATION_RE.search(user_text or ""))
+    has_slot_data = isinstance(available_slots, list) and any(str(slot).strip() for slot in available_slots)
 
-    lines = [
-        f"{store_name}의 {period_label} 예약 가능 여부는 매장 휴무일과 예약 오픈 일정 기준으로 확인해야 해요.",
-    ]
-    if holiday:
-        lines.append(f"현재 확인되는 매장 휴무일 정보는 `{holiday}`입니다.")
+    if is_operation_query:
+        if has_slot_data:
+            lines = [f"{store_name}은 {period_label}에 영업 중인 것으로 확인돼요."]
+        elif holiday:
+            lines = [f"{store_name}은 {period_label}에 `{holiday}`로 확인돼요."]
+        else:
+            lines = [f"{store_name}의 {period_label} 영업 여부는 매장 상세 정보 기준으로 확인해 주세요."]
     else:
-        lines.append("현재 매장 상세 정보에서 별도 휴무일 문구는 확인되지 않아요.")
-    lines.append(
-        f"{period_label}의 정확한 예약 가능 시간은 해당 기간 예약 일정이 열리는 시점에 다시 확인해 주세요."
-    )
+        lines = [
+            f"{store_name}의 {period_label} 예약 가능 여부는 매장 휴무일과 예약 오픈 일정 기준으로 확인해야 해요.",
+        ]
+        if holiday:
+            lines.append(f"현재 확인되는 매장 휴무일 정보는 `{holiday}`입니다.")
+        else:
+            lines.append("현재 매장 상세 정보에서 별도 휴무일 문구는 확인되지 않아요.")
+        lines.append(
+            f"{period_label}의 정확한 예약 가능 시간은 해당 기간 예약 일정이 열리는 시점에 다시 확인해 주세요."
+        )
 
     detail_summary = _build_store_detail_summary_from_context([{
         "tool": "get_store_detail_tool",

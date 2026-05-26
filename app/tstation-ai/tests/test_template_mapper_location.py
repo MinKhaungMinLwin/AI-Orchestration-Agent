@@ -1860,6 +1860,7 @@ def test_specific_date_store_availability_maps_detail_slots_to_datepick() -> Non
     """A single-date open/holiday question should show the concrete slots,
     even when no product/order booking tool ran in the same turn."""
     current_store_date_availability.set(True)
+    current_user_text.set("티스테이션 송파오금점 6/6 예약 가능해?")
     entry = _store_detail_entry(cal_day="20260606", available_slots=["09", "10", "11", "13", "14", "15", "16", "17"])
 
     result = try_build_template([entry], "고객님, 티스테이션 송파오금점 매장 정보를 안내드릴게요.")
@@ -1887,6 +1888,18 @@ def test_plain_store_detail_with_slots_still_maps_to_info_quickreply() -> None:
     assert result["template"] == "quickReply"
     assert "매장명: 티스테이션 송파오금점" in result["data"]["assistantResponse"]
     assert "예약 가능한 시간이 있습니다" not in result["data"]["assistantResponse"]
+
+
+def test_specific_date_operation_query_with_slots_stays_info_quickreply() -> None:
+    current_store_date_availability.set(True)
+    current_user_text.set("한남점 이번주 일요일 영업해?")
+    entry = _store_detail_entry(cal_day="20260606", available_slots=["09", "10"])
+
+    result = try_build_template([entry], "고객님, 티스테이션 송파오금점 매장 정보를 안내드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assert "매장명: 티스테이션 송파오금점" in result["data"]["assistantResponse"]
 
 
 def test_date_only_followup_after_reservation_query_maps_detail_slots_to_datepick() -> None:

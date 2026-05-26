@@ -1376,6 +1376,7 @@ def test_store_holiday_period_query_detects_named_and_specific_holidays() -> Non
     assert _is_store_holiday_period_info_query('티스테이션 한남점 "추석 연휴에도 타이어 교체 예약 받아?"')
     assert _is_store_holiday_period_info_query("티스테이션 한남점 석가탄신일에 영업해?")
     assert _is_store_holiday_period_info_query("티스테이션 한남점 5/1에 문 열어?")
+    assert _is_store_holiday_period_info_query("한남점 이번주 일요일 영업해?")
 
 
 def test_store_holiday_period_query_does_not_hijack_reservation_slot_question() -> None:
@@ -1409,6 +1410,29 @@ def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
     assert "매장명: 티스테이션 한남점" in data["assistantResponse"]
     assert data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
     assert data["quickReplies"][0]["url"].endswith("/store/locals/F204423537")
+
+
+def test_store_holiday_period_event_answers_operation_query_from_detail_slots() -> None:
+    event = _build_store_holiday_period_event(
+        "한남점 이번주 일요일 영업해?",
+        {"shop_seq": "F204423537", "shop_nm": "티스테이션 한남점"},
+        {
+            "status": "success",
+            "data": {
+                "shop_seq": "F204423537",
+                "shop_nm": "티스테이션 한남점",
+                "holiday": None,
+                "available_slots": ["09", "10", "11"],
+                "tel_no": "027902921",
+                "shop_biz_strt_time": "09",
+                "shop_biz_end_time": "19",
+            },
+        },
+    )
+
+    data = event["data"]
+    assert event["template"] == "quickReply"
+    assert "티스테이션 한남점은 일요일에 영업 중인 것으로 확인돼요." in data["assistantResponse"]
 
 
 def test_store_holiday_period_detail_uses_requested_cal_day_when_present() -> None:

@@ -3723,6 +3723,10 @@ _STORE_BOOKING_FOLLOWUP_SIGNAL_RE = re.compile(
     r"예약|장착|방문|스케줄|시간표|가능\s*(?:해|하|한|하냐|하냐고|하나요|여부)?|돼\??|되\??",
     re.IGNORECASE,
 )
+_STORE_OPERATION_INFO_SIGNAL_RE = re.compile(
+    r"영업|운영|휴무|휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    re.IGNORECASE,
+)
 _STORE_DATE_REFERENCE_RE = re.compile(
     r"\d{1,2}\s*/\s*\d{1,2}|(?:\d{2,4}\s*년\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일|"
     r"오늘|내일|모레|이번\s*주|다음\s*주|주말|월요일|화요일|수요일|목요일|금요일|토요일|일요일",
@@ -3772,9 +3776,13 @@ def _today_service_datepick_response(event: dict) -> str | None:
 
 
 def _should_treat_store_detail_slots_as_datepick() -> bool:
+    user_text = current_user_text.get() or ""
+    if user_text and _STORE_OPERATION_INFO_SIGNAL_RE.search(user_text) and not _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(
+        user_text
+    ):
+        return False
     if current_store_date_availability.get():
         return True
-    user_text = current_user_text.get() or ""
     if not user_text:
         return False
     return bool(
