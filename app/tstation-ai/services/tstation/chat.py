@@ -4136,10 +4136,10 @@ def _coupon_issue_event() -> dict:
 
 _RESERVATION_CONTEXT_RE = re.compile(r"예약|장착|방문|갈\s*건데|가려|갈래|시간\s*선택|예약\s*가능", re.IGNORECASE)
 _FUTURE_SLASH_MONTH_DAY_RE = re.compile(
-    r"(?:(?P<year>20\d{2})\s*[./-]\s*)?(?P<month>1[0-2]|0?[1-9])\s*/\s*(?P<day>[12]?\d|3[01])"
+    r"(?:(?P<year>20\d{2})\s*[./-]\s*)?(?P<month>1[0-2]|0?[1-9])\s*/\s*(?P<day>3[01]|[12]?\d)"
 )
 _FUTURE_MONTH_DAY_RE = re.compile(
-    r"(?:(?P<year>20\d{2})\s*년\s*)?(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>[12]?\d|3[01])\s*일)?"
+    r"(?:(?P<year>20\d{2})\s*년\s*)?(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?"
 )
 
 

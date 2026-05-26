@@ -68,6 +68,7 @@ from services.tstation.chat import (
     _recommendation_type_for_vehicle_auto_continue,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
+    _parse_requested_reservation_date,
     _requested_reservation_cal_day_or_today,
     _qc_skip_reason,
     _select_vehicle_from_listcar_event,
@@ -422,6 +423,18 @@ def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates(
 
     assert _reservation_date_range_guard_event("6월 1일 예약 가능해?", today=today) is None
     assert _reservation_date_range_guard_event("8월 이벤트 알려줘", today=today) is None
+
+
+def test_parse_requested_reservation_date_preserves_day_30_for_slash_format() -> None:
+    today = datetime.date(2026, 5, 26)
+
+    assert _parse_requested_reservation_date("5/30은?", today=today) == datetime.date(2026, 5, 30)
+
+
+def test_parse_requested_reservation_date_preserves_day_31_for_month_day_format() -> None:
+    today = datetime.date(2026, 5, 26)
+
+    assert _parse_requested_reservation_date("5월 31일 예약 돼?", today=today) == datetime.date(2026, 5, 31)
 
 
 def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_template() -> None:
