@@ -676,8 +676,6 @@ def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
     assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
 
 
-<<<<<<< HEAD
-=======
 def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
     assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 설명좀") is True
 
@@ -710,7 +708,6 @@ def test_store_date_availability_context_not_preserved_for_generic_store_confirm
     assert _should_preserve_store_date_availability_context("네, 맞아요", messages) is False
 
 
->>>>>>> dev
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
     assert _preferred_product_search_keyword("Kinergy EX") == "키너지 EX"
     assert _preferred_product_search_keyword("kinergy ex") == "키너지 EX"

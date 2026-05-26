@@ -5085,8 +5085,6 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
 
 
-<<<<<<< HEAD
-=======
 def _should_suppress_inherited_recommendation_context_for_product_attribute(user_text: str) -> bool:
     if _is_ev_suitability_turn(user_text):
         return False
@@ -5097,7 +5095,6 @@ def _should_suppress_inherited_recommendation_context_for_product_attribute(user
     return normalize_tire_size(user_text) is None
 
 
->>>>>>> dev
 def _should_replace_listcar_with_product_attribute_lookup(event: dict | None, user_text: str) -> bool:
     """Return true when a vehicle-list card is an accidental detour for a product attribute question."""
     if not isinstance(event, dict) or event.get("template") != "listCar":
