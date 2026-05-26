@@ -16,6 +16,9 @@ _WEEKDAY_REQUEST_RE = re.compile(
     r"(?:이번\s*주|다음\s*주|다다음\s*주)?\s*(월|화|수|목|금|토|일)\s*(?:요일|욜)"
 )
 _WEEKEND_REQUEST_RE = re.compile(r"(?:이번\s*주말|다음\s*주말|주말)")
+_EXACT_DATE_REQUEST_RE = re.compile(
+    r"(?:(?P<year>\d{2,4})\s*년\s*)?(?P<month>\d{1,2})\s*(?:/\s*|월\s*)(?P<day>3[01]|[12]?\d)(?:\s*일)?"
+)
 _STOCK_STORE_TEXT_RE = re.compile(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장")
 _OTHER_STORE_REQUEST_RE = re.compile(
     r"(?:다른|추가|더)\s*(?:매장|지점)|(?:매장|지점)\s*(?:더|또|추가)"
@@ -250,6 +253,24 @@ def _replace_datepick_dates(event_data: dict, dates: list[dict]) -> None:
     event_data["selectedDate"] = 0
 
 
+def _extract_requested_month_day(user_text: str) -> tuple[int | None, int, int] | None:
+    match = _EXACT_DATE_REQUEST_RE.search(user_text or "")
+    if not match:
+        return None
+    year_text = match.group("year")
+    year = int(year_text) if year_text else None
+    if year is not None and year < 100:
+        year += 2000
+    return year, int(match.group("month")), int(match.group("day"))
+
+
+def _parse_date_label_components(label: str) -> tuple[int, int, int] | None:
+    match = re.search(r"(?P<year>\d{4})년\s*(?P<month>\d{1,2})월\s*(?P<day>\d{1,2})일", label or "")
+    if not match:
+        return None
+    return int(match.group("year")), int(match.group("month")), int(match.group("day"))
+
+
 def _first_contiguous_weekend_dates(dates: list[dict]) -> list[dict]:
     weekend_dates: list[dict] = []
     for date_item in dates:
@@ -420,4 +441,42 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
         )
         if rebuilt is not None:
             return rebuilt
+    return None
+
+
+def filter_datepick_to_requested_date(event: dict, user_text: str) -> dict | None:
+    """Narrow datepick dates when the user explicitly asks for a concrete date."""
+    if event.get("template") != "datepick":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    dates = event_data.get("dates")
+    if not isinstance(dates, list) or len(dates) <= 1:
+        return None
+
+    requested = _extract_requested_month_day(user_text)
+    if requested is None:
+        return None
+    requested_year, requested_month, requested_day = requested
+    for date_item in dates:
+        if not isinstance(date_item, dict):
+            continue
+        components = _parse_date_label_components(str(date_item.get("date") or ""))
+        if components is None:
+            continue
+        year, month, day = components
+        if month != requested_month or day != requested_day:
+            continue
+        if requested_year is not None and year != requested_year:
+            continue
+        label = str(date_item.get("date") or "")
+        _replace_datepick_dates(event_data, [date_item])
+        has_default_response = (
+            not event_data.get("assistantResponse")
+            or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요."
+        )
+        if has_default_response:
+            event_data["assistantResponse"] = f"{label} 예약 가능한 시간을 선택해 주세요."
+        return event
     return None

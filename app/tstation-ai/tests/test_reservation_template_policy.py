@@ -7,6 +7,7 @@ from services.tstation.policies.reservation_template_policy import (
     build_datepick_from_schedule_payload,
     coerce_reservation_quickreply_to_datepick,
     coerce_schedule_confirmation_quickreply_to_datepick,
+    filter_datepick_to_requested_date,
     filter_datepick_to_requested_weekday,
     is_other_store_request,
     latest_template_data_from_messages,
@@ -204,6 +205,22 @@ def test_explicit_weekday_request_keeps_first_matching_day() -> None:
 
 def test_incidental_weekday_character_does_not_filter_datepick() -> None:
     assert filter_datepick_to_requested_weekday(_datepick_event(), "금액도 같이 알려줘") is None
+
+
+def test_explicit_slash_date_request_keeps_matching_day() -> None:
+    result = filter_datepick_to_requested_date(_datepick_event(), "5/29은?")
+
+    assert result is not None
+    assert result["data"]["dates"] == [{
+        "date": "2026년 5월 29일 (금)",
+        "available": True,
+        "availableTimes": [11],
+        "index": 0,
+    }]
+
+
+def test_non_date_question_does_not_filter_datepick_by_date() -> None:
+    assert filter_datepick_to_requested_date(_datepick_event(), "예약 가능해?") is None
 
 
 def test_other_store_request_detection() -> None:

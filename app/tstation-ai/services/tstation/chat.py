@@ -35,6 +35,7 @@ from services.tstation.source_filter import filter_source_data, filter_for_conte
 from services.tstation import qc_verifier
 from services.tstation.classifier_feedback import log_classifier_redirect
 from services.tstation.policies.reservation_template_policy import (
+    filter_datepick_to_requested_date,
     coerce_reservation_quickreply_to_datepick,
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
@@ -9719,6 +9720,16 @@ class TStationChatServiceV2:
                     last_template = "datepick"
                     last_template_source = last_template_source or "code_mapper"
                     last_assistant_response_source = "code_mapper_weekday_filter"
+                    event_data = event.get("data", {})
+                coerced_event = filter_datepick_to_requested_date(event, user_query)
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] datepick filtered to requested date"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = last_template_source or "code_mapper"
+                    last_assistant_response_source = "code_mapper_date_filter"
                     event_data = event.get("data", {})
                 coerced_event = _coerce_vehicle_type_compatibility_listcar_to_quickreply(event, user_query)
                 if coerced_event is not None:
