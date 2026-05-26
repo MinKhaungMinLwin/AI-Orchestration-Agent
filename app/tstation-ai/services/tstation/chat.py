@@ -4158,10 +4158,33 @@ _FUTURE_SLASH_MONTH_DAY_RE = re.compile(
 _FUTURE_MONTH_DAY_RE = re.compile(
     r"(?:(?P<year>20\d{2})\s*년\s*)?(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?"
 )
+_RELATIVE_WEEKDAY_RESERVATION_RE = re.compile(
+    r"(?P<offset>이번\s*주|다음\s*주|다다음\s*주)\s*(?P<weekday>월|화|수|목|금|토|일)\s*(?:요일|욜)?"
+)
+_WEEKDAY_TO_INDEX = {"월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6}
 
 
 def _kst_today() -> datetime.date:
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+
+
+def _parse_relative_weekday_reservation_date(
+    user_text: str,
+    *,
+    today: datetime.date,
+) -> datetime.date | None:
+    match = _RELATIVE_WEEKDAY_RESERVATION_RE.search(user_text or "")
+    if not match:
+        return None
+
+    offset_text = re.sub(r"\s+", "", str(match.group("offset") or ""))
+    weeks_ahead = {"이번주": 0, "다음주": 1, "다다음주": 2}.get(offset_text)
+    weekday = _WEEKDAY_TO_INDEX.get(str(match.group("weekday") or "").strip())
+    if weeks_ahead is None or weekday is None:
+        return None
+
+    week_start = today - datetime.timedelta(days=today.weekday())
+    return week_start + datetime.timedelta(days=(weeks_ahead * 7) + weekday)
 
 
 def _reservation_context_from_messages(user_text: str, messages: list[dict] | None = None) -> bool:
@@ -4237,6 +4260,9 @@ def _should_preserve_store_date_availability_context(
 
 def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | None = None) -> datetime.date | None:
     today = today or _kst_today()
+    relative_requested = _parse_relative_weekday_reservation_date(user_text, today=today)
+    if relative_requested is not None:
+        return relative_requested
     match = _FUTURE_SLASH_MONTH_DAY_RE.search(user_text or "") or _FUTURE_MONTH_DAY_RE.search(user_text or "")
     if not match:
         return None
