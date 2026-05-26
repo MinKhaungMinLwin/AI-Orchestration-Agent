@@ -108,7 +108,7 @@ def test_transaction_policy_blocks_store_list_tool_when_required_slot_missing():
     assert event["template"] == "quickReply"
     assert event["assistant_response_source"] == "transaction_policy_guard"
     assert event["data"]["requiredSlots"] == ["quantity"]
-    assert {reply["label"] for reply in event["data"]["quickReplies"]} == {"2개", "4개"}
+    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["1개", "2개", "3개", "4개"]
 
 
 def test_transaction_policy_does_not_block_when_no_required_slots():

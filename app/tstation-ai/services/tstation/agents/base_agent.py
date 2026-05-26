@@ -436,11 +436,13 @@ def _build_validated_quickreply_data(assistant_response: str, chips: list[dict])
 # LLM 이 가끔 일부 chip 을 누락 (예: ["4개","2개"]) 하거나 중복 (["2개","2개"]) 시켜
 # UX 가 깨지므로 결정적 후처리로 정규화한다.
 _CANONICAL_QTY_CHIPS = ("1개", "2개", "3개", "4개")
-_QTY_CHIP_LABEL_RE = re.compile(r"^\s*\d+\s*개\s*$")
+_QTY_CHIP_LABEL_RE = re.compile(r"^\s*\d+\s*(?:개|본)\s*$")
 _QTY_PROMPT_RE = re.compile(
     r"주문\s*수량"
     r"|몇\s*개\s*(?:주문|구매|확인|예약|받|살|쓸|장바구니|결제|보내|들여|선택)"
+    r"|몇\s*본\s*(?:주문|구매|확인|예약|받|살|쓸|장바구니|결제|보내|들여|선택)"
     r"|수량(?:을\s*(?:알려|선택|입력|말씀)|이\s*어떻|은\s*\d+\s*개)"
+    r"|수량(?:을\s*)?몇\s*(?:개|본)"
     r"|수량\s*[:：]"
 )
 
@@ -1519,7 +1521,9 @@ class BaseAgent(ABC):
             quick_replies.append({"label": "근처 매장 찾기", "domain": "TRANSACTION"})
         if "quantity" in decision.required_slots:
             quick_replies.extend([
+                {"label": "1개", "domain": "TRANSACTION"},
                 {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "3개", "domain": "TRANSACTION"},
                 {"label": "4개", "domain": "TRANSACTION"},
             ])
         if not quick_replies:

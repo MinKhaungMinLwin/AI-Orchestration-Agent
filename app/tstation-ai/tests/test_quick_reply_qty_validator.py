@@ -38,7 +38,9 @@ def _labels(tpl: QuickReplyTemplate) -> list[str]:
     [
         "구매하실 타이어 수량을 알려주세요 😊",
         "장착하실 타이어 수량을 알려주세요.",
+        "장착 수량은 몇 본으로 확인해 드릴까요?",
         "몇 개 주문하시겠습니까?",
+        "몇 본 주문하시겠습니까?",
         "몇개 확인해 드릴까요?",
         "수량을 선택해 주세요.",
     ],
@@ -156,6 +158,24 @@ def _qty_question_raw_dict(chips: list[str]) -> dict:
 def test_transaction_agent_output_propagates_qty_autofix() -> None:
     """LLM 이 ['2개','4개','처음으로'] 만 emit 해도 self.data 가 4개 chip 으로 wire-through."""
     payload = _qty_question_raw_dict(["2개", "4개", "처음으로"])
+    out = TransactionAgentOutput.model_validate(payload)
+    assert [c["label"] for c in out.data["quickReplies"]] == _QTY_CHIPS
+    assert all(c["domain"] == "TRANSACTION" for c in out.data["quickReplies"])
+
+
+def test_transaction_agent_output_normalizes_bon_unit_qty_chips() -> None:
+    payload = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "235/35R20 아이온 에보로 확인할게요. 장착 수량은 몇 본으로 확인해 드릴까요?",
+            "quickReplies": [
+                {"label": "2본", "domain": "TRANSACTION"},
+                {"label": "4본", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
     out = TransactionAgentOutput.model_validate(payload)
     assert [c["label"] for c in out.data["quickReplies"]] == _QTY_CHIPS
     assert all(c["domain"] == "TRANSACTION" for c in out.data["quickReplies"])
