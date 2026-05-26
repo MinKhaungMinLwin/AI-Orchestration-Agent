@@ -437,6 +437,13 @@ def test_parse_requested_reservation_date_preserves_day_31_for_month_day_format(
     assert _parse_requested_reservation_date("5월 31일 예약 돼?", today=today) == datetime.date(2026, 5, 31)
 
 
+def test_parse_requested_reservation_date_supports_relative_weekday_expression() -> None:
+    today = datetime.date(2026, 5, 27)
+
+    assert _parse_requested_reservation_date("한남점 이번주 일요일 영업해?", today=today) == datetime.date(2026, 5, 31)
+    assert _parse_requested_reservation_date("다음 주 토요일 예약 가능해?", today=today) == datetime.date(2026, 6, 6)
+
+
 def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_template() -> None:
     store_name, region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
         "네, 맞아요",
