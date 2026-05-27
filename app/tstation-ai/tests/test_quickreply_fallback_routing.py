@@ -23,8 +23,11 @@ from services.tstation.chat import (
     _FALLBACK_LEADING_PROGRESS,
     _FALLBACK_ORDER_LIST,
     _ALL_MY_T_5_PERCENT_COUPON_RE,
+    _ALL_MY_T_BENEFIT_PAGE_RE,
     _COUPON_ISSUE_INTENT_RE,
+    _all_my_t_benefit_page_event,
     _build_coupon_applicability_event,
+    _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
@@ -32,11 +35,16 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _build_oe_replacement_followup_recommendation_args,
+    _build_oe_replacement_same_product_brand_prompt_event,
+    _build_oe_replacement_same_product_search_args,
+    _vehicle_selection_slot_values,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
     _is_oe_replacement_context,
     _is_oe_replacement_equivalent_query,
+    _is_oe_replacement_followup_query,
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
@@ -49,6 +57,7 @@ from services.tstation.chat import (
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
     _choose_quickreply_fallback,
+    _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
     _discovery_recovery_chips_for_text,
     _find_coupon_from_owned_coupons,
@@ -70,12 +79,16 @@ from services.tstation.chat import (
     _reservation_date_range_guard_event,
     _parse_requested_reservation_date,
     _requested_reservation_cal_day_or_today,
+    _requested_maintenance_focus,
     _qc_skip_reason,
+    _rule_based_classify,
     _select_vehicle_from_listcar_event,
+    _should_reuse_pending_vehicle_lookup_car_no,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
+    _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
@@ -133,6 +146,23 @@ def test_all_my_t_five_percent_coupon_path_query_is_detected() -> None:
     assert _ALL_MY_T_5_PERCENT_COUPON_RE.search("올마이티 5% 쿠폰 어디서 다운로드해?")
     assert _ALL_MY_T_5_PERCENT_COUPON_RE.search("5% 할인쿠폰 all my T 회원이면 받을 수 있어?")
     assert _ALL_MY_T_5_PERCENT_COUPON_RE.search("그냥 5% 할인쿠폰 알려줘") is None
+
+
+def test_all_my_t_benefit_page_query_is_detected() -> None:
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("all my T 혜택 안내 페이지 링크 알려줘")
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("올마이티 혜택 페이지 바로가기 줘")
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("혜택 안내 링크 all my T")
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("내 쿠폰 보여줘") is None
+
+
+def test_all_my_t_benefit_page_event_uses_dedicated_cta() -> None:
+    event = _all_my_t_benefit_page_event()
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_all_my_t_benefit_page"
+    assert "쿠폰함" not in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["all my T 혜택 안내", "1:1 문의하기"]
+    assert event["data"]["quickReplies"][0]["url"].endswith("/membership/dashboard/benefit")
 
 
 def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
@@ -353,6 +383,100 @@ def test_oe_replacement_guidance_does_not_recommend_vehicle_products_immediately
     assert "미쉐린으로 기억" in response
     assert "추천 상품" not in response
     assert _labels(event["data"]["quickReplies"]) == ["동일 상품 찾기", "교체용 상품 추천", "사이즈 직접 입력"]
+
+
+def test_oe_replacement_followup_query_is_detected() -> None:
+    assert _is_oe_replacement_followup_query("교체용 상품 추천")
+    assert _is_oe_replacement_followup_query("호환 사이즈 추천")
+    assert _is_oe_replacement_followup_query("동일 상품 찾기")
+    assert not _is_oe_replacement_followup_query("쿠폰 보여줘")
+
+
+def test_oe_replacement_followup_reuses_confirmed_tire_size() -> None:
+    args = _build_oe_replacement_followup_recommendation_args(
+        "교체용 상품 추천",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n교체용 상품 추천",
+        "235/55R19",
+    )
+
+    assert args is not None
+    assert args["tire_size"] == "235/55R19"
+    assert args["brand_cd"] == "HK"
+
+
+def test_oe_replacement_same_product_followup_prefers_context_brand() -> None:
+    args = _build_oe_replacement_same_product_search_args(
+        "동일 상품 찾기",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n동일 상품 찾기",
+        "235/55R19",
+    )
+
+    assert args is not None
+    assert args["size"] == "235/55R19"
+    assert args["brand_cd"] == "MC"
+
+
+def test_oe_replacement_same_product_without_brand_returns_none() -> None:
+    args = _build_oe_replacement_same_product_search_args(
+        "동일 상품 찾기",
+        "내 차 제네시스 GV70인데 동일한 상품 판매하고 있어?\n동일 상품 찾기",
+        "235/55R19",
+    )
+
+    assert args is None
+
+
+def test_oe_replacement_same_product_without_brand_prompts_for_brand() -> None:
+    event = _build_oe_replacement_same_product_brand_prompt_event("235/55R19")
+
+    assert event["assistant_response_source"] == "code_oe_replacement_same_product_brand_prompt"
+    assert "브랜드를 알려주시면" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == [
+        "미쉐린으로 동일 상품 찾기",
+        "한국타이어 교체용 추천",
+        "사이즈 직접 입력",
+    ]
+
+
+def test_oe_replacement_followup_does_not_fire_for_unrelated_question() -> None:
+    args = _build_oe_replacement_followup_recommendation_args(
+        "쿠폰 뭐 있어?",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n쿠폰 뭐 있어?",
+        "235/55R19",
+    )
+
+    assert args is None
+
+
+def test_vehicle_selection_slot_values_normalize_tire_size() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "205소4214",
+            "info": "제네시스 GV70 (1세대) (2021 - 2024)",
+        },
+        "meta": {
+            "carNo": "205소4214",
+            "tireSize": "2355519",
+        },
+    })
+
+    assert slot_values["tire_size"] == "235/55R19"
+
+
+def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "205소4214",
+            "info": "제네시스 GV70 (1세대) (2021 - 2024)",
+        },
+        "meta": {
+            "carNo": "205소4214",
+            "tireSize": "235/55R19",
+            "carNm": "GV70",
+        },
+    })
+
+    assert slot_values["car_model"] == "GV70"
 
 
 def test_transaction_stall_recovery_appends_transaction_after_existing_discovery() -> None:
@@ -1766,10 +1890,40 @@ def test_pickup_service_force_routes_to_support() -> None:
     assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
 
 
+def test_delivery_policy_force_routes_to_support() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("서귀포시인데 배송비 더 들어?")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
+
+
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("신청 방법 안내해줘")
 
     assert result is None
+
+
+def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
+    assert _support_fast_path("픽업서비스 어떻게 신청해?") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("타이어 집으로 걍 배송받고 싶어") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
+    assert _support_fast_path("신청 방법 알려줘") is None
+
+
+def test_rule_based_classify_keeps_pickup_and_delivery_policy_gates_even_when_disabled() -> None:
+    merged_slots = SimpleNamespace(goods_no=None)
+
+    assert _rule_based_classify("차 가지러 올 수 있어?", merged_slots) == [MultiAgentDomain.Domain.SUPPORT]
+    assert _rule_based_classify("타이어 집으로 걍 배송받고 싶어", merged_slots) == [MultiAgentDomain.Domain.SUPPORT]
+    assert _rule_based_classify("서귀포시인데 배송비 더 들어?", merged_slots) == [MultiAgentDomain.Domain.SUPPORT]
+    assert _rule_based_classify("제주도 매장에서도 온라인 가격이랑 똑같아?", merged_slots) == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _rule_based_classify("신청 방법 알려줘", merged_slots) is None
 
 
 def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
@@ -1789,6 +1943,61 @@ def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
 
     assert selected is not None
     assert selected["meta"]["carNo"] == "205소4214"
+
+
+def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
+    slot_values = _vehicle_selection_slot_values(
+        {
+            "car": {"licensePlate": "205소4214", "info": "GV70 2.5T"},
+            "meta": {
+                "carNo": "205소4214",
+                "carLncCd": "W049847",
+                "mbrCarRegSeq": "2000002944",
+                "carNm": "GV70 2.5T 가솔린 AWD A/T",
+                "tireSize": "2355519",
+            },
+        }
+    )
+
+    assert slot_values == {
+        "tire_size": "235/55R19",
+        "car_model": "GV70 2.5T 가솔린 AWD A/T",
+        "car_no": "205소4214",
+        "car_lnc_cd": "W049847",
+        "mbr_car_reg_seq": "2000002944",
+    }
+
+
+def test_unmatched_vehicle_listcar_is_coerced_to_owner_prompt() -> None:
+    event = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "205소4214", "info": "GV70"}],
+            "metadata": [{"carNo": "205소4214"}],
+        },
+    }
+
+    coerced = _coerce_unmatched_vehicle_listcar_to_owner_prompt(event, "14다5499")
+
+    assert coerced is not None
+    assert coerced["template"] == "quickReply"
+    assert "차량번호 + 소유주명" in coerced["data"]["assistantResponse"]
+
+
+def test_pending_vehicle_lookup_plate_is_reused_for_owner_only_followup() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "해당 차량으로 찾으시려면 차량번호 + 소유주명을 입력해 주세요.",
+            "quickReplies": [{"label": "차번+이름으로 검색", "domain": "DISCOVERY"}],
+        },
+    }
+
+    assert _should_reuse_pending_vehicle_lookup_car_no(
+        latest_quickreply_tmpl,
+        "홍길동",
+        "14다5499",
+    )
 
 
 def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -> None:
@@ -1889,6 +2098,121 @@ def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tir
         TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
         == "G2"
     )
+
+
+def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "벤투스 S1 에보 Z", "tire_size_1": "255/40R21"},
+                {"goods_no": "G2", "goods_nm": "벤투스 S1 에보 Z", "tire_size_1": "265/40R21"},
+            ],
+        }
+    ]
+
+    assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
+
+
+def test_confirmed_product_slot_values_from_single_product_event() -> None:
+    event = {
+        "template": "product",
+        "data": {
+            "products": [
+                {
+                    "titleProductName": "벤투스 S1 에보 Z",
+                    "titleTires": "265/40R21",
+                }
+            ],
+            "metadata": [{"goodsId": "G2"}],
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+        "goods_no": "G2",
+        "tire_model": "벤투스 S1 에보 Z",
+        "tire_size": "265/40R21",
+    }
+
+
+def test_confirmed_product_slot_values_ignore_multi_product_event() -> None:
+    event = {
+        "template": "product",
+        "data": {
+            "products": [
+                {"titleProductName": "벤투스 S1 에보 Z", "titleTires": "255/40R21"},
+                {"titleProductName": "벤투스 S1 에보 Z", "titleTires": "265/40R21"},
+            ],
+            "metadata": [{"goodsId": "G1"}, {"goodsId": "G2"}],
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) is None
+
+
+def test_requested_maintenance_focus_matches_tire_query() -> None:
+    assert _requested_maintenance_focus("타이어 교체 시기 알려줘") == ("타이어 교체", (r"타이어",), "교체")
+
+
+def test_build_maintenance_dday_event_summarizes_tire_schedule_for_tire_query() -> None:
+    event = _build_maintenance_dday_event(
+        {
+            "data": {
+                "data": {
+                    "cars": [
+                        {
+                            "mbr_car_reg_seq": "2000002944",
+                            "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                            "items": [
+                                {"kind_nm": "엔진오일 교체", "exp_dt": "2026-08-01", "dday": 66, "status": "normal"},
+                                {"kind_nm": "타이어 교체", "exp_dt": "2027-10-31", "dday": 522, "status": "normal"},
+                            ],
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "meta": {"mbrCarRegSeq": "2000002944"},
+            "car": {"info": "GV70 2.5T 가솔린 AWD A/T"},
+        },
+        "타이어 교체 시기 알려줘",
+    )
+
+    assert event["template"] == "quickReply"
+    assert (
+        event["data"]["assistantResponse"]
+        == "GV70 2.5T 가솔린 AWD A/T의 타이어 교체 일정은 지난 교체일 기준 2027-10-31에 교체하는 것을 권장 드려요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊"
+    )
+
+
+def test_build_maintenance_dday_event_keeps_full_schedule_for_generic_query() -> None:
+    event = _build_maintenance_dday_event(
+        {
+            "data": {
+                "data": {
+                    "cars": [
+                        {
+                            "mbr_car_reg_seq": "2000002944",
+                            "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                            "items": [
+                                {"kind_nm": "엔진오일 교체", "exp_dt": "2026-08-01", "dday": 66, "status": "normal"},
+                                {"kind_nm": "타이어 교체", "exp_dt": "2027-10-31", "dday": 522, "status": "normal"},
+                            ],
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "meta": {"mbrCarRegSeq": "2000002944"},
+            "car": {"info": "GV70 2.5T 가솔린 AWD A/T"},
+        },
+        "내 차 정비 일정 알려줘",
+    )
+
+    assert "엔진오일 교체: 2026-08-01" in event["data"]["assistantResponse"]
+    assert "타이어 교체: 2027-10-31" in event["data"]["assistantResponse"]
 
 
 def test_vehicle_information_event_answers_staggered_fitment_question() -> None:

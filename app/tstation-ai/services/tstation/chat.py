@@ -879,31 +879,6 @@ class StreamingMultiAgentCoordinator:
                 "매장에서도 구매",
                 "온라인에서만",
                 "온라인에서만 사야",
-                # generic online vs in-store price difference queries
-                "매장에서 구매하는거랑 온라인",
-                "매장 구매랑 온라인",
-                "온라인 주문이랑 매장",
-                "온라인이랑 매장 가격 차이",
-                "매장 가격 온라인 가격",
-                "매장에서 사는 거랑 온라인",
-                "매장 가서 직접 사는 거랑 온라인",
-                "매장 가서 직접 사는",
-                "매장에서 사는거랑 온라인",
-            ],
-            MultiAgentDomain.Domain.SUPPORT,
-        ),
-        # SUPPORT — Jeju/island-mountain shipping-fee policy (TC-057).
-        # Policy questions about regional surcharge should use FAQ guidance, not store search.
-        (
-            [
-                "도서산간",
-                "제주도 매장에서도 온라인 가격",
-                "제주 배송비",
-                "제주도 배송비",
-                "서귀포시인데 배송비",
-                "서귀포 배송비",
-                "배송비 더 들어",
-                "추가 배송비",
             ],
             MultiAgentDomain.Domain.SUPPORT,
         ),
@@ -1112,6 +1087,16 @@ class StreamingMultiAgentCoordinator:
                 user_behavior="asking about Smart Pickup / pickup service",
                 agent_prompt_profile=AgentPromptProfile.FULL,
                 flow="pickup service intent gate — bypassed LLM router",
+            )
+        delivery_decision = decide_delivery_policy_gate(user_text=text)
+        if delivery_decision.is_actionable:
+            return MultiAgentDomain(
+                reason=f"delivery policy gate matched {delivery_decision.intent}",
+                domains=[MultiAgentDomain.Domain.SUPPORT],
+                execution_plan=["Run SUPPORT for delivery/shipping-fee policy guidance"],
+                user_behavior="asking about direct delivery, shipping fee, or online/store price policy",
+                agent_prompt_profile=AgentPromptProfile.FULL,
+                flow="delivery policy intent gate — bypassed LLM router",
             )
 
         # Regex force — license plate + owner name → DISCOVERY_RECOMMENDATION profile.
@@ -2378,6 +2363,12 @@ _ALL_MY_T_5_PERCENT_COUPON_RE = re.compile(
     r"5\s*%\s*(?:할인\s*)?쿠폰.{0,30}(?:all\s*my\s*t|올마이\s*t|올마이티)",
     re.IGNORECASE,
 )
+_ALL_MY_T_BENEFIT_PAGE_RE = re.compile(
+    r"(?:all\s*my\s*t|올마이\s*t|올마이티).{0,30}(?:혜택|benefit).{0,30}(?:링크|페이지|안내|바로가기)|"
+    r"(?:혜택|benefit).{0,30}(?:링크|페이지|안내|바로가기).{0,30}(?:all\s*my\s*t|올마이\s*t|올마이티)|"
+    r"(?:링크|페이지|안내|바로가기).{0,30}(?:all\s*my\s*t|올마이\s*t|올마이티).{0,30}(?:혜택|benefit)",
+    re.IGNORECASE,
+)
 _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
     # ownership
     r"내\s*쿠폰|내\s*5\s*%|내가\s|받은|보유|가진|가지고|갖고|소유한|"
@@ -2893,6 +2884,8 @@ _MAINTENANCE_DDAY_TEXT_RE = re.compile(
     r"배터리|무상점검|all\s*my\s*T|타이어\s*(?:언제|교체\s*시기)|교체\s*언제",
     re.IGNORECASE,
 )
+_VEHICLE_OWNER_TEXT_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
+_OWNER_NAME_ONLY_RE = re.compile(r"^\s*[가-힣]{2,4}\s*$")
 _VEHICLE_MATCH_STOPWORDS = {
     "내",
     "내차",
@@ -2949,6 +2942,10 @@ _OE_REPLACEMENT_EQUIVALENT_RE = re.compile(
 _OWNED_VEHICLE_SELECTION_CTA_RE = re.compile(
     r"^\s*(보유\s*차량\s*중\s*선택|내\s*차량\s*보기|내\s*차\s*보기|내\s*차(?:량)?로\s*찾기|"
     r"차량\s*(?:정보로\s*)?찾기|차량\s*선택해서\s*찾기)\s*$",
+    re.IGNORECASE,
+)
+_OE_REPLACEMENT_FOLLOWUP_RE = re.compile(
+    r"교체용\s*상품\s*추천|호환\s*사이즈\s*추천|동일(?:한)?\s*상품\s*찾기|같은\s*상품\s*찾기",
     re.IGNORECASE,
 )
 _VEHICLE_TYPE_COMPATIBILITY_TEXT_RE = re.compile(
@@ -3158,7 +3155,140 @@ def _format_maintenance_dday_item(item: dict) -> str:
     return f"{prefix}{kind}: {exp_dt}{suffix}".strip()
 
 
-def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict) -> dict:
+def _requested_maintenance_focus(user_query: str) -> tuple[str, tuple[str, ...], str] | None:
+    text = str(user_query or "")
+    focus_rules = [
+        ("타이어 교체", (r"타이어",), "교체"),
+        ("엔진오일 교체", (r"엔진오일",), "교체"),
+        ("실내필터 교체", (r"실내필터|에어컨\s*필터|캐빈\s*필터",), "교체"),
+        ("와이퍼 교체", (r"와이퍼",), "교체"),
+        ("배터리 교체", (r"배터리",), "교체"),
+        ("얼라인먼트 점검", (r"얼라인먼트",), "점검"),
+        ("all my T 점검", (r"all\s*my\s*T|무상점검",), "점검"),
+    ]
+    for label, patterns, action in focus_rules:
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return label, patterns, action
+    return None
+
+
+def _vehicle_owner_lookup_prompt_event(plate: str, owner_provided: bool) -> dict:
+    if owner_provided:
+        assistant_response = (
+            f"입력하신 **{plate}** 차량 정보를 확인하지 못했어요.\n"
+            "차량번호와 소유주명을 다시 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "차번+이름 다시 입력", "domain": "DISCOVERY"},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "내 차량 보기", "domain": "DISCOVERY"},
+        ]
+    else:
+        assistant_response = (
+            f"**{plate}** 은(는) 등록된 차량 목록에 없어요.\n"
+            "해당 차량으로 찾으시려면 **차량번호 + 소유주명**을 입력해 주세요. "
+            "예: 12가3456 홍길동"
+        )
+        quick_replies = [
+            {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "내 차량 보기", "domain": "DISCOVERY"},
+        ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+def _coerce_unmatched_vehicle_listcar_to_owner_prompt(event: dict, user_text: str | None) -> dict | None:
+    if event.get("template") != "listCar":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    plate_match = _VEHICLE_PLATE_RE.search(user_text or "")
+    if not plate_match:
+        return None
+    requested_plate = re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, list):
+        return None
+    returned_plates = {
+        re.sub(r"[^0-9가-힣]", "", str(meta.get("carNo") or ""))
+        for meta in metadata
+        if isinstance(meta, dict)
+    }
+    if requested_plate and requested_plate not in returned_plates:
+        return _vehicle_owner_lookup_prompt_event(
+            requested_plate,
+            owner_provided=bool(_VEHICLE_OWNER_TEXT_RE.search(user_text or "")),
+        )
+    return None
+
+
+def _should_reuse_pending_vehicle_lookup_car_no(
+    latest_quickreply_tmpl: dict | None,
+    user_text: str | None,
+    pending_car_no: str | None,
+) -> bool:
+    if not pending_car_no or not _OWNER_NAME_ONLY_RE.match(user_text or ""):
+        return False
+    # Primary condition: the immediately previous turn left an unmatched plate
+    # waiting for owner-name completion, and the user now provided only a
+    # plausible Korean owner name. This is enough to safely reconstruct
+    # "car_no + owner_nm" even if template-history persistence races.
+    if not isinstance(latest_quickreply_tmpl, dict):
+        return True
+    template_data = latest_quickreply_tmpl.get("data")
+    if not isinstance(template_data, dict):
+        return True
+    assistant_response = str(template_data.get("assistantResponse") or "")
+    quick_replies = template_data.get("quickReplies") or []
+    labels = {
+        str(chip.get("label") or "").strip()
+        for chip in quick_replies
+        if isinstance(chip, dict)
+    }
+    return (
+        "차량번호 + 소유주명" in assistant_response
+        or "차량번호와 소유주명" in assistant_response
+        or "차번+이름으로 검색" in labels
+        or "차번+이름 다시 입력" in labels
+    )
+
+
+def _build_maintenance_focus_response(car_name: str, items: list[dict], user_query: str) -> str | None:
+    focus = _requested_maintenance_focus(user_query)
+    if focus is None:
+        return None
+
+    label, patterns, action = focus
+    matched_item = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and any(re.search(pattern, str(item.get("kind_nm") or ""), re.IGNORECASE) for pattern in patterns)
+            and str(item.get("exp_dt") or "").strip()
+        ),
+        None,
+    )
+    if matched_item is None:
+        return None
+
+    exp_dt = str(matched_item.get("exp_dt") or "").strip()
+    return (
+        f"{car_name}의 {label} 일정은 지난 교체일 기준 {exp_dt}에 {action}하는 것을 권장 드려요. "
+        "정확한 진단은 매장에서 받아 보실 수 있어요 😊"
+    )
+
+
+def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, user_query: str) -> dict:
     data = tool_result.get("data") if isinstance(tool_result, dict) else {}
     if isinstance(data, dict) and isinstance(data.get("data"), dict):
         data = data["data"]
@@ -3177,13 +3307,18 @@ def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict) -> 
         lines: list[str] = []
         for car_row in car_rows:
             name = str(car_row.get("car_nm") or selected_car.get("info") or "선택하신 차량").strip()
+            focus_response = _build_maintenance_focus_response(name, car_row.get("items") or [], user_query)
+            if focus_response:
+                response = focus_response
+                break
             lines.append(name)
             for item in (car_row.get("items") or [])[:7]:
                 if isinstance(item, dict):
                     lines.append(_format_maintenance_dday_item(item))
             lines.append("")
-        lines.append("정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊")
-        response = "\n".join(lines).strip()
+        else:
+            lines.append("정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊")
+            response = "\n".join(lines).strip()
     return {
         "type": "data",
         "template": "quickReply",
@@ -3282,6 +3417,50 @@ def _build_vehicle_information_event(selected_vehicle: dict, user_text: str) -> 
     }
 
 
+def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, Any]:
+    selected_car = (selected_vehicle or {}).get("car") or {}
+    selected_meta = (selected_vehicle or {}).get("meta") or {}
+    raw_tire_size = selected_meta.get("tireSize") or selected_meta.get("tire_size")
+    normalized_tire_size = normalize_tire_size(str(raw_tire_size or ""))
+
+    slot_values: dict[str, Any] = {}
+    if normalized_tire_size:
+        slot_values["tire_size"] = normalized_tire_size
+
+    raw_car_model = (
+        selected_meta.get("carModel")
+        or selected_meta.get("carNm")
+        or selected_car.get("model")
+        or selected_car.get("name")
+    )
+    car_model = str(raw_car_model or "").strip()
+    if car_model:
+        slot_values["car_model"] = car_model
+    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+    if car_no:
+        slot_values["car_no"] = car_no
+    car_lnc_cd = str(selected_meta.get("carLncCd") or "").strip()
+    if car_lnc_cd:
+        slot_values["car_lnc_cd"] = car_lnc_cd
+    mbr_car_reg_seq = str(selected_meta.get("mbrCarRegSeq") or "").strip()
+    if mbr_car_reg_seq:
+        slot_values["mbr_car_reg_seq"] = mbr_car_reg_seq
+
+    return slot_values
+
+
+def _brand_label_for_code(brand_cd: str) -> str:
+    return {
+        "HK": "한국타이어",
+        "LF": "라우펜",
+        "MC": "미쉐린",
+        "PI": "피렐리",
+        "BS": "브리지스톤",
+        "CT": "콘티넨탈",
+        "GY": "굿이어",
+    }.get(str(brand_cd or "").strip().upper(), "해당 브랜드")
+
+
 def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
     return bool(_OE_REPLACEMENT_EQUIVALENT_RE.search(user_text or ""))
 
@@ -3292,6 +3471,105 @@ def _is_owned_vehicle_selection_cta(user_text: str | None) -> bool:
 
 def _is_oe_replacement_context(context_text: str | None, current_text: str | None) -> bool:
     return _is_oe_replacement_equivalent_query(context_text) and not _is_owned_vehicle_selection_cta(current_text)
+
+
+def _is_oe_replacement_followup_query(user_text: str | None) -> bool:
+    return bool(_OE_REPLACEMENT_FOLLOWUP_RE.search(user_text or ""))
+
+
+def _should_reuse_vehicle_slots_for_oe_followup(
+    recent_context_text: str | None,
+    current_text: str | None,
+    tire_size: str | None,
+) -> bool:
+    text = current_text or ""
+    if not tire_size:
+        return False
+    if not _is_oe_replacement_context(recent_context_text, current_text):
+        return False
+    if not _is_oe_replacement_followup_query(text):
+        return False
+    if _NON_SELF_CAR_RE.search(text):
+        return False
+    if _VEHICLE_BOUND_REQUEST_RE.search(text) or _VEHICLE_LIST_REQUEST_RE.search(text):
+        return False
+    return True
+
+
+def _build_oe_replacement_followup_recommendation_args(
+    current_text: str,
+    recent_context_text: str,
+    tire_size: str | None,
+) -> dict[str, Any] | None:
+    if not _should_reuse_vehicle_slots_for_oe_followup(recent_context_text, current_text, tire_size):
+        return None
+
+    tool_input: dict[str, Any] = {
+        "rcmd_type": _recommendation_type_for_vehicle_auto_continue(current_text),
+        "limit": 3,
+        "tire_size": str(tire_size),
+        "brand_cd": "HK",
+    }
+    return tool_input
+
+
+def _oe_replacement_followup_brand_cd(current_text: str, recent_context_text: str) -> str | None:
+    current_frame = build_discovery_intent_frame(current_text)
+    current_brand_cd = str(current_frame.entities.get("brand_cd") or "").strip()
+    if current_brand_cd:
+        return current_brand_cd
+
+    context_frame = build_discovery_intent_frame(recent_context_text)
+    context_brand_cd = str(context_frame.entities.get("brand_cd") or "").strip()
+    if context_brand_cd:
+        return context_brand_cd
+
+    return None
+
+
+def _build_oe_replacement_same_product_search_args(
+    current_text: str,
+    recent_context_text: str,
+    tire_size: str | None,
+) -> dict[str, Any] | None:
+    if not _should_reuse_vehicle_slots_for_oe_followup(recent_context_text, current_text, tire_size):
+        return None
+    if not re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
+        return None
+    brand_cd = _oe_replacement_followup_brand_cd(current_text, recent_context_text)
+    if not brand_cd:
+        return None
+
+    return {
+        "size": str(tire_size),
+        "brand_cd": brand_cd,
+        "limit": 10,
+    }
+
+
+def _build_oe_replacement_same_product_brand_prompt_event(
+    tire_size: str | None,
+) -> dict:
+    size_text = f"{tire_size} 기준으로 " if tire_size else ""
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_oe_replacement_same_product_brand_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{size_text}동일 상품은 기존 장착 브랜드를 알아야 더 정확하게 찾을 수 있어요.\n\n"
+                "브랜드를 알려주시면 그 기준으로 동일 상품을 찾아드릴게요. "
+                "브랜드가 기억나지 않으시면 한국타이어 교체용 상품으로 바로 추천해 드릴 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "미쉐린으로 동일 상품 찾기", "domain": "DISCOVERY"},
+                {"label": "한국타이어 교체용 추천", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
 
 
 def _build_oe_replacement_guidance_event(
@@ -4142,6 +4420,25 @@ def _coupon_box_event(message: str) -> dict:
             "assistantResponse": message,
             "quickReplies": [dict(chip) for chip in _COUPON_BOX_CHIPS],
             "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _all_my_t_benefit_page_event() -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_all_my_t_benefit_page",
+        "data": {
+            "assistantResponse": (
+                "all my T 혜택 안내는 아래 페이지에서 바로 확인하실 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "all my T 혜택 안내", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT"],
         },
     }
 
@@ -5483,6 +5780,14 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             pickup_decision.reason,
         )
         return [MultiAgentDomain.Domain.SUPPORT]
+    delivery_decision = decide_delivery_policy_gate(user_text=text)
+    if delivery_decision.is_actionable:
+        logger.debug(
+            "[SUPPORT_FAST_PATH] delivery gate → SUPPORT: intent=%s reason=%s",
+            delivery_decision.intent,
+            delivery_decision.reason,
+        )
+        return [MultiAgentDomain.Domain.SUPPORT]
     if _SUPPORT_FAST_RE.search(text):
         logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
         return [MultiAgentDomain.Domain.SUPPORT]
@@ -5900,19 +6205,9 @@ def _rule_based_classify(
       3. goods_no in slots + transactional keyword in text → [TRANSACTION]
       4. goods_no pattern in text + transactional keyword  → [TRANSACTION]
     """
-    # DISABLED — set to True to re-enable rule-based routing
-    _RULE_BASED_ROUTING_ENABLED = False
-    if not _RULE_BASED_ROUTING_ENABLED:
-        return None
-
     text = last_user_text.strip()
     if not text:
         return None
-
-    # Case 1: Pure greeting (short, no additional intent)
-    if _GREETING_ONLY_RE.match(text):
-        logger.debug("[RULE_ROUTER] Greeting fast-path → LEADING")
-        return [MultiAgentDomain.Domain.LEADING]
 
     pickup_decision = decide_pickup_service_gate(user_text=text)
     if pickup_decision.is_pickup:
@@ -5922,6 +6217,25 @@ def _rule_based_classify(
             pickup_decision.reason,
         )
         return [MultiAgentDomain.Domain.SUPPORT]
+
+    delivery_decision = decide_delivery_policy_gate(user_text=text)
+    if delivery_decision.is_actionable:
+        logger.debug(
+            "[RULE_ROUTER] Delivery gate fast-path → SUPPORT: intent=%s reason=%s",
+            delivery_decision.intent,
+            delivery_decision.reason,
+        )
+        return [MultiAgentDomain.Domain.SUPPORT]
+
+    # DISABLED — set to True to re-enable rule-based routing
+    _RULE_BASED_ROUTING_ENABLED = False
+    if not _RULE_BASED_ROUTING_ENABLED:
+        return None
+
+    # Case 1: Pure greeting (short, no additional intent)
+    if _GREETING_ONLY_RE.match(text):
+        logger.debug("[RULE_ROUTER] Greeting fast-path → LEADING")
+        return [MultiAgentDomain.Domain.LEADING]
 
     # Case 2: Clear support / escalation keywords
     if _SUPPORT_FAST_RE.search(text):
@@ -6470,15 +6784,14 @@ class TStationChatServiceV2:
                 if goods_no:
                     return goods_no
 
-        size_match = re.search(r"\d{3}/\d{2}R\d{2}", text)
-        if size_match:
-            target_size = size_match.group(0)
+        target_size = normalize_tire_size(text)
+        if target_size:
             # filter_for_context keeps `tire_size_1`; include legacy aliases
             # for safety if another path ever stores the raw field name.
             same_size = [
                 item
                 for item in items
-                if (item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize") or "") == target_size
+                if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
             ]
 
             if len(same_size) == 1:
@@ -6502,6 +6815,47 @@ class TStationChatServiceV2:
                         return goods_no
 
         return None
+
+    @staticmethod
+    def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
+        """Extract confirmed product slots from a single-product `product` event."""
+        if event.get("template") != "product":
+            return None
+        event_data = event.get("data")
+        if not isinstance(event_data, dict):
+            return None
+        products = event_data.get("products")
+        metadata = event_data.get("metadata")
+        if not (
+            isinstance(products, list)
+            and len(products) == 1
+            and isinstance(metadata, list)
+            and len(metadata) == 1
+        ):
+            return None
+
+        product = products[0]
+        meta = metadata[0]
+        if not isinstance(product, dict) or not isinstance(meta, dict):
+            return None
+
+        goods_no = str(meta.get("goodsId") or meta.get("goodsNo") or "").strip()
+        if not goods_no:
+            return None
+
+        tire_size = normalize_tire_size(
+            str(product.get("titleTires") or product.get("tireSize") or product.get("size") or "")
+        )
+        tire_model = str(
+            product.get("titleProductName") or product.get("productName") or product.get("goodsNm") or ""
+        ).strip()
+
+        slot_values: dict[str, Any] = {"goods_no": goods_no}
+        if tire_size:
+            slot_values["tire_size"] = tire_size
+        if tire_model:
+            slot_values["tire_model"] = tire_model
+        return slot_values
 
     @staticmethod
     def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
@@ -7151,6 +7505,28 @@ class TStationChatServiceV2:
                 messages_chars,
             )
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
+
+            pending_vehicle_lookup_car_no = str(
+                getattr(existing_slots, "pending_vehicle_lookup_car_no", None) or ""
+            ).strip()
+            reused_pending_vehicle_lookup_car_no = _should_reuse_pending_vehicle_lookup_car_no(
+                latest_quickreply_tmpl,
+                last_user_text,
+                pending_vehicle_lookup_car_no,
+            )
+            if reused_pending_vehicle_lookup_car_no:
+                effective_vehicle_owner_text = f"{pending_vehicle_lookup_car_no} {last_user_text.strip()}".strip()
+                for message_list in (enriched_messages, messages, classifier_messages):
+                    for msg in reversed(message_list):
+                        if msg.get("role") == "user":
+                            msg["content"] = effective_vehicle_owner_text
+                            break
+                last_user_text = effective_vehicle_owner_text
+                existing_slots.pending_vehicle_lookup_car_no = None
+                logger.info(
+                    "[VEHICLE_OWNER_LOOKUP] combined pending plate with owner name follow-up: %s",
+                    effective_vehicle_owner_text,
+                )
 
             classify_future = _try_submit_speculative(
                 _coordinator.classify_multi_intent,
@@ -8890,6 +9266,8 @@ class TStationChatServiceV2:
 
         async def _resolve_owned_coupon_lookup_with_code() -> tuple[list[dict], dict]:
             emitted_events: list[dict] = []
+            if _ALL_MY_T_BENEFIT_PAGE_RE.search(user_query or ""):
+                return emitted_events, _all_my_t_benefit_page_event()
             from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
             from services.tstation.template_mapper import try_build_template
 
@@ -8983,6 +9361,144 @@ class TStationChatServiceV2:
                 })
 
             return emitted_events, _build_owned_coupon_best_discount_event(my_coupons_result)
+
+        async def _resolve_oe_replacement_followup_with_code(
+            confirmed_tire_size: str | None,
+        ) -> tuple[list[dict], dict] | None:
+            if (
+                _should_reuse_vehicle_slots_for_oe_followup(
+                    recent_user_context_text,
+                    user_query,
+                    confirmed_tire_size,
+                )
+                and re.search(r"동일(?:한)?\s*상품|같은\s*상품", user_query, re.IGNORECASE)
+                and _oe_replacement_followup_brand_cd(user_query, recent_user_context_text) is None
+            ):
+                return [], _build_oe_replacement_same_product_brand_prompt_event(confirmed_tire_size)
+
+            same_product_search_input = _build_oe_replacement_same_product_search_args(
+                user_query,
+                recent_user_context_text,
+                confirmed_tire_size,
+            )
+            if same_product_search_input is not None:
+                emitted_events: list[dict] = []
+                from services.tstation.agents.b_discovery_agent.tools import (
+                    search_product_tool as _search_product_tool,
+                )
+                from services.tstation.template_mapper import try_build_template
+
+                tool_name = "search_product_tool"
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": tool_name,
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_result = await asyncio.to_thread(_search_product_tool.invoke, same_product_search_input)
+                    tool_result = _tool_result_dict(raw_result)
+                except Exception as exc:
+                    logger.exception("[OE_REPLACEMENT_FOLLOWUP] search tool failed")
+                    tool_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result(tool_name, same_product_search_input, tool_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Search AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": tool_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": same_product_search_input,
+                    "output": json.dumps(tool_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": tool_name,
+                    "source_domain": "discovery",
+                })
+
+                brand_label = _brand_label_for_code(str(same_product_search_input.get("brand_cd") or ""))
+                intro = (
+                    f"{brand_label} {confirmed_tire_size} 기준으로 동일 상품 후보를 찾았어요. "
+                    "원하시는 상품을 선택해 주세요."
+                )
+                mapped_event = try_build_template(
+                    [{"tool": tool_name, "args": same_product_search_input, "data": tool_result}],
+                    intro,
+                )
+                if mapped_event is None:
+                    return None
+                mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                mapped_event["assistant_response_source"] = "code_oe_replacement_same_product_search"
+                return emitted_events, mapped_event
+
+            followup_input = _build_oe_replacement_followup_recommendation_args(
+                user_query,
+                recent_user_context_text,
+                confirmed_tire_size,
+            )
+            if followup_input is None:
+                return None
+
+            emitted_events: list[dict] = []
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_products_recommendations_tool as _recommendations_tool,
+            )
+            from services.tstation.template_mapper import try_build_template
+
+            tool_name = "get_products_recommendations_tool"
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": tool_name,
+                "display_name": "상품 추천 중...",
+                "source_domain": "discovery",
+            })
+            try:
+                raw_result = await asyncio.to_thread(_recommendations_tool.invoke, followup_input)
+                tool_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[OE_REPLACEMENT_FOLLOWUP] recommendations tool failed")
+                tool_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result(tool_name, followup_input, tool_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Recommendation AF]",
+                "agent_class": "Discovery Agent",
+                "status": tool_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": followup_input,
+                "output": json.dumps(tool_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": tool_name,
+                "source_domain": "discovery",
+            })
+
+            intro = f"{confirmed_tire_size} 기준으로 찾은 상품입니다. 원하시는 상품을 선택해 주세요."
+            mapped_event = try_build_template(
+                [{"tool": tool_name, "args": followup_input, "data": tool_result}],
+                intro,
+            )
+            if mapped_event is None:
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+            mapped_event["assistant_response_source"] = "code_oe_replacement_followup"
+            return emitted_events, mapped_event
 
         async def _resolve_product_coupon_eligibility_with_code(
             my_coupons_result: dict | None = None,
@@ -9329,6 +9845,7 @@ class TStationChatServiceV2:
         async def _auto_continue_selected_vehicle(
             listcar_event: dict,
         ) -> tuple[list[dict], dict | None]:
+            nonlocal pending_slots
             if _VEHICLE_LIST_REQUEST_RE.search(user_query or ""):
                 return [], None
             event_data = listcar_event.get("data")
@@ -9337,6 +9854,21 @@ class TStationChatServiceV2:
             selected = _select_vehicle_from_listcar_event(user_query, event_data)
             if selected is None:
                 return [], None
+
+            vehicle_slot_values = _vehicle_selection_slot_values(selected)
+            if vehicle_slot_values:
+                from schemas.tstation.slots import ConversationSlots
+
+                base_slots = pending_slots
+                if base_slots is None:
+                    base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                updated_slots = base_slots.merge(ConversationSlots(**vehicle_slot_values))
+                if updated_slots.model_dump() != base_slots.model_dump():
+                    pending_slots = updated_slots
+                    logger.info(
+                        "[VEHICLE_AUTO_SELECT] staged vehicle slots for next turn: %s",
+                        vehicle_slot_values,
+                    )
 
             source_domain = str(listcar_event.get("source_domain") or "").lower()
             selected_car = selected.get("car") or {}
@@ -9385,7 +9917,7 @@ class TStationChatServiceV2:
                     "tool": tool_name,
                     "source_domain": "support",
                 })
-                return emitted_events, _build_maintenance_dday_event(tool_result, selected)
+                return emitted_events, _build_maintenance_dday_event(tool_result, selected, user_query)
 
             vehicle_info_event = _build_vehicle_information_event(selected, user_query)
             if vehicle_info_event is not None:
@@ -9540,6 +10072,23 @@ class TStationChatServiceV2:
             assistant_response = str(
                 (deterministic_variant_event.get("data") or {}).get("assistantResponse") or ""
             )
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        oe_replacement_followup_resolution = await _resolve_oe_replacement_followup_with_code(
+            initial_slots.tire_size
+        )
+        if oe_replacement_followup_resolution is not None:
+            code_events, followup_event = oe_replacement_followup_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(followup_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((followup_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
@@ -9741,6 +10290,33 @@ class TStationChatServiceV2:
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_oe_replacement_guidance"
                         event_data = event.get("data", {})
+                    coerced_event = _coerce_unmatched_vehicle_listcar_to_owner_prompt(event, user_query)
+                    if coerced_event is not None:
+                        from schemas.tstation.slots import ConversationSlots
+
+                        plate_match = _VEHICLE_PLATE_RE.search(user_query or "")
+                        pending_plate = (
+                            re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+                            if plate_match
+                            else None
+                        )
+                        if pending_plate:
+                            base_slots = pending_slots
+                            if base_slots is None:
+                                base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                            updated_slots = base_slots.model_copy()
+                            updated_slots.pending_vehicle_lookup_car_no = pending_plate
+                            if updated_slots.model_dump() != base_slots.model_dump():
+                                pending_slots = updated_slots
+                                logger.info(
+                                    "[VEHICLE_OWNER_LOOKUP] staged pending unmatched plate=%s",
+                                    pending_plate,
+                                )
+                        event = coerced_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_vehicle_owner_lookup_prompt"
+                        event_data = event.get("data", {})
                 coerced_event = coerce_reservation_quickreply_to_datepick(
                     event,
                     structured_sources,
@@ -9865,6 +10441,27 @@ class TStationChatServiceV2:
                             last_assistant_response_source = "code_multi_variant_recommendation"
                             event_data = event.get("data", {})
                 if isinstance(event_data, dict):
+                    confirmed_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event(event)
+                    if confirmed_product_slots:
+                        from schemas.tstation.slots import ConversationSlots
+
+                        base_slots = pending_slots
+                        if base_slots is None:
+                            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        updated_slots = base_slots.model_copy()
+                        for field, value in confirmed_product_slots.items():
+                            setattr(updated_slots, field, value)
+                        if (
+                            confirmed_product_slots.get("goods_no") is not None
+                            and getattr(base_slots, "goods_no", None) != confirmed_product_slots["goods_no"]
+                        ):
+                            updated_slots.payment_amount = None
+                        if updated_slots.model_dump() != base_slots.model_dump():
+                            pending_slots = updated_slots
+                            logger.info(
+                                "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
+                                confirmed_product_slots,
+                            )
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
                         event_data["assistantResponse"] = assistant_response
