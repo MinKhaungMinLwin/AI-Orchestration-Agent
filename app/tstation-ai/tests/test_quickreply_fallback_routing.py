@@ -34,11 +34,13 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _build_oe_replacement_followup_recommendation_args,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
     _is_oe_replacement_context,
     _is_oe_replacement_equivalent_query,
+    _is_oe_replacement_followup_query,
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
@@ -374,6 +376,47 @@ def test_oe_replacement_guidance_does_not_recommend_vehicle_products_immediately
     assert "미쉐린으로 기억" in response
     assert "추천 상품" not in response
     assert _labels(event["data"]["quickReplies"]) == ["동일 상품 찾기", "교체용 상품 추천", "사이즈 직접 입력"]
+
+
+def test_oe_replacement_followup_query_is_detected() -> None:
+    assert _is_oe_replacement_followup_query("교체용 상품 추천")
+    assert _is_oe_replacement_followup_query("호환 사이즈 추천")
+    assert _is_oe_replacement_followup_query("동일 상품 찾기")
+    assert not _is_oe_replacement_followup_query("쿠폰 보여줘")
+
+
+def test_oe_replacement_followup_reuses_confirmed_tire_size() -> None:
+    args = _build_oe_replacement_followup_recommendation_args(
+        "교체용 상품 추천",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n교체용 상품 추천",
+        "235/55R19",
+    )
+
+    assert args is not None
+    assert args["tire_size"] == "235/55R19"
+    assert args["brand_cd"] == "HK"
+
+
+def test_oe_replacement_same_product_followup_prefers_context_brand() -> None:
+    args = _build_oe_replacement_followup_recommendation_args(
+        "동일 상품 찾기",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n동일 상품 찾기",
+        "235/55R19",
+    )
+
+    assert args is not None
+    assert args["tire_size"] == "235/55R19"
+    assert args["brand_cd"] == "MC"
+
+
+def test_oe_replacement_followup_does_not_fire_for_unrelated_question() -> None:
+    args = _build_oe_replacement_followup_recommendation_args(
+        "쿠폰 뭐 있어?",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n쿠폰 뭐 있어?",
+        "235/55R19",
+    )
+
+    assert args is None
 
 
 def test_transaction_stall_recovery_appends_transaction_after_existing_discovery() -> None:

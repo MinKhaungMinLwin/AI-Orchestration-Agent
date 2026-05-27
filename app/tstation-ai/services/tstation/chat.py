@@ -2942,6 +2942,10 @@ _OWNED_VEHICLE_SELECTION_CTA_RE = re.compile(
     r"차량\s*(?:정보로\s*)?찾기|차량\s*선택해서\s*찾기)\s*$",
     re.IGNORECASE,
 )
+_OE_REPLACEMENT_FOLLOWUP_RE = re.compile(
+    r"교체용\s*상품\s*추천|호환\s*사이즈\s*추천|동일(?:한)?\s*상품\s*찾기|같은\s*상품\s*찾기",
+    re.IGNORECASE,
+)
 _VEHICLE_TYPE_COMPATIBILITY_TEXT_RE = re.compile(
     r"(?=.*(?:suv|SUV|에스유브이))(?=.*(?:승용|세단|일반\s*타이어))"
     r"(?=.*(?:끼워|써도|사용|장착|맞|호환|가능|돼|되))",
@@ -3283,6 +3287,60 @@ def _is_owned_vehicle_selection_cta(user_text: str | None) -> bool:
 
 def _is_oe_replacement_context(context_text: str | None, current_text: str | None) -> bool:
     return _is_oe_replacement_equivalent_query(context_text) and not _is_owned_vehicle_selection_cta(current_text)
+
+
+def _is_oe_replacement_followup_query(user_text: str | None) -> bool:
+    return bool(_OE_REPLACEMENT_FOLLOWUP_RE.search(user_text or ""))
+
+
+def _should_reuse_vehicle_slots_for_oe_followup(
+    recent_context_text: str | None,
+    current_text: str | None,
+    tire_size: str | None,
+) -> bool:
+    text = current_text or ""
+    if not tire_size:
+        return False
+    if not _is_oe_replacement_context(recent_context_text, current_text):
+        return False
+    if not _is_oe_replacement_followup_query(text):
+        return False
+    if _NON_SELF_CAR_RE.search(text):
+        return False
+    if _VEHICLE_BOUND_REQUEST_RE.search(text) or _VEHICLE_LIST_REQUEST_RE.search(text):
+        return False
+    return True
+
+
+def _build_oe_replacement_followup_recommendation_args(
+    current_text: str,
+    recent_context_text: str,
+    tire_size: str | None,
+) -> dict[str, Any] | None:
+    if not _should_reuse_vehicle_slots_for_oe_followup(recent_context_text, current_text, tire_size):
+        return None
+
+    tool_input: dict[str, Any] = {
+        "rcmd_type": _recommendation_type_for_vehicle_auto_continue(current_text),
+        "limit": 3,
+        "tire_size": str(tire_size),
+    }
+
+    current_frame = build_discovery_intent_frame(current_text)
+    current_brand_cd = str(current_frame.entities.get("brand_cd") or "").strip()
+    if current_brand_cd:
+        tool_input["brand_cd"] = current_brand_cd
+        return tool_input
+
+    if re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
+        context_frame = build_discovery_intent_frame(recent_context_text)
+        context_brand_cd = str(context_frame.entities.get("brand_cd") or "").strip()
+        if context_brand_cd:
+            tool_input["brand_cd"] = context_brand_cd
+            return tool_input
+
+    tool_input["brand_cd"] = "HK"
+    return tool_input
 
 
 def _build_oe_replacement_guidance_event(
@@ -9013,6 +9071,70 @@ class TStationChatServiceV2:
 
             return emitted_events, _build_owned_coupon_best_discount_event(my_coupons_result)
 
+        async def _resolve_oe_replacement_followup_with_code(
+            confirmed_tire_size: str | None,
+        ) -> tuple[list[dict], dict] | None:
+            followup_input = _build_oe_replacement_followup_recommendation_args(
+                user_query,
+                recent_user_context_text,
+                confirmed_tire_size,
+            )
+            if followup_input is None:
+                return None
+
+            emitted_events: list[dict] = []
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_products_recommendations_tool as _recommendations_tool,
+            )
+            from services.tstation.template_mapper import try_build_template
+
+            tool_name = "get_products_recommendations_tool"
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": tool_name,
+                "display_name": "상품 추천 중...",
+                "source_domain": "discovery",
+            })
+            try:
+                raw_result = await asyncio.to_thread(_recommendations_tool.invoke, followup_input)
+                tool_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[OE_REPLACEMENT_FOLLOWUP] recommendations tool failed")
+                tool_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result(tool_name, followup_input, tool_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Recommendation AF]",
+                "agent_class": "Discovery Agent",
+                "status": tool_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": followup_input,
+                "output": json.dumps(tool_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": tool_name,
+                "source_domain": "discovery",
+            })
+
+            intro = f"{confirmed_tire_size} 기준으로 찾은 상품입니다. 원하시는 상품을 선택해 주세요."
+            mapped_event = try_build_template(
+                [{"tool": tool_name, "args": followup_input, "data": tool_result}],
+                intro,
+            )
+            if mapped_event is None:
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+            mapped_event["assistant_response_source"] = "code_oe_replacement_followup"
+            return emitted_events, mapped_event
+
         async def _resolve_product_coupon_eligibility_with_code(
             my_coupons_result: dict | None = None,
             target_product_name: str | None = None,
@@ -9569,6 +9691,23 @@ class TStationChatServiceV2:
             assistant_response = str(
                 (deterministic_variant_event.get("data") or {}).get("assistantResponse") or ""
             )
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        oe_replacement_followup_resolution = await _resolve_oe_replacement_followup_with_code(
+            initial_slots.tire_size
+        )
+        if oe_replacement_followup_resolution is not None:
+            code_events, followup_event = oe_replacement_followup_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(followup_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((followup_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
