@@ -44,6 +44,7 @@ class ConversationSlots(BaseModel):
     car_no: Optional[str] = None         # e.g. "12가3456"
     car_lnc_cd: Optional[str] = None     # vehicle WCODE
     mbr_car_reg_seq: Optional[str] = None  # member car registration sequence
+    pending_vehicle_lookup_car_no: Optional[str] = None  # unmatched plate awaiting owner name
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
     # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
     # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면

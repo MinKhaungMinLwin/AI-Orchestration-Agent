@@ -2884,6 +2884,8 @@ _MAINTENANCE_DDAY_TEXT_RE = re.compile(
     r"배터리|무상점검|all\s*my\s*T|타이어\s*(?:언제|교체\s*시기)|교체\s*언제",
     re.IGNORECASE,
 )
+_VEHICLE_OWNER_TEXT_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
+_OWNER_NAME_ONLY_RE = re.compile(r"^\s*[가-힣]{2,4}\s*$")
 _VEHICLE_MATCH_STOPWORDS = {
     "내",
     "내차",
@@ -3168,6 +3170,92 @@ def _requested_maintenance_focus(user_query: str) -> tuple[str, tuple[str, ...],
         if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
             return label, patterns, action
     return None
+
+
+def _vehicle_owner_lookup_prompt_event(plate: str, owner_provided: bool) -> dict:
+    if owner_provided:
+        assistant_response = (
+            f"입력하신 **{plate}** 차량 정보를 확인하지 못했어요.\n"
+            "차량번호와 소유주명을 다시 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "차번+이름 다시 입력", "domain": "DISCOVERY"},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "내 차량 보기", "domain": "DISCOVERY"},
+        ]
+    else:
+        assistant_response = (
+            f"**{plate}** 은(는) 등록된 차량 목록에 없어요.\n"
+            "해당 차량으로 찾으시려면 **차량번호 + 소유주명**을 입력해 주세요. "
+            "예: 12가3456 홍길동"
+        )
+        quick_replies = [
+            {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "내 차량 보기", "domain": "DISCOVERY"},
+        ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+def _coerce_unmatched_vehicle_listcar_to_owner_prompt(event: dict, user_text: str | None) -> dict | None:
+    if event.get("template") != "listCar":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    plate_match = _VEHICLE_PLATE_RE.search(user_text or "")
+    if not plate_match:
+        return None
+    requested_plate = re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, list):
+        return None
+    returned_plates = {
+        re.sub(r"[^0-9가-힣]", "", str(meta.get("carNo") or ""))
+        for meta in metadata
+        if isinstance(meta, dict)
+    }
+    if requested_plate and requested_plate not in returned_plates:
+        return _vehicle_owner_lookup_prompt_event(
+            requested_plate,
+            owner_provided=bool(_VEHICLE_OWNER_TEXT_RE.search(user_text or "")),
+        )
+    return None
+
+
+def _should_reuse_pending_vehicle_lookup_car_no(
+    latest_quickreply_tmpl: dict | None,
+    user_text: str | None,
+    pending_car_no: str | None,
+) -> bool:
+    if not pending_car_no or not _OWNER_NAME_ONLY_RE.match(user_text or ""):
+        return False
+    if not isinstance(latest_quickreply_tmpl, dict):
+        return False
+    template_data = latest_quickreply_tmpl.get("data")
+    if not isinstance(template_data, dict):
+        return False
+    assistant_response = str(template_data.get("assistantResponse") or "")
+    quick_replies = template_data.get("quickReplies") or []
+    labels = {
+        str(chip.get("label") or "").strip()
+        for chip in quick_replies
+        if isinstance(chip, dict)
+    }
+    return (
+        "차량번호 + 소유주명" in assistant_response
+        or "차량번호와 소유주명" in assistant_response
+        or "차번+이름으로 검색" in labels
+        or "차번+이름 다시 입력" in labels
+    )
 
 
 def _build_maintenance_focus_response(car_name: str, items: list[dict], user_query: str) -> str | None:
@@ -7414,6 +7502,26 @@ class TStationChatServiceV2:
             )
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
+            pending_vehicle_lookup_car_no = str(
+                getattr(existing_slots, "pending_vehicle_lookup_car_no", None) or ""
+            ).strip()
+            if _should_reuse_pending_vehicle_lookup_car_no(
+                latest_quickreply_tmpl,
+                last_user_text,
+                pending_vehicle_lookup_car_no,
+            ):
+                effective_vehicle_owner_text = f"{pending_vehicle_lookup_car_no} {last_user_text.strip()}".strip()
+                for message_list in (enriched_messages, messages, classifier_messages):
+                    for msg in reversed(message_list):
+                        if msg.get("role") == "user":
+                            msg["content"] = effective_vehicle_owner_text
+                            break
+                last_user_text = effective_vehicle_owner_text
+                logger.info(
+                    "[VEHICLE_OWNER_LOOKUP] combined pending plate with owner name follow-up: %s",
+                    effective_vehicle_owner_text,
+                )
+
             classify_future = _try_submit_speculative(
                 _coordinator.classify_multi_intent,
                 classifier_messages,
@@ -10175,6 +10283,33 @@ class TStationChatServiceV2:
                         last_template = "quickReply"
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_oe_replacement_guidance"
+                        event_data = event.get("data", {})
+                    coerced_event = _coerce_unmatched_vehicle_listcar_to_owner_prompt(event, user_query)
+                    if coerced_event is not None:
+                        from schemas.tstation.slots import ConversationSlots
+
+                        plate_match = _VEHICLE_PLATE_RE.search(user_query or "")
+                        pending_plate = (
+                            re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+                            if plate_match
+                            else None
+                        )
+                        if pending_plate:
+                            base_slots = pending_slots
+                            if base_slots is None:
+                                base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                            updated_slots = base_slots.model_copy()
+                            updated_slots.pending_vehicle_lookup_car_no = pending_plate
+                            if updated_slots.model_dump() != base_slots.model_dump():
+                                pending_slots = updated_slots
+                                logger.info(
+                                    "[VEHICLE_OWNER_LOOKUP] staged pending unmatched plate=%s",
+                                    pending_plate,
+                                )
+                        event = coerced_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_vehicle_owner_lookup_prompt"
                         event_data = event.get("data", {})
                 coerced_event = coerce_reservation_quickreply_to_datepick(
                     event,

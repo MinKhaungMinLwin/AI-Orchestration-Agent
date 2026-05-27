@@ -57,6 +57,7 @@ from services.tstation.chat import (
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
     _choose_quickreply_fallback,
+    _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
     _discovery_recovery_chips_for_text,
     _find_coupon_from_owned_coupons,
@@ -82,6 +83,7 @@ from services.tstation.chat import (
     _qc_skip_reason,
     _rule_based_classify,
     _select_vehicle_from_listcar_event,
+    _should_reuse_pending_vehicle_lookup_car_no,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
@@ -1964,6 +1966,38 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
         "car_lnc_cd": "W049847",
         "mbr_car_reg_seq": "2000002944",
     }
+
+
+def test_unmatched_vehicle_listcar_is_coerced_to_owner_prompt() -> None:
+    event = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "205소4214", "info": "GV70"}],
+            "metadata": [{"carNo": "205소4214"}],
+        },
+    }
+
+    coerced = _coerce_unmatched_vehicle_listcar_to_owner_prompt(event, "14다5499")
+
+    assert coerced is not None
+    assert coerced["template"] == "quickReply"
+    assert "차량번호 + 소유주명" in coerced["data"]["assistantResponse"]
+
+
+def test_pending_vehicle_lookup_plate_is_reused_for_owner_only_followup() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "해당 차량으로 찾으시려면 차량번호 + 소유주명을 입력해 주세요.",
+            "quickReplies": [{"label": "차번+이름으로 검색", "domain": "DISCOVERY"}],
+        },
+    }
+
+    assert _should_reuse_pending_vehicle_lookup_car_no(
+        latest_quickreply_tmpl,
+        "홍길동",
+        "14다5499",
+    )
 
 
 def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -> None:
