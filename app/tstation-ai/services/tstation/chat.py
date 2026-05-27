@@ -3238,11 +3238,15 @@ def _should_reuse_pending_vehicle_lookup_car_no(
 ) -> bool:
     if not pending_car_no or not _OWNER_NAME_ONLY_RE.match(user_text or ""):
         return False
+    # Primary condition: the immediately previous turn left an unmatched plate
+    # waiting for owner-name completion, and the user now provided only a
+    # plausible Korean owner name. This is enough to safely reconstruct
+    # "car_no + owner_nm" even if template-history persistence races.
     if not isinstance(latest_quickreply_tmpl, dict):
-        return False
+        return True
     template_data = latest_quickreply_tmpl.get("data")
     if not isinstance(template_data, dict):
-        return False
+        return True
     assistant_response = str(template_data.get("assistantResponse") or "")
     quick_replies = template_data.get("quickReplies") or []
     labels = {
@@ -7505,11 +7509,12 @@ class TStationChatServiceV2:
             pending_vehicle_lookup_car_no = str(
                 getattr(existing_slots, "pending_vehicle_lookup_car_no", None) or ""
             ).strip()
-            if _should_reuse_pending_vehicle_lookup_car_no(
+            reused_pending_vehicle_lookup_car_no = _should_reuse_pending_vehicle_lookup_car_no(
                 latest_quickreply_tmpl,
                 last_user_text,
                 pending_vehicle_lookup_car_no,
-            ):
+            )
+            if reused_pending_vehicle_lookup_car_no:
                 effective_vehicle_owner_text = f"{pending_vehicle_lookup_car_no} {last_user_text.strip()}".strip()
                 for message_list in (enriched_messages, messages, classifier_messages):
                     for msg in reversed(message_list):
@@ -7517,6 +7522,7 @@ class TStationChatServiceV2:
                             msg["content"] = effective_vehicle_owner_text
                             break
                 last_user_text = effective_vehicle_owner_text
+                existing_slots.pending_vehicle_lookup_car_no = None
                 logger.info(
                     "[VEHICLE_OWNER_LOOKUP] combined pending plate with owner name follow-up: %s",
                     effective_vehicle_owner_text,
