@@ -3300,6 +3300,18 @@ def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, A
     return slot_values
 
 
+def _brand_label_for_code(brand_cd: str) -> str:
+    return {
+        "HK": "한국타이어",
+        "LF": "라우펜",
+        "MC": "미쉐린",
+        "PI": "피렐리",
+        "BS": "브리지스톤",
+        "CT": "콘티넨탈",
+        "GY": "굿이어",
+    }.get(str(brand_cd or "").strip().upper(), "해당 브랜드")
+
+
 def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
     return bool(_OE_REPLACEMENT_EQUIVALENT_RE.search(user_text or ""))
 
@@ -3349,21 +3361,39 @@ def _build_oe_replacement_followup_recommendation_args(
         "tire_size": str(tire_size),
     }
 
+    tool_input["brand_cd"] = _oe_replacement_followup_brand_cd(current_text, recent_context_text)
+    return tool_input
+
+
+def _oe_replacement_followup_brand_cd(current_text: str, recent_context_text: str) -> str:
     current_frame = build_discovery_intent_frame(current_text)
     current_brand_cd = str(current_frame.entities.get("brand_cd") or "").strip()
     if current_brand_cd:
-        tool_input["brand_cd"] = current_brand_cd
-        return tool_input
+        return current_brand_cd
 
-    if re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
-        context_frame = build_discovery_intent_frame(recent_context_text)
-        context_brand_cd = str(context_frame.entities.get("brand_cd") or "").strip()
-        if context_brand_cd:
-            tool_input["brand_cd"] = context_brand_cd
-            return tool_input
+    context_frame = build_discovery_intent_frame(recent_context_text)
+    context_brand_cd = str(context_frame.entities.get("brand_cd") or "").strip()
+    if context_brand_cd:
+        return context_brand_cd
 
-    tool_input["brand_cd"] = "HK"
-    return tool_input
+    return "HK"
+
+
+def _build_oe_replacement_same_product_search_args(
+    current_text: str,
+    recent_context_text: str,
+    tire_size: str | None,
+) -> dict[str, Any] | None:
+    if not _should_reuse_vehicle_slots_for_oe_followup(recent_context_text, current_text, tire_size):
+        return None
+    if not re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
+        return None
+
+    return {
+        "size": str(tire_size),
+        "brand_cd": _oe_replacement_followup_brand_cd(current_text, recent_context_text),
+        "limit": 10,
+    }
 
 
 def _build_oe_replacement_guidance_event(
@@ -9097,6 +9127,69 @@ class TStationChatServiceV2:
         async def _resolve_oe_replacement_followup_with_code(
             confirmed_tire_size: str | None,
         ) -> tuple[list[dict], dict] | None:
+            same_product_search_input = _build_oe_replacement_same_product_search_args(
+                user_query,
+                recent_user_context_text,
+                confirmed_tire_size,
+            )
+            if same_product_search_input is not None:
+                emitted_events: list[dict] = []
+                from services.tstation.agents.b_discovery_agent.tools import (
+                    search_product_tool as _search_product_tool,
+                )
+                from services.tstation.template_mapper import try_build_template
+
+                tool_name = "search_product_tool"
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": tool_name,
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_result = await asyncio.to_thread(_search_product_tool.invoke, same_product_search_input)
+                    tool_result = _tool_result_dict(raw_result)
+                except Exception as exc:
+                    logger.exception("[OE_REPLACEMENT_FOLLOWUP] search tool failed")
+                    tool_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result(tool_name, same_product_search_input, tool_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Search AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": tool_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": same_product_search_input,
+                    "output": json.dumps(tool_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": tool_name,
+                    "source_domain": "discovery",
+                })
+
+                brand_label = _brand_label_for_code(str(same_product_search_input.get("brand_cd") or ""))
+                intro = (
+                    f"{brand_label} {confirmed_tire_size} 기준으로 동일 상품 후보를 찾았어요. "
+                    "원하시는 상품을 선택해 주세요."
+                )
+                mapped_event = try_build_template(
+                    [{"tool": tool_name, "args": same_product_search_input, "data": tool_result}],
+                    intro,
+                )
+                if mapped_event is None:
+                    return None
+                mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                mapped_event["assistant_response_source"] = "code_oe_replacement_same_product_search"
+                return emitted_events, mapped_event
+
             followup_input = _build_oe_replacement_followup_recommendation_args(
                 user_query,
                 recent_user_context_text,

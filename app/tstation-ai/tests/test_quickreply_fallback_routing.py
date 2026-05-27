@@ -35,6 +35,7 @@ from services.tstation.chat import (
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
     _build_oe_replacement_followup_recommendation_args,
+    _build_oe_replacement_same_product_search_args,
     _vehicle_selection_slot_values,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
@@ -395,18 +396,18 @@ def test_oe_replacement_followup_reuses_confirmed_tire_size() -> None:
 
     assert args is not None
     assert args["tire_size"] == "235/55R19"
-    assert args["brand_cd"] == "HK"
+    assert args["brand_cd"] == "MC"
 
 
 def test_oe_replacement_same_product_followup_prefers_context_brand() -> None:
-    args = _build_oe_replacement_followup_recommendation_args(
+    args = _build_oe_replacement_same_product_search_args(
         "동일 상품 찾기",
         "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n동일 상품 찾기",
         "235/55R19",
     )
 
     assert args is not None
-    assert args["tire_size"] == "235/55R19"
+    assert args["size"] == "235/55R19"
     assert args["brand_cd"] == "MC"
 
 
