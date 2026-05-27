@@ -3498,6 +3498,43 @@ def _has_staggered_vehicle_tire_sizes(front_size: str | None, rear_size: str | N
     return bool(front_size and rear_size and front_size != rear_size)
 
 
+def _is_staggered_selected_tire_size_context(slots: Any) -> bool:
+    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
+    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
+    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
+    return (
+        _has_staggered_vehicle_tire_sizes(front_size, rear_size)
+        and selected_size in {front_size, rear_size}
+    )
+
+
+def _build_staggered_tire_quantity_limit_event(slots: Any) -> dict | None:
+    if not _is_staggered_selected_tire_size_context(slots):
+        return None
+
+    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
+    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
+    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
+    axle_label = "앞바퀴" if selected_size == front_size else "뒷바퀴" if selected_size == rear_size else "선택한"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_staggered_tire_quantity_limit",
+        "data": {
+            "assistantResponse": (
+                f"앞/뒤 사이즈가 다른 차량은 {axle_label} 규격 **{selected_size}** 기준으로 "
+                "최대 2개까지 선택할 수 있어요.\n\n수량을 다시 선택해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
+                {"label": "2개", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 def _build_staggered_vehicle_tire_selection_event(selected_vehicle: dict) -> dict | None:
     selected_car = selected_vehicle.get("car") or {}
     selected_meta = selected_vehicle.get("meta") or {}
@@ -8174,6 +8211,23 @@ class TStationChatServiceV2:
                             f"[SLOTS] Carried forward shop_name={resolved_store_name!r} from recent assistant text "
                             f"for fresh pending_intent={regex_slots.pending_intent!r}"
                         )
+
+            if (
+                merged_slots.ord_qty is not None
+                and merged_slots.ord_qty > 2
+                and _is_staggered_selected_tire_size_context(merged_slots)
+            ):
+                logger.debug(
+                    "[SLOTS] Clearing ord_qty=%s for staggered selected tire_size=%r "
+                    "(front=%r rear=%r) and prompting max-2 quantity",
+                    merged_slots.ord_qty,
+                    merged_slots.tire_size,
+                    merged_slots.tire_size_front,
+                    merged_slots.tire_size_rear,
+                )
+                merged_slots.ord_qty = None
+                merged_slots.payment_amount = None
+                current_vehicle_selection_prompt_event.set(_build_staggered_tire_quantity_limit_event(merged_slots))
 
             # 4) Save merged slots to Redis without blocking the async request path.
             await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)

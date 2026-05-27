@@ -45,7 +45,9 @@ from services.tstation.chat import (
     _build_oe_replacement_same_product_search_args,
     _build_manual_tire_size_input_event,
     _build_staggered_vehicle_tire_selection_event,
+    _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
+    _is_staggered_selected_tire_size_context,
     _listcar_allows_staggered_tire_prompt,
     _apply_vehicle_selection_slot_values,
     _resolve_vehicle_tire_position_selection,
@@ -2147,6 +2149,31 @@ def test_vehicle_tire_position_selection_preserves_transactional_intent_text() -
     resolved = _resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
 
     assert resolved == "225/50R18 가격 알려줘"
+
+
+def test_staggered_selected_tire_size_context_detects_single_axle_size() -> None:
+    slots = SimpleNamespace(
+        tire_size="225/50R18",
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+    )
+
+    assert _is_staggered_selected_tire_size_context(slots) is True
+
+
+def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
+    slots = SimpleNamespace(
+        tire_size="255/50R18",
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+    )
+
+    event = _build_staggered_tire_quantity_limit_event(slots)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "최대 2개" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
 
 
 def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() -> None:

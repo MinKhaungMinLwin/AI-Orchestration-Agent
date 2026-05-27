@@ -685,6 +685,14 @@ class ConversationSlots(BaseModel):
                 entity_lines.append(f"- {label}: {val:,}원 (이미 산출된 총 결제금액 — 단가×수량 재계산 금지)")
             else:
                 entity_lines.append(f"- {label}: {val}")
+        if (
+            self.tire_size
+            and self.tire_size_front
+            and self.tire_size_rear
+            and self.tire_size_front != self.tire_size_rear
+            and self.tire_size in {self.tire_size_front, self.tire_size_rear}
+        ):
+            entity_lines.append("- 수량 제한: 전/후륜 규격 상이 차량은 현재 선택한 규격 기준 최대 2개")
 
         blocks: list[str] = []
 
