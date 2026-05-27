@@ -49,6 +49,7 @@ class CTAUrls:
     TIRE_CHECK_RESULT_LIST: Final[str] = f"{_PC}/mypage/tireTest/tireCheckResultList.do"
     SMART_PICKUP: Final[str] = f"{_PC}/membership/dashboard/membership_smartPickup"
     MEMBERSHIP_DASHBOARD: Final[str] = f"{_PC}/membership/dashboard"
+    MEMBERSHIP_BENEFIT: Final[str] = f"{_PC}/membership/dashboard/benefit"
 
     # Group B — contain LLM placeholders (<ord_no>, <shop_seq>)
     ORDER_HISTORY_DETAIL: Final[str] = f"{_PC}/mypage/tstation/order-history/detail/<ord_no>"
@@ -71,6 +72,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_TIRE_CHECK_RESULT_LIST__": CTAUrls.TIRE_CHECK_RESULT_LIST,
     "__URL_SMART_PICKUP__": CTAUrls.SMART_PICKUP,
     "__URL_MEMBERSHIP_DASHBOARD__": CTAUrls.MEMBERSHIP_DASHBOARD,
+    "__URL_MEMBERSHIP_BENEFIT__": CTAUrls.MEMBERSHIP_BENEFIT,
 }
 
 

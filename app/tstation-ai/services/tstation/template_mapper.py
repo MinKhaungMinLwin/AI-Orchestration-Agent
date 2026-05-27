@@ -236,6 +236,11 @@ _MY_COUPON_LINK = {
     "pc": CTAUrls.MY_COUPON_LIST_PC,
     "mobile": CTAUrls.MY_COUPON_LIST_MOBILE,
 }
+_ALL_MY_T_BENEFIT_LINK = {
+    "pc": CTAUrls.MEMBERSHIP_BENEFIT,
+    # The requested all my T benefit page is a web URL; keep the same target on mobile.
+    "mobile": CTAUrls.MEMBERSHIP_BENEFIT,
+}
 
 _CNSL_TYPE_MAP = {
     "10002": "상품문의",
@@ -2036,6 +2041,13 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
 def _map_voucher(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     vouchers, metadata = [], []
+    user_text = current_user_text.get() or ""
+    use_benefit_link = bool(
+        re.search(r"all\s*my\s*t|올마이\s*t|올마이티", user_text, re.IGNORECASE)
+        and re.search(r"혜택|benefit", user_text, re.IGNORECASE)
+        and re.search(r"링크|페이지|안내|바로가기", user_text, re.IGNORECASE)
+    )
+    my_coupon_link = _ALL_MY_T_BENEFIT_LINK if use_benefit_link else _MY_COUPON_LINK
     for entry in _find_entries(tool_data_list, "get_my_coupons_tool"):
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else ((raw.get("coupons") or raw.get("items") or []) if isinstance(raw, dict) else [])
@@ -2050,7 +2062,7 @@ def _map_voucher(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "discount": _get_str(row, "rt_amt_val"),
                 "dateVoucher": _get_str(row, "use_end_dtime").split(" ")[0],
                 "downloadLink": "",
-                "myCouponLink": _MY_COUPON_LINK,
+                "myCouponLink": my_coupon_link,
             })
             metadata.append({"couponId": cpn_no})
     if not vouchers:
