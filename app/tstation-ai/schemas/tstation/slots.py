@@ -323,6 +323,8 @@ class ConversationSlots(BaseModel):
             # Bare model names (brand omitted by user)
             r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
             r"\bS001\b|\bS007\b|\bER33\b|\bHPX\b|\bHP3\b|"
+            r"S\s*FIT|G\s*FIT|에스핏|지핏|i\*?cept|icept|아이셉트|"
+            r"\b4S2\b|\bDWS06\b|\bCC7\b|\bPS4S\b|\bPS\s*AS\s*4\b|\bPSAS4\b|\bCUP\s*2\b|\bCUP2\b|\bP7\b|"
             r"P\s?Zero|e\.?Primacy|Hyperion|S\.fit",
             re.IGNORECASE,
         ),

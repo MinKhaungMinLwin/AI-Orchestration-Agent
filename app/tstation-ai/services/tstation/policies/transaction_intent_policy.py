@@ -44,7 +44,8 @@ _REGION_HINT_RE = re.compile(
     r"청량리|인천|하남|청주|제주|서귀포)"
 )
 _PRODUCT_HINT_RE = re.compile(
-    r"벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2",
+    r"벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2|"
+    r"s\s*fit|g\s*fit|에스핏|지핏|i\*?cept|icept|아이셉트|4s2|dws06|cc7|ps4s|ps\s*as\s*4|psas4|cup\s*2|cup2|p7",
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
@@ -64,6 +65,24 @@ _PRODUCT_ALIASES: tuple[tuple[str, str], ...] = (
     ("ion evo", "iON evo"),
     ("아이온 evo", "iON evo"),
     ("아이온 에보", "iON evo"),
+    ("s fit as", "S FIT AS"),
+    ("s fit", "S FIT"),
+    ("에스핏", "S FIT"),
+    ("g fit as", "G FIT AS"),
+    ("g fit", "G FIT"),
+    ("지핏", "G FIT"),
+    ("i*cept", "i*cept"),
+    ("icept", "i*cept"),
+    ("아이셉트", "아이셉트"),
+    ("4s2", "4S2"),
+    ("dws06", "DWS06"),
+    ("cc7", "CC7"),
+    ("ps4s", "PS4S"),
+    ("ps as 4", "PS AS 4"),
+    ("psas4", "PS AS 4"),
+    ("cup2", "CUP2"),
+    ("cup 2", "CUP2"),
+    ("p7", "P7"),
 )
 
 
