@@ -3535,6 +3535,57 @@ def _build_staggered_tire_quantity_limit_event(slots: Any) -> dict | None:
     }
 
 
+def _build_order_quantity_prompt_event(slots: Any) -> dict:
+    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
+    if _is_staggered_selected_tire_size_context(slots):
+        front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
+        rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
+        axle_label = "앞바퀴" if selected_size == front_size else "뒷바퀴" if selected_size == rear_size else "현재"
+        assistant_response = (
+            f"{axle_label} **{selected_size}** 기준으로 몇 개 구매하실까요?\n\n"
+            "이 차량은 앞/뒤 규격이 달라 현재 규격은 최대 2개까지 선택할 수 있어요."
+        )
+        quick_replies = [
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+        ]
+    else:
+        size_text = f" **{selected_size}** 기준으로" if selected_size else ""
+        assistant_response = f"타이어{size_text} 몇 개 구매하실까요?"
+        quick_replies = [
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+            {"label": "3개", "domain": "TRANSACTION"},
+            {"label": "4개", "domain": "TRANSACTION"},
+        ]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_quantity_prompt",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _should_prompt_order_quantity_before_store(user_text: str | None, slots: Any) -> bool:
+    from schemas.tstation.slots import ConversationSlots
+
+    if getattr(slots, "goods_no", None) is None:
+        return False
+    if getattr(slots, "ord_qty", None) is not None:
+        return False
+    if getattr(slots, "pending_intent", None) != "order" and getattr(slots, "goal_type", None) != "place_order":
+        return False
+    if ConversationSlots.extract_from_user_text(str(user_text or "")).ord_qty is not None:
+        return False
+    return True
+
+
 def _build_staggered_vehicle_tire_selection_event(selected_vehicle: dict) -> dict | None:
     selected_car = selected_vehicle.get("car") or {}
     selected_meta = selected_vehicle.get("meta") or {}
@@ -8228,6 +8279,20 @@ class TStationChatServiceV2:
                 merged_slots.ord_qty = None
                 merged_slots.payment_amount = None
                 current_vehicle_selection_prompt_event.set(_build_staggered_tire_quantity_limit_event(merged_slots))
+
+            if (
+                current_vehicle_selection_prompt_event.get() is None
+                and _should_prompt_order_quantity_before_store(last_user_text, merged_slots)
+            ):
+                logger.debug(
+                    "[SLOTS] Prompting order quantity before store flow: goods_no=%r tire_size=%r "
+                    "region=%r shop_id=%r",
+                    merged_slots.goods_no,
+                    merged_slots.tire_size,
+                    merged_slots.region,
+                    merged_slots.shop_id,
+                )
+                current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
 
             # 4) Save merged slots to Redis without blocking the async request path.
             await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)

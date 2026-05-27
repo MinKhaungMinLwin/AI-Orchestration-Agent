@@ -44,6 +44,7 @@ from services.tstation.chat import (
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
     _build_manual_tire_size_input_event,
+    _build_order_quantity_prompt_event,
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
@@ -99,6 +100,7 @@ from services.tstation.chat import (
     _rule_based_classify,
     _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
+    _should_prompt_order_quantity_before_store,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
@@ -2174,6 +2176,43 @@ def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
     assert event["template"] == "quickReply"
     assert "최대 2개" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
+
+
+def test_order_quantity_prompt_for_staggered_vehicle_offers_only_one_or_two() -> None:
+    slots = SimpleNamespace(
+        tire_size="225/50R18",
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+    )
+
+    event = _build_order_quantity_prompt_event(slots)
+
+    assert event["template"] == "quickReply"
+    assert "앞바퀴 **225/50R18** 기준으로 몇 개 구매" in event["data"]["assistantResponse"]
+    assert "최대 2개" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
+
+
+def test_order_quantity_prompt_precedes_store_when_region_entered_without_quantity() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=None,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _should_prompt_order_quantity_before_store("강남", slots) is True
+
+
+def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _should_prompt_order_quantity_before_store("2개", slots) is False
 
 
 def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() -> None:
