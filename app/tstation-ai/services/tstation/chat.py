@@ -3359,13 +3359,12 @@ def _build_oe_replacement_followup_recommendation_args(
         "rcmd_type": _recommendation_type_for_vehicle_auto_continue(current_text),
         "limit": 3,
         "tire_size": str(tire_size),
+        "brand_cd": "HK",
     }
-
-    tool_input["brand_cd"] = _oe_replacement_followup_brand_cd(current_text, recent_context_text)
     return tool_input
 
 
-def _oe_replacement_followup_brand_cd(current_text: str, recent_context_text: str) -> str:
+def _oe_replacement_followup_brand_cd(current_text: str, recent_context_text: str) -> str | None:
     current_frame = build_discovery_intent_frame(current_text)
     current_brand_cd = str(current_frame.entities.get("brand_cd") or "").strip()
     if current_brand_cd:
@@ -3376,7 +3375,7 @@ def _oe_replacement_followup_brand_cd(current_text: str, recent_context_text: st
     if context_brand_cd:
         return context_brand_cd
 
-    return "HK"
+    return None
 
 
 def _build_oe_replacement_same_product_search_args(
@@ -3388,11 +3387,39 @@ def _build_oe_replacement_same_product_search_args(
         return None
     if not re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
         return None
+    brand_cd = _oe_replacement_followup_brand_cd(current_text, recent_context_text)
+    if not brand_cd:
+        return None
 
     return {
         "size": str(tire_size),
-        "brand_cd": _oe_replacement_followup_brand_cd(current_text, recent_context_text),
+        "brand_cd": brand_cd,
         "limit": 10,
+    }
+
+
+def _build_oe_replacement_same_product_brand_prompt_event(
+    tire_size: str | None,
+) -> dict:
+    size_text = f"{tire_size} 기준으로 " if tire_size else ""
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_oe_replacement_same_product_brand_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{size_text}동일 상품은 기존 장착 브랜드를 알아야 더 정확하게 찾을 수 있어요.\n\n"
+                "브랜드를 알려주시면 그 기준으로 동일 상품을 찾아드릴게요. "
+                "브랜드가 기억나지 않으시면 한국타이어 교체용 상품으로 바로 추천해 드릴 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "미쉐린으로 동일 상품 찾기", "domain": "DISCOVERY"},
+                {"label": "한국타이어 교체용 추천", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
     }
 
 
@@ -9127,6 +9154,17 @@ class TStationChatServiceV2:
         async def _resolve_oe_replacement_followup_with_code(
             confirmed_tire_size: str | None,
         ) -> tuple[list[dict], dict] | None:
+            if (
+                _should_reuse_vehicle_slots_for_oe_followup(
+                    recent_user_context_text,
+                    user_query,
+                    confirmed_tire_size,
+                )
+                and re.search(r"동일(?:한)?\s*상품|같은\s*상품", user_query, re.IGNORECASE)
+                and _oe_replacement_followup_brand_cd(user_query, recent_user_context_text) is None
+            ):
+                return [], _build_oe_replacement_same_product_brand_prompt_event(confirmed_tire_size)
+
             same_product_search_input = _build_oe_replacement_same_product_search_args(
                 user_query,
                 recent_user_context_text,
