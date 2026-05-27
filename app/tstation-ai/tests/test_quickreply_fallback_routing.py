@@ -27,6 +27,7 @@ from services.tstation.chat import (
     _COUPON_ISSUE_INTENT_RE,
     _all_my_t_benefit_page_event,
     _build_coupon_applicability_event,
+    _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
@@ -77,6 +78,7 @@ from services.tstation.chat import (
     _reservation_date_range_guard_event,
     _parse_requested_reservation_date,
     _requested_reservation_cal_day_or_today,
+    _requested_maintenance_focus,
     _qc_skip_reason,
     _rule_based_classify,
     _select_vehicle_from_listcar_event,
@@ -2089,6 +2091,71 @@ def test_confirmed_product_slot_values_ignore_multi_product_event() -> None:
     }
 
     assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) is None
+
+
+def test_requested_maintenance_focus_matches_tire_query() -> None:
+    assert _requested_maintenance_focus("타이어 교체 시기 알려줘") == ("타이어 교체", (r"타이어",), "교체")
+
+
+def test_build_maintenance_dday_event_summarizes_tire_schedule_for_tire_query() -> None:
+    event = _build_maintenance_dday_event(
+        {
+            "data": {
+                "data": {
+                    "cars": [
+                        {
+                            "mbr_car_reg_seq": "2000002944",
+                            "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                            "items": [
+                                {"kind_nm": "엔진오일 교체", "exp_dt": "2026-08-01", "dday": 66, "status": "normal"},
+                                {"kind_nm": "타이어 교체", "exp_dt": "2027-10-31", "dday": 522, "status": "normal"},
+                            ],
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "meta": {"mbrCarRegSeq": "2000002944"},
+            "car": {"info": "GV70 2.5T 가솔린 AWD A/T"},
+        },
+        "타이어 교체 시기 알려줘",
+    )
+
+    assert event["template"] == "quickReply"
+    assert (
+        event["data"]["assistantResponse"]
+        == "GV70 2.5T 가솔린 AWD A/T의 타이어 교체 일정은 지난 교체일 기준 2027-10-31에 교체하는 것을 권장 드려요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊"
+    )
+
+
+def test_build_maintenance_dday_event_keeps_full_schedule_for_generic_query() -> None:
+    event = _build_maintenance_dday_event(
+        {
+            "data": {
+                "data": {
+                    "cars": [
+                        {
+                            "mbr_car_reg_seq": "2000002944",
+                            "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                            "items": [
+                                {"kind_nm": "엔진오일 교체", "exp_dt": "2026-08-01", "dday": 66, "status": "normal"},
+                                {"kind_nm": "타이어 교체", "exp_dt": "2027-10-31", "dday": 522, "status": "normal"},
+                            ],
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "meta": {"mbrCarRegSeq": "2000002944"},
+            "car": {"info": "GV70 2.5T 가솔린 AWD A/T"},
+        },
+        "내 차 정비 일정 알려줘",
+    )
+
+    assert "엔진오일 교체: 2026-08-01" in event["data"]["assistantResponse"]
+    assert "타이어 교체: 2027-10-31" in event["data"]["assistantResponse"]
 
 
 def test_vehicle_information_event_answers_staggered_fitment_question() -> None:

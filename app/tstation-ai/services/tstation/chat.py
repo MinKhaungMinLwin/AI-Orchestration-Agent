@@ -3153,7 +3153,50 @@ def _format_maintenance_dday_item(item: dict) -> str:
     return f"{prefix}{kind}: {exp_dt}{suffix}".strip()
 
 
-def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict) -> dict:
+def _requested_maintenance_focus(user_query: str) -> tuple[str, tuple[str, ...], str] | None:
+    text = str(user_query or "")
+    focus_rules = [
+        ("타이어 교체", (r"타이어",), "교체"),
+        ("엔진오일 교체", (r"엔진오일",), "교체"),
+        ("실내필터 교체", (r"실내필터|에어컨\s*필터|캐빈\s*필터",), "교체"),
+        ("와이퍼 교체", (r"와이퍼",), "교체"),
+        ("배터리 교체", (r"배터리",), "교체"),
+        ("얼라인먼트 점검", (r"얼라인먼트",), "점검"),
+        ("all my T 점검", (r"all\s*my\s*T|무상점검",), "점검"),
+    ]
+    for label, patterns, action in focus_rules:
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return label, patterns, action
+    return None
+
+
+def _build_maintenance_focus_response(car_name: str, items: list[dict], user_query: str) -> str | None:
+    focus = _requested_maintenance_focus(user_query)
+    if focus is None:
+        return None
+
+    label, patterns, action = focus
+    matched_item = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and any(re.search(pattern, str(item.get("kind_nm") or ""), re.IGNORECASE) for pattern in patterns)
+            and str(item.get("exp_dt") or "").strip()
+        ),
+        None,
+    )
+    if matched_item is None:
+        return None
+
+    exp_dt = str(matched_item.get("exp_dt") or "").strip()
+    return (
+        f"{car_name}의 {label} 일정은 지난 교체일 기준 {exp_dt}에 {action}하는 것을 권장 드려요. "
+        "정확한 진단은 매장에서 받아 보실 수 있어요 😊"
+    )
+
+
+def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, user_query: str) -> dict:
     data = tool_result.get("data") if isinstance(tool_result, dict) else {}
     if isinstance(data, dict) and isinstance(data.get("data"), dict):
         data = data["data"]
@@ -3172,13 +3215,18 @@ def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict) -> 
         lines: list[str] = []
         for car_row in car_rows:
             name = str(car_row.get("car_nm") or selected_car.get("info") or "선택하신 차량").strip()
+            focus_response = _build_maintenance_focus_response(name, car_row.get("items") or [], user_query)
+            if focus_response:
+                response = focus_response
+                break
             lines.append(name)
             for item in (car_row.get("items") or [])[:7]:
                 if isinstance(item, dict):
                     lines.append(_format_maintenance_dday_item(item))
             lines.append("")
-        lines.append("정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊")
-        response = "\n".join(lines).strip()
+        else:
+            lines.append("정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊")
+            response = "\n".join(lines).strip()
     return {
         "type": "data",
         "template": "quickReply",
@@ -9746,7 +9794,7 @@ class TStationChatServiceV2:
                     "tool": tool_name,
                     "source_domain": "support",
                 })
-                return emitted_events, _build_maintenance_dday_event(tool_result, selected)
+                return emitted_events, _build_maintenance_dday_event(tool_result, selected, user_query)
 
             vehicle_info_event = _build_vehicle_information_event(selected, user_query)
             if vehicle_info_event is not None:
