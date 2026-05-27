@@ -80,6 +80,7 @@ from services.tstation.chat import (
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
     _is_ev_suitability_turn,
+    _is_bare_product_name_search_query,
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
@@ -987,6 +988,12 @@ def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
     assert _preferred_product_search_keyword("kinergy ex") == "키너지 EX"
     assert _preferred_product_search_keyword("Ventus air S") == "벤투스 에어S"
     assert _preferred_product_search_keyword("ventus air s") == "벤투스 에어S"
+
+
+def test_bare_short_alias_can_use_code_product_search_path() -> None:
+    assert _is_bare_product_name_search_query("s fit as") is True
+    assert _is_bare_product_name_search_query("에스핏") is True
+    assert _is_bare_product_name_search_query("s fit as 가격 알려줘") is False
 
 
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:

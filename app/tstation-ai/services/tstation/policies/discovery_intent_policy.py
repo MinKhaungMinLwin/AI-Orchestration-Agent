@@ -302,6 +302,9 @@ def build_discovery_intent_frame(
     elif products and _STOCK_OR_BOOKING_RE.search(text):
         intent = "product_search"
         sub_intent = "product_name_search"
+    elif products:
+        intent = "product_search"
+        sub_intent = "product_name_search"
     else:
         intent = "product_recommendation"
         sub_intent = "general_recommendation"

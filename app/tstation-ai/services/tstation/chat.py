@@ -5739,6 +5739,27 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
 
 
+_BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
+    r"가격|얼마|재고|구매|주문|결제|장착|매장|근처|주변|할인|쿠폰|스마트\s*페이|스마트페이|"
+    r"비교|보다|중에|뭐야|무슨|가능|어때|맞아|추천",
+    re.IGNORECASE,
+)
+_BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
+
+
+def _is_bare_product_name_search_query(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    frame = build_discovery_intent_frame(text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    if not product_names or frame.intent != "product_search" or frame.sub_intent != "product_name_search":
+        return False
+    if _BARE_PRODUCT_SEARCH_BLOCK_RE.search(text):
+        return False
+    return len(text) <= 48 or bool(_BARE_PRODUCT_SEARCH_ALLOW_RE.search(text))
+
+
 def _should_suppress_inherited_recommendation_context_for_product_attribute(user_text: str) -> bool:
     if _is_ev_suitability_turn(user_text):
         return False
@@ -10151,6 +10172,71 @@ class TStationChatServiceV2:
                 return None
             return emitted_events, event
 
+        async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
+            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            if not _is_bare_product_name_search_query(user_query):
+                return None
+
+            frame = build_discovery_intent_frame(user_query)
+            product_names = tuple(frame.entities.get("product_names") or ())
+            if not product_names:
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+            from services.tstation.template_mapper import try_build_template
+
+            product_name = product_names[0]
+            preferred_keyword = _preferred_product_search_keyword(product_name)
+            tool_input = {"keyword": preferred_keyword, "limit": 10}
+            if frame.entities.get("brand_cd"):
+                tool_input["brand_cd"] = frame.entities["brand_cd"]
+
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": "search_product_tool",
+                "display_name": "상품 검색 중...",
+                "source_domain": "discovery",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                search_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[PRODUCT_SEARCH] search_product_tool failed for %s", product_name)
+                search_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result("search_product_tool", tool_input, search_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Compatibility AF]",
+                "agent_class": "Discovery Agent",
+                "status": search_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(search_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "search_product_tool",
+                "source_domain": "discovery",
+            })
+
+            mapped_event = try_build_template(
+                [{"tool": "search_product_tool", "args": tool_input, "data": search_result}],
+                f"{preferred_keyword} 검색 결과입니다. 원하시는 상품을 선택해 주세요.",
+            )
+            if mapped_event is None:
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+            mapped_event["assistant_response_source"] = "code_bare_product_search"
+            return emitted_events, mapped_event
+
         async def _resolve_multi_variant_recommendation_with_code() -> tuple[list[dict], dict] | None:
             stored_context = None
             if initial_slots is not None:
@@ -10496,6 +10582,22 @@ class TStationChatServiceV2:
             assistant_response = str((holiday_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        bare_product_search_resolution = await _resolve_bare_product_search_with_code()
+        if bare_product_search_resolution is not None:
+            code_events, product_event = bare_product_search_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(product_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((product_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
