@@ -157,40 +157,6 @@ def test_voucher_keeps_coupon_list_link_for_general_owned_coupon_lookup() -> Non
     assert first["pc"].endswith("/mypage/tstation/coupon/couponList")
 
 
-def test_voucher_uses_membership_benefit_link_for_all_my_t_benefit_page_request() -> None:
-    current_user_text.set("all my T 혜택 안내 페이지 링크 알려줘")
-
-    event = try_build_template(
-        [
-            {
-                "tool": "get_my_coupons_tool",
-                "args": {"lang_cd": "ko"},
-                "data": {
-                    "status": "success",
-                    "http_status": 200,
-                    "data": {
-                        "coupons": [
-                            {
-                                "cpn_no": "C123",
-                                "cpn_nm": "생일 쿠폰",
-                                "rt_amt_val": "10%",
-                                "use_end_dtime": "2026-06-30 23:59:59",
-                            }
-                        ]
-                    },
-                },
-            }
-        ],
-        "보유 쿠폰을 확인했어요.",
-    )
-
-    assert event is not None
-    assert event["template"] == "voucher"
-    first = event["data"]["vouchers"][0]["myCouponLink"]
-    assert first["pc"].endswith("/membership/dashboard/benefit")
-    assert first["mobile"].endswith("/membership/dashboard/benefit")
-
-
 def test_location_prepends_unverifiable_store_preference_guidance() -> None:
     current_goal_type.set("store_finder")
     current_user_preferences_text.set("내 차 타스만인데 리프트 있어야 되더라고... 하남 지역에 리프트 있는 매장 있어?")

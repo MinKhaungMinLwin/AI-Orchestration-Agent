@@ -2363,6 +2363,12 @@ _ALL_MY_T_5_PERCENT_COUPON_RE = re.compile(
     r"5\s*%\s*(?:할인\s*)?쿠폰.{0,30}(?:all\s*my\s*t|올마이\s*t|올마이티)",
     re.IGNORECASE,
 )
+_ALL_MY_T_BENEFIT_PAGE_RE = re.compile(
+    r"(?:all\s*my\s*t|올마이\s*t|올마이티).{0,30}(?:혜택|benefit).{0,30}(?:링크|페이지|안내|바로가기)|"
+    r"(?:혜택|benefit).{0,30}(?:링크|페이지|안내|바로가기).{0,30}(?:all\s*my\s*t|올마이\s*t|올마이티)|"
+    r"(?:링크|페이지|안내|바로가기).{0,30}(?:all\s*my\s*t|올마이\s*t|올마이티).{0,30}(?:혜택|benefit)",
+    re.IGNORECASE,
+)
 _FIVE_PERCENT_COUPON_OWNERSHIP_OR_ACTION_RE = re.compile(
     # ownership
     r"내\s*쿠폰|내\s*5\s*%|내가\s|받은|보유|가진|가지고|갖고|소유한|"
@@ -4127,6 +4133,25 @@ def _coupon_box_event(message: str) -> dict:
             "assistantResponse": message,
             "quickReplies": [dict(chip) for chip in _COUPON_BOX_CHIPS],
             "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _all_my_t_benefit_page_event() -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_all_my_t_benefit_page",
+        "data": {
+            "assistantResponse": (
+                "all my T 혜택 안내는 아래 페이지에서 바로 확인하실 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "all my T 혜택 안내", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT"],
         },
     }
 
@@ -8892,6 +8917,8 @@ class TStationChatServiceV2:
 
         async def _resolve_owned_coupon_lookup_with_code() -> tuple[list[dict], dict]:
             emitted_events: list[dict] = []
+            if _ALL_MY_T_BENEFIT_PAGE_RE.search(user_query or ""):
+                return emitted_events, _all_my_t_benefit_page_event()
             from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
             from services.tstation.template_mapper import try_build_template
 

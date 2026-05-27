@@ -23,7 +23,9 @@ from services.tstation.chat import (
     _FALLBACK_LEADING_PROGRESS,
     _FALLBACK_ORDER_LIST,
     _ALL_MY_T_5_PERCENT_COUPON_RE,
+    _ALL_MY_T_BENEFIT_PAGE_RE,
     _COUPON_ISSUE_INTENT_RE,
+    _all_my_t_benefit_page_event,
     _build_coupon_applicability_event,
     _build_owned_coupon_best_discount_event,
     _build_oe_replacement_guidance_event,
@@ -135,6 +137,23 @@ def test_all_my_t_five_percent_coupon_path_query_is_detected() -> None:
     assert _ALL_MY_T_5_PERCENT_COUPON_RE.search("올마이티 5% 쿠폰 어디서 다운로드해?")
     assert _ALL_MY_T_5_PERCENT_COUPON_RE.search("5% 할인쿠폰 all my T 회원이면 받을 수 있어?")
     assert _ALL_MY_T_5_PERCENT_COUPON_RE.search("그냥 5% 할인쿠폰 알려줘") is None
+
+
+def test_all_my_t_benefit_page_query_is_detected() -> None:
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("all my T 혜택 안내 페이지 링크 알려줘")
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("올마이티 혜택 페이지 바로가기 줘")
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("혜택 안내 링크 all my T")
+    assert _ALL_MY_T_BENEFIT_PAGE_RE.search("내 쿠폰 보여줘") is None
+
+
+def test_all_my_t_benefit_page_event_uses_dedicated_cta() -> None:
+    event = _all_my_t_benefit_page_event()
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_all_my_t_benefit_page"
+    assert "쿠폰함" not in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["all my T 혜택 안내", "1:1 문의하기"]
+    assert event["data"]["quickReplies"][0]["url"].endswith("/membership/dashboard/benefit")
 
 
 def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
