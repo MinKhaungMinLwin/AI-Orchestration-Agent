@@ -7849,6 +7849,29 @@ class TStationChatServiceV2:
                         f"so the new vehicle's CAR MODEL DISPLAY flow can run"
                     )
 
+            # If a previous buggy/partial turn saved only a tire_size without
+            # any vehicle identity, a fresh "내차 BMW 타이어 추천" turn must not
+            # reuse that orphan size. Force registered-vehicle lookup so a
+            # staggered-fitment car can ask front/rear before recommendation.
+            if (
+                last_user_text
+                and _VEHICLE_BOUND_REQUEST_RE.search(last_user_text)
+                and _VEHICLE_RECOMMENDATION_TEXT_RE.search(last_user_text)
+                and regex_slots.tire_size is None
+                and merged_slots.tire_size is not None
+                and merged_slots.car_no is None
+                and merged_slots.car_model is None
+                and merged_slots.tire_size_front is None
+                and merged_slots.tire_size_rear is None
+            ):
+                logger.debug(
+                    "[SLOTS] Clearing orphan tire_size=%r for fresh registered-vehicle recommendation",
+                    merged_slots.tire_size,
+                )
+                merged_slots.tire_size = None
+                merged_slots.goods_no = None
+                merged_slots.payment_amount = None
+
             # 3.7) Tool context already loaded in step 1 (parallel with get_slots).
 
             # 3.7.5) Recommendation-flow stale-clear.
