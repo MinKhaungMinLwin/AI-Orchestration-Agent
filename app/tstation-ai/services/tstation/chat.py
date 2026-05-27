@@ -1846,6 +1846,24 @@ class StreamingMultiAgentCoordinator:
                     if _agent_first_data_ms is None and event_type == "data":
                         _agent_first_data_ms = _elapsed_ms
 
+                    if event_type == "vehicle_selection_slots":
+                        from schemas.tstation.slots import ConversationSlots
+
+                        slot_values = event.get("slot_values")
+                        if isinstance(slot_values, dict):
+                            base_slots = pending_slots
+                            if base_slots is None:
+                                base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                            updated_slots = _apply_vehicle_selection_slot_values(base_slots, slot_values)
+                            if updated_slots.model_dump() != base_slots.model_dump():
+                                pending_slots = updated_slots
+                                pending_slots_dirty = True
+                                logger.info(
+                                    "[VEHICLE_AUTO_SELECT] staged registered vehicle slots from agent guard: %s",
+                                    slot_values,
+                                )
+                        continue
+
                     # Track direct data events emitted by the domain agent (JSON output).
                     # When present, skip the UI Template stage below.
                     if event_type == "data":

@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.schedule_tool_gate import (
     build_blocked_schedule_event,
     decide_schedule_tool_gate,
@@ -266,6 +267,63 @@ def _resolve_registered_vehicle_match(tool_name: str, tool_result: Any, messages
     row = matched[0]
     tire_size = row.get("tire_size_fr") or row.get("tire_size_re")
     return row if tire_size else None
+
+
+def _registered_vehicle_tire_sizes(row: dict) -> tuple[str | None, str | None]:
+    front_size = normalize_tire_size(str(row.get("tire_size_fr") or ""))
+    rear_size = normalize_tire_size(str(row.get("tire_size_re") or ""))
+    return front_size, rear_size
+
+
+def _is_staggered_registered_vehicle(row: dict) -> bool:
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    return bool(front_size and rear_size and front_size != rear_size)
+
+
+def _registered_vehicle_slot_values(row: dict) -> dict[str, Any]:
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    slot_values: dict[str, Any] = {
+        "car_model": row.get("car_nm") or row.get("ver_opt_choc") or row.get("car_model_det"),
+        "car_no": row.get("car_no"),
+        "car_lnc_cd": row.get("car_lnc_cd"),
+        "mbr_car_reg_seq": row.get("mbr_car_unif_no"),
+        "tire_size_front": front_size,
+        "tire_size_rear": rear_size,
+    }
+    if front_size and (not rear_size or front_size == rear_size):
+        slot_values["tire_size"] = front_size
+    elif rear_size and not front_size:
+        slot_values["tire_size"] = rear_size
+    else:
+        slot_values["tire_size"] = None
+    return {key: value for key, value in slot_values.items() if value is not None or key == "tire_size"}
+
+
+def _build_registered_vehicle_staggered_tire_event(row: dict) -> dict | None:
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    if not (front_size and rear_size and front_size != rear_size):
+        return None
+
+    car_name = str(row.get("car_nm") or row.get("ver_opt_choc") or row.get("car_model_det") or "선택하신 차량").strip()
+    car_no = str(row.get("car_no") or "").strip()
+    vehicle_label = f"**{car_name} ({car_no})**" if car_no else f"**{car_name}**"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_registered_vehicle_staggered_tire_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{vehicle_label}의 규격은 전륜 **{front_size}**, 후륜 **{rear_size}**예요.\n\n"
+                "앞/뒤 사이즈가 다릅니다. 어떤 사이즈 기준으로 검색할까요?"
+            ),
+            "quickReplies": [
+                {"label": "앞바퀴사이즈", "domain": "DISCOVERY"},
+                {"label": "뒷바퀴사이즈", "domain": "DISCOVERY"},
+                {"label": "다른 사이즈 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
 
 
 def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
@@ -1037,6 +1095,25 @@ class BaseAgent(ABC):
                                 tool_result,
                                 messages,
                             )
+                            if (
+                                registered_vehicle_match is not None
+                                and _is_staggered_registered_vehicle(registered_vehicle_match)
+                            ):
+                                staggered_event = _build_registered_vehicle_staggered_tire_event(
+                                    registered_vehicle_match
+                                )
+                                if staggered_event is not None:
+                                    logger.info(
+                                        "[%s] Stop registered-vehicle auto recommendation for staggered fitment car_no=%s",
+                                        self.name,
+                                        registered_vehicle_match.get("car_no"),
+                                    )
+                                    yield {
+                                        "type": "vehicle_selection_slots",
+                                        "slot_values": _registered_vehicle_slot_values(registered_vehicle_match),
+                                    }
+                                    yield staggered_event
+                                    return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
                                 # When the user already named a unique registered vehicle in a
                                 # recommendation turn, do not terminate at listCar here. Let the

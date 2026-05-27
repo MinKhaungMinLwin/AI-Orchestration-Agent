@@ -17,6 +17,11 @@ from types import SimpleNamespace
 import pytest
 
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+from services.tstation.agents.base_agent import (
+    _build_registered_vehicle_staggered_tire_event,
+    _is_staggered_registered_vehicle,
+    _registered_vehicle_slot_values,
+)
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -113,6 +118,43 @@ from services.tstation.source_filter import filter_for_context
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
+
+
+def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:
+    row = {
+        "car_no": "56모2162",
+        "car_lnc_cd": "W022859",
+        "car_nm": "3-series(F30) 320d A/T",
+        "mbr_car_unif_no": "2000002975",
+        "tire_size_fr": "2255018",
+        "tire_size_re": "2555018",
+    }
+
+    assert _is_staggered_registered_vehicle(row) is True
+
+    event = _build_registered_vehicle_staggered_tire_event(row)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "전륜 **225/50R18**, 후륜 **255/50R18**" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["앞바퀴사이즈", "뒷바퀴사이즈", "다른 사이즈 입력"]
+
+
+def test_registered_vehicle_staggered_slot_values_clear_selected_size_until_user_chooses() -> None:
+    row = {
+        "car_no": "56모2162",
+        "car_lnc_cd": "W022859",
+        "car_nm": "3-series(F30) 320d A/T",
+        "mbr_car_unif_no": "2000002975",
+        "tire_size_fr": "2255018",
+        "tire_size_re": "2555018",
+    }
+
+    slot_values = _registered_vehicle_slot_values(row)
+
+    assert slot_values["tire_size_front"] == "225/50R18"
+    assert slot_values["tire_size_rear"] == "255/50R18"
+    assert slot_values["tire_size"] is None
 
 
 def test_qc_runs_for_code_mapped_product_with_tool_sources() -> None:
