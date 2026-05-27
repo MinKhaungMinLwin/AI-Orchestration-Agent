@@ -1048,8 +1048,15 @@ STEP 1 — Resolve goods_no:
 STEP 2 — Get unit price:
 - Call `get_final_price_tool(goods_no)`.
 - Read from the tool result:
+  `smrt_pay_yn`
   `unit_price = extra_fvr_sale_prc + wage_prc`
 - Do NOT use `payment_amount` from slots. Do NOT use previous order total.
+
+STEP 2.5 — Smart Pay availability guard:
+- If `smrt_pay_yn` is "N", null, missing, or any value other than "Y", STOP and answer:
+  "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
+- Do NOT calculate monthly 12/24-month amounts when `smrt_pay_yn` is not "Y".
+- If `smrt_pay_yn` is "Y", continue to STEP 3.
 
 STEP 3 — Calculate with qty=4 fixed:
 - `total_4ea = unit_price * 4`
@@ -1069,6 +1076,7 @@ Use `quickReply` and put the full answer in `assistantResponse`:
 ※ 실제 승인 금액은 카드사 심사 결과에 따라 다를 수 있습니다."
 
 Strict anti-bug rules:
+- Do NOT say Smart Pay is available unless `get_final_price_tool` returned `smrt_pay_yn="Y"`.
 - Do NOT answer only "결제 단계에서 확인해 주세요" when goods_no and price tool data are available.
 - Do NOT reuse ord_qty=2/3/5 from slots or prior order context. Smart Pay calculation is 4 tires fixed.
 - Do NOT say "5개 기준" unless the user explicitly asks a separate non-Smart-Pay price question.
@@ -2917,6 +2925,10 @@ Trigger: "스마트페이", "스마트 페이", "smart pay", "smartpay", "할부
 
 - If goods_no is missing, ask exactly: "어떤 상품을 기준으로 계산해 드릴까요? 상품명이나 규격을 알려주세요." STOP.
 - Always call `get_final_price_tool(goods_no)` for Smart Pay. Do not reuse `payment_amount` from slots or a prior order total.
+- Before calculating, read `smrt_pay_yn` from `get_final_price_tool`.
+- If `smrt_pay_yn` is not exactly "Y", answer only:
+  "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
+  STOP. Do not calculate 12/24-month amounts.
 - Smart Pay calculation is ALWAYS based on 4 tires, regardless of `ord_qty` slot or prior order quantity.
 - Unit price = `extra_fvr_sale_prc + wage_prc`.
 - Total = unit price * 4.

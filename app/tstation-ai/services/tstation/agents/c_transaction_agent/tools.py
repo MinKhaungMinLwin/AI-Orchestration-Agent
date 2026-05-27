@@ -308,6 +308,8 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         - cheapest_total_discount: sale_prc - cheapest_final_prc
         - cheapest_applied_coupons[]: 단계별 적용 쿠폰 {stage, cpn_no, cpn_nm,
           discount_amt}. 자연어 답변에 cpn_nm 인용 권장.
+        - smrt_pay_yn: 스마트페이 가능 여부. "Y"이면 스마트페이 월 납부액 계산 가능,
+          "N"이면 스마트페이 할부서비스 미지원 상품으로 안내하라.
 
     paymentAmount 우선순위 (preOrder / orderComplete 카드 채울 때):
         cheapest_final_prc → extra_fvr_sale_prc → sale_prc (fallback 순서).
