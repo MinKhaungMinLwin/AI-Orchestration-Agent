@@ -10233,6 +10233,12 @@ class TStationChatServiceV2:
             )
             if mapped_event is None:
                 return None
+            if not frame.entities.get("tire_size") and mapped_event.get("template") != "quickReply":
+                logger.warning(
+                    "[PRODUCT_SEARCH] unsized bare product search mapped to %s; falling back to agent",
+                    mapped_event.get("template"),
+                )
+                return None
             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
             mapped_event["assistant_response_source"] = "code_bare_product_search"
             return emitted_events, mapped_event
