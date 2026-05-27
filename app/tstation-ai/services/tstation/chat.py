@@ -3344,6 +3344,15 @@ def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, A
     car_model = str(raw_car_model or "").strip()
     if car_model:
         slot_values["car_model"] = car_model
+    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+    if car_no:
+        slot_values["car_no"] = car_no
+    car_lnc_cd = str(selected_meta.get("carLncCd") or "").strip()
+    if car_lnc_cd:
+        slot_values["car_lnc_cd"] = car_lnc_cd
+    mbr_car_reg_seq = str(selected_meta.get("mbrCarRegSeq") or "").strip()
+    if mbr_car_reg_seq:
+        slot_values["mbr_car_reg_seq"] = mbr_car_reg_seq
 
     return slot_values
 

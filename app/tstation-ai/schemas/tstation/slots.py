@@ -41,6 +41,9 @@ class ConversationSlots(BaseModel):
     shop_id: Optional[str] = None        # store code
     shop_name: Optional[str] = None      # e.g. "한남점"
     car_model: Optional[str] = None      # e.g. "쏘나타"
+    car_no: Optional[str] = None         # e.g. "12가3456"
+    car_lnc_cd: Optional[str] = None     # vehicle WCODE
+    mbr_car_reg_seq: Optional[str] = None  # member car registration sequence
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
     # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
     # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면
@@ -65,7 +68,8 @@ class ConversationSlots(BaseModel):
         "goods_no": ["tire_model", "tire_size", "payment_amount"],
         "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id"],
-        "car_model": ["tire_size", "goods_no", "payment_amount"],
+        "car_model": ["car_no", "car_lnc_cd", "mbr_car_reg_seq", "tire_size", "goods_no", "payment_amount"],
+        "car_no": ["car_model", "car_lnc_cd", "mbr_car_reg_seq", "tire_size", "goods_no", "payment_amount"],
         # When the goal flips, drop free-form store preferences (they are session-specific).
         # Region changes mean the user is searching a new area, not confirming the
         # previous store. Clear store identity so a stale shop_id cannot satisfy
@@ -632,6 +636,9 @@ class ConversationSlots(BaseModel):
             "shop_id": "매장코드",
             "shop_name": "매장명",
             "car_model": "차량 모델",
+            "car_no": "차량번호",
+            "car_lnc_cd": "차량코드",
+            "mbr_car_reg_seq": "차량등록시퀀스",
             "region": "지역",
             "payment_amount": "결제금액",
         }

@@ -1943,6 +1943,29 @@ def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
     assert selected["meta"]["carNo"] == "205소4214"
 
 
+def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
+    slot_values = _vehicle_selection_slot_values(
+        {
+            "car": {"licensePlate": "205소4214", "info": "GV70 2.5T"},
+            "meta": {
+                "carNo": "205소4214",
+                "carLncCd": "W049847",
+                "mbrCarRegSeq": "2000002944",
+                "carNm": "GV70 2.5T 가솔린 AWD A/T",
+                "tireSize": "2355519",
+            },
+        }
+    )
+
+    assert slot_values == {
+        "tire_size": "235/55R19",
+        "car_model": "GV70 2.5T 가솔린 AWD A/T",
+        "car_no": "205소4214",
+        "car_lnc_cd": "W049847",
+        "mbr_car_reg_seq": "2000002944",
+    }
+
+
 def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -> None:
     selected = _select_vehicle_from_listcar_event(
         "내 차 BMW 3시리즈 GT 320d 이건데 전/후륜 규격이 다른게 있던데 뭘로 그럼 사이즈를 봐야해..?",
