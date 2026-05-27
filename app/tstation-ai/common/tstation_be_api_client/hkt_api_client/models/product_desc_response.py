@@ -66,6 +66,7 @@ class ProductDescResponse:
         rating (None | ReviewRating | Unset):
         reviews (list[ReviewItem] | Unset):
         sale_prc (int | None | Unset): 기본 판매가 (정가, PR_ITEM_PRC_INFO.SALE_PRC). 단일 상품 상세 화면 노출용.
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         cheapest_final_prc (int | None | Unset): 회원 보유 쿠폰 3-stage 그리디 적용 후 최저가 (회원·상품 매칭 실패 시 null)
         cheapest_total_discount (int | None | Unset): cheapest 시뮬레이션의 총 할인 금액 (sale_prc - cheapest_final_prc)
         cheapest_applied_coupons (list[AppliedCouponItem] | None | Unset): cheapest 시뮬레이션에서 단계별로 적용된 쿠폰 목록
@@ -115,6 +116,7 @@ class ProductDescResponse:
     rating: None | ReviewRating | Unset = UNSET
     reviews: list[ReviewItem] | Unset = UNSET
     sale_prc: int | None | Unset = UNSET
+    smrt_pay_yn: None | str | Unset = UNSET
     cheapest_final_prc: int | None | Unset = UNSET
     cheapest_total_discount: int | None | Unset = UNSET
     cheapest_applied_coupons: list[AppliedCouponItem] | None | Unset = UNSET
@@ -387,6 +389,12 @@ class ProductDescResponse:
         else:
             sale_prc = self.sale_prc
 
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
+
         cheapest_final_prc: int | None | Unset
         if isinstance(self.cheapest_final_prc, Unset):
             cheapest_final_prc = UNSET
@@ -504,6 +512,8 @@ class ProductDescResponse:
             field_dict["reviews"] = reviews
         if sale_prc is not UNSET:
             field_dict["sale_prc"] = sale_prc
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if cheapest_final_prc is not UNSET:
             field_dict["cheapest_final_prc"] = cheapest_final_prc
         if cheapest_total_discount is not UNSET:
@@ -918,6 +928,15 @@ class ProductDescResponse:
 
         sale_prc = _parse_sale_prc(d.pop("sale_prc", UNSET))
 
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
+
         def _parse_cheapest_final_prc(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -1005,6 +1024,7 @@ class ProductDescResponse:
             rating=rating,
             reviews=reviews,
             sale_prc=sale_prc,
+            smrt_pay_yn=smrt_pay_yn,
             cheapest_final_prc=cheapest_final_prc,
             cheapest_total_discount=cheapest_total_discount,
             cheapest_applied_coupons=cheapest_applied_coupons,

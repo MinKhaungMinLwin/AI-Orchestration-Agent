@@ -21,6 +21,7 @@ class ProductSearchItem:
         tire_size_2 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_2)
         score (int | Unset): 검색 관련도 점수 Default: 0.
         match_type (str | Unset): 매칭 유형 (exact/prefix/partial/alias) Default: 'none'.
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''
@@ -73,6 +74,7 @@ class ProductSearchItem:
     tire_size_2: None | str | Unset = UNSET
     score: int | Unset = 0
     match_type: str | Unset = "none"
+    smrt_pay_yn: None | str | Unset = UNSET
     image_url: None | str | Unset = UNSET
     label_pnwave: None | str | Unset = UNSET
     label_pnwave_nm: None | str | Unset = UNSET
@@ -136,6 +138,12 @@ class ProductSearchItem:
         score = self.score
 
         match_type = self.match_type
+
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
 
         image_url: None | str | Unset
         if isinstance(self.image_url, Unset):
@@ -399,6 +407,8 @@ class ProductSearchItem:
             field_dict["score"] = score
         if match_type is not UNSET:
             field_dict["match_type"] = match_type
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if image_url is not UNSET:
             field_dict["image_url"] = image_url
         if label_pnwave is not UNSET:
@@ -512,6 +522,15 @@ class ProductSearchItem:
         score = d.pop("score", UNSET)
 
         match_type = d.pop("match_type", UNSET)
+
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
 
         def _parse_image_url(data: object) -> None | str | Unset:
             if data is None:
@@ -889,6 +908,7 @@ class ProductSearchItem:
             tire_size_2=tire_size_2,
             score=score,
             match_type=match_type,
+            smrt_pay_yn=smrt_pay_yn,
             image_url=image_url,
             label_pnwave=label_pnwave,
             label_pnwave_nm=label_pnwave_nm,

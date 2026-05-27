@@ -24,6 +24,7 @@ class PriceResponse:
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
         wage_prc (int | None | Unset): 공임비
         wage_today_prc (int | None | Unset): 오늘의 공임비
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         cheapest_final_prc (int | None | Unset): 회원 보유 쿠폰 3-stage 그리디 적용 후 최저가. 결제 단계의 paymentAmount 기준값. 회원 미보유 /
             PL/SQL 함수 미배포 등으로 계산 실패 시 null — 호출자는 extra_fvr_sale_prc 로 fallback.
         cheapest_total_discount (int | None | Unset): cheapest 시뮬레이션 총 할인 (sale_prc - cheapest_final_prc)
@@ -35,6 +36,7 @@ class PriceResponse:
     extra_fvr_sale_per: float | None | Unset = UNSET
     wage_prc: int | None | Unset = UNSET
     wage_today_prc: int | None | Unset = UNSET
+    smrt_pay_yn: None | str | Unset = UNSET
     cheapest_final_prc: int | None | Unset = UNSET
     cheapest_total_discount: int | None | Unset = UNSET
     cheapest_applied_coupons: list[AppliedCouponItem] | None | Unset = UNSET
@@ -70,6 +72,12 @@ class PriceResponse:
             wage_today_prc = UNSET
         else:
             wage_today_prc = self.wage_today_prc
+
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
 
         cheapest_final_prc: int | None | Unset
         if isinstance(self.cheapest_final_prc, Unset):
@@ -108,6 +116,8 @@ class PriceResponse:
             field_dict["wage_prc"] = wage_prc
         if wage_today_prc is not UNSET:
             field_dict["wage_today_prc"] = wage_today_prc
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if cheapest_final_prc is not UNSET:
             field_dict["cheapest_final_prc"] = cheapest_final_prc
         if cheapest_total_discount is not UNSET:
@@ -168,6 +178,15 @@ class PriceResponse:
 
         wage_today_prc = _parse_wage_today_prc(d.pop("wage_today_prc", UNSET))
 
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
+
         def _parse_cheapest_final_prc(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -216,6 +235,7 @@ class PriceResponse:
             extra_fvr_sale_per=extra_fvr_sale_per,
             wage_prc=wage_prc,
             wage_today_prc=wage_today_prc,
+            smrt_pay_yn=smrt_pay_yn,
             cheapest_final_prc=cheapest_final_prc,
             cheapest_total_discount=cheapest_total_discount,
             cheapest_applied_coupons=cheapest_applied_coupons,
