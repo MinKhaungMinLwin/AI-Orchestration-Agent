@@ -656,6 +656,42 @@ def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates(
     assert _reservation_date_range_guard_event("8월 이벤트 알려줘", today=today) is None
 
 
+@pytest.mark.parametrize(
+    "tire_size_text",
+    [
+        "2254517",
+        "225 45 17",
+        "225 4517",
+        "225/4517",
+        "225-4517",
+        "225-45-17",
+        "225R4517",
+        "225/45R17",
+    ],
+)
+def test_reservation_date_range_guard_ignores_tire_size_tokens(tire_size_text: str) -> None:
+    text = f"벤투스 S2 AS {tire_size_text}"
+
+    event = _reservation_date_range_guard_event(
+        text,
+        messages=[{"role": "assistant", "content": "원하시는 매장을 선택하면 예약 가능 시간을 확인해 드릴게요."}],
+        today=datetime.date(2026, 5, 27),
+    )
+
+    assert event is None
+    assert _parse_requested_reservation_date(text, today=datetime.date(2026, 5, 27)) is None
+
+
+def test_reservation_date_range_guard_still_parses_date_after_tire_size() -> None:
+    event = _reservation_date_range_guard_event(
+        "벤투스 S2 AS 225/45R17 8월 1일 예약 가능해?",
+        today=datetime.date(2026, 5, 27),
+    )
+
+    assert event is not None
+    assert "2026년 8월 1일 예약은 아직 오픈 전" in event["data"]["assistantResponse"]
+
+
 def test_parse_requested_reservation_date_preserves_day_30_for_slash_format() -> None:
     today = datetime.date(2026, 5, 26)
 

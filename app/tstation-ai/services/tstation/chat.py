@@ -4771,10 +4771,19 @@ def _coupon_issue_event() -> dict:
 
 _RESERVATION_CONTEXT_RE = re.compile(r"예약|장착|방문|갈\s*건데|가려|갈래|시간\s*선택|예약\s*가능", re.IGNORECASE)
 _FUTURE_SLASH_MONTH_DAY_RE = re.compile(
-    r"(?:(?P<year>20\d{2})\s*[./-]\s*)?(?P<month>1[0-2]|0?[1-9])\s*/\s*(?P<day>3[01]|[12]?\d)"
+    r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2})\s*[./-]\s*)?"
+    r"(?P<month>1[0-2]|0?[1-9])\s*/\s*(?P<day>3[01]|[12]?\d)(?![\dA-Za-z/-])"
 )
 _FUTURE_MONTH_DAY_RE = re.compile(
-    r"(?:(?P<year>20\d{2})\s*년\s*)?(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?"
+    r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2})\s*년\s*)?"
+    r"(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?(?![\dA-Za-z/-])"
+)
+_TIRE_SIZE_TOKEN_FOR_DATE_PARSE_RE = re.compile(
+    r"(?<!\d)"
+    r"\d{3}"
+    r"(?:\s*(?:/|-)?\s*R?\s*\d{2}\s*(?:/|-)?\s*\d{2}|\s*/\s*\d{4}|\s*-\s*\d{4})"
+    r"(?!\d)",
+    re.IGNORECASE,
 )
 _RELATIVE_WEEKDAY_RESERVATION_RE = re.compile(
     r"(?P<offset>이번\s*주|다음\s*주|다다음\s*주)\s*(?P<weekday>월|화|수|목|금|토|일)\s*(?:요일|욜)?"
@@ -4878,10 +4887,11 @@ def _should_preserve_store_date_availability_context(
 
 def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | None = None) -> datetime.date | None:
     today = today or _kst_today()
-    relative_requested = _parse_relative_weekday_reservation_date(user_text, today=today)
+    text = _TIRE_SIZE_TOKEN_FOR_DATE_PARSE_RE.sub(" ", user_text or "")
+    relative_requested = _parse_relative_weekday_reservation_date(text, today=today)
     if relative_requested is not None:
         return relative_requested
-    match = _FUTURE_SLASH_MONTH_DAY_RE.search(user_text or "") or _FUTURE_MONTH_DAY_RE.search(user_text or "")
+    match = _FUTURE_SLASH_MONTH_DAY_RE.search(text) or _FUTURE_MONTH_DAY_RE.search(text)
     if not match:
         return None
     month = int(match.group("month"))
