@@ -1205,6 +1205,23 @@ def _product_attribute_explanation(metrics: list[str]) -> str:
     return "상품명을 알려주시면 등급, 출시 시점, 원산지, 하중지수, 속도기호 같은 상세 정보를 확인해 드릴게요."
 
 
+def _product_attribute_no_results_response(tool_data_list: list[dict]) -> str:
+    for entry in _find_entries(tool_data_list, "search_product_tool"):
+        args = entry.get("args") or entry.get("input") or {}
+        if not isinstance(args, dict):
+            continue
+        keyword = str(args.get("keyword") or "").strip()
+        size = _format_tire_size_for_user(args.get("size"))
+        if keyword and size:
+            return (
+                f"고객님 차량 규격 **{size}** 기준으로는 **{keyword}** 상품이 확인되지 않아요.\n\n"
+                "다른 차량을 선택하시거나, 같은 상품의 다른 규격을 확인해 드릴게요."
+            )
+        if keyword:
+            return f"**{keyword}** 상품의 요청하신 상세 정보를 찾지 못했어요. 정확한 상품명이나 규격을 알려주세요."
+    return ""
+
+
 def _product_attribute_policy_response(tool_data_list: list[dict]) -> str:
     metrics = _requested_product_attribute_metrics()
     grouped = _collect_product_attribute_rows(tool_data_list)
@@ -1234,6 +1251,10 @@ def _product_attribute_policy_response(tool_data_list: list[dict]) -> str:
         if "noise" in metrics:
             lines.extend(["", "소음 등급은 보통 A/AA처럼 표시되고, dB 값은 낮을수록 조용한 편입니다."])
         return "\n".join(lines)
+
+    no_results_response = _product_attribute_no_results_response(tool_data_list)
+    if no_results_response:
+        return no_results_response
 
     return _product_attribute_explanation(metrics)
 

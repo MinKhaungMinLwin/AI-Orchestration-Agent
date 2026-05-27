@@ -903,6 +903,17 @@ def _kinergy_ex_search_entry() -> dict:
     }
 
 
+def _empty_product_attribute_search_entry(*, keyword: str = "옵티모", size: str | None = None) -> dict:
+    args = {"keyword": keyword, "brand_cd": "HK", "limit": 10}
+    if size is not None:
+        args["size"] = size
+    return {
+        "tool": "search_product_tool",
+        "args": args,
+        "data": {"status": "success", "http_status": 200, "data": {"items": []}},
+    }
+
+
 def _attribute_compare_search_entries() -> list[dict]:
     return [
         {
@@ -1253,6 +1264,41 @@ def test_product_card_uses_search_context_not_generic_intro() -> None:
     assert result is not None
     assert result["template"] == "product"
     assert result["data"]["assistantResponse"] == "퍼포먼스 조건으로 찾은 상품 3개입니다. 원하시는 상품을 선택해 주세요."
+
+
+def test_product_attribute_no_results_keeps_known_product_and_vehicle_size_context() -> None:
+    text = "내 차 하중이 좀 무거워. 짐을 많이 싣고 다니거든.. optimo 가 하중 버틸 수 있음?"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_empty_product_attribute_search_entry(keyword="옵티모", size="225/50R18")],
+        "",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "225/50R18" in assistant_response
+    assert "옵티모" in assistant_response
+    assert "상품명을 알려주시면" not in assistant_response
+
+
+def test_product_attribute_no_results_without_size_mentions_known_product() -> None:
+    text = "옵티모 하중지수 알려줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_empty_product_attribute_search_entry(keyword="옵티모")],
+        "",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "옵티모" in assistant_response
+    assert "상품명을 알려주시면" not in assistant_response
 
 
 def test_similar_price_recommendation_with_items_prefers_product_cards() -> None:
