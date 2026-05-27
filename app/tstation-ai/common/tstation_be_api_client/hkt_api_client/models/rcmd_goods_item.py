@@ -27,6 +27,7 @@ class RcmdGoodsItem:
             PR_GOODS_ENTR_DSCNT_PRC_INFO.SALE_PRC). FE 의 originalPrice 매핑 소스.
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         tot_scr (int | None | Unset): 추천 점수 (TOT_SCR (FST_DISP_YN = ‘Y’ 이면 TOT_SCR * 10), 티스테이션 추천 전용)
         t_comfort (float | None | Unset): 승차감 (T_COMFORT)
         t_silence (float | None | Unset): 정숙성 점수 (T_SILENCE). 내부 추천 점수 — EU 소음 라벨(label_pnwave)과 별개
@@ -95,6 +96,7 @@ class RcmdGoodsItem:
     sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
+    smrt_pay_yn: None | str | Unset = UNSET
     tot_scr: int | None | Unset = UNSET
     t_comfort: float | None | Unset = UNSET
     t_silence: float | None | Unset = UNSET
@@ -190,6 +192,12 @@ class RcmdGoodsItem:
             extra_fvr_sale_per = UNSET
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
+
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
 
         tot_scr: int | None | Unset
         if isinstance(self.tot_scr, Unset):
@@ -546,6 +554,8 @@ class RcmdGoodsItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if tot_scr is not UNSET:
             field_dict["tot_scr"] = tot_scr
         if t_comfort is not UNSET:
@@ -719,6 +729,15 @@ class RcmdGoodsItem:
             return cast(float | None | Unset, data)
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
+
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
 
         def _parse_tot_scr(data: object) -> int | None | Unset:
             if data is None:
@@ -1238,6 +1257,7 @@ class RcmdGoodsItem:
             sale_prc=sale_prc,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
+            smrt_pay_yn=smrt_pay_yn,
             tot_scr=tot_scr,
             t_comfort=t_comfort,
             t_silence=t_silence,

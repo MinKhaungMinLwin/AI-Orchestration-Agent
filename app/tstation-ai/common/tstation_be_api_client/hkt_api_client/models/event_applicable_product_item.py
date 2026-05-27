@@ -25,6 +25,7 @@ class EventApplicableProductItem:
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가. 회원 유형에 따라 PR_GOODS_DSCNT_PRC_INFO(일반) 또는
             PR_GOODS_ENTR_DSCNT_PRC_INFO(PARTNER)에서 join
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''
@@ -48,6 +49,7 @@ class EventApplicableProductItem:
     sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
+    smrt_pay_yn: None | str | Unset = UNSET
     image_url: None | str | Unset = UNSET
     label_pnwave: None | str | Unset = UNSET
     label_pnwave_nm: None | str | Unset = UNSET
@@ -106,6 +108,12 @@ class EventApplicableProductItem:
             extra_fvr_sale_per = UNSET
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
+
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
 
         image_url: None | str | Unset
         if isinstance(self.image_url, Unset):
@@ -189,6 +197,8 @@ class EventApplicableProductItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if image_url is not UNSET:
             field_dict["image_url"] = image_url
         if label_pnwave is not UNSET:
@@ -281,6 +291,15 @@ class EventApplicableProductItem:
             return cast(float | None | Unset, data)
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
+
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
 
         def _parse_image_url(data: object) -> None | str | Unset:
             if data is None:
@@ -382,6 +401,7 @@ class EventApplicableProductItem:
             sale_prc=sale_prc,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
+            smrt_pay_yn=smrt_pay_yn,
             image_url=image_url,
             label_pnwave=label_pnwave,
             label_pnwave_nm=label_pnwave_nm,

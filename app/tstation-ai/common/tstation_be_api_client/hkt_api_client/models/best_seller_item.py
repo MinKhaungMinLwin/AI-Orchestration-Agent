@@ -22,6 +22,7 @@ class BestSellerItem:
         image_url (None | str | Unset): 대표 이미지 (IMG_PATH_NM)
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         big_goods_nm (None | str | Unset): 대상품명 (BIG_GOODS_NM)
         ptrn_d_nm (None | str | Unset): 직관적 명칭 (PTRN_D_NM)
         tire_width (None | str | Unset): 단면폭 (TIRE_WIDTH)
@@ -64,6 +65,7 @@ class BestSellerItem:
     image_url: None | str | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
+    smrt_pay_yn: None | str | Unset = UNSET
     big_goods_nm: None | str | Unset = UNSET
     ptrn_d_nm: None | str | Unset = UNSET
     tire_width: None | str | Unset = UNSET
@@ -137,6 +139,12 @@ class BestSellerItem:
             extra_fvr_sale_per = UNSET
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
+
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
 
         big_goods_nm: None | str | Unset
         if isinstance(self.big_goods_nm, Unset):
@@ -355,6 +363,8 @@ class BestSellerItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if big_goods_nm is not UNSET:
             field_dict["big_goods_nm"] = big_goods_nm
         if ptrn_d_nm is not UNSET:
@@ -482,6 +492,15 @@ class BestSellerItem:
             return cast(float | None | Unset, data)
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
+
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
 
         def _parse_big_goods_nm(data: object) -> None | str | Unset:
             if data is None:
@@ -788,6 +807,7 @@ class BestSellerItem:
             image_url=image_url,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
+            smrt_pay_yn=smrt_pay_yn,
             big_goods_nm=big_goods_nm,
             ptrn_d_nm=ptrn_d_nm,
             tire_width=tire_width,

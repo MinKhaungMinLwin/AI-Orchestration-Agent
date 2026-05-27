@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.schedule_tool_gate import (
     build_blocked_schedule_event,
     decide_schedule_tool_gate,
@@ -268,6 +269,63 @@ def _resolve_registered_vehicle_match(tool_name: str, tool_result: Any, messages
     return row if tire_size else None
 
 
+def _registered_vehicle_tire_sizes(row: dict) -> tuple[str | None, str | None]:
+    front_size = normalize_tire_size(str(row.get("tire_size_fr") or ""))
+    rear_size = normalize_tire_size(str(row.get("tire_size_re") or ""))
+    return front_size, rear_size
+
+
+def _is_staggered_registered_vehicle(row: dict) -> bool:
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    return bool(front_size and rear_size and front_size != rear_size)
+
+
+def _registered_vehicle_slot_values(row: dict) -> dict[str, Any]:
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    slot_values: dict[str, Any] = {
+        "car_model": row.get("car_nm") or row.get("ver_opt_choc") or row.get("car_model_det"),
+        "car_no": row.get("car_no"),
+        "car_lnc_cd": row.get("car_lnc_cd"),
+        "mbr_car_reg_seq": row.get("mbr_car_unif_no"),
+        "tire_size_front": front_size,
+        "tire_size_rear": rear_size,
+    }
+    if front_size and (not rear_size or front_size == rear_size):
+        slot_values["tire_size"] = front_size
+    elif rear_size and not front_size:
+        slot_values["tire_size"] = rear_size
+    else:
+        slot_values["tire_size"] = None
+    return {key: value for key, value in slot_values.items() if value is not None or key == "tire_size"}
+
+
+def _build_registered_vehicle_staggered_tire_event(row: dict) -> dict | None:
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    if not (front_size and rear_size and front_size != rear_size):
+        return None
+
+    car_name = str(row.get("car_nm") or row.get("ver_opt_choc") or row.get("car_model_det") or "선택하신 차량").strip()
+    car_no = str(row.get("car_no") or "").strip()
+    vehicle_label = f"**{car_name} ({car_no})**" if car_no else f"**{car_name}**"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_registered_vehicle_staggered_tire_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{vehicle_label}의 규격은 전륜 **{front_size}**, 후륜 **{rear_size}**예요.\n\n"
+                "앞/뒤 사이즈가 다릅니다. 어떤 사이즈 기준으로 검색할까요?"
+            ),
+            "quickReplies": [
+                {"label": "앞바퀴사이즈", "domain": "DISCOVERY"},
+                {"label": "뒷바퀴사이즈", "domain": "DISCOVERY"},
+                {"label": "다른 사이즈 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _strip_keys_in_place(node: Any, keys: frozenset[str]) -> None:
     if isinstance(node, dict):
         for k in list(node.keys()):
@@ -436,6 +494,7 @@ def _build_validated_quickreply_data(assistant_response: str, chips: list[dict])
 # LLM 이 가끔 일부 chip 을 누락 (예: ["4개","2개"]) 하거나 중복 (["2개","2개"]) 시켜
 # UX 가 깨지므로 결정적 후처리로 정규화한다.
 _CANONICAL_QTY_CHIPS = ("1개", "2개", "3개", "4개")
+_STAGGERED_QTY_CHIPS = ("1개", "2개")
 _QTY_CHIP_LABEL_RE = re.compile(r"^\s*\d+\s*(?:개|본)\s*$")
 _QTY_PROMPT_RE = re.compile(
     r"주문\s*수량"
@@ -444,6 +503,11 @@ _QTY_PROMPT_RE = re.compile(
     r"|수량(?:을\s*(?:알려|선택|입력|말씀)|이\s*어떻|은\s*\d+\s*개)"
     r"|수량(?:을\s*)?몇\s*(?:개|본)"
     r"|수량\s*[:：]"
+)
+_STAGGERED_MAX_TWO_QTY_PROMPT_RE = re.compile(
+    r"(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라).{0,80}최대\s*2\s*개"
+    r"|최대\s*2\s*개.{0,80}(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라)",
+    re.DOTALL,
 )
 
 
@@ -473,7 +537,12 @@ def _normalize_qty_quick_replies(payload: dict) -> None:
     # 빈 배열이거나 chip 이 모두 qty 모양일 때만 정규화 — 다른 라벨이 섞이면 보존.
     if labels and not all(qty_shaped):
         return
-    if tuple(labels) == _CANONICAL_QTY_CHIPS:
+    canonical_chips = (
+        _STAGGERED_QTY_CHIPS
+        if _STAGGERED_MAX_TWO_QTY_PROMPT_RE.search(assistant_response)
+        else _CANONICAL_QTY_CHIPS
+    )
+    if tuple(labels) == canonical_chips:
         return  # 이미 정상
     domains = {
         c.get("domain")
@@ -482,12 +551,12 @@ def _normalize_qty_quick_replies(payload: dict) -> None:
     }
     domain = next(iter(domains)) if len(domains) == 1 else "TRANSACTION"
     data["quickReplies"] = [
-        {"label": label, "domain": domain} for label in _CANONICAL_QTY_CHIPS
+        {"label": label, "domain": domain} for label in canonical_chips
     ]
     logger.info(
         "[base_agent] Normalized qty quickReply chips: was %s, now %s",
         labels,
-        list(_CANONICAL_QTY_CHIPS),
+        list(canonical_chips),
     )
 
 
@@ -1037,6 +1106,25 @@ class BaseAgent(ABC):
                                 tool_result,
                                 messages,
                             )
+                            if (
+                                registered_vehicle_match is not None
+                                and _is_staggered_registered_vehicle(registered_vehicle_match)
+                            ):
+                                staggered_event = _build_registered_vehicle_staggered_tire_event(
+                                    registered_vehicle_match
+                                )
+                                if staggered_event is not None:
+                                    logger.info(
+                                        "[%s] Stop registered-vehicle auto recommendation for staggered fitment car_no=%s",
+                                        self.name,
+                                        registered_vehicle_match.get("car_no"),
+                                    )
+                                    yield {
+                                        "type": "vehicle_selection_slots",
+                                        "slot_values": _registered_vehicle_slot_values(registered_vehicle_match),
+                                    }
+                                    yield staggered_event
+                                    return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
                                 # When the user already named a unique registered vehicle in a
                                 # recommendation turn, do not terminate at listCar here. Let the

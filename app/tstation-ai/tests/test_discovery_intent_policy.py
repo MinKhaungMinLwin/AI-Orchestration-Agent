@@ -51,6 +51,27 @@ def test_tc017_product_noise_label_lookup_uses_product_search() -> None:
     assert "get_products_recommendations_tool" in plan.forbidden_tools
 
 
+def test_short_alias_only_query_uses_product_search() -> None:
+    frame = build_discovery_intent_frame("s fit as")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_name_search"
+    assert frame.entities["product_names"] == ("S FIT AS", "S FIT")
+    assert frame.entities["brand_cd"] == "LF"
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {"keyword": "S FIT AS", "brand_cd": "LF"}
+
+
+def test_short_alias_infers_non_default_brand_code() -> None:
+    frame = build_discovery_intent_frame("p7")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["product_names"] == ("P7",)
+    assert frame.entities["brand_cd"] == "PI"
+    assert plan.tool_args_patch == {"keyword": "P7", "brand_cd": "PI"}
+
+
 def test_tc017_general_noise_label_question_is_not_recommendation() -> None:
     frame = build_discovery_intent_frame("소음 등급은 어떻게 돼?")
 

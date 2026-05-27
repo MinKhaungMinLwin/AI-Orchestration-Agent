@@ -35,6 +35,8 @@ class ConversationSlots(BaseModel):
     """Conversation slots for tracking confirmed customer information across turns."""
 
     tire_size: Optional[str] = None      # e.g. "225/45R17"
+    tire_size_front: Optional[str] = None  # selected vehicle front tire size
+    tire_size_rear: Optional[str] = None   # selected vehicle rear tire size
     tire_model: Optional[str] = None     # e.g. "벤투스 S2"
     goods_no: Optional[str] = None       # e.g. "G000000314254"
     ord_qty: Optional[int] = None        # e.g. 4
@@ -69,8 +71,26 @@ class ConversationSlots(BaseModel):
         "goods_no": ["tire_model", "tire_size", "payment_amount"],
         "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id"],
-        "car_model": ["car_no", "car_lnc_cd", "mbr_car_reg_seq", "tire_size", "goods_no", "payment_amount"],
-        "car_no": ["car_model", "car_lnc_cd", "mbr_car_reg_seq", "tire_size", "goods_no", "payment_amount"],
+        "car_model": [
+            "car_no",
+            "car_lnc_cd",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "goods_no",
+            "payment_amount",
+        ],
+        "car_no": [
+            "car_model",
+            "car_lnc_cd",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "goods_no",
+            "payment_amount",
+        ],
         # When the goal flips, drop free-form store preferences (they are session-specific).
         # Region changes mean the user is searching a new area, not confirming the
         # previous store. Clear store identity so a stale shop_id cannot satisfy
@@ -303,6 +323,8 @@ class ConversationSlots(BaseModel):
             # Bare model names (brand omitted by user)
             r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
             r"\bS001\b|\bS007\b|\bER33\b|\bHPX\b|\bHP3\b|"
+            r"S\s*FIT|G\s*FIT|에스핏|지핏|i\*?cept|icept|아이셉트|"
+            r"\b4S2\b|\bDWS06\b|\bCC7\b|\bPS4S\b|\bPS\s*AS\s*4\b|\bPSAS4\b|\bCUP\s*2\b|\bCUP2\b|\bP7\b|"
             r"P\s?Zero|e\.?Primacy|Hyperion|S\.fit",
             re.IGNORECASE,
         ),
@@ -631,6 +653,8 @@ class ConversationSlots(BaseModel):
         """
         entity_label_map = {
             "tire_size": "타이어 사이즈",
+            "tire_size_front": "전륜 타이어 사이즈",
+            "tire_size_rear": "후륜 타이어 사이즈",
             "tire_model": "타이어 모델",
             "goods_no": "상품번호",
             "ord_qty": "수량",
@@ -663,6 +687,14 @@ class ConversationSlots(BaseModel):
                 entity_lines.append(f"- {label}: {val:,}원 (이미 산출된 총 결제금액 — 단가×수량 재계산 금지)")
             else:
                 entity_lines.append(f"- {label}: {val}")
+        if (
+            self.tire_size
+            and self.tire_size_front
+            and self.tire_size_rear
+            and self.tire_size_front != self.tire_size_rear
+            and self.tire_size in {self.tire_size_front, self.tire_size_rear}
+        ):
+            entity_lines.append("- 수량 제한: 전/후륜 규격 상이 차량은 현재 선택한 규격 기준 최대 2개")
 
         blocks: list[str] = []
 

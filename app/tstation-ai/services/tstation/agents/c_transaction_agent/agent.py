@@ -611,9 +611,20 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 - ord_qty in confirmed slot → confirm with user: "수량은 [N]개 맞으시죠?"
 - qty not specified → MUST ask user: "몇 개를 확인하시겠습니까?"
 - This rule applies equally to inventory check, store stock check, and order flows
-- ⚠️ Whenever you ask the qty question ("몇 개를 확인하시겠습니까?" / "몇 개 주문하시겠습니까?" / "장착하실 타이어 수량을 알려주세요" / any qty prompt), the `quickReply` MUST set `quickReplies` to EXACTLY `["1개", "2개", "3개", "4개"]` — all four options, in this exact order. NEVER omit "3개". NEVER drop or reorder. Applies to every flow (inventory, stock, store check, urgent visit, order).
-  - ❌ FORBIDDEN: `["2개", "4개"]` (짝수만), `["1개", "2개"]` (앞 2개만), `["4개"]` (단일), `["2개", "4개", "처음으로"]` (필수 chip 누락 + 무관 chip 추가), `["1개", "2개", "3개", "4개", "처음으로"]` (5개로 초과 — `_MAX_QUICK_REPLIES=4` 에 의해 "처음으로" 가 잘리면 안 됨).
-  - ✅ REQUIRED: 정확히 `[{"label":"1개"}, {"label":"2개"}, {"label":"3개"}, {"label":"4개"}]` 4개 chip 만. "처음으로" / "다시 추천" 등 보조 chip 을 함께 노출하고 싶어도 이 턴에는 **금지** — qty chip 4개의 완전성이 최우선.
+- Exception: if [확인된 고객 정보] contains BOTH `전륜 타이어 사이즈` and `후륜 타이어 사이즈`, they differ,
+  and `타이어 사이즈` is one of those two values, the current flow is for one axle only.
+  In that case quantity is limited to 1 or 2 only. If the user asks for 3개/4개, do not call tools;
+  respond that front/rear different-size vehicles can select up to 2 for the currently selected size and ask again
+  with quickReplies EXACTLY `["1개", "2개"]`.
+- ⚠️ Whenever you ask the qty question ("몇 개를 확인하시겠습니까?" / "몇 개 주문하시겠습니까?" / "장착하실 타이어 수량을 알려주세요" / any qty prompt), the `quickReply` MUST set `quickReplies` to EXACTLY `["1개", "2개", "3개", "4개"]` — all four options, in this exact order. NEVER omit "3개". NEVER drop or reorder. Applies to every flow (inventory, stock, store check, urgent visit, order), except the front/rear different-size single-axle context above.
+  - ❌ FORBIDDEN except for the front/rear different-size single-axle context:
+    `["2개", "4개"]` (짝수만), `["1개", "2개"]` (앞 2개만), `["4개"]` (단일),
+    `["2개", "4개", "처음으로"]` (필수 chip 누락 + 무관 chip 추가),
+    `["1개", "2개", "3개", "4개", "처음으로"]` (5개로 초과 — `_MAX_QUICK_REPLIES=4` 에 의해
+    "처음으로" 가 잘리면 안 됨).
+  - ✅ REQUIRED normally: 정확히 `[{"label":"1개"}, {"label":"2개"}, {"label":"3개"}, {"label":"4개"}]`
+    4개 chip 만. Exception context above: 정확히 `[{"label":"1개"}, {"label":"2개"}]` 2개 chip 만.
+    "처음으로" / "다시 추천" 등 보조 chip 을 함께 노출하고 싶어도 이 턴에는 **금지**.
   - 4륜 차량이 일반적이라는 사실은 prompt 외부 사실일 뿐, 사용자가 1개·3개 (스페어·트리오) 를 선택할 권한을 박탈하면 안 됨.
 
 ⚠️ SLOT OVERRIDE RULE (CRITICAL):
@@ -1037,8 +1048,15 @@ STEP 1 — Resolve goods_no:
 STEP 2 — Get unit price:
 - Call `get_final_price_tool(goods_no)`.
 - Read from the tool result:
+  `smrt_pay_yn`
   `unit_price = extra_fvr_sale_prc + wage_prc`
 - Do NOT use `payment_amount` from slots. Do NOT use previous order total.
+
+STEP 2.5 — Smart Pay availability guard:
+- If `smrt_pay_yn` is "N", null, missing, or any value other than "Y", STOP and answer:
+  "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
+- Do NOT calculate monthly 12/24-month amounts when `smrt_pay_yn` is not "Y".
+- If `smrt_pay_yn` is "Y", continue to STEP 3.
 
 STEP 3 — Calculate with qty=4 fixed:
 - `total_4ea = unit_price * 4`
@@ -1058,6 +1076,7 @@ Use `quickReply` and put the full answer in `assistantResponse`:
 ※ 실제 승인 금액은 카드사 심사 결과에 따라 다를 수 있습니다."
 
 Strict anti-bug rules:
+- Do NOT say Smart Pay is available unless `get_final_price_tool` returned `smrt_pay_yn="Y"`.
 - Do NOT answer only "결제 단계에서 확인해 주세요" when goods_no and price tool data are available.
 - Do NOT reuse ord_qty=2/3/5 from slots or prior order context. Smart Pay calculation is 4 tires fixed.
 - Do NOT say "5개 기준" unless the user explicitly asks a separate non-Smart-Pay price question.
@@ -1606,7 +1625,8 @@ STEP 2: ord_qty — always confirm with user
     ⚠️ 이 확인 질문은 quickReply [1개/2개/3개/4개] 버튼을 절대 붙이지 말 것. 이미 수량이 알려진 상태이므로 단순 텍스트 확인 메시지만 emit하고 STOP. 버튼을 붙이면 사용자가 버튼으로 변경을 시도할 때 인덱스/값 혼동 오류가 발생한다.
   - If no qty in context (qty completely unknown): "몇 개 주문하시겠습니까? (일반적으로 4개 = 4바퀴 기준)"
     → Render as `quickReply` template with `quickReplies` ALWAYS set to ["1개", "2개", "3개", "4개"] (all four options, in this exact order). Do NOT omit any of 1/2/3/4.
-    ❌ FORBIDDEN 출력 패턴: `["2개", "4개"]` / `["1개", "2개"]` / `["4개"]` / `["2개", "4개", "처음으로"]`. 4개 chip 의 완전성이 "처음으로" 같은 보조 chip 보다 우선.
+    → Exception: front/rear different-size vehicle + currently selected axle size context uses `["1개", "2개"]` only.
+    ❌ FORBIDDEN 출력 패턴: `["2개", "4개"]` / `["1개", "2개"]` / `["4개"]` / `["2개", "4개", "처음으로"]`. 단, 전/후륜 상이 + 단일 축 규격 컨텍스트에서는 `["1개", "2개"]`가 REQUIRED. 그 외에는 4개 chip 의 완전성이 "처음으로" 같은 보조 chip 보다 우선.
     ⚠️ quickReply에서 사용자가 "N개"를 선택하면 반드시 해당 레이블 텍스트("3개" 등)의 숫자를 그대로 ord_qty로 사용. 배열 인덱스(0, 1, 2, 3)를 수량으로 절대 사용하지 말 것.
   - Wait for user response before proceeding
   - qty=0 → always ask, never proceed
@@ -2905,6 +2925,10 @@ Trigger: "스마트페이", "스마트 페이", "smart pay", "smartpay", "할부
 
 - If goods_no is missing, ask exactly: "어떤 상품을 기준으로 계산해 드릴까요? 상품명이나 규격을 알려주세요." STOP.
 - Always call `get_final_price_tool(goods_no)` for Smart Pay. Do not reuse `payment_amount` from slots or a prior order total.
+- Before calculating, read `smrt_pay_yn` from `get_final_price_tool`.
+- If `smrt_pay_yn` is not exactly "Y", answer only:
+  "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
+  STOP. Do not calculate 12/24-month amounts.
 - Smart Pay calculation is ALWAYS based on 4 tires, regardless of `ord_qty` slot or prior order quantity.
 - Unit price = `extra_fvr_sale_prc + wage_prc`.
 - Total = unit price * 4.

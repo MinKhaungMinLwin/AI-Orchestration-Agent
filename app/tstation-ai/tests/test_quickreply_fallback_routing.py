@@ -17,6 +17,11 @@ from types import SimpleNamespace
 import pytest
 
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+from services.tstation.agents.base_agent import (
+    _build_registered_vehicle_staggered_tire_event,
+    _is_staggered_registered_vehicle,
+    _registered_vehicle_slot_values,
+)
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -38,6 +43,15 @@ from services.tstation.chat import (
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
+    _build_manual_tire_size_input_event,
+    _build_order_quantity_prompt_event,
+    _build_staggered_vehicle_tire_selection_event,
+    _build_staggered_tire_quantity_limit_event,
+    _is_manual_tire_size_input_selection,
+    _is_staggered_selected_tire_size_context,
+    _listcar_allows_staggered_tire_prompt,
+    _apply_vehicle_selection_slot_values,
+    _resolve_vehicle_tire_position_selection,
     _vehicle_selection_slot_values,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
@@ -66,13 +80,17 @@ from services.tstation.chat import (
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
     _is_ev_suitability_turn,
+    _is_bare_product_name_search_query,
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
+    _non_self_vehicle_plate_owner_lookup_plate,
+    _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
     _pickup_service_guard_event,
+    _past_event_page_event,
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
     _remove_home_quick_reply_chips,
@@ -84,6 +102,7 @@ from services.tstation.chat import (
     _rule_based_classify,
     _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
+    _should_prompt_order_quantity_before_store,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
@@ -107,6 +126,43 @@ from services.tstation.source_filter import filter_for_context
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
+
+
+def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:
+    row = {
+        "car_no": "56모2162",
+        "car_lnc_cd": "W022859",
+        "car_nm": "3-series(F30) 320d A/T",
+        "mbr_car_unif_no": "2000002975",
+        "tire_size_fr": "2255018",
+        "tire_size_re": "2555018",
+    }
+
+    assert _is_staggered_registered_vehicle(row) is True
+
+    event = _build_registered_vehicle_staggered_tire_event(row)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "전륜 **225/50R18**, 후륜 **255/50R18**" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["앞바퀴사이즈", "뒷바퀴사이즈", "다른 사이즈 입력"]
+
+
+def test_registered_vehicle_staggered_slot_values_clear_selected_size_until_user_chooses() -> None:
+    row = {
+        "car_no": "56모2162",
+        "car_lnc_cd": "W022859",
+        "car_nm": "3-series(F30) 320d A/T",
+        "mbr_car_unif_no": "2000002975",
+        "tire_size_fr": "2255018",
+        "tire_size_re": "2555018",
+    }
+
+    slot_values = _registered_vehicle_slot_values(row)
+
+    assert slot_values["tire_size_front"] == "225/50R18"
+    assert slot_values["tire_size_rear"] == "255/50R18"
+    assert slot_values["tire_size"] is None
 
 
 def test_qc_runs_for_code_mapped_product_with_tool_sources() -> None:
@@ -172,6 +228,22 @@ def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
     assert event["template"] == "quickReply"
     assert "원복 또는 재사용이 어렵" in event["data"]["assistantResponse"]
     assert "1:1 문의하기" in _labels(event["data"]["quickReplies"])
+
+
+def test_past_event_page_event_routes_ended_event_list_queries() -> None:
+    for text in ("지난 이벤트 알려줘", "종료된 이벤트 알려줘", "끝난 행사 보여줘"):
+        event = _past_event_page_event(text)
+
+        assert event is not None
+        assert event["template"] == "quickReply"
+        assert "지난 이벤트" in event["data"]["assistantResponse"]
+        chips = event["data"]["quickReplies"]
+        assert _labels(chips) == ["지난 이벤트 보기", "진행 중인 이벤트"]
+        assert chips[0]["url"].endswith("/promotion/past-event-list")
+
+
+def test_past_event_page_event_does_not_hijack_restore_claims() -> None:
+    assert _past_event_page_event("종료된 이벤트 혜택 원복해줘") is None
 
 
 def test_tc210_price_policy_guard_denies_fake_vip_link() -> None:
@@ -461,6 +533,8 @@ def test_vehicle_selection_slot_values_normalize_tire_size() -> None:
     })
 
     assert slot_values["tire_size"] == "235/55R19"
+    assert slot_values["tire_size_front"] == "235/55R19"
+    assert "tire_size_rear" not in slot_values
 
 
 def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -> None:
@@ -477,6 +551,57 @@ def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -
     })
 
     assert slot_values["car_model"] == "GV70"
+
+
+def test_vehicle_selection_slot_values_preserve_staggered_front_rear_without_default_selected_size() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "56모2162",
+            "info": "BMW 3시리즈 그란 투리스모(6세대)",
+        },
+        "meta": {
+            "carNo": "56모2162",
+            "tireSize": "2255018",
+            "tireSizeRe": "2555018",
+        },
+    })
+
+    assert slot_values["tire_size_front"] == "225/50R18"
+    assert slot_values["tire_size_rear"] == "255/50R18"
+    assert "tire_size" not in slot_values
+
+
+def test_vehicle_selection_atomic_update_preserves_new_front_rear_when_car_changes() -> None:
+    from schemas.tstation.slots import ConversationSlots
+
+    base_slots = ConversationSlots(
+        car_model="GV70",
+        car_no="205소4214",
+        car_lnc_cd="W000001",
+        tire_size="235/55R19",
+        tire_size_front="235/55R19",
+        tire_size_rear="235/55R19",
+        goods_no="G000000123456",
+        payment_amount=100000,
+    )
+    slot_values = {
+        "car_model": "BMW 3시리즈 그란 투리스모",
+        "car_no": "56모2162",
+        "car_lnc_cd": "W049847",
+        "tire_size_front": "225/50R18",
+        "tire_size_rear": "255/50R18",
+    }
+
+    updated = _apply_vehicle_selection_slot_values(base_slots, slot_values)
+
+    assert updated.car_model == "BMW 3시리즈 그란 투리스모"
+    assert updated.car_no == "56모2162"
+    assert updated.car_lnc_cd == "W049847"
+    assert updated.tire_size is None
+    assert updated.tire_size_front == "225/50R18"
+    assert updated.tire_size_rear == "255/50R18"
+    assert updated.goods_no is None
+    assert updated.payment_amount is None
 
 
 def test_transaction_stall_recovery_appends_transaction_after_existing_discovery() -> None:
@@ -547,6 +672,42 @@ def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates(
 
     assert _reservation_date_range_guard_event("6월 1일 예약 가능해?", today=today) is None
     assert _reservation_date_range_guard_event("8월 이벤트 알려줘", today=today) is None
+
+
+@pytest.mark.parametrize(
+    "tire_size_text",
+    [
+        "2254517",
+        "225 45 17",
+        "225 4517",
+        "225/4517",
+        "225-4517",
+        "225-45-17",
+        "225R4517",
+        "225/45R17",
+    ],
+)
+def test_reservation_date_range_guard_ignores_tire_size_tokens(tire_size_text: str) -> None:
+    text = f"벤투스 S2 AS {tire_size_text}"
+
+    event = _reservation_date_range_guard_event(
+        text,
+        messages=[{"role": "assistant", "content": "원하시는 매장을 선택하면 예약 가능 시간을 확인해 드릴게요."}],
+        today=datetime.date(2026, 5, 27),
+    )
+
+    assert event is None
+    assert _parse_requested_reservation_date(text, today=datetime.date(2026, 5, 27)) is None
+
+
+def test_reservation_date_range_guard_still_parses_date_after_tire_size() -> None:
+    event = _reservation_date_range_guard_event(
+        "벤투스 S2 AS 225/45R17 8월 1일 예약 가능해?",
+        today=datetime.date(2026, 5, 27),
+    )
+
+    assert event is not None
+    assert "2026년 8월 1일 예약은 아직 오픈 전" in event["data"]["assistantResponse"]
 
 
 def test_parse_requested_reservation_date_preserves_day_30_for_slash_format() -> None:
@@ -844,6 +1005,12 @@ def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
     assert _preferred_product_search_keyword("kinergy ex") == "키너지 EX"
     assert _preferred_product_search_keyword("Ventus air S") == "벤투스 에어S"
     assert _preferred_product_search_keyword("ventus air s") == "벤투스 에어S"
+
+
+def test_bare_short_alias_can_use_code_product_search_path() -> None:
+    assert _is_bare_product_name_search_query("s fit as") is True
+    assert _is_bare_product_name_search_query("에스핏") is True
+    assert _is_bare_product_name_search_query("s fit as 가격 알려줘") is False
 
 
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:
@@ -1961,11 +2128,273 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
 
     assert slot_values == {
         "tire_size": "235/55R19",
+        "tire_size_front": "235/55R19",
         "car_model": "GV70 2.5T 가솔린 AWD A/T",
         "car_no": "205소4214",
         "car_lnc_cd": "W049847",
         "mbr_car_reg_seq": "2000002944",
     }
+
+
+def test_staggered_vehicle_selection_event_prompts_for_front_or_rear_size() -> None:
+    event = _build_staggered_vehicle_tire_selection_event(
+        {
+            "car": {"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"},
+            "meta": {
+                "carNo": "56모2162",
+                "tireSize": "225/50R18",
+                "tireSizeRe": "255/50R18",
+            },
+        }
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "어떤 사이즈 기준으로 검색할까요?" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["앞바퀴사이즈", "뒷바퀴사이즈", "다른 사이즈 입력"]
+
+
+def test_staggered_prompt_is_not_allowed_for_support_originated_listcar() -> None:
+    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "support"}) is False
+    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "discovery"}) is True
+
+
+def test_manual_tire_size_chip_gets_deterministic_prompt() -> None:
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {
+            "quickReplies": [
+                {"label": "앞바퀴사이즈"},
+                {"label": "뒷바퀴사이즈"},
+                {"label": "다른 사이즈 입력"},
+            ]
+        },
+    }
+
+    assert _is_manual_tire_size_input_selection("다른 사이즈 입력", latest_quickreply) is True
+
+    event = _build_manual_tire_size_input_event()
+
+    assert event["template"] == "quickReply"
+    assert "타이어 사이즈를 직접 입력" in event["data"]["assistantResponse"]
+
+
+def test_vehicle_tire_position_selection_resolves_quickreply_chip_to_front_size() -> None:
+    slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {
+            "quickReplies": [
+                {"label": "앞바퀴사이즈"},
+                {"label": "뒷바퀴사이즈"},
+                {"label": "다른 사이즈 입력"},
+            ]
+        },
+    }
+
+    resolved = _resolve_vehicle_tire_position_selection("앞바퀴사이즈", slots, latest_quickreply)
+
+    assert resolved == "225/50R18"
+
+
+def test_vehicle_tire_position_selection_resolves_rear_recommend_followup() -> None:
+    slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
+
+    resolved = _resolve_vehicle_tire_position_selection("뒤바퀴도 추천해줘", slots, None)
+
+    assert resolved == "255/50R18도 추천해줘"
+
+
+def test_vehicle_tire_position_selection_preserves_transactional_intent_text() -> None:
+    slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
+
+    resolved = _resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
+
+    assert resolved == "225/50R18 가격 알려줘"
+
+
+def test_staggered_selected_tire_size_context_detects_single_axle_size() -> None:
+    slots = SimpleNamespace(
+        tire_size="225/50R18",
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+    )
+
+    assert _is_staggered_selected_tire_size_context(slots) is True
+
+
+def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
+    slots = SimpleNamespace(
+        tire_size="255/50R18",
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+    )
+
+    event = _build_staggered_tire_quantity_limit_event(slots)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "최대 2개" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
+
+
+def test_order_quantity_prompt_for_staggered_vehicle_offers_only_one_or_two() -> None:
+    slots = SimpleNamespace(
+        tire_size="225/50R18",
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+    )
+
+    event = _build_order_quantity_prompt_event(slots)
+
+    assert event["template"] == "quickReply"
+    assert "앞바퀴 **225/50R18** 기준으로 몇 개 구매" in event["data"]["assistantResponse"]
+    assert "최대 2개" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
+
+
+def test_order_quantity_prompt_precedes_store_when_region_entered_without_quantity() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=None,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _should_prompt_order_quantity_before_store("강남", slots) is True
+
+
+def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _should_prompt_order_quantity_before_store("2개", slots) is False
+
+
+def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"}],
+            "metadata": [{
+                "carNo": "56모2162",
+                "tireSize": "225/50R18",
+                "tireSizeRe": "255/50R18",
+            }],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("56모2162", template)
+
+    assert resolved is None
+
+
+def test_history_vehicle_selection_still_resolves_selected_vehicle_for_staggered_fitment() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"}],
+            "metadata": [{
+                "carNo": "56모2162",
+                "tireSize": "225/50R18",
+                "tireSizeRe": "255/50R18",
+                "carLncCd": "W049847",
+            }],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("56모2162", template)
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "56모2162"
+    assert resolved["meta"]["tireSizeRe"] == "255/50R18"
+
+
+def test_history_vehicle_selection_resolves_ordinal_pick() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "11가1111", "info": "쏘나타"},
+                {"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"},
+            ],
+            "metadata": [
+                {"carNo": "11가1111", "tireSize": "205/55R16", "tireSizeRe": "205/55R16"},
+                {"carNo": "56모2162", "tireSize": "225/50R18", "tireSizeRe": "255/50R18"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("2번", template)
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "56모2162"
+    assert resolved["meta"]["tireSizeRe"] == "255/50R18"
+
+
+def test_history_tire_size_resolution_supports_ordinal_pick_for_same_size_vehicle() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "11가1111", "info": "쏘나타"},
+                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+            ],
+            "metadata": [
+                {"carNo": "11가1111", "tireSize": "205/55R16", "tireSizeRe": "205/55R16"},
+                {"carNo": "29조3344", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("2)", template)
+
+    assert resolved == "225/45R17"
+
+
+def test_history_vehicle_selection_resolves_model_name_pick() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "205소4214", "info": "제네시스 GV70 2.5T"},
+                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+            ],
+            "metadata": [
+                {"carNo": "205소4214", "tireSize": "235/55R19", "tireSizeRe": "235/55R19"},
+                {"carNo": "29조3344", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("GV70", template)
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "205소4214"
+
+
+def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "11가1111", "info": "제네시스 GV70 2.5T"},
+                {"licensePlate": "22나2222", "info": "제네시스 GV80 3.5T"},
+            ],
+            "metadata": [
+                {"carNo": "11가1111", "tireSize": "235/55R19", "tireSizeRe": "235/55R19"},
+                {"carNo": "22나2222", "tireSize": "265/40R22", "tireSizeRe": "265/40R22"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("제네시스", template)
+
+    assert resolved is None
 
 
 def test_unmatched_vehicle_listcar_is_coerced_to_owner_prompt() -> None:
@@ -2741,6 +3170,23 @@ def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None
 @pytest.mark.parametrize("text", ["내차말고 GV70", "내차말구 GV70", "내차말로 ev70", "내 차 아닌 모델Y"])
 def test_non_self_car_negation_handles_common_typos(text: str) -> None:
     assert _NON_SELF_CAR_RE.search(text)
+
+
+def test_non_self_vehicle_plate_only_prompts_for_owner_lookup() -> None:
+    event = _non_self_vehicle_plate_owner_lookup_prompt_event("내차말고 29조3344")
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_non_self_vehicle_owner_lookup_prompt"
+    assert "차량번호 + 소유주명" in event["data"]["assistantResponse"]
+    assert "소유주명만 이어서 입력" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["차번+이름으로 검색", "사이즈 직접 입력", "내 차량 보기"]
+
+
+def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:
+    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344") == "29조3344"
+    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344 홍길동") is None
+    assert _should_reuse_pending_vehicle_lookup_car_no(None, "홍길동", "29조3344") is True
 
 
 # --------------------------------------------------------------------------- #
