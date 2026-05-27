@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import datetime
+from contextvars import ContextVar
 from dataclasses import replace
 import hashlib
 import json
@@ -122,6 +123,10 @@ _speculative_classify_sem = threading.Semaphore(4)
 _decision_verify_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _DISCOVERY_PROFILE_CLASSIFIER_TIMEOUT_S = 0.15
 _SYNC_ITER_SENTINEL = object()
+current_vehicle_selection_prompt_event: ContextVar[dict | None] = ContextVar(
+    "current_vehicle_selection_prompt_event",
+    default=None,
+)
 
 
 def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
@@ -3417,15 +3422,150 @@ def _build_vehicle_information_event(selected_vehicle: dict, user_text: str) -> 
     }
 
 
+_FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
+_REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
+_CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
+_FRONT_TIRE_SELECTION_RE = re.compile(r"앞\s*바퀴|전륜|앞\s*타이어", re.IGNORECASE)
+_REAR_TIRE_SELECTION_RE = re.compile(r"뒤\s*바퀴|뒷\s*바퀴|후륜|뒤\s*타이어|뒷\s*타이어", re.IGNORECASE)
+_TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
+    r"추천|찾|검색|재고|가격|주문|구매|장착|진행|볼래|봐줘|알려줘|도\s*추천",
+    re.IGNORECASE,
+)
+
+
+def _normalize_vehicle_tire_size_pair(selected_meta: dict[str, Any]) -> tuple[str | None, str | None]:
+    front_size = normalize_tire_size(str(selected_meta.get("tireSize") or selected_meta.get("tire_size") or ""))
+    rear_size = normalize_tire_size(str(selected_meta.get("tireSizeRe") or selected_meta.get("tire_size_re") or ""))
+    return front_size, rear_size
+
+
+def _has_staggered_vehicle_tire_sizes(front_size: str | None, rear_size: str | None) -> bool:
+    return bool(front_size and rear_size and front_size != rear_size)
+
+
+def _build_staggered_vehicle_tire_selection_event(selected_vehicle: dict) -> dict | None:
+    selected_car = selected_vehicle.get("car") or {}
+    selected_meta = selected_vehicle.get("meta") or {}
+    front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
+    if not _has_staggered_vehicle_tire_sizes(front_size, rear_size):
+        return None
+
+    car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
+    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+    vehicle_label = f"**{car_info} ({car_no})**" if car_no else f"**{car_info}**"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_vehicle_staggered_tire_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{vehicle_label}의 규격은 전륜 **{front_size}**, 후륜 **{rear_size}**예요.\n\n"
+                "앞/뒤 사이즈가 다릅니다. 어떤 사이즈 기준으로 검색할까요?"
+            ),
+            "quickReplies": [
+                {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+                {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+                {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+def _build_manual_tire_size_input_event() -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_vehicle_manual_tire_size_prompt",
+        "data": {
+            "assistantResponse": "검색할 타이어 사이즈를 직접 입력해 주세요. 예: 225/50R18",
+            "quickReplies": [
+                {"label": "앞바퀴사이즈", "domain": "DISCOVERY"},
+                {"label": "뒷바퀴사이즈", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+def _listcar_allows_staggered_tire_prompt(template_data: dict | None) -> bool:
+    if not isinstance(template_data, dict):
+        return True
+    source_domain = str(template_data.get("source_domain") or "").strip().lower()
+    return source_domain in {"", MultiAgentDomain.Domain.DISCOVERY.value}
+
+
+def _quickreply_labels(template_data: dict | None) -> set[str]:
+    labels: set[str] = set()
+    if not isinstance(template_data, dict):
+        return labels
+    data = template_data.get("data")
+    if not isinstance(data, dict):
+        return labels
+    for quick_reply in data.get("quickReplies") or []:
+        if isinstance(quick_reply, dict):
+            label = str(quick_reply.get("label") or "").strip()
+            if label:
+                labels.add(label)
+    return labels
+
+
+def _is_manual_tire_size_input_selection(user_text: str | None, latest_quickreply_tmpl: dict | None) -> bool:
+    return (
+        str(user_text or "").strip() == _CUSTOM_TIRE_CHIP_LABEL
+        and _CUSTOM_TIRE_CHIP_LABEL in _quickreply_labels(latest_quickreply_tmpl)
+    )
+
+
+def _resolve_vehicle_tire_position_selection(
+    user_text: str | None,
+    slots: Any,
+    latest_quickreply_tmpl: dict | None = None,
+) -> str | None:
+    text = str(user_text or "").strip()
+    if not text or normalize_tire_size(text):
+        return None
+
+    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
+    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
+    if not _has_staggered_vehicle_tire_sizes(front_size, rear_size):
+        return None
+
+    latest_labels = _quickreply_labels(latest_quickreply_tmpl)
+
+    if text == _FRONT_TIRE_CHIP_LABEL and _FRONT_TIRE_CHIP_LABEL in latest_labels:
+        return front_size
+    if text == _REAR_TIRE_CHIP_LABEL and _REAR_TIRE_CHIP_LABEL in latest_labels:
+        return rear_size
+    if text == _CUSTOM_TIRE_CHIP_LABEL and _CUSTOM_TIRE_CHIP_LABEL in latest_labels:
+        return None
+    if (
+        _FRONT_TIRE_SELECTION_RE.search(text)
+        and not _REAR_TIRE_SELECTION_RE.search(text)
+        and _TIRE_POSITION_FOLLOWUP_ACTION_RE.search(text)
+    ):
+        return _FRONT_TIRE_SELECTION_RE.sub(front_size, text, count=1)
+    if _REAR_TIRE_SELECTION_RE.search(text) and _TIRE_POSITION_FOLLOWUP_ACTION_RE.search(text):
+        return _REAR_TIRE_SELECTION_RE.sub(rear_size, text, count=1)
+    return None
+
+
 def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, Any]:
     selected_car = (selected_vehicle or {}).get("car") or {}
     selected_meta = (selected_vehicle or {}).get("meta") or {}
-    raw_tire_size = selected_meta.get("tireSize") or selected_meta.get("tire_size")
-    normalized_tire_size = normalize_tire_size(str(raw_tire_size or ""))
+    front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
 
     slot_values: dict[str, Any] = {}
-    if normalized_tire_size:
-        slot_values["tire_size"] = normalized_tire_size
+    if front_size:
+        slot_values["tire_size_front"] = front_size
+    if rear_size:
+        slot_values["tire_size_rear"] = rear_size
+    if front_size and (not rear_size or front_size == rear_size):
+        slot_values["tire_size"] = front_size
+    elif rear_size and not front_size:
+        slot_values["tire_size"] = rear_size
 
     raw_car_model = (
         selected_meta.get("carModel")
@@ -3447,6 +3587,42 @@ def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, A
         slot_values["mbr_car_reg_seq"] = mbr_car_reg_seq
 
     return slot_values
+
+
+def _apply_vehicle_selection_slot_values(base_slots: Any, slot_values: dict[str, Any]) -> Any:
+    """Apply selected-vehicle slots as one atomic replacement.
+
+    Generic ConversationSlots.merge() is field-ordered and may reset front/rear
+    sizes after setting them when car_model/car_no changes. Vehicle selection is
+    different: the vehicle identity and tire sizes arrive as one confirmed set.
+    """
+    updated = base_slots.model_copy()
+
+    vehicle_fields = {
+        "car_model",
+        "car_no",
+        "car_lnc_cd",
+        "mbr_car_reg_seq",
+        "tire_size",
+        "tire_size_front",
+        "tire_size_rear",
+    }
+    for field in vehicle_fields:
+        setattr(updated, field, slot_values.get(field))
+
+    if getattr(updated, "tire_size", None) != getattr(base_slots, "tire_size", None):
+        updated.goods_no = None
+        updated.payment_amount = None
+
+    if (
+        getattr(updated, "car_no", None) != getattr(base_slots, "car_no", None)
+        or getattr(updated, "car_lnc_cd", None) != getattr(base_slots, "car_lnc_cd", None)
+        or getattr(updated, "car_model", None) != getattr(base_slots, "car_model", None)
+    ):
+        updated.goods_no = None
+        updated.payment_amount = None
+
+    return updated
 
 
 def _brand_label_for_code(brand_cd: str) -> str:
@@ -6886,66 +7062,64 @@ class TStationChatServiceV2:
         """
         if not user_text or not isinstance(template_data, dict):
             return None
+        selected_vehicle = TStationChatServiceV2._resolve_vehicle_from_history_template(user_text, template_data)
+        if selected_vehicle is None:
+            return None
+        selected_meta = selected_vehicle.get("meta") or {}
+        front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
+        if _has_staggered_vehicle_tire_sizes(front_size, rear_size):
+            return None
+        tire_size = front_size or rear_size
+        if tire_size:
+            return tire_size
+        return None
+
+    @staticmethod
+    def _resolve_vehicle_from_history_template(user_text: str, template_data: dict | None) -> dict | None:
+        """Resolve a user's next-turn `listCar` pick back to the selected vehicle."""
+        if not user_text or not isinstance(template_data, dict):
+            return None
 
         latest_listcar: dict | None = None
         if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), dict):
             latest_listcar = template_data.get("data")
         elif isinstance(template_data.get("listCar"), list):
-            # Defensive: allow passing the inner payload directly.
             latest_listcar = template_data
         if latest_listcar is None:
             return None
 
         cars = latest_listcar.get("listCar") or []
         metadata = latest_listcar.get("metadata") or []
-        if not isinstance(cars, list) or not isinstance(metadata, list) or not metadata:
+        if not isinstance(cars, list) or not isinstance(metadata, list) or len(cars) != len(metadata):
             return None
 
-        text = user_text.strip()
-
-        # 1. License plate match against metadata[i].carNo.
-        plate_match = re.search(r"\d{2,3}[가-힣]\d{4}", text)
-        if plate_match:
-            target_plate = plate_match.group(0)
-            for meta in metadata:
-                if not isinstance(meta, dict):
-                    continue
-                if meta.get("carNo") == target_plate:
-                    tire_size = meta.get("tireSize")
-                    if tire_size:
-                        return tire_size
-
-        # 2. Ordinal pick.
-        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", str(user_text or ""))
         if ordinal_match:
             idx = int(ordinal_match.group(1)) - 1
             if 0 <= idx < len(metadata):
+                car = cars[idx]
                 meta = metadata[idx]
-                if isinstance(meta, dict):
-                    tire_size = meta.get("tireSize")
-                    if tire_size:
-                        return tire_size
+                if isinstance(car, dict) and isinstance(meta, dict):
+                    return {"car": car, "meta": meta}
 
-        # 3. Token-overlap against listCar[i].info. Require unique top scorer.
-        tokens = [t for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+        tokens = [t for t in re.findall(r"[A-Za-z가-힣0-9]+", str(user_text or "")) if len(t) >= 2]
         if tokens:
-            scored: list[tuple[int, dict]] = []
+            scored: list[tuple[int, dict, dict]] = []
             for car, meta in zip(cars, metadata):
                 if not isinstance(car, dict) or not isinstance(meta, dict):
                     continue
                 info = (car.get("info") or car.get("description") or "").lower()
-                score = sum(1 for tok in tokens if tok.lower() in info)
+                score = sum(1 for token in tokens if token.lower() in info)
                 if score > 0:
-                    scored.append((score, meta))
+                    scored.append((score, car, meta))
             if scored:
-                max_score = max(s for s, _ in scored)
-                top = [meta for s, meta in scored if s == max_score]
+                max_score = max(score for score, _, _ in scored)
+                top = [(car, meta) for score, car, meta in scored if score == max_score]
                 if len(top) == 1:
-                    tire_size = top[0].get("tireSize")
-                    if tire_size:
-                        return tire_size
+                    car, meta = top[0]
+                    return {"car": car, "meta": meta}
 
-        return None
+        return _select_vehicle_from_listcar_event(user_text, latest_listcar)
 
     @staticmethod
     def _resolve_recent_product_search_keyword(prev_tool_data: list[dict]) -> str | None:
@@ -7456,6 +7630,7 @@ class TStationChatServiceV2:
             if msg.get("role") == "user":
                 last_user_text = msg.get("content", "")
                 break
+        current_vehicle_selection_prompt_event.set(None)
 
         try:
             chat_history_svc = get_chat_history_service()
@@ -7526,6 +7701,26 @@ class TStationChatServiceV2:
                 logger.info(
                     "[VEHICLE_OWNER_LOOKUP] combined pending plate with owner name follow-up: %s",
                     effective_vehicle_owner_text,
+                )
+
+            if _is_manual_tire_size_input_selection(last_user_text, latest_quickreply_tmpl):
+                current_vehicle_selection_prompt_event.set(_build_manual_tire_size_input_event())
+
+            resolved_position_size = _resolve_vehicle_tire_position_selection(
+                last_user_text,
+                existing_slots,
+                latest_quickreply_tmpl,
+            )
+            if resolved_position_size:
+                for message_list in (enriched_messages, messages, classifier_messages):
+                    for msg in reversed(message_list):
+                        if msg.get("role") == "user":
+                            msg["content"] = resolved_position_size
+                            break
+                last_user_text = resolved_position_size
+                logger.info(
+                    "[VEHICLE_TIRE_SELECTION] rewrote front/rear tire selection follow-up to text=%s",
+                    resolved_position_size,
                 )
 
             classify_future = _try_submit_speculative(
@@ -7749,6 +7944,29 @@ class TStationChatServiceV2:
             # goal-router's `size` step and route to Discovery instead of
             # Transaction.
             tire_size_resolved_from_vehicle_selection = False
+            history_selected_vehicle = None
+            if latest_listcar_tmpl:
+                try:
+                    history_selected_vehicle = TStationChatServiceV2._resolve_vehicle_from_history_template(
+                        last_user_text,
+                        latest_listcar_tmpl,
+                    )
+                except Exception as e:
+                    logger.warning(f"[SLOTS] history vehicle resolver failed: {e}")
+            if history_selected_vehicle is not None:
+                selected_meta = history_selected_vehicle.get("meta") or {}
+                front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
+                merged_slots.tire_size_front = front_size
+                merged_slots.tire_size_rear = rear_size
+                is_staggered_vehicle = _has_staggered_vehicle_tire_sizes(front_size, rear_size)
+                if is_staggered_vehicle:
+                    merged_slots.tire_size = None
+                    merged_slots.goods_no = None
+                    merged_slots.payment_amount = None
+                if is_staggered_vehicle and _listcar_allows_staggered_tire_prompt(latest_listcar_tmpl):
+                    current_vehicle_selection_prompt_event.set(
+                        _build_staggered_vehicle_tire_selection_event(history_selected_vehicle)
+                    )
             if merged_slots.tire_size is None:
                 try:
                     resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
@@ -9862,7 +10080,7 @@ class TStationChatServiceV2:
                 base_slots = pending_slots
                 if base_slots is None:
                     base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
-                updated_slots = base_slots.merge(ConversationSlots(**vehicle_slot_values))
+                updated_slots = _apply_vehicle_selection_slot_values(base_slots, vehicle_slot_values)
                 if updated_slots.model_dump() != base_slots.model_dump():
                     pending_slots = updated_slots
                     logger.info(
@@ -9931,6 +10149,10 @@ class TStationChatServiceV2:
                 or _VEHICLE_RECOMMENDATION_TEXT_RE.search(user_query)
             ):
                 return [], None
+
+            staggered_tire_event = _build_staggered_vehicle_tire_selection_event(selected)
+            if staggered_tire_event is not None:
+                return [], staggered_tire_event
 
             tire_size = selected_meta.get("tireSize")
             car_lnc_cd = selected_meta.get("carLncCd")
@@ -10089,6 +10311,18 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(followup_event, ensure_ascii=False)}\n\n"
             assistant_response = str((followup_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        history_selected_vehicle_prompt_event = current_vehicle_selection_prompt_event.get()
+        if history_selected_vehicle_prompt_event is not None:
+            yield f"data: {json.dumps(history_selected_vehicle_prompt_event, ensure_ascii=False)}\n\n"
+            assistant_response = str(
+                (history_selected_vehicle_prompt_event.get("data") or {}).get("assistantResponse") or ""
+            )
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

@@ -38,6 +38,12 @@ from services.tstation.chat import (
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
+    _build_manual_tire_size_input_event,
+    _build_staggered_vehicle_tire_selection_event,
+    _is_manual_tire_size_input_selection,
+    _listcar_allows_staggered_tire_prompt,
+    _apply_vehicle_selection_slot_values,
+    _resolve_vehicle_tire_position_selection,
     _vehicle_selection_slot_values,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
@@ -461,6 +467,8 @@ def test_vehicle_selection_slot_values_normalize_tire_size() -> None:
     })
 
     assert slot_values["tire_size"] == "235/55R19"
+    assert slot_values["tire_size_front"] == "235/55R19"
+    assert "tire_size_rear" not in slot_values
 
 
 def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -> None:
@@ -477,6 +485,57 @@ def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -
     })
 
     assert slot_values["car_model"] == "GV70"
+
+
+def test_vehicle_selection_slot_values_preserve_staggered_front_rear_without_default_selected_size() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "56모2162",
+            "info": "BMW 3시리즈 그란 투리스모(6세대)",
+        },
+        "meta": {
+            "carNo": "56모2162",
+            "tireSize": "2255018",
+            "tireSizeRe": "2555018",
+        },
+    })
+
+    assert slot_values["tire_size_front"] == "225/50R18"
+    assert slot_values["tire_size_rear"] == "255/50R18"
+    assert "tire_size" not in slot_values
+
+
+def test_vehicle_selection_atomic_update_preserves_new_front_rear_when_car_changes() -> None:
+    from schemas.tstation.slots import ConversationSlots
+
+    base_slots = ConversationSlots(
+        car_model="GV70",
+        car_no="205소4214",
+        car_lnc_cd="W000001",
+        tire_size="235/55R19",
+        tire_size_front="235/55R19",
+        tire_size_rear="235/55R19",
+        goods_no="G000000123456",
+        payment_amount=100000,
+    )
+    slot_values = {
+        "car_model": "BMW 3시리즈 그란 투리스모",
+        "car_no": "56모2162",
+        "car_lnc_cd": "W049847",
+        "tire_size_front": "225/50R18",
+        "tire_size_rear": "255/50R18",
+    }
+
+    updated = _apply_vehicle_selection_slot_values(base_slots, slot_values)
+
+    assert updated.car_model == "BMW 3시리즈 그란 투리스모"
+    assert updated.car_no == "56모2162"
+    assert updated.car_lnc_cd == "W049847"
+    assert updated.tire_size is None
+    assert updated.tire_size_front == "225/50R18"
+    assert updated.tire_size_rear == "255/50R18"
+    assert updated.goods_no is None
+    assert updated.payment_amount is None
 
 
 def test_transaction_stall_recovery_appends_transaction_after_existing_discovery() -> None:
@@ -1961,11 +2020,211 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
 
     assert slot_values == {
         "tire_size": "235/55R19",
+        "tire_size_front": "235/55R19",
         "car_model": "GV70 2.5T 가솔린 AWD A/T",
         "car_no": "205소4214",
         "car_lnc_cd": "W049847",
         "mbr_car_reg_seq": "2000002944",
     }
+
+
+def test_staggered_vehicle_selection_event_prompts_for_front_or_rear_size() -> None:
+    event = _build_staggered_vehicle_tire_selection_event(
+        {
+            "car": {"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"},
+            "meta": {
+                "carNo": "56모2162",
+                "tireSize": "225/50R18",
+                "tireSizeRe": "255/50R18",
+            },
+        }
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "어떤 사이즈 기준으로 검색할까요?" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["앞바퀴사이즈", "뒷바퀴사이즈", "다른 사이즈 입력"]
+
+
+def test_staggered_prompt_is_not_allowed_for_support_originated_listcar() -> None:
+    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "support"}) is False
+    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "discovery"}) is True
+
+
+def test_manual_tire_size_chip_gets_deterministic_prompt() -> None:
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {
+            "quickReplies": [
+                {"label": "앞바퀴사이즈"},
+                {"label": "뒷바퀴사이즈"},
+                {"label": "다른 사이즈 입력"},
+            ]
+        },
+    }
+
+    assert _is_manual_tire_size_input_selection("다른 사이즈 입력", latest_quickreply) is True
+
+    event = _build_manual_tire_size_input_event()
+
+    assert event["template"] == "quickReply"
+    assert "타이어 사이즈를 직접 입력" in event["data"]["assistantResponse"]
+
+
+def test_vehicle_tire_position_selection_resolves_quickreply_chip_to_front_size() -> None:
+    slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {
+            "quickReplies": [
+                {"label": "앞바퀴사이즈"},
+                {"label": "뒷바퀴사이즈"},
+                {"label": "다른 사이즈 입력"},
+            ]
+        },
+    }
+
+    resolved = _resolve_vehicle_tire_position_selection("앞바퀴사이즈", slots, latest_quickreply)
+
+    assert resolved == "225/50R18"
+
+
+def test_vehicle_tire_position_selection_resolves_rear_recommend_followup() -> None:
+    slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
+
+    resolved = _resolve_vehicle_tire_position_selection("뒤바퀴도 추천해줘", slots, None)
+
+    assert resolved == "255/50R18도 추천해줘"
+
+
+def test_vehicle_tire_position_selection_preserves_transactional_intent_text() -> None:
+    slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
+
+    resolved = _resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
+
+    assert resolved == "225/50R18 가격 알려줘"
+
+
+def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"}],
+            "metadata": [{
+                "carNo": "56모2162",
+                "tireSize": "225/50R18",
+                "tireSizeRe": "255/50R18",
+            }],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("56모2162", template)
+
+    assert resolved is None
+
+
+def test_history_vehicle_selection_still_resolves_selected_vehicle_for_staggered_fitment() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"}],
+            "metadata": [{
+                "carNo": "56모2162",
+                "tireSize": "225/50R18",
+                "tireSizeRe": "255/50R18",
+                "carLncCd": "W049847",
+            }],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("56모2162", template)
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "56모2162"
+    assert resolved["meta"]["tireSizeRe"] == "255/50R18"
+
+
+def test_history_vehicle_selection_resolves_ordinal_pick() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "11가1111", "info": "쏘나타"},
+                {"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"},
+            ],
+            "metadata": [
+                {"carNo": "11가1111", "tireSize": "205/55R16", "tireSizeRe": "205/55R16"},
+                {"carNo": "56모2162", "tireSize": "225/50R18", "tireSizeRe": "255/50R18"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("2번", template)
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "56모2162"
+    assert resolved["meta"]["tireSizeRe"] == "255/50R18"
+
+
+def test_history_tire_size_resolution_supports_ordinal_pick_for_same_size_vehicle() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "11가1111", "info": "쏘나타"},
+                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+            ],
+            "metadata": [
+                {"carNo": "11가1111", "tireSize": "205/55R16", "tireSizeRe": "205/55R16"},
+                {"carNo": "29조3344", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("2)", template)
+
+    assert resolved == "225/45R17"
+
+
+def test_history_vehicle_selection_resolves_model_name_pick() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "205소4214", "info": "제네시스 GV70 2.5T"},
+                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+            ],
+            "metadata": [
+                {"carNo": "205소4214", "tireSize": "235/55R19", "tireSizeRe": "235/55R19"},
+                {"carNo": "29조3344", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("GV70", template)
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "205소4214"
+
+
+def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "11가1111", "info": "제네시스 GV70 2.5T"},
+                {"licensePlate": "22나2222", "info": "제네시스 GV80 3.5T"},
+            ],
+            "metadata": [
+                {"carNo": "11가1111", "tireSize": "235/55R19", "tireSizeRe": "235/55R19"},
+                {"carNo": "22나2222", "tireSize": "265/40R22", "tireSizeRe": "265/40R22"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("제네시스", template)
+
+    assert resolved is None
 
 
 def test_unmatched_vehicle_listcar_is_coerced_to_owner_prompt() -> None:
