@@ -82,6 +82,8 @@ from services.tstation.chat import (
     _normalize_discovery_policy_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
+    _non_self_vehicle_plate_owner_lookup_plate,
+    _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
     _pickup_service_guard_event,
     _price_policy_guard_event,
@@ -3042,6 +3044,23 @@ def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None
 @pytest.mark.parametrize("text", ["내차말고 GV70", "내차말구 GV70", "내차말로 ev70", "내 차 아닌 모델Y"])
 def test_non_self_car_negation_handles_common_typos(text: str) -> None:
     assert _NON_SELF_CAR_RE.search(text)
+
+
+def test_non_self_vehicle_plate_only_prompts_for_owner_lookup() -> None:
+    event = _non_self_vehicle_plate_owner_lookup_prompt_event("내차말고 29조3344")
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_non_self_vehicle_owner_lookup_prompt"
+    assert "차량번호 + 소유주명" in event["data"]["assistantResponse"]
+    assert "소유주명만 이어서 입력" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["차번+이름으로 검색", "사이즈 직접 입력", "내 차량 보기"]
+
+
+def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:
+    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344") == "29조3344"
+    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344 홍길동") is None
+    assert _should_reuse_pending_vehicle_lookup_car_no(None, "홍길동", "29조3344") is True
 
 
 # --------------------------------------------------------------------------- #

@@ -3228,6 +3228,43 @@ def _vehicle_owner_lookup_prompt_event(plate: str, owner_provided: bool) -> dict
     }
 
 
+def _non_self_vehicle_plate_owner_lookup_plate(user_text: str | None) -> str | None:
+    """Return the plate for "not my car + plate only" owner-lookup requests."""
+    text = user_text or ""
+    if not _NON_SELF_CAR_RE.search(text) or _VEHICLE_OWNER_TEXT_RE.search(text):
+        return None
+    plate_match = _VEHICLE_PLATE_RE.search(text)
+    if not plate_match:
+        return None
+    return re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+
+
+def _non_self_vehicle_plate_owner_lookup_prompt_event(user_text: str | None) -> dict | None:
+    plate = _non_self_vehicle_plate_owner_lookup_plate(user_text)
+    if not plate:
+        return None
+    assistant_response = (
+        f"**{plate}** 차량으로 확인하려면 **차량번호 + 소유주명**이 필요해요.\n"
+        "소유주명만 이어서 입력해 주셔도 차량 조회로 연결할게요. "
+        f"예: {plate} 홍길동"
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_non_self_vehicle_owner_lookup_prompt",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _coerce_unmatched_vehicle_listcar_to_owner_prompt(event: dict, user_text: str | None) -> dict | None:
     if event.get("template") != "listCar":
         return None
@@ -7848,6 +7885,17 @@ class TStationChatServiceV2:
                         f"{last_user_text[:60]!r} — cleared {', '.join(cleared)} "
                         f"so the new vehicle's CAR MODEL DISPLAY flow can run"
                     )
+
+            non_self_plate_owner_prompt = _non_self_vehicle_plate_owner_lookup_prompt_event(last_user_text)
+            if non_self_plate_owner_prompt is not None:
+                pending_plate = _non_self_vehicle_plate_owner_lookup_plate(last_user_text)
+                if pending_plate:
+                    merged_slots.pending_vehicle_lookup_car_no = pending_plate
+                    logger.info(
+                        "[VEHICLE_OWNER_LOOKUP] staged non-self plate-only owner lookup prompt plate=%s",
+                        pending_plate,
+                    )
+                current_vehicle_selection_prompt_event.set(non_self_plate_owner_prompt)
 
             # If a previous buggy/partial turn saved only a tire_size without
             # any vehicle identity, a fresh "내차 BMW 타이어 추천" turn must not
