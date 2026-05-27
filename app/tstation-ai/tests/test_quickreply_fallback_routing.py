@@ -35,6 +35,7 @@ from services.tstation.chat import (
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
     _build_oe_replacement_followup_recommendation_args,
+    _vehicle_selection_slot_values,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
@@ -417,6 +418,37 @@ def test_oe_replacement_followup_does_not_fire_for_unrelated_question() -> None:
     )
 
     assert args is None
+
+
+def test_vehicle_selection_slot_values_normalize_tire_size() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "205소4214",
+            "info": "제네시스 GV70 (1세대) (2021 - 2024)",
+        },
+        "meta": {
+            "carNo": "205소4214",
+            "tireSize": "2355519",
+        },
+    })
+
+    assert slot_values["tire_size"] == "235/55R19"
+
+
+def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "205소4214",
+            "info": "제네시스 GV70 (1세대) (2021 - 2024)",
+        },
+        "meta": {
+            "carNo": "205소4214",
+            "tireSize": "235/55R19",
+            "carNm": "GV70",
+        },
+    })
+
+    assert slot_values["car_model"] == "GV70"
 
 
 def test_transaction_stall_recovery_appends_transaction_after_existing_discovery() -> None:

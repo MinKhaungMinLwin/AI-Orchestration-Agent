@@ -3277,6 +3277,29 @@ def _build_vehicle_information_event(selected_vehicle: dict, user_text: str) -> 
     }
 
 
+def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, Any]:
+    selected_car = (selected_vehicle or {}).get("car") or {}
+    selected_meta = (selected_vehicle or {}).get("meta") or {}
+    raw_tire_size = selected_meta.get("tireSize") or selected_meta.get("tire_size")
+    normalized_tire_size = normalize_tire_size(str(raw_tire_size or ""))
+
+    slot_values: dict[str, Any] = {}
+    if normalized_tire_size:
+        slot_values["tire_size"] = normalized_tire_size
+
+    raw_car_model = (
+        selected_meta.get("carModel")
+        or selected_meta.get("carNm")
+        or selected_car.get("model")
+        or selected_car.get("name")
+    )
+    car_model = str(raw_car_model or "").strip()
+    if car_model:
+        slot_values["car_model"] = car_model
+
+    return slot_values
+
+
 def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
     return bool(_OE_REPLACEMENT_EQUIVALENT_RE.search(user_text or ""))
 
@@ -9480,6 +9503,7 @@ class TStationChatServiceV2:
         async def _auto_continue_selected_vehicle(
             listcar_event: dict,
         ) -> tuple[list[dict], dict | None]:
+            nonlocal pending_slots
             if _VEHICLE_LIST_REQUEST_RE.search(user_query or ""):
                 return [], None
             event_data = listcar_event.get("data")
@@ -9488,6 +9512,21 @@ class TStationChatServiceV2:
             selected = _select_vehicle_from_listcar_event(user_query, event_data)
             if selected is None:
                 return [], None
+
+            vehicle_slot_values = _vehicle_selection_slot_values(selected)
+            if vehicle_slot_values:
+                from schemas.tstation.slots import ConversationSlots
+
+                base_slots = pending_slots
+                if base_slots is None:
+                    base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                updated_slots = base_slots.merge(ConversationSlots(**vehicle_slot_values))
+                if updated_slots.model_dump() != base_slots.model_dump():
+                    pending_slots = updated_slots
+                    logger.info(
+                        "[VEHICLE_AUTO_SELECT] staged vehicle slots for next turn: %s",
+                        vehicle_slot_values,
+                    )
 
             source_domain = str(listcar_event.get("source_domain") or "").lower()
             selected_car = selected.get("car") or {}
