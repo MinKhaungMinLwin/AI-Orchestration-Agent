@@ -6,6 +6,7 @@ from services.tstation.agents.base_agent import (
     BaseAgent,
     _AssistantResponseStreamer,
     _is_explicit_vehicle_list_request,
+    _normalize_qty_quick_replies,
     _owner_lookup_vehicle_recommendation_args,
     _resolve_registered_vehicle_match,
     _vehicle_owner_lookup_args_after_registered_mismatch,
@@ -109,6 +110,50 @@ def test_transaction_policy_blocks_store_list_tool_when_required_slot_missing():
     assert event["assistant_response_source"] == "transaction_policy_guard"
     assert event["data"]["requiredSlots"] == ["quantity"]
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["1개", "2개", "3개", "4개"]
+
+
+def test_qty_quickreply_normalizer_preserves_staggered_max_two_chips():
+    payload = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": (
+                "앞바퀴 225/50R18 기준으로 몇 개 구매하실까요? "
+                "이 차량은 앞/뒤 규격이 달라 현재 규격은 최대 2개까지 선택할 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
+                {"label": "2개", "domain": "TRANSACTION"},
+            ],
+        },
+    }
+
+    _normalize_qty_quick_replies(payload)
+
+    assert [reply["label"] for reply in payload["data"]["quickReplies"]] == ["1개", "2개"]
+
+
+def test_qty_quickreply_normalizer_rewrites_staggered_max_two_prompt_to_two_chips():
+    payload = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": (
+                "앞바퀴 225/50R18 기준으로 몇 개 구매하실까요? "
+                "이 차량은 앞/뒤 규격이 달라 현재 규격은 최대 2개까지 선택할 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
+                {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "3개", "domain": "TRANSACTION"},
+                {"label": "4개", "domain": "TRANSACTION"},
+            ],
+        },
+    }
+
+    _normalize_qty_quick_replies(payload)
+
+    assert [reply["label"] for reply in payload["data"]["quickReplies"]] == ["1개", "2개"]
 
 
 def test_transaction_policy_does_not_block_when_no_required_slots():

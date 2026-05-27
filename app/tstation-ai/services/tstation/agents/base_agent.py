@@ -494,6 +494,7 @@ def _build_validated_quickreply_data(assistant_response: str, chips: list[dict])
 # LLM 이 가끔 일부 chip 을 누락 (예: ["4개","2개"]) 하거나 중복 (["2개","2개"]) 시켜
 # UX 가 깨지므로 결정적 후처리로 정규화한다.
 _CANONICAL_QTY_CHIPS = ("1개", "2개", "3개", "4개")
+_STAGGERED_QTY_CHIPS = ("1개", "2개")
 _QTY_CHIP_LABEL_RE = re.compile(r"^\s*\d+\s*(?:개|본)\s*$")
 _QTY_PROMPT_RE = re.compile(
     r"주문\s*수량"
@@ -502,6 +503,11 @@ _QTY_PROMPT_RE = re.compile(
     r"|수량(?:을\s*(?:알려|선택|입력|말씀)|이\s*어떻|은\s*\d+\s*개)"
     r"|수량(?:을\s*)?몇\s*(?:개|본)"
     r"|수량\s*[:：]"
+)
+_STAGGERED_MAX_TWO_QTY_PROMPT_RE = re.compile(
+    r"(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라).{0,80}최대\s*2\s*개"
+    r"|최대\s*2\s*개.{0,80}(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라)",
+    re.DOTALL,
 )
 
 
@@ -531,7 +537,12 @@ def _normalize_qty_quick_replies(payload: dict) -> None:
     # 빈 배열이거나 chip 이 모두 qty 모양일 때만 정규화 — 다른 라벨이 섞이면 보존.
     if labels and not all(qty_shaped):
         return
-    if tuple(labels) == _CANONICAL_QTY_CHIPS:
+    canonical_chips = (
+        _STAGGERED_QTY_CHIPS
+        if _STAGGERED_MAX_TWO_QTY_PROMPT_RE.search(assistant_response)
+        else _CANONICAL_QTY_CHIPS
+    )
+    if tuple(labels) == canonical_chips:
         return  # 이미 정상
     domains = {
         c.get("domain")
@@ -540,12 +551,12 @@ def _normalize_qty_quick_replies(payload: dict) -> None:
     }
     domain = next(iter(domains)) if len(domains) == 1 else "TRANSACTION"
     data["quickReplies"] = [
-        {"label": label, "domain": domain} for label in _CANONICAL_QTY_CHIPS
+        {"label": label, "domain": domain} for label in canonical_chips
     ]
     logger.info(
         "[base_agent] Normalized qty quickReply chips: was %s, now %s",
         labels,
-        list(_CANONICAL_QTY_CHIPS),
+        list(canonical_chips),
     )
 
 
