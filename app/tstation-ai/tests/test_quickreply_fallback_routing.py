@@ -90,6 +90,7 @@ from services.tstation.chat import (
     _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
     _pickup_service_guard_event,
+    _past_event_page_event,
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
     _remove_home_quick_reply_chips,
@@ -227,6 +228,22 @@ def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
     assert event["template"] == "quickReply"
     assert "원복 또는 재사용이 어렵" in event["data"]["assistantResponse"]
     assert "1:1 문의하기" in _labels(event["data"]["quickReplies"])
+
+
+def test_past_event_page_event_routes_ended_event_list_queries() -> None:
+    for text in ("지난 이벤트 알려줘", "종료된 이벤트 알려줘", "끝난 행사 보여줘"):
+        event = _past_event_page_event(text)
+
+        assert event is not None
+        assert event["template"] == "quickReply"
+        assert "지난 이벤트" in event["data"]["assistantResponse"]
+        chips = event["data"]["quickReplies"]
+        assert _labels(chips) == ["지난 이벤트 보기", "진행 중인 이벤트"]
+        assert chips[0]["url"].endswith("/promotion/past-event-list")
+
+
+def test_past_event_page_event_does_not_hijack_restore_claims() -> None:
+    assert _past_event_page_event("종료된 이벤트 혜택 원복해줘") is None
 
 
 def test_tc210_price_policy_guard_denies_fake_vip_link() -> None:

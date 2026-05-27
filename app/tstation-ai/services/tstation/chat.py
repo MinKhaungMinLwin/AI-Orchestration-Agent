@@ -5096,6 +5096,45 @@ def _direct_tire_delivery_guard_event(user_text: str) -> dict | None:
     return event
 
 
+_PAST_EVENT_QUERY_RE = re.compile(
+    r"(?=.*(?:지난|종료(?:된|한)?|끝난|과거|예전|이전|마감(?:된)?))(?=.*(?:이벤트|행사))",
+    re.IGNORECASE,
+)
+_PAST_EVENT_RESTORE_RE = re.compile(r"원복|복구|재사용|다시\s*쓰|혜택", re.IGNORECASE)
+
+
+def _past_event_page_event(user_text: str) -> dict | None:
+    """Route past/ended event list inquiries to the official past-event page."""
+    if not user_text or not _PAST_EVENT_QUERY_RE.search(user_text):
+        return None
+    if _PAST_EVENT_RESTORE_RE.search(user_text):
+        return None
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_past_event_page",
+        "data": {
+            "assistantResponse": (
+                "지난 이벤트와 종료된 이벤트는 티스테이션 이벤트의 '지난 이벤트' 페이지에서 확인하실 수 있어요."
+            ),
+            "quickReplies": [
+                {
+                    "label": "지난 이벤트 보기",
+                    "url": CTAUrls.PROMOTION_PAST_EVENT_LIST,
+                    "domain": "DISCOVERY",
+                },
+                {
+                    "label": "진행 중인 이벤트",
+                    "url": CTAUrls.PROMOTION_EVENT_LIST,
+                    "domain": "DISCOVERY",
+                },
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _price_policy_guard_event(user_text: str) -> dict | None:
     """Return a deterministic price/coupon policy guard event, if one applies."""
     if not user_text:
@@ -7631,6 +7670,25 @@ class TStationChatServiceV2:
                     },
                 )
             return TStationChatResponse(content=_regional_canned_msg)
+
+        past_event_page_event = _past_event_page_event(last_user_msg)
+        if past_event_page_event is not None:
+            logger.info(
+                "[CHAT_V2] Past event page fast-path intercept: %s",
+                last_user_msg[:80],
+            )
+            guard_text = str((past_event_page_event.get("data") or {}).get("assistantResponse") or "")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(past_event_page_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=guard_text)
 
         price_policy_guard = _price_policy_guard_event(last_user_msg)
         if price_policy_guard is not None:
