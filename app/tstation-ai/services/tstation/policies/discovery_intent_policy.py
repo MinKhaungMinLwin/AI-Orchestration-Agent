@@ -47,51 +47,51 @@ _RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
     {"fuel_efficiency", "wet", "load", "speed"}
 )
 
-_PRODUCT_ALIASES: tuple[tuple[str, str], ...] = (
-    ("ventus air s", "Ventus air S"),
-    ("벤투스 air s", "Ventus air S"),
-    ("벤투스 에어 s", "Ventus air S"),
-    ("ventus s2 as", "Ventus S2 AS"),
-    ("벤투스 s2 as", "Ventus S2 AS"),
-    ("dynapro hpx", "Dynapro HPX"),
-    ("다이나프로 hpx", "Dynapro HPX"),
-    ("dynapro hp3", "Dynapro HP3"),
-    ("다이나프로 hp3", "Dynapro HP3"),
-    ("kinergy ex", "Kinergy EX"),
-    ("키너지 ex", "Kinergy EX"),
-    ("ion evo as", "iON evo AS"),
-    ("아이온 evo as", "iON evo AS"),
-    ("아이온 에보 as", "iON evo AS"),
-    ("ion evo", "iON evo"),
-    ("아이온 evo", "iON evo"),
-    ("아이온 에보", "iON evo"),
-    ("optimo", "Optimo"),
-    ("옵티모", "Optimo"),
-    ("미쉐린 cc2", "Michelin CC2"),
-    ("michelin cc2", "Michelin CC2"),
-    ("마일리지 플러스 2", "Mileage Plus 2"),
-    ("마일리지 플러스2", "Mileage Plus 2"),
-    ("마일리지 플러스 3", "Mileage Plus 3"),
-    ("마일리지 플러스3", "Mileage Plus 3"),
-    ("마일리지 타이어", "Mileage Plus"),
-    ("s fit as", "S FIT AS"),
-    ("s fit", "S FIT"),
-    ("에스핏", "S FIT"),
-    ("g fit as", "G FIT AS"),
-    ("g fit", "G FIT"),
-    ("지핏", "G FIT"),
-    ("i*cept", "i*cept"),
-    ("icept", "i*cept"),
-    ("아이셉트", "아이셉트"),
-    ("4s2", "4S2"),
-    ("dws06", "DWS06"),
-    ("cc7", "CC7"),
-    ("ps4s", "PS4S"),
-    ("ps as 4", "PS AS 4"),
-    ("psas4", "PS AS 4"),
-    ("cup2", "CUP2"),
-    ("cup 2", "CUP2"),
-    ("p7", "P7"),
+_PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
+    ("ventus air s", "Ventus air S", "HK"),
+    ("벤투스 air s", "Ventus air S", "HK"),
+    ("벤투스 에어 s", "Ventus air S", "HK"),
+    ("ventus s2 as", "Ventus S2 AS", "HK"),
+    ("벤투스 s2 as", "Ventus S2 AS", "HK"),
+    ("dynapro hpx", "Dynapro HPX", "HK"),
+    ("다이나프로 hpx", "Dynapro HPX", "HK"),
+    ("dynapro hp3", "Dynapro HP3", "HK"),
+    ("다이나프로 hp3", "Dynapro HP3", "HK"),
+    ("kinergy ex", "Kinergy EX", "HK"),
+    ("키너지 ex", "Kinergy EX", "HK"),
+    ("ion evo as", "iON evo AS", "HK"),
+    ("아이온 evo as", "iON evo AS", "HK"),
+    ("아이온 에보 as", "iON evo AS", "HK"),
+    ("ion evo", "iON evo", "HK"),
+    ("아이온 evo", "iON evo", "HK"),
+    ("아이온 에보", "iON evo", "HK"),
+    ("optimo", "Optimo", "HK"),
+    ("옵티모", "Optimo", "HK"),
+    ("미쉐린 cc2", "Michelin CC2", "MC"),
+    ("michelin cc2", "Michelin CC2", "MC"),
+    ("마일리지 플러스 2", "Mileage Plus 2", "HK"),
+    ("마일리지 플러스2", "Mileage Plus 2", "HK"),
+    ("마일리지 플러스 3", "Mileage Plus 3", "HK"),
+    ("마일리지 플러스3", "Mileage Plus 3", "HK"),
+    ("마일리지 타이어", "Mileage Plus", "HK"),
+    ("s fit as", "S FIT AS", "LF"),
+    ("s fit", "S FIT", "LF"),
+    ("에스핏", "S FIT", "LF"),
+    ("g fit as", "G FIT AS", "LF"),
+    ("g fit", "G FIT", "LF"),
+    ("지핏", "G FIT", "LF"),
+    ("i*cept", "i*cept", "HK"),
+    ("icept", "i*cept", "HK"),
+    ("아이셉트", "아이셉트", "HK"),
+    ("4s2", "4S2", "HK"),
+    ("dws06", "DWS06", "CT"),
+    ("cc7", "CC7", "CT"),
+    ("ps4s", "PS4S", "MC"),
+    ("ps as 4", "PS AS 4", "MC"),
+    ("psas4", "PS AS 4", "MC"),
+    ("cup2", "CUP2", "MC"),
+    ("cup 2", "CUP2", "MC"),
+    ("p7", "P7", "PI"),
 )
 _BRAND_ALIASES: tuple[tuple[str, str], ...] = (
     ("한국타이어", "HK"),
@@ -121,7 +121,7 @@ def normalize_tire_size(text: str) -> str | None:
 def extract_product_names(text: str) -> tuple[str, ...]:
     normalized = (text or "").casefold()
     products: list[str] = []
-    for needle, display_name in _PRODUCT_ALIASES:
+    for needle, display_name, _brand_cd in _PRODUCT_ALIASES:
         if needle.casefold() in normalized and display_name not in products:
             products.append(display_name)
     return tuple(products)
@@ -144,6 +144,14 @@ def extract_brand_codes(text: str) -> tuple[str, ...]:
 def extract_brand_code(text: str) -> str | None:
     brand_codes = extract_brand_codes(text)
     return brand_codes[0] if brand_codes else None
+
+
+def extract_product_brand_code(text: str) -> str | None:
+    normalized = (text or "").casefold()
+    for needle, _display_name, brand_cd in _PRODUCT_ALIASES:
+        if needle.casefold() in normalized:
+            return brand_cd
+    return None
 
 
 def extract_product_attribute_metrics(text: str) -> tuple[str, ...]:
@@ -196,7 +204,7 @@ def build_discovery_intent_frame(
     attribute_metrics = extract_product_attribute_metrics(text)
     brand_codes = extract_brand_codes(text)
     variant_constraints = extract_variant_constraints(text)
-    brand_cd = brand_codes[0] if brand_codes else None
+    brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
 
     entities: dict[str, Any] = {
         "product_names": products,
