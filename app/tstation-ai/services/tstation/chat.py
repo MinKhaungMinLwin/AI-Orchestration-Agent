@@ -6635,15 +6635,14 @@ class TStationChatServiceV2:
                 if goods_no:
                     return goods_no
 
-        size_match = re.search(r"\d{3}/\d{2}R\d{2}", text)
-        if size_match:
-            target_size = size_match.group(0)
+        target_size = normalize_tire_size(text)
+        if target_size:
             # filter_for_context keeps `tire_size_1`; include legacy aliases
             # for safety if another path ever stores the raw field name.
             same_size = [
                 item
                 for item in items
-                if (item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize") or "") == target_size
+                if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
             ]
 
             if len(same_size) == 1:
@@ -6667,6 +6666,47 @@ class TStationChatServiceV2:
                         return goods_no
 
         return None
+
+    @staticmethod
+    def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
+        """Extract confirmed product slots from a single-product `product` event."""
+        if event.get("template") != "product":
+            return None
+        event_data = event.get("data")
+        if not isinstance(event_data, dict):
+            return None
+        products = event_data.get("products")
+        metadata = event_data.get("metadata")
+        if not (
+            isinstance(products, list)
+            and len(products) == 1
+            and isinstance(metadata, list)
+            and len(metadata) == 1
+        ):
+            return None
+
+        product = products[0]
+        meta = metadata[0]
+        if not isinstance(product, dict) or not isinstance(meta, dict):
+            return None
+
+        goods_no = str(meta.get("goodsId") or meta.get("goodsNo") or "").strip()
+        if not goods_no:
+            return None
+
+        tire_size = normalize_tire_size(
+            str(product.get("titleTires") or product.get("tireSize") or product.get("size") or "")
+        )
+        tire_model = str(
+            product.get("titleProductName") or product.get("productName") or product.get("goodsNm") or ""
+        ).strip()
+
+        slot_values: dict[str, Any] = {"goods_no": goods_no}
+        if tire_size:
+            slot_values["tire_size"] = tire_size
+        if tire_model:
+            slot_values["tire_model"] = tire_model
+        return slot_values
 
     @staticmethod
     def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
@@ -10203,6 +10243,27 @@ class TStationChatServiceV2:
                             last_assistant_response_source = "code_multi_variant_recommendation"
                             event_data = event.get("data", {})
                 if isinstance(event_data, dict):
+                    confirmed_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event(event)
+                    if confirmed_product_slots:
+                        from schemas.tstation.slots import ConversationSlots
+
+                        base_slots = pending_slots
+                        if base_slots is None:
+                            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        updated_slots = base_slots.model_copy()
+                        for field, value in confirmed_product_slots.items():
+                            setattr(updated_slots, field, value)
+                        if (
+                            confirmed_product_slots.get("goods_no") is not None
+                            and getattr(base_slots, "goods_no", None) != confirmed_product_slots["goods_no"]
+                        ):
+                            updated_slots.payment_amount = None
+                        if updated_slots.model_dump() != base_slots.model_dump():
+                            pending_slots = updated_slots
+                            logger.info(
+                                "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
+                                confirmed_product_slots,
+                            )
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
                         event_data["assistantResponse"] = assistant_response

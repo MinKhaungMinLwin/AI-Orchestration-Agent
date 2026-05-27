@@ -2041,6 +2041,56 @@ def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tir
     )
 
 
+def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "벤투스 S1 에보 Z", "tire_size_1": "255/40R21"},
+                {"goods_no": "G2", "goods_nm": "벤투스 S1 에보 Z", "tire_size_1": "265/40R21"},
+            ],
+        }
+    ]
+
+    assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
+
+
+def test_confirmed_product_slot_values_from_single_product_event() -> None:
+    event = {
+        "template": "product",
+        "data": {
+            "products": [
+                {
+                    "titleProductName": "벤투스 S1 에보 Z",
+                    "titleTires": "265/40R21",
+                }
+            ],
+            "metadata": [{"goodsId": "G2"}],
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+        "goods_no": "G2",
+        "tire_model": "벤투스 S1 에보 Z",
+        "tire_size": "265/40R21",
+    }
+
+
+def test_confirmed_product_slot_values_ignore_multi_product_event() -> None:
+    event = {
+        "template": "product",
+        "data": {
+            "products": [
+                {"titleProductName": "벤투스 S1 에보 Z", "titleTires": "255/40R21"},
+                {"titleProductName": "벤투스 S1 에보 Z", "titleTires": "265/40R21"},
+            ],
+            "metadata": [{"goodsId": "G1"}, {"goodsId": "G2"}],
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) is None
+
+
 def test_vehicle_information_event_answers_staggered_fitment_question() -> None:
     event = _build_vehicle_information_event(
         {
