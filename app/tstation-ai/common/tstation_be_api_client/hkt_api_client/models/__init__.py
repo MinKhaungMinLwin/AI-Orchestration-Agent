@@ -101,6 +101,8 @@ from .set_order_form_ai_request import SetOrderFormAIRequest
 from .set_order_form_ai_response import SetOrderFormAIResponse
 from .set_order_form_ai_response_data_type_0 import SetOrderFormAIResponseDataType0
 from .shop_id_item import ShopIdItem
+from .store_complex_search_item import StoreComplexSearchItem
+from .store_complex_search_response import StoreComplexSearchResponse
 from .store_detail_response import StoreDetailResponse
 from .store_inventory_request import StoreInventoryRequest
 from .store_inventory_response import StoreInventoryResponse
@@ -210,6 +212,8 @@ __all__ = (
     "SetOrderFormAIResponse",
     "SetOrderFormAIResponseDataType0",
     "ShopIdItem",
+    "StoreComplexSearchItem",
+    "StoreComplexSearchResponse",
     "StoreDetailResponse",
     "StoreInventoryRequest",
     "StoreInventoryResponse",
