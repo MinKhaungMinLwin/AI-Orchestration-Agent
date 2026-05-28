@@ -118,6 +118,7 @@ from services.tstation.policies.delivery_policy_gate import (
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.template_mapper import current_discovery_response_decision, current_user_text
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
@@ -3181,6 +3182,68 @@ def test_non_self_vehicle_plate_only_prompts_for_owner_lookup() -> None:
     assert "차량번호 + 소유주명" in event["data"]["assistantResponse"]
     assert "소유주명만 이어서 입력" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["차번+이름으로 검색", "사이즈 직접 입력", "내 차량 보기"]
+
+
+def test_product_selection_prefers_latest_recommendation_context_over_stale_search() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "data": [
+                {
+                    "goods_no": "GSTALE000001",
+                    "goods_nm": "다이나프로 HPX",
+                    "tire_size_1": "265/50R20",
+                }
+            ],
+        },
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {
+                    "goods_no": "GREC00000001",
+                    "goods_nm": "윈터 아이셉트 에보3 X",
+                    "tire_size_1": "235/55R19",
+                },
+                {
+                    "goods_no": "GREC00000002",
+                    "goods_nm": "다이나프로 HPX",
+                    "tire_size_1": "235/55R19",
+                },
+            ],
+        },
+    ]
+
+    goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+        "다이나프로 HPX 235/55R19",
+        prev_tool_data,
+    )
+
+    assert goods_no == "GREC00000002"
+
+
+def test_single_product_search_result_updates_goods_no_and_tire_size() -> None:
+    slots = ConversationSlots(goods_no="GOLD00000001", tire_size="265/50R20")
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_product_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "GNEW00000001",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "235/55R19",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert changed is True
+    assert slots.goods_no == "GNEW00000001"
+    assert slots.tire_size == "235/55R19"
 
 
 def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:

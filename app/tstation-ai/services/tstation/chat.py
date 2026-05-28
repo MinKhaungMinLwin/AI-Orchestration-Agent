@@ -1527,9 +1527,18 @@ class StreamingMultiAgentCoordinator:
                     val = data.get(field)
                     if val:
                         tool_slots[field] = val
+                if tool_name == "search_product_tool" and tool_slots.get("goods_no"):
+                    tire_size = data.get("tire_size") or data.get("tire_size_1") or data.get("tireSize")
+                    if tire_size:
+                        tool_slots["tire_size"] = tire_size
 
         if tool_slots:
-            updated = slots.merge(ConversationSlots(**tool_slots))
+            if tool_slots.get("goods_no") and tool_slots.get("tire_size"):
+                updated = slots.merge(ConversationSlots(goods_no=tool_slots["goods_no"]))
+                remaining_slots = {key: value for key, value in tool_slots.items() if key != "goods_no"}
+                updated = updated.merge(ConversationSlots(**remaining_slots))
+            else:
+                updated = slots.merge(ConversationSlots(**tool_slots))
             if updated.model_dump() != slots.model_dump():
                 slots.__dict__.update(updated.__dict__)
                 changed = True
@@ -7148,7 +7157,7 @@ class TStationChatServiceV2:
 
         items: list[dict] = []
         PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
-        for entry in prev_tool_data:
+        for entry in reversed(prev_tool_data):
             if entry.get("tool") not in PRODUCT_LIST_TOOLS:
                 continue
             data = entry.get("data")
@@ -10232,6 +10241,8 @@ class TStationChatServiceV2:
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
             if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            if TStationChatServiceV2._resolve_goods_no_from_selection(user_query, prev_tool_data or []):
                 return None
             if not _is_bare_product_name_search_query(user_query):
                 return None
