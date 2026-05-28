@@ -2521,6 +2521,44 @@ def test_tc058_time_filter_location_excludes_blocked_noon_slot() -> None:
     assert "13:00, 14:00" in description
 
 
+def test_store_complex_search_location_includes_schedule_slots() -> None:
+    entry = {
+        "tool": "search_stores_complex_tool",
+        "args": {
+            "region_code": "분당",
+            "ev_specialty_only": True,
+            "cal_days": ["20260531"],
+            "open_only": True,
+        },
+        "data": {
+            "status": "success",
+            "data": {
+                "stores": [{
+                    "shop_id": "T00003",
+                    "shop_nm": "티스테이션 분당EV점",
+                    "road_addr_base": "경기 성남시 분당구",
+                    "is_ev_specialty": True,
+                    "is_open": True,
+                    "slots": [
+                        {"cal_day": "20260531", "tm": "1000"},
+                        {"cal_day": "20260531", "tm": "1500"},
+                    ],
+                }],
+            },
+        },
+    }
+
+    result = try_build_template([entry], "조건에 맞는 매장을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is True
+    description = result["data"]["stores"][0]["description"]
+    assert "전기차 특화점" in description
+    assert "예약 가능일:" in description
+    assert "10:00, 15:00" in description
+
+
 def test_tc076_location_mapper_respects_requested_store_limit_from_user_text() -> None:
     current_goal_type.set("store_finder")
     current_user_text.set("청량리역 주변 가까운 매장 순으로 5개만")

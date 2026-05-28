@@ -21,6 +21,7 @@ from common.brand_mapping import normalize_brand_name
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync_detailed as get_store_detail
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_schedule_api_store_schedule_get import sync_detailed as get_store_schedule
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_stores_complex_api_store_complex_search_get import sync_detailed as search_stores_complex
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_place_api_store_place_search_get import sync_detailed as search_place
 from common.tstation_be_api_client.hkt_api_client.models import ScheduleMode
 
@@ -1212,6 +1213,177 @@ def search_stores_tool(
         return _error_response(None, str(e), "Failed to search stores")
 
 
+def _next_cal_days(days: int = 3) -> list[str]:
+    today = datetime.now()
+    return [(today + timedelta(days=delta)).strftime("%Y%m%d") for delta in range(max(days, 0))]
+
+
+def _slot_hour(slot: object) -> int | None:
+    if isinstance(slot, int):
+        return slot
+    if isinstance(slot, str):
+        raw = slot.strip()
+        if not raw:
+            return None
+        head = raw.split(":", 1)[0]
+        if head.isdigit():
+            return int(head[:2]) if len(head) == 4 else int(head)
+    if isinstance(slot, dict):
+        return _slot_hour(slot.get("tm"))
+    return None
+
+
+def _store_address(store: dict) -> str:
+    road_full = " ".join(filter(None, [store.get("road_addr_base"), store.get("road_addr_dtl")])).strip()
+    jibun_full = " ".join(filter(None, [store.get("addr_base"), store.get("addr_dtl")])).strip()
+    return road_full or jibun_full
+
+
+def _first_qualifying_slot(slots: list, threshold_hour: int) -> tuple[str, list]:
+    by_day: dict[str, list] = {}
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        cal_day = str(slot.get("cal_day") or "").strip()
+        hour = _slot_hour(slot)
+        if not cal_day or hour is None or hour < threshold_hour:
+            continue
+        by_day.setdefault(cal_day, []).append(slot.get("tm") or f"{hour:02d}00")
+    if not by_day:
+        return "", []
+    cal_day = sorted(by_day.keys())[0]
+    qualifying = sorted(by_day[cal_day], key=lambda value: (_slot_hour(value) is None, _slot_hour(value) or 99))
+    return cal_day, qualifying
+
+
+@tool
+@tool_cache(ttl=300)
+def search_stores_complex_tool(
+    place_query: str | None = None,
+    region_code: str | None = None,
+    store_nm: str | None = None,
+    xpos: float | None = None,
+    ypos: float | None = None,
+    radius_km: float = 20.0,
+    svc_codes: List[str] | None = None,
+    all_my_t_only: bool = False,
+    imported_car_only: bool = False,
+    ev_specialty_only: bool = False,
+    ev_charge_available_only: bool = False,
+    installable_only: bool = False,
+    chl_sct_cd: str | None = None,
+    cal_days: List[str] | None = None,
+    open_only: bool = False,
+    time_after_hour: int | None = None,
+    sort_by: str | None = None,
+    limit: int = 10,
+):
+    """
+    지역/장소/매장명 + 특화 서비스 + 특정 날짜 영업/예약 가능 조건을 한 번에 검색합니다.
+
+    Use when the user combines store search with any of:
+    - 전기차 특화점/전기차 전문 매장 → ev_specialty_only=True
+    - 전기차 충전 가능 → ev_charge_available_only=True
+    - 수입차 특화 → imported_car_only=True
+    - 특정 날짜/요일 영업 또는 예약 가능 여부 → cal_days=["YYYYMMDD"], open_only=True
+    - N시 이후 예약 가능 → time_after_hour=N, cal_days provided. 날짜가 없으면 get_stores_with_time_filter_tool 사용.
+
+    Args:
+        place_query: 랜드마크/장소명. 있으면 좌표로 변환 후 주변 검색.
+        region_code: 지역명 키워드.
+        store_nm: 매장명 키워드.
+        xpos/ypos: 직접 전달된 좌표.
+        cal_days: 조회 날짜 목록(YYYYMMDD). 여러 날짜 가능.
+        open_only: True면 cal_days 기준 예약 가능 슬롯이 있는 매장만 반환.
+        time_after_hour: 해당 시각 이후 슬롯만 반환. 반드시 cal_days와 함께 사용.
+        limit: 최종 반환 매장 수.
+    """
+    final_limit = _clamp_int(limit, default=10, minimum=1, maximum=10)
+    normalized_store_nm = normalize_brand_name(store_nm) if store_nm else None
+    normalized_cal_days = [str(day).strip() for day in (cal_days or []) if str(day).strip()]
+
+    logger.debug(
+        "[TOOL][search_stores_complex_tool] place_query=%s, region_code=%s, store_nm=%s, xpos=%s, ypos=%s, "
+        "cal_days=%s, open_only=%s, time_after_hour=%s, ev_specialty_only=%s, ev_charge_available_only=%s",
+        place_query, region_code, normalized_store_nm, xpos, ypos, normalized_cal_days, open_only,
+        time_after_hour, ev_specialty_only, ev_charge_available_only,
+    )
+
+    try:
+        search_meta: dict[str, Any] = {
+            "source": "complex",
+            "requested_limit": final_limit,
+            "filters": {
+                "svc_codes": svc_codes,
+                "all_my_t_only": all_my_t_only,
+                "imported_car_only": imported_car_only,
+                "ev_specialty_only": ev_specialty_only,
+                "ev_charge_available_only": ev_charge_available_only,
+                "installable_only": installable_only,
+                "chl_sct_cd": chl_sct_cd,
+                "cal_days": normalized_cal_days,
+                "open_only": open_only,
+                "time_after_hour": time_after_hour,
+                "sort_by": sort_by,
+            },
+        }
+
+        if place_query:
+            place_response = search_place(client=get_client(), query=place_query, size=1)
+            if place_response.parsed is None:
+                return _error_response(
+                    place_response.status_code,
+                    f"HTTP {place_response.status_code}",
+                    place_response.content.decode(errors="ignore") or "Failed to search place",
+                )
+            place_data = _to_dict(place_response.parsed)
+            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
+            if found_xpos is None or found_ypos is None:
+                return _success_response(200, {"stores": [], "search": {**search_meta, "source": "place"}})
+            xpos, ypos = found_xpos, found_ypos
+            search_meta.update({"source": "place", "place_query": place_query, "place": _place_meta(place)})
+
+        response = search_stores_complex(
+            client=get_client(),
+            region_code=region_code,
+            store_nm=normalized_store_nm,
+            xpos=xpos,
+            ypos=ypos,
+            radius_km=radius_km,
+            svc_codes=svc_codes,
+            all_my_t_only=all_my_t_only,
+            imported_car_only=imported_car_only,
+            ev_specialty_only=ev_specialty_only,
+            ev_charge_available_only=ev_charge_available_only,
+            installable_only=installable_only,
+            chl_sct_cd=chl_sct_cd,
+            cal_days=normalized_cal_days or None,
+            open_only=open_only,
+            time_after_hour=time_after_hour,
+            sort_by=sort_by,
+            limit=final_limit,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search stores",
+            )
+        data = _to_dict(response.parsed)
+        if not isinstance(data, dict):
+            return _success_response(response.status_code, data)
+        stores = data.get("stores")
+        if isinstance(stores, list):
+            data["stores"] = stores[:final_limit]
+            search_meta["candidate_count"] = len(stores)
+            search_meta["returned_count"] = len(data["stores"])
+            data["search"] = search_meta
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][search_stores_complex_tool] Failed")
+        return _error_response(None, str(e), "Failed to search stores")
+
+
 @tool
 def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: bool = False):
     """
@@ -1437,8 +1609,8 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
     Use this tool when the user asks for stores available "N시 이후" / "저녁 N시" / "오후 N시"
     in a region, without specifying a particular store name or goods_no.
 
-    Fetches a broad store list for the region in parallel with checking today→+2 day reservation
-    slots per store, then returns pre-filtered raw store data for the location mapper.
+    Uses backend complex search for today→+2 day reservation slots, then returns pre-filtered
+    raw store data for the location mapper.
 
     Args:
         region_code (str): Region name (e.g., '인천', '부산', '강남').
@@ -1462,100 +1634,59 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
         region_code, time_threshold_hour,
     )
 
-    # Fetch more candidates than the UI can render. Filtering happens after schedule checks;
-    # using a small pre-filter limit can hide stores that actually have slots after the threshold.
-    list_result = _get_store_list_cached(region_code=region_code, limit=50)
-    if list_result.get("status") == "error":
-        return list_result
+    cal_days = _next_cal_days(3)
+    try:
+        response = search_stores_complex(
+            client=get_client(),
+            region_code=region_code,
+            cal_days=cal_days,
+            open_only=True,
+            time_after_hour=time_threshold_hour,
+            limit=50,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search stores",
+            )
+        data = _to_dict(response.parsed)
+    except Exception as e:
+        logger.exception("[TOOL][get_stores_with_time_filter_tool] complex search failed")
+        return _error_response(None, str(e), "Failed to search stores")
 
-    stores_raw = (list_result.get("data") or {}).get("stores") or []
-    if not stores_raw:
-        return _success_response(200, {
-            "stores_available": [],
-            "stores_unavailable": [],
-            "time_threshold_hour": time_threshold_hour,
-            "region_code": region_code,
-        })
-
-    today = datetime.now()
-    client = get_client()  # obtain in main thread so worker threads inherit the request context
-
-    def _slot_hour(slot: object) -> int | None:
-        """Return the hour part from BE slot shapes like 18, "18", "18:00", or "1800"."""
-        if isinstance(slot, int):
-            return slot
-        if isinstance(slot, str):
-            raw = slot.strip()
-            if not raw:
-                return None
-            head = raw.split(":", 1)[0]
-            if head.isdigit():
-                # "1800" is occasionally used as HHMM; keep "18" as-is.
-                return int(head[:2]) if len(head) == 4 else int(head)
-        return None
-
-    def _check_store(store: dict) -> tuple[bool, dict]:
-        shop_id = store.get("shop_id") or store.get("shop_seq")
-        shop_nm = store.get("shop_nm") or ""
-        # BE 매장 일부는 road_addr_* 가 null. 지번주소(addr_base/addr_dtl)로 폴백.
-        road_full = " ".join(filter(None, [store.get("road_addr_base"), store.get("road_addr_dtl")])).strip()
-        jibun_full = " ".join(filter(None, [store.get("addr_base"), store.get("addr_dtl")])).strip()
-        addr = road_full or jibun_full
-        tel = store.get("tel_no") or ""
-        list_is_all_my_t = bool(store.get("is_all_my_t") or False)
-
-        if not shop_id:
-            return False, {"shop_nm": shop_nm, "address": addr, "tel": tel, "reason": "매장 ID 없음"}
-
-        for delta in range(3):
-            cal_day = (today + timedelta(days=delta)).strftime("%Y%m%d")
-            try:
-                resp = get_store_detail(client=client, shop_id=shop_id, cal_day=cal_day)
-                if resp.parsed is None:
-                    continue
-                detail = _to_dict(resp.parsed)
-                slots = detail.get("available_slots") or []
-                qualifying = [s for s in slots if (_slot_hour(s) is not None and _slot_hour(s) >= time_threshold_hour)]
-                if qualifying:
-                    detail_road = " ".join(filter(None, [detail.get("road_addr_base"), detail.get("road_addr_dtl")])).strip()
-                    detail_jibun = " ".join(filter(None, [detail.get("addr_base"), detail.get("addr_dtl")])).strip()
-                    return True, {
-                        "shop_id": shop_id,
-                        "shop_nm": detail.get("shop_nm") or shop_nm,
-                        "address": detail_road or detail_jibun or addr,
-                        "tel": detail.get("tel_no") or tel,
-                        "cal_day": cal_day,
-                        "qualifying_slots": qualifying,
-                        "is_all_my_t": bool(detail.get("is_all_my_t", list_is_all_my_t)),
-                        "is_tna_delivery": bool(detail.get("is_tna_delivery", False)),
-                    }
-            except Exception:
-                logger.warning(
-                    "[get_stores_with_time_filter_tool] detail failed shop_id=%s day+%d", shop_id, delta,
-                )
-
-        return False, {
-            "shop_id": shop_id,
-            "shop_nm": shop_nm,
-            "address": addr,
-            "tel": tel,
-            "reason": f"{time_threshold_hour}시 이후 예약 가능 슬롯 없음",
-        }
-
+    stores_raw = data.get("stores") if isinstance(data, dict) else []
     stores_available: list[dict] = []
     stores_unavailable: list[dict] = []
+    if not isinstance(stores_raw, list):
+        stores_raw = []
 
-    with ThreadPoolExecutor(max_workers=min(len(stores_raw), 9)) as executor:
-        futures = {executor.submit(_check_store, store): store for store in stores_raw}
-        for future in as_completed(futures):
-            try:
-                is_avail, result = future.result()
-                if is_avail:
-                    stores_available.append(result)
-                else:
-                    stores_unavailable.append(result)
-            except Exception:
-                logger.warning("[get_stores_with_time_filter_tool] future failed")
+    for store in stores_raw:
+        if not isinstance(store, dict):
+            continue
+        shop_id = store.get("shop_id") or store.get("shop_seq")
+        slots = store.get("slots") if isinstance(store.get("slots"), list) else []
+        cal_day, qualifying = _first_qualifying_slot(slots, time_threshold_hour)
+        if not shop_id or not qualifying:
+            stores_unavailable.append({
+                "shop_id": shop_id,
+                "shop_nm": store.get("shop_nm") or "",
+                "address": _store_address(store),
+                "tel": store.get("tel_no") or "",
+                "reason": f"{time_threshold_hour}시 이후 예약 가능 슬롯 없음",
+            })
+            continue
+        stores_available.append({
+            "shop_id": shop_id,
+            "shop_nm": store.get("shop_nm") or "",
+            "address": _store_address(store),
+            "tel": store.get("tel_no") or "",
+            "cal_day": cal_day,
+            "qualifying_slots": qualifying,
+            "is_all_my_t": bool(store.get("is_all_my_t", False)),
+            "is_tna_delivery": bool(store.get("is_tna_delivery", False)),
+            "rating_idx": store.get("rating_idx"),
+        })
 
     stores_available.sort(key=lambda row: (
         row.get("cal_day") or "99999999",
@@ -1568,6 +1699,7 @@ def get_stores_with_time_filter_tool(region_code: str, time_threshold_hour: int)
         "stores_unavailable": stores_unavailable,
         "time_threshold_hour": time_threshold_hour,
         "region_code": region_code,
+        "cal_days": cal_days,
     })
 
 

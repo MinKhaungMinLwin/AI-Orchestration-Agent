@@ -273,6 +273,120 @@ def test_search_stores_blocks_foreign_region_business_place_fallback(monkeypatch
     assert [call.get("region_code") for call in store_calls] == ["베이징"]
 
 
+def test_search_stores_complex_tool_passes_specialty_and_schedule_filters(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_get_client():
+        return "client"
+
+    def fake_search_stores_complex(**kwargs):
+        calls.append(kwargs)
+        return _Response({
+            "stores": [{
+                "shop_id": "T00001",
+                "shop_nm": "티스테이션 분당점",
+                "is_ev_specialty": True,
+                "is_open": True,
+                "slots": [{"cal_day": "20260531", "tm": "1500"}],
+            }]
+        })
+
+    monkeypatch.setattr(tools, "get_client", fake_get_client)
+    monkeypatch.setattr(tools, "search_stores_complex", fake_search_stores_complex)
+
+    result = tools.search_stores_complex_tool.func(
+        region_code="분당",
+        ev_specialty_only=True,
+        cal_days=["20260531"],
+        open_only=True,
+        time_after_hour=15,
+        limit=5,
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["stores"][0]["shop_id"] == "T00001"
+    assert result["data"]["search"]["filters"]["cal_days"] == ["20260531"]
+    assert calls == [{
+        "client": "client",
+        "region_code": "분당",
+        "store_nm": None,
+        "xpos": None,
+        "ypos": None,
+        "radius_km": 20.0,
+        "svc_codes": None,
+        "all_my_t_only": False,
+        "imported_car_only": False,
+        "ev_specialty_only": True,
+        "ev_charge_available_only": False,
+        "installable_only": False,
+        "chl_sct_cd": None,
+        "cal_days": ["20260531"],
+        "open_only": True,
+        "time_after_hour": 15,
+        "sort_by": None,
+        "limit": 5,
+    }]
+
+
+def test_time_filter_tool_uses_complex_search_for_today_plus_two(monkeypatch):
+    calls: list[dict] = []
+
+    class FixedDatetime:
+        @staticmethod
+        def now():
+            from datetime import datetime
+
+            return datetime(2026, 5, 28)
+
+    def fake_get_client():
+        return "client"
+
+    def fake_search_stores_complex(**kwargs):
+        calls.append(kwargs)
+        return _Response({
+            "stores": [{
+                "shop_id": "T00002",
+                "shop_nm": "티스테이션 판교점",
+                "road_addr_base": "경기 성남시 분당구",
+                "tel_no": "031-000-0000",
+                "is_all_my_t": True,
+                "rating_idx": 4.7,
+                "slots": [
+                    {"cal_day": "20260528", "tm": "1400"},
+                    {"cal_day": "20260529", "tm": "1600"},
+                ],
+            }]
+        })
+
+    monkeypatch.setattr(tools, "datetime", FixedDatetime)
+    monkeypatch.setattr(tools, "get_client", fake_get_client)
+    monkeypatch.setattr(tools, "search_stores_complex", fake_search_stores_complex)
+
+    result = tools.get_stores_with_time_filter_tool.func(region_code="분당", time_threshold_hour=15)
+
+    assert result["status"] == "success"
+    assert calls == [{
+        "client": "client",
+        "region_code": "분당",
+        "cal_days": ["20260528", "20260529", "20260530"],
+        "open_only": True,
+        "time_after_hour": 15,
+        "limit": 50,
+    }]
+    available = result["data"]["stores_available"]
+    assert available == [{
+        "shop_id": "T00002",
+        "shop_nm": "티스테이션 판교점",
+        "address": "경기 성남시 분당구",
+        "tel": "031-000-0000",
+        "cal_day": "20260529",
+        "qualifying_slots": ["1600"],
+        "is_all_my_t": True,
+        "is_tna_delivery": False,
+        "rating_idx": 4.7,
+    }]
+
+
 def test_multi_store_schedule_uses_broader_mode_for_today_shop_without_logistics(monkeypatch):
     calls: list[tuple[list[str], str]] = []
 
