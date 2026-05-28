@@ -5787,6 +5787,12 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
 
 
+def _should_apply_product_attribute_resolver(user_text: str, called_tool_names: set[str]) -> bool:
+    if "get_product_description_tool" in called_tool_names:
+        return False
+    return _is_product_attribute_lookup_query(user_text)
+
+
 _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
     r"가격|얼마|재고|구매|주문|결제|장착|매장|근처|주변|할인|쿠폰|스마트\s*페이|스마트페이|"
     r"비교|보다|중에|뭐야|무슨|가능|어때|맞아|추천",
@@ -10887,7 +10893,10 @@ class TStationChatServiceV2:
                     last_assistant_response_source = event_response_source
                 event_data = event.get("data", {})
                 if event.get("template") == "listCar":
-                    if _should_replace_listcar_with_product_attribute_lookup(event, user_query):
+                    if (
+                        _should_apply_product_attribute_resolver(user_query, called_tool_names)
+                        and _should_replace_listcar_with_product_attribute_lookup(event, user_query)
+                    ):
                         product_attribute_resolution = await _resolve_product_attribute_with_code()
                         if product_attribute_resolution is not None:
                             code_events, attribute_event = product_attribute_resolution
@@ -11010,12 +11019,20 @@ class TStationChatServiceV2:
                     str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.DISCOVERY.value
                     and event.get("template") in {"product", "quickReply"}
                 ):
-                    deterministic_attribute_event = _build_product_attribute_event_from_search_results(
+                    apply_product_attribute_resolver = _should_apply_product_attribute_resolver(
                         user_query,
-                        search_product_tool_results,
+                        called_tool_names,
+                    )
+                    deterministic_attribute_event = (
+                        _build_product_attribute_event_from_search_results(
+                            user_query,
+                            search_product_tool_results,
+                        )
+                        if apply_product_attribute_resolver
+                        else None
                     )
                     if (
-                        _is_product_attribute_lookup_query(user_query)
+                        apply_product_attribute_resolver
                         and (
                             event.get("template") == "product"
                             or deterministic_attribute_event is None

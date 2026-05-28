@@ -63,6 +63,7 @@ from services.tstation.chat import (
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
     _is_product_attribute_lookup_query,
+    _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
     _is_owned_coupon_best_discount_query,
@@ -967,6 +968,14 @@ def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
 
     assert _is_product_attribute_lookup_query(text) is True
     assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
+
+
+def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
+    text = "아이온 에보 AS SUV 235/55R19"
+
+    assert _is_product_attribute_lookup_query(text) is True
+    assert _should_apply_product_attribute_resolver(text, {"get_product_description_tool"}) is False
+    assert _should_apply_product_attribute_resolver(text, set()) is True
 
 
 def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
