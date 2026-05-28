@@ -14,6 +14,7 @@ from services.tstation.agents.c_transaction_agent.tools import (
     get_store_inventory_tool,
     transaction_store_preview_tool,
     search_stores_tool,
+    search_stores_complex_tool,
     search_place_tool,
     get_nearby_stores_tool,
     get_store_list_tool,
@@ -78,6 +79,16 @@ Never fabricate values. Never expose internal IDs, backend field names, coordina
 - 사용자가 "5개"처럼 수량을 말하면 `limit=5`, 후보가 더 필요하면 `candidate_limit` 은 `limit` 보다 크게 유지한다.
 - v1은 날짜/요일 영업 여부, 예약 가능 시간, 상품 재고를 확인하지 않는다. 그런 조건이 있으면
   `search_stores_tool` 로 후보를 찾은 뒤 기존 상세/스케줄/재고 도구를 후속 호출한다.
+
+## STORE COMPLEX SEARCH — 지역/장소 + 특화 + 영업/스케줄 조합
+사용자가 지역/장소/매장명과 함께 전기차 특화, 전기차 충전, 수입차 특화, 서비스 보유,
+특정 날짜/요일 영업 여부 또는 예약 가능 시간 조건을 조합하면 `search_stores_complex_tool` 을 우선 사용한다.
+- 예: "분당에서 이번 주 일요일 영업하는 전기차 전문 매장" →
+  `search_stores_complex_tool(region_code="분당", ev_specialty_only=true, cal_days=["YYYYMMDD"], open_only=true)`
+- 예: "강남에서 토요일 오후 3시 이후 예약 가능한 전기차 충전 매장" →
+  `search_stores_complex_tool(region_code="강남", ev_charge_available_only=true, cal_days=["YYYYMMDD"], open_only=true, time_after_hour=15)`
+- 날짜가 명시되지 않고 "N시 이후"만 있으면 기존 Flow 5.5T인 `get_stores_with_time_filter_tool` 을 사용한다.
+  이 tool은 오늘~+2일을 자동으로 본다.
 
 Keep user-visible text short and mobile-friendly. Do not use markdown headings, bold/italic, or numbered prefixes.
 For code-mapped card results, respond with ONLY 1 short Korean sentence; the system renders card details from tool output.
@@ -2975,6 +2986,7 @@ class TransactionSubAgent(BaseAgent):
         "get_store_inventory_tool": "Inventory",
         "transaction_store_preview_tool": "Inventory",
         "search_stores_tool": "Store",
+        "search_stores_complex_tool": "Store",
         "search_place_tool": "Store",
         "get_nearby_stores_tool": "Store",
         "get_store_list_tool": "Store",
@@ -3006,6 +3018,7 @@ class TransactionSubAgent(BaseAgent):
             get_store_inventory_tool,
             transaction_store_preview_tool,
             search_stores_tool,
+            search_stores_complex_tool,
             search_place_tool,
             get_nearby_stores_tool,
             get_store_list_tool,
@@ -3054,6 +3067,7 @@ class TransactionSubAgent(BaseAgent):
                 get_store_inventory_tool,
                 transaction_store_preview_tool,
                 search_stores_tool,
+                search_stores_complex_tool,
                 search_place_tool,
                 get_nearby_stores_tool,
                 get_store_list_tool,

@@ -40,6 +40,7 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _comparison_query_with_recent_context,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
@@ -62,7 +63,9 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_product_comparison_query,
     _is_product_attribute_lookup_query,
+    _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
     _is_owned_coupon_best_discount_query,
@@ -118,6 +121,7 @@ from services.tstation.policies.delivery_policy_gate import (
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.template_mapper import current_discovery_response_decision, current_user_text
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
@@ -918,6 +922,59 @@ def test_product_comparison_uses_existing_search_results() -> None:
     assert "상위 등급" in event["data"]["assistantResponse"]
 
 
+def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
+    event = _build_product_comparison_event(
+        "다이나프로 hpx 랑 윈터 아이셉트 비교해줘",
+        [
+            (
+                "다이나프로 HPX",
+                {
+                    "goods_nm": "다이나프로 HPX",
+                    "slogan": "SUV용 사계절 컴포트 타이어",
+                    "rating": {"rating_avg": 4.8, "review_count": 12},
+                    "reviews": [{"gdas_cont": "승차감이 좋고 조용해서 장거리 주행이 편해요."}],
+                    "sale_prc": 249700,
+                },
+            ),
+            (
+                "윈터 아이셉트 에보3 X",
+                {
+                    "goods_nm": "윈터 아이셉트 에보3 X",
+                    "slogan": "겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어",
+                    "rating": {"rating_avg": 4.6, "review_count": 5},
+                    "reviews": [{"gdas_cont": "눈길 접지력이 안정적이라는 느낌이 있어요."}],
+                    "sale_prc": 256300,
+                },
+            ),
+        ],
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert "상품 특징과 리뷰 기준" in assistant
+    assert "SUV용 사계절 컴포트 타이어" in assistant
+    assert "눈길과 빙판" in assistant
+    assert "승차감이 좋고 조용" in assistant
+    assert "가격 기준" not in assistant
+    assert "249,700" not in assistant
+
+
+def test_generic_compare_text_is_product_comparison_query() -> None:
+    assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
+
+
+def test_description_compare_followup_reuses_previous_compare_products() -> None:
+    messages = [
+        {"role": "user", "content": "다이나프로 hpx 랑 윈터 아이셉트 비교해줘"},
+        {"role": "assistant", "content": "가격 기준으로는 다이나프로 HPX가 더 저렴해요."},
+        {"role": "user", "content": "상품 설명 비교"},
+    ]
+
+    query = _comparison_query_with_recent_context("상품 설명 비교", messages)
+
+    assert query == "Dynapro HPX랑 아이셉트 상품 설명 비교"
+
+
 def test_product_attribute_uses_existing_search_results_for_load_question() -> None:
     text = "내 차 하중이 좀 무거워. 짐을 많이 싣고 다니거든.. optimo 가 하중 버틸 수 있음?"
     text_token = current_user_text.set(text)
@@ -966,6 +1023,14 @@ def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
 
     assert _is_product_attribute_lookup_query(text) is True
     assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
+
+
+def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
+    text = "아이온 에보 AS SUV 235/55R19"
+
+    assert _is_product_attribute_lookup_query(text) is True
+    assert _should_apply_product_attribute_resolver(text, {"get_product_description_tool"}) is False
+    assert _should_apply_product_attribute_resolver(text, set()) is True
 
 
 def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
@@ -2543,6 +2608,49 @@ def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
     assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
+def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G000000310120", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R17"},
+                {"goods_no": "G000000318549", "goods_nm": "키너지 ST AS", "tire_size_1": "225/55R17"},
+                {"goods_no": "G000000312301", "goods_nm": "벤투스 V2 AS", "tire_size_1": "225/55R17"},
+            ],
+        }
+    ]
+
+    assert (
+        TStationChatServiceV2._resolve_goods_no_from_selection(
+            "벤투스 S2 AS 선택",
+            prev_tool_data,
+            current_tire_size="225/55R17",
+        )
+        == "G000000310120"
+    )
+
+
+def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R17"},
+                {"goods_no": "G2", "goods_nm": "벤투스 V2 AS", "tire_size_1": "225/55R17"},
+            ],
+        }
+    ]
+
+    assert (
+        TStationChatServiceV2._resolve_goods_no_from_selection(
+            "벤투스 선택",
+            prev_tool_data,
+            current_tire_size="225/55R17",
+        )
+        is None
+    )
+
+
 def test_confirmed_product_slot_values_from_single_product_event() -> None:
     event = {
         "template": "product",
@@ -3181,6 +3289,68 @@ def test_non_self_vehicle_plate_only_prompts_for_owner_lookup() -> None:
     assert "차량번호 + 소유주명" in event["data"]["assistantResponse"]
     assert "소유주명만 이어서 입력" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["차번+이름으로 검색", "사이즈 직접 입력", "내 차량 보기"]
+
+
+def test_product_selection_prefers_latest_recommendation_context_over_stale_search() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "data": [
+                {
+                    "goods_no": "GSTALE000001",
+                    "goods_nm": "다이나프로 HPX",
+                    "tire_size_1": "265/50R20",
+                }
+            ],
+        },
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {
+                    "goods_no": "GREC00000001",
+                    "goods_nm": "윈터 아이셉트 에보3 X",
+                    "tire_size_1": "235/55R19",
+                },
+                {
+                    "goods_no": "GREC00000002",
+                    "goods_nm": "다이나프로 HPX",
+                    "tire_size_1": "235/55R19",
+                },
+            ],
+        },
+    ]
+
+    goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+        "다이나프로 HPX 235/55R19",
+        prev_tool_data,
+    )
+
+    assert goods_no == "GREC00000002"
+
+
+def test_single_product_search_result_updates_goods_no_and_tire_size() -> None:
+    slots = ConversationSlots(goods_no="GOLD00000001", tire_size="265/50R20")
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_product_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "GNEW00000001",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "235/55R19",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert changed is True
+    assert slots.goods_no == "GNEW00000001"
+    assert slots.tire_size == "235/55R19"
 
 
 def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:

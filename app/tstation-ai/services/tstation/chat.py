@@ -1527,9 +1527,18 @@ class StreamingMultiAgentCoordinator:
                     val = data.get(field)
                     if val:
                         tool_slots[field] = val
+                if tool_name == "search_product_tool" and tool_slots.get("goods_no"):
+                    tire_size = data.get("tire_size") or data.get("tire_size_1") or data.get("tireSize")
+                    if tire_size:
+                        tool_slots["tire_size"] = tire_size
 
         if tool_slots:
-            updated = slots.merge(ConversationSlots(**tool_slots))
+            if tool_slots.get("goods_no") and tool_slots.get("tire_size"):
+                updated = slots.merge(ConversationSlots(goods_no=tool_slots["goods_no"]))
+                remaining_slots = {key: value for key, value in tool_slots.items() if key != "goods_no"}
+                updated = updated.merge(ConversationSlots(**remaining_slots))
+            else:
+                updated = slots.merge(ConversationSlots(**tool_slots))
             if updated.model_dump() != slots.model_dump():
                 slots.__dict__.update(updated.__dict__)
                 changed = True
@@ -5481,6 +5490,38 @@ def _pick_product_row_from_search_result(tool_result: dict, product_name: str, *
     return best_row
 
 
+_PRODUCT_COMPARE_TEXT_RE = re.compile(r"비교|차이|다른|달라|어느\s*게|뭐가\s*(?:더|나아|좋)", re.IGNORECASE)
+_PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
+    r"(?:상품\s*)?(?:설명|특징|장점|후기|리뷰)\s*비교|비교.*(?:설명|특징|장점|후기|리뷰)",
+    re.IGNORECASE,
+)
+
+
+def _product_comparison_names(user_text: str) -> tuple[str, ...]:
+    frame = build_discovery_intent_frame(user_text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    if len(product_names) < 2:
+        return ()
+    if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
+        return product_names
+    if frame.intent in {"product_search", "product_description"} and _PRODUCT_COMPARE_TEXT_RE.search(user_text):
+        return product_names
+    return ()
+
+
+def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) -> str:
+    if _product_comparison_names(user_text):
+        return user_text
+    if not _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text or ""):
+        return user_text
+    for message in reversed(messages[:-1]):
+        content = str(message.get("content") or "")
+        names = _product_comparison_names(content)
+        if len(names) >= 2:
+            return f"{names[0]}랑 {names[1]} 상품 설명 비교"
+    return user_text
+
+
 def _build_product_comparison_fallback_event(product_rows: list[tuple[str, dict | None]]) -> dict:
     found_rows = [(name, row) for name, row in product_rows if row is not None]
     missing_names = [name for name, row in product_rows if row is None]
@@ -5511,6 +5552,76 @@ def _build_product_comparison_fallback_event(product_rows: list[tuple[str, dict 
         }
 
     return {}
+
+
+def _clean_product_sentence(value: Any) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.strip(" -•")
+
+
+def _product_feature_summary(row: dict) -> str:
+    for key in ("slogan", "pc_prod_tech_desc", "pc_prod_remark_desc"):
+        summary = _clean_product_sentence(row.get(key))
+        if summary:
+            return summary[:120]
+
+    parts: list[str] = []
+    season = str(row.get("season_nm") or "").strip()
+    car_kind = str(row.get("car_knd_nm") or "").strip()
+    pattern = str(row.get("ptrn_d_nm") or row.get("big_goods_nm") or "").strip()
+    performance = str(row.get("goods_pfm_nm") or "").strip()
+    if pattern:
+        parts.append(pattern)
+    if season:
+        parts.append(season)
+    if car_kind:
+        parts.append(f"{car_kind}용")
+    if performance:
+        parts.append(performance)
+    return ", ".join(parts) if parts else "상세 특징 정보는 추가 확인이 필요해요"
+
+
+def _product_review_summary(row: dict) -> str:
+    rating = row.get("rating") if isinstance(row.get("rating"), dict) else {}
+    rating_avg = row.get("rating_avg") or row.get("rate") or rating.get("rating_avg")
+    review_count = row.get("review_count") or rating.get("review_count")
+    reviews = row.get("reviews")
+    review_text = ""
+    if isinstance(reviews, list):
+        for review in reviews:
+            if isinstance(review, dict):
+                review_text = _clean_product_sentence(review.get("gdas_cont") or review.get("content"))
+                if review_text:
+                    break
+    if review_text:
+        prefix = ""
+        if rating_avg and review_count:
+            prefix = f"평점 {rating_avg}, 리뷰 {review_count}건. "
+        return f"{prefix}대표 리뷰는 \"{review_text[:80]}\" 흐름입니다."
+    if rating_avg and review_count:
+        return f"평점 {rating_avg}, 리뷰 {review_count}건이 확인돼요."
+    if review_count:
+        return f"리뷰 {review_count}건이 확인돼요."
+    return "확인 가능한 리뷰 요약은 아직 없어요."
+
+
+def _build_product_feature_review_comparison(
+    left_name: str,
+    left_row: dict,
+    right_name: str,
+    right_row: dict,
+) -> str:
+    return "\n".join([
+        "상품 특징과 리뷰 기준으로 비교해드릴게요.",
+        "",
+        f"- {left_name}",
+        f"  - 특징: {_product_feature_summary(left_row)}",
+        f"  - 리뷰: {_product_review_summary(left_row)}",
+        f"- {right_name}",
+        f"  - 특징: {_product_feature_summary(right_row)}",
+        f"  - 리뷰: {_product_review_summary(right_row)}",
+    ])
 
 
 def _metric_label(metric: str) -> str:
@@ -5575,7 +5686,9 @@ def _build_product_comparison_event(
     sub_intent = str(frame.sub_intent or "")
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
 
-    if sub_intent == "grade_compare" or compare_metric in {"grade", "price_grade"}:
+    if not compare_metric and sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
+        assistant = _build_product_feature_review_comparison(left_name, left_row, right_name, right_row)
+    elif sub_intent == "grade_compare" or compare_metric in {"grade", "price_grade"}:
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
         if _grade_rank_value(left_grade) == _grade_rank_value(right_grade):
@@ -5666,10 +5779,9 @@ def _build_product_comparison_event_from_search_results(
     user_text: str,
     search_results: list[tuple[str, dict]],
 ) -> dict | None:
-    frame = build_discovery_intent_frame(user_text)
-    if frame.sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
+    product_names = _product_comparison_names(user_text)
+    if not product_names:
         return None
-    product_names = tuple(frame.entities.get("product_names") or ())
     if len(product_names) < 2 or not search_results:
         return None
 
@@ -5763,11 +5875,7 @@ def _build_product_attribute_event_from_search_results(
 
 
 def _is_product_comparison_query(user_text: str) -> bool:
-    frame = build_discovery_intent_frame(user_text)
-    if frame.sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
-        return False
-    product_names = tuple(frame.entities.get("product_names") or ())
-    return len(product_names) >= 2
+    return len(_product_comparison_names(user_text)) >= 2
 
 
 def _is_product_attribute_lookup_query(user_text: str) -> bool:
@@ -5776,6 +5884,12 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
     return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
+
+
+def _should_apply_product_attribute_resolver(user_text: str, called_tool_names: set[str]) -> bool:
+    if "get_product_description_tool" in called_tool_names:
+        return False
+    return _is_product_attribute_lookup_query(user_text)
 
 
 _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
@@ -7115,12 +7229,17 @@ class TStationChatServiceV2:
         return selected
 
     @staticmethod
-    def _resolve_goods_no_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
+    def _resolve_goods_no_from_selection(
+        user_text: str,
+        prev_tool_data: list[dict],
+        current_tire_size: str | None = None,
+    ) -> str | None:
         """Match a user's list-selection reply against the prior search_product_tool
         result and return the goods_no of the matched item.
 
         When a previous turn returned multiple products and the user responds with
-        an ordinal ("3.", "3번") or a name + size ("Ventus S2 AS 225/45R18"), this
+        an ordinal ("3.", "3번"), a name + size ("Ventus S2 AS 225/45R18"), or
+        a name-only pick with a confirmed tire_size already stored in slots, this
         lets the coordinator capture goods_no before any agent runs — so that the
         subsequent Discovery→Transaction handoff is not blocked by the "goods_no
         missing in slots" safety check (Discovery may skip calling the search tool
@@ -7128,9 +7247,11 @@ class TStationChatServiceV2:
 
         Matching strategy (first hit wins):
           1. Ordinal at the start of the message → items[idx-1]
-          2. Single item with matching tire_size
+          2. Single item with matching tire_size from the current text
           3. Multiple items with matching tire_size → pick the one whose goods_nm
              has the highest token overlap (≥2 tokens required to avoid false hits)
+          4. If the current text has no size but current_tire_size is known, use
+             that size as the candidate filter and require goods_nm token overlap.
 
         Only the most recent product-listing tool entry is inspected.
         Returns None when no confident match is found.
@@ -7148,7 +7269,7 @@ class TStationChatServiceV2:
 
         items: list[dict] = []
         PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
-        for entry in prev_tool_data:
+        for entry in reversed(prev_tool_data):
             if entry.get("tool") not in PRODUCT_LIST_TOOLS:
                 continue
             data = entry.get("data")
@@ -7173,7 +7294,8 @@ class TStationChatServiceV2:
                 if goods_no:
                     return goods_no
 
-        target_size = normalize_tire_size(text)
+        target_size_from_text = normalize_tire_size(text)
+        target_size = target_size_from_text or normalize_tire_size(current_tire_size or "")
         if target_size:
             # filter_for_context keeps `tire_size_1`; include legacy aliases
             # for safety if another path ever stores the raw field name.
@@ -7183,25 +7305,28 @@ class TStationChatServiceV2:
                 if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
             ]
 
-            if len(same_size) == 1:
+            if target_size_from_text and len(same_size) == 1:
                 goods_no = same_size[0].get("goods_no")
                 if goods_no:
                     return goods_no
 
-            if len(same_size) >= 2:
-                tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
-                best_item: dict | None = None
-                best_score = 0
-                for item in same_size:
-                    goods_nm = (item.get("goods_nm") or "").lower()
-                    score = sum(1 for tok in tokens if tok in goods_nm)
-                    if score > best_score:
-                        best_score = score
-                        best_item = item
-                if best_item is not None and best_score >= 2:
-                    goods_no = best_item.get("goods_no")
-                    if goods_no:
-                        return goods_no
+            tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+            best_item: dict | None = None
+            best_score = 0
+            tied = False
+            for item in same_size:
+                goods_nm = (item.get("goods_nm") or "").lower()
+                score = sum(1 for tok in tokens if tok in goods_nm)
+                if score > best_score:
+                    best_score = score
+                    best_item = item
+                    tied = False
+                elif score == best_score and score > 0:
+                    tied = True
+            if best_item is not None and best_score >= 2 and not tied:
+                goods_no = best_item.get("goods_no")
+                if goods_no:
+                    return goods_no
 
         return None
 
@@ -8188,7 +8313,9 @@ class TStationChatServiceV2:
             # before Transaction runs.
             if merged_slots.goods_no is None and prev_tool_data:
                 resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
-                    last_user_text, prev_tool_data
+                    last_user_text,
+                    prev_tool_data,
+                    current_tire_size=merged_slots.tire_size,
                 )
                 if resolved_goods_no:
                     merged_slots.goods_no = resolved_goods_no
@@ -10116,20 +10243,25 @@ class TStationChatServiceV2:
             )
 
         async def _resolve_product_comparison_with_code() -> tuple[list[dict], dict] | None:
-            frame = build_discovery_intent_frame(user_query)
-            if frame.sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
-                return None
-            product_names = tuple(frame.entities.get("product_names") or ())
+            comparison_query = _comparison_query_with_recent_context(user_query, messages)
+            product_names = _product_comparison_names(comparison_query)
             if len(product_names) < 2:
                 return None
+            frame = build_discovery_intent_frame(comparison_query)
+            tire_size = frame.entities.get("tire_size") or getattr(initial_slots, "tire_size", None)
 
             emitted_events: list[dict] = []
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_product_description_tool as _get_product_description_tool,
+            )
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
 
             product_rows: list[tuple[str, dict | None]] = []
             for product_name in product_names[:2]:
                 preferred_keyword = _preferred_product_search_keyword(product_name)
                 tool_input = {"keyword": preferred_keyword, "limit": 10}
+                if tire_size:
+                    tool_input["size"] = tire_size
                 emitted_events.append({
                     "type": "status",
                     "status": "tool_start",
@@ -10164,12 +10296,49 @@ class TStationChatServiceV2:
                     "tool": "search_product_tool",
                     "source_domain": "discovery",
                 })
-                product_rows.append((
-                    product_name,
-                    _pick_product_row_from_search_result(search_result, product_name, preferred_keyword),
-                ))
+                row = _pick_product_row_from_search_result(search_result, product_name, preferred_keyword)
+                if row and row.get("goods_no"):
+                    detail_input = {"goods_no": row["goods_no"]}
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "get_product_description_tool",
+                        "display_name": "상품 상세 정보 조회 중...",
+                        "source_domain": "discovery",
+                    })
+                    try:
+                        raw_detail = await asyncio.to_thread(_get_product_description_tool.invoke, detail_input)
+                        detail_result = _tool_result_dict(raw_detail)
+                    except Exception as exc:
+                        logger.exception("[PRODUCT_COMPARE] get_product_description_tool failed for %s", row["goods_no"])
+                        detail_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": str(exc),
+                            "data": {},
+                        }
+                    _record_code_tool_result("get_product_description_tool", detail_input, detail_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Description AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": detail_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": detail_input,
+                        "output": json.dumps(detail_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "get_product_description_tool",
+                        "source_domain": "discovery",
+                    })
+                    detail_data = _unwrap_tool_data(detail_result)
+                    if isinstance(detail_data, dict) and detail_data:
+                        row = {**row, **detail_data}
+                product_rows.append((product_name, row))
 
-            return emitted_events, _build_product_comparison_event(user_query, product_rows)
+            return emitted_events, _build_product_comparison_event(comparison_query, product_rows)
 
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
             frame = build_discovery_intent_frame(user_query)
@@ -10232,6 +10401,13 @@ class TStationChatServiceV2:
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
             if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            confirmed_tire_size = getattr(initial_slots, "tire_size", None) if initial_slots is not None else None
+            if TStationChatServiceV2._resolve_goods_no_from_selection(
+                user_query,
+                prev_tool_data or [],
+                current_tire_size=confirmed_tire_size,
+            ):
                 return None
             if not _is_bare_product_name_search_query(user_query):
                 return None
@@ -10876,7 +11052,10 @@ class TStationChatServiceV2:
                     last_assistant_response_source = event_response_source
                 event_data = event.get("data", {})
                 if event.get("template") == "listCar":
-                    if _should_replace_listcar_with_product_attribute_lookup(event, user_query):
+                    if (
+                        _should_apply_product_attribute_resolver(user_query, called_tool_names)
+                        and _should_replace_listcar_with_product_attribute_lookup(event, user_query)
+                    ):
                         product_attribute_resolution = await _resolve_product_attribute_with_code()
                         if product_attribute_resolution is not None:
                             code_events, attribute_event = product_attribute_resolution
@@ -10999,12 +11178,53 @@ class TStationChatServiceV2:
                     str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.DISCOVERY.value
                     and event.get("template") in {"product", "quickReply"}
                 ):
-                    deterministic_attribute_event = _build_product_attribute_event_from_search_results(
-                        user_query,
+                    comparison_query = _comparison_query_with_recent_context(user_query, messages)
+                    deterministic_compare_event = _build_product_comparison_event_from_search_results(
+                        comparison_query,
                         search_product_tool_results,
                     )
                     if (
-                        _is_product_attribute_lookup_query(user_query)
+                        _is_product_comparison_query(comparison_query)
+                        and (
+                            event.get("template") == "product"
+                            or deterministic_compare_event is None
+                            or _is_product_compare_missing_event(deterministic_compare_event)
+                        )
+                    ):
+                        product_compare_resolution = await _resolve_product_comparison_with_code()
+                        if product_compare_resolution is not None:
+                            code_events, deterministic_compare_event = product_compare_resolution
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    if deterministic_compare_event is not None:
+                        logger.info("[PRODUCT_COMPARE] replacing discovery event with product detail comparison")
+                        event = deterministic_compare_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_product_compare_resolver"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
+                    apply_product_attribute_resolver = _should_apply_product_attribute_resolver(
+                        user_query,
+                        called_tool_names,
+                    )
+                    deterministic_attribute_event = (
+                        _build_product_attribute_event_from_search_results(
+                            user_query,
+                            search_product_tool_results,
+                        )
+                        if apply_product_attribute_resolver
+                        else None
+                    )
+                    if (
+                        apply_product_attribute_resolver
                         and (
                             event.get("template") == "product"
                             or deterministic_attribute_event is None
@@ -11157,15 +11377,20 @@ class TStationChatServiceV2:
                 # Chip set is selected from called_tool_names so the fallback matches the
                 # conversation context (e.g., order list → order-related chips, not a generic
                 # "1:1 문의" pair which makes the order flow look broken).
-                if last_template == "quickReply" and isinstance(event_data, dict):
+                if (
+                    last_template == "quickReply"
+                    and isinstance(event_data, dict)
+                    and last_assistant_response_source != "code_product_compare_resolver"
+                ):
                     source_domain = str(event.get("source_domain", "ui_template")).lower()
                     if source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
+                        comparison_query = _comparison_query_with_recent_context(user_query, messages)
                         deterministic_compare_event = _build_product_comparison_event_from_search_results(
-                            user_query,
+                            comparison_query,
                             search_product_tool_results,
                         )
                         if (
-                            _is_product_comparison_query(user_query)
+                            _is_product_comparison_query(comparison_query)
                             and (
                                 deterministic_compare_event is None
                                 or _is_product_compare_missing_event(deterministic_compare_event)

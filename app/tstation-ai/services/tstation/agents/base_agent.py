@@ -683,6 +683,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_logistics_inventory_tool": "재고 확인 중...",
     "get_store_inventory_tool": "매장 재고 확인 중...",
     "search_stores_tool": "매장 검색 중...",
+    "search_stores_complex_tool": "매장 복합 검색 중...",
     "search_place_tool": "위치 검색 중...",
     "get_nearby_stores_tool": "주변 매장 검색 중...",
     "get_store_list_tool": "매장 목록 조회 중...",
@@ -716,6 +717,7 @@ class BaseAgent(ABC):
         "get_store_inventory_tool",
         "get_store_schedule_tool",
         "get_stores_with_time_filter_tool",
+        "search_stores_complex_tool",
         "search_product_tool",
         "get_products_recommendations_tool",
         "get_newest_products_tool",
@@ -1549,6 +1551,7 @@ class BaseAgent(ABC):
             "get_store_inventory_tool": {"location", "quickReply"},
             "get_store_schedule_tool": {"datepick"},
             "get_stores_with_time_filter_tool": {"location", "quickReply"},
+            "search_stores_complex_tool": {"location", "quickReply"},
             "search_product_tool": {"product", "quickReply"},
             "get_products_recommendations_tool": {"product", "quickReply"},
             "get_newest_products_tool": {"product", "quickReply"},
@@ -1562,6 +1565,7 @@ class BaseAgent(ABC):
         """Return a deterministic clarification when Transaction lacks required slots."""
         transaction_tools_requiring_slots = {
             "search_stores_tool",
+            "search_stores_complex_tool",
             "get_store_list_tool",
             "get_nearby_stores_tool",
             "get_store_inventory_tool",

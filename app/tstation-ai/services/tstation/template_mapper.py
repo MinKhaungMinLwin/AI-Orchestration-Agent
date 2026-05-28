@@ -203,6 +203,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "search_youtube_video_tool": "previewYoutube",
     # location
     "search_stores_tool": "location",
+    "search_stores_complex_tool": "location",
     "get_store_list_tool": "location",
     "get_nearby_stores_tool": "location",
     "transaction_store_preview_tool": "location",
@@ -543,7 +544,13 @@ def _store_quality_preference_response_text(tool_data_list: list[dict], count: i
         return None
     requested_region = ""
     sort_by = ""
-    for entry in _find_entries(tool_data_list, "search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"):
+    for entry in _find_entries(
+        tool_data_list,
+        "search_stores_tool",
+        "search_stores_complex_tool",
+        "get_store_list_tool",
+        "get_nearby_stores_tool",
+    ):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if not isinstance(args, dict):
             continue
@@ -2511,7 +2518,12 @@ def _store_result_limit(tool_data_list: list[dict]) -> int:
     if requested is not None:
         return requested
     for entry in reversed(tool_data_list):
-        if entry.get("tool") not in {"search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"}:
+        if entry.get("tool") not in {
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+        }:
             continue
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if not isinstance(args, dict) or args.get("limit") is None:
@@ -2534,6 +2546,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         and called_tools
         & {
             "search_stores_tool",
+            "search_stores_complex_tool",
             "get_store_list_tool",
             "get_nearby_stores_tool",
             "transaction_store_preview_tool",
@@ -2649,7 +2662,21 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # single-item clickable card implies a selection action that doesn't exist
     # and risks showing default-False fields (tnaDelivery/todayInstall) as if
     # they were authoritative when the list endpoint simply omits them.
-    has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+    complex_has_schedule_filter = False
+    for entry in _find_entries(tool_data_list, "search_stores_complex_tool"):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        raw = _unwrap(entry)
+        stores = raw.get("stores") if isinstance(raw, dict) else None
+        complex_has_schedule_filter = bool(
+            isinstance(args, dict)
+            and (args.get("cal_days") or args.get("open_only") or args.get("time_after_hour") is not None)
+        ) or bool(
+            isinstance(stores, list)
+            and any(isinstance(store, dict) and (store.get("slots") or store.get("is_open") is not None) for store in stores)
+        )
+        if complex_has_schedule_filter:
+            break
+    has_booking_signal = bool(called_tools & _BOOKING_SIGNAL_TOOLS) or complex_has_schedule_filter
     is_list_browsing = current_goal_type.get() == "store_finder"
     # Booking-implying intents that arrived via casual conversation ("구매한다고",
     # "재고 확인해줘", "와이퍼 예약좀") rather than the formal goal checklist.
@@ -2701,7 +2728,15 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     items, metadata = [], []
     stock_filtered_preview = False
     stock_filtered_region = ""
-    for entry in _find_entries(tool_data_list, "search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool", "transaction_store_preview_tool", "get_favorite_stores_tool"):
+    for entry in _find_entries(
+        tool_data_list,
+        "search_stores_tool",
+        "search_stores_complex_tool",
+        "get_store_list_tool",
+        "get_nearby_stores_tool",
+        "transaction_store_preview_tool",
+        "get_favorite_stores_tool",
+    ):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -2709,7 +2744,12 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not isinstance(stores, list):
             continue
         stock_labels_by_shop_id: dict[str, str] = {}
-        if entry.get("tool") in {"search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"}:
+        if entry.get("tool") in {
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+        }:
             if inventory_stock_labels and stock_filter_context:
                 stock_labels_by_shop_id.update(inventory_stock_labels)
                 args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
@@ -2829,6 +2869,21 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 description_lines.append(f"리뷰 {review_count}건")
             if services_text:
                 description_lines.append(f"서비스: {services_text}")
+            row_slots = row.get("slots") if isinstance(row.get("slots"), list) else []
+            slots_by_day: dict[str, set[int]] = {}
+            for slot in row_slots:
+                if not isinstance(slot, dict):
+                    continue
+                cal_day = _get_str(slot, "cal_day")
+                hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+                if cal_day and hour is not None and _is_bookable_hour(hour):
+                    slots_by_day.setdefault(cal_day, set()).add(hour)
+            if slots_by_day:
+                first_day = sorted(slots_by_day.keys())[0]
+                slot_text = ", ".join(f"{hour:02d}:00" for hour in sorted(slots_by_day[first_day])[:5])
+                description_lines.append(f"예약 가능일: {yyyymmdd_to_korean_date(first_day)}")
+                if slot_text:
+                    description_lines.append(f"예약 가능 시간: {slot_text}")
             if stock_label:
                 description_lines.append(f"[{stock_label}]")
             description = "\n ".join(description_lines)
@@ -2857,6 +2912,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             for entry in _find_entries(
                 tool_data_list,
                 "search_stores_tool",
+                "search_stores_complex_tool",
                 "get_store_list_tool",
                 "get_nearby_stores_tool",
                 "transaction_store_preview_tool",
@@ -2890,7 +2946,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # yield 1 store do NOT loop — the user hasn't named that store yet, so
     # we must render the card for selection.
     called_with_store_nm = False
-    for entry in _find_entries(tool_data_list, "search_stores_tool", "get_store_list_tool"):
+    for entry in _find_entries(tool_data_list, "search_stores_tool", "search_stores_complex_tool", "get_store_list_tool"):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if isinstance(args, dict) and args.get("store_nm"):
             called_with_store_nm = True
@@ -2916,7 +2972,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
-        bool(called_tools & _BOOKING_SIGNAL_TOOLS)
+        has_booking_signal
         or _is_goal_booking_followup()
         or has_booking_intent
         or current_return_visit_store_flow.get()
@@ -2963,6 +3019,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         for entry in _find_entries(
             tool_data_list,
             "search_stores_tool",
+            "search_stores_complex_tool",
             "get_store_list_tool",
             "get_nearby_stores_tool",
         ):
@@ -3862,6 +3919,7 @@ _MAPPERS: dict[str, Any] = {
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
     "search_stores_tool": _map_location,
+    "search_stores_complex_tool": _map_location,
     "get_store_list_tool": _map_location,
     "get_nearby_stores_tool": _map_location,
     "transaction_store_preview_tool": _map_location,
@@ -3945,6 +4003,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("search_youtube_video_tool", _map_preview_youtube),
         ("transfer_to_qna_tool", _map_qna_complete),
         ("get_stores_with_time_filter_tool", _map_time_filter_location),
+        ("search_stores_complex_tool", _map_location),
         ("search_stores_tool", _map_location),
         ("get_nearby_stores_tool", _map_location),
         ("get_store_list_tool", _map_location),
