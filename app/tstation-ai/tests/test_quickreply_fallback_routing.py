@@ -40,6 +40,7 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _comparison_query_with_recent_context,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
@@ -62,6 +63,7 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_product_comparison_query,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
@@ -918,6 +920,59 @@ def test_product_comparison_uses_existing_search_results() -> None:
     assert event["assistant_response_source"] == "code_product_compare_resolver"
     assert "벤투스 에어S" in event["data"]["assistantResponse"]
     assert "상위 등급" in event["data"]["assistantResponse"]
+
+
+def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
+    event = _build_product_comparison_event(
+        "다이나프로 hpx 랑 윈터 아이셉트 비교해줘",
+        [
+            (
+                "다이나프로 HPX",
+                {
+                    "goods_nm": "다이나프로 HPX",
+                    "slogan": "SUV용 사계절 컴포트 타이어",
+                    "rating": {"rating_avg": 4.8, "review_count": 12},
+                    "reviews": [{"gdas_cont": "승차감이 좋고 조용해서 장거리 주행이 편해요."}],
+                    "sale_prc": 249700,
+                },
+            ),
+            (
+                "윈터 아이셉트 에보3 X",
+                {
+                    "goods_nm": "윈터 아이셉트 에보3 X",
+                    "slogan": "겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어",
+                    "rating": {"rating_avg": 4.6, "review_count": 5},
+                    "reviews": [{"gdas_cont": "눈길 접지력이 안정적이라는 느낌이 있어요."}],
+                    "sale_prc": 256300,
+                },
+            ),
+        ],
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert "상품 특징과 리뷰 기준" in assistant
+    assert "SUV용 사계절 컴포트 타이어" in assistant
+    assert "눈길과 빙판" in assistant
+    assert "승차감이 좋고 조용" in assistant
+    assert "가격 기준" not in assistant
+    assert "249,700" not in assistant
+
+
+def test_generic_compare_text_is_product_comparison_query() -> None:
+    assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
+
+
+def test_description_compare_followup_reuses_previous_compare_products() -> None:
+    messages = [
+        {"role": "user", "content": "다이나프로 hpx 랑 윈터 아이셉트 비교해줘"},
+        {"role": "assistant", "content": "가격 기준으로는 다이나프로 HPX가 더 저렴해요."},
+        {"role": "user", "content": "상품 설명 비교"},
+    ]
+
+    query = _comparison_query_with_recent_context("상품 설명 비교", messages)
+
+    assert query == "Dynapro HPX랑 아이셉트 상품 설명 비교"
 
 
 def test_product_attribute_uses_existing_search_results_for_load_question() -> None:
