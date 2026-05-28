@@ -2608,6 +2608,49 @@ def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
     assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
+def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G000000310120", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R17"},
+                {"goods_no": "G000000318549", "goods_nm": "키너지 ST AS", "tire_size_1": "225/55R17"},
+                {"goods_no": "G000000312301", "goods_nm": "벤투스 V2 AS", "tire_size_1": "225/55R17"},
+            ],
+        }
+    ]
+
+    assert (
+        TStationChatServiceV2._resolve_goods_no_from_selection(
+            "벤투스 S2 AS 선택",
+            prev_tool_data,
+            current_tire_size="225/55R17",
+        )
+        == "G000000310120"
+    )
+
+
+def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R17"},
+                {"goods_no": "G2", "goods_nm": "벤투스 V2 AS", "tire_size_1": "225/55R17"},
+            ],
+        }
+    ]
+
+    assert (
+        TStationChatServiceV2._resolve_goods_no_from_selection(
+            "벤투스 선택",
+            prev_tool_data,
+            current_tire_size="225/55R17",
+        )
+        is None
+    )
+
+
 def test_confirmed_product_slot_values_from_single_product_event() -> None:
     event = {
         "template": "product",

@@ -7229,12 +7229,17 @@ class TStationChatServiceV2:
         return selected
 
     @staticmethod
-    def _resolve_goods_no_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
+    def _resolve_goods_no_from_selection(
+        user_text: str,
+        prev_tool_data: list[dict],
+        current_tire_size: str | None = None,
+    ) -> str | None:
         """Match a user's list-selection reply against the prior search_product_tool
         result and return the goods_no of the matched item.
 
         When a previous turn returned multiple products and the user responds with
-        an ordinal ("3.", "3번") or a name + size ("Ventus S2 AS 225/45R18"), this
+        an ordinal ("3.", "3번"), a name + size ("Ventus S2 AS 225/45R18"), or
+        a name-only pick with a confirmed tire_size already stored in slots, this
         lets the coordinator capture goods_no before any agent runs — so that the
         subsequent Discovery→Transaction handoff is not blocked by the "goods_no
         missing in slots" safety check (Discovery may skip calling the search tool
@@ -7242,9 +7247,11 @@ class TStationChatServiceV2:
 
         Matching strategy (first hit wins):
           1. Ordinal at the start of the message → items[idx-1]
-          2. Single item with matching tire_size
+          2. Single item with matching tire_size from the current text
           3. Multiple items with matching tire_size → pick the one whose goods_nm
              has the highest token overlap (≥2 tokens required to avoid false hits)
+          4. If the current text has no size but current_tire_size is known, use
+             that size as the candidate filter and require goods_nm token overlap.
 
         Only the most recent product-listing tool entry is inspected.
         Returns None when no confident match is found.
@@ -7287,7 +7294,8 @@ class TStationChatServiceV2:
                 if goods_no:
                     return goods_no
 
-        target_size = normalize_tire_size(text)
+        target_size_from_text = normalize_tire_size(text)
+        target_size = target_size_from_text or normalize_tire_size(current_tire_size or "")
         if target_size:
             # filter_for_context keeps `tire_size_1`; include legacy aliases
             # for safety if another path ever stores the raw field name.
@@ -7297,25 +7305,28 @@ class TStationChatServiceV2:
                 if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
             ]
 
-            if len(same_size) == 1:
+            if target_size_from_text and len(same_size) == 1:
                 goods_no = same_size[0].get("goods_no")
                 if goods_no:
                     return goods_no
 
-            if len(same_size) >= 2:
-                tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
-                best_item: dict | None = None
-                best_score = 0
-                for item in same_size:
-                    goods_nm = (item.get("goods_nm") or "").lower()
-                    score = sum(1 for tok in tokens if tok in goods_nm)
-                    if score > best_score:
-                        best_score = score
-                        best_item = item
-                if best_item is not None and best_score >= 2:
-                    goods_no = best_item.get("goods_no")
-                    if goods_no:
-                        return goods_no
+            tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+            best_item: dict | None = None
+            best_score = 0
+            tied = False
+            for item in same_size:
+                goods_nm = (item.get("goods_nm") or "").lower()
+                score = sum(1 for tok in tokens if tok in goods_nm)
+                if score > best_score:
+                    best_score = score
+                    best_item = item
+                    tied = False
+                elif score == best_score and score > 0:
+                    tied = True
+            if best_item is not None and best_score >= 2 and not tied:
+                goods_no = best_item.get("goods_no")
+                if goods_no:
+                    return goods_no
 
         return None
 
@@ -8302,7 +8313,9 @@ class TStationChatServiceV2:
             # before Transaction runs.
             if merged_slots.goods_no is None and prev_tool_data:
                 resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
-                    last_user_text, prev_tool_data
+                    last_user_text,
+                    prev_tool_data,
+                    current_tire_size=merged_slots.tire_size,
                 )
                 if resolved_goods_no:
                     merged_slots.goods_no = resolved_goods_no
@@ -10389,7 +10402,12 @@ class TStationChatServiceV2:
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
             if domains != [MultiAgentDomain.Domain.DISCOVERY]:
                 return None
-            if TStationChatServiceV2._resolve_goods_no_from_selection(user_query, prev_tool_data or []):
+            confirmed_tire_size = getattr(initial_slots, "tire_size", None) if initial_slots is not None else None
+            if TStationChatServiceV2._resolve_goods_no_from_selection(
+                user_query,
+                prev_tool_data or [],
+                current_tire_size=confirmed_tire_size,
+            ):
                 return None
             if not _is_bare_product_name_search_query(user_query):
                 return None
