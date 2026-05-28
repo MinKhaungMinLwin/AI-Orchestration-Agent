@@ -24,7 +24,7 @@ def _get_kwargs(
     ev_charge_available_only: bool | Unset = False,
     installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
-    cal_day: None | str | Unset = UNSET,
+    cal_days: list[str] | None | Unset = UNSET,
     open_only: bool | Unset = False,
     time_after_hour: int | None | Unset = UNSET,
     sort_by: None | str | Unset = UNSET,
@@ -90,12 +90,15 @@ def _get_kwargs(
         json_chl_sct_cd = chl_sct_cd
     params["chl_sct_cd"] = json_chl_sct_cd
 
-    json_cal_day: None | str | Unset
-    if isinstance(cal_day, Unset):
-        json_cal_day = UNSET
+    json_cal_days: list[str] | None | Unset
+    if isinstance(cal_days, Unset):
+        json_cal_days = UNSET
+    elif isinstance(cal_days, list):
+        json_cal_days = cal_days
+
     else:
-        json_cal_day = cal_day
-    params["cal_day"] = json_cal_day
+        json_cal_days = cal_days
+    params["cal_days"] = json_cal_days
 
     params["open_only"] = open_only
 
@@ -171,7 +174,7 @@ def sync_detailed(
     ev_charge_available_only: bool | Unset = False,
     installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
-    cal_day: None | str | Unset = UNSET,
+    cal_days: list[str] | None | Unset = UNSET,
     open_only: bool | Unset = False,
     time_after_hour: int | None | Unset = UNSET,
     sort_by: None | str | Unset = UNSET,
@@ -179,8 +182,8 @@ def sync_detailed(
 ) -> Response[HTTPValidationError | StoreComplexSearchResponse]:
     """매장 복합 검색
 
-     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_day`가 있으면
-    `is_open_on_cal_day`와 `available_slots`를 별도로 반환합니다.
+     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜들의 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_days`가 있으면
+    `is_open`과 `slots`를 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
@@ -195,9 +198,9 @@ def sync_detailed(
         ev_charge_available_only (bool | Unset): True 이면 전기차 충전 가능 매장만 조회 Default: False.
         installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회 Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
-        cal_day (None | str | Unset): 영업/예약 조회 날짜 (YYYYMMDD)
-        open_only (bool | Unset): True 이면 cal_day 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
-        time_after_hour (int | None | Unset): cal_day 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
+        cal_days (list[str] | None | Unset): 영업/예약 조회 날짜 목록 (YYYYMMDD). 여러 번 전달 가능.
+        open_only (bool | Unset): True 이면 cal_days 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
+        time_after_hour (int | None | Unset): cal_days 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
         sort_by (None | str | Unset): 정렬 기준: rating, review_count, distance. 미지정 시 기존 매장 목록 정렬과
             동일.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
@@ -223,7 +226,7 @@ def sync_detailed(
         ev_charge_available_only=ev_charge_available_only,
         installable_only=installable_only,
         chl_sct_cd=chl_sct_cd,
-        cal_day=cal_day,
+        cal_days=cal_days,
         open_only=open_only,
         time_after_hour=time_after_hour,
         sort_by=sort_by,
@@ -252,7 +255,7 @@ def sync(
     ev_charge_available_only: bool | Unset = False,
     installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
-    cal_day: None | str | Unset = UNSET,
+    cal_days: list[str] | None | Unset = UNSET,
     open_only: bool | Unset = False,
     time_after_hour: int | None | Unset = UNSET,
     sort_by: None | str | Unset = UNSET,
@@ -260,8 +263,8 @@ def sync(
 ) -> HTTPValidationError | StoreComplexSearchResponse | None:
     """매장 복합 검색
 
-     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_day`가 있으면
-    `is_open_on_cal_day`와 `available_slots`를 별도로 반환합니다.
+     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜들의 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_days`가 있으면
+    `is_open`과 `slots`를 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
@@ -276,9 +279,9 @@ def sync(
         ev_charge_available_only (bool | Unset): True 이면 전기차 충전 가능 매장만 조회 Default: False.
         installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회 Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
-        cal_day (None | str | Unset): 영업/예약 조회 날짜 (YYYYMMDD)
-        open_only (bool | Unset): True 이면 cal_day 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
-        time_after_hour (int | None | Unset): cal_day 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
+        cal_days (list[str] | None | Unset): 영업/예약 조회 날짜 목록 (YYYYMMDD). 여러 번 전달 가능.
+        open_only (bool | Unset): True 이면 cal_days 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
+        time_after_hour (int | None | Unset): cal_days 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
         sort_by (None | str | Unset): 정렬 기준: rating, review_count, distance. 미지정 시 기존 매장 목록 정렬과
             동일.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
@@ -305,7 +308,7 @@ def sync(
         ev_charge_available_only=ev_charge_available_only,
         installable_only=installable_only,
         chl_sct_cd=chl_sct_cd,
-        cal_day=cal_day,
+        cal_days=cal_days,
         open_only=open_only,
         time_after_hour=time_after_hour,
         sort_by=sort_by,
@@ -328,7 +331,7 @@ async def asyncio_detailed(
     ev_charge_available_only: bool | Unset = False,
     installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
-    cal_day: None | str | Unset = UNSET,
+    cal_days: list[str] | None | Unset = UNSET,
     open_only: bool | Unset = False,
     time_after_hour: int | None | Unset = UNSET,
     sort_by: None | str | Unset = UNSET,
@@ -336,8 +339,8 @@ async def asyncio_detailed(
 ) -> Response[HTTPValidationError | StoreComplexSearchResponse]:
     """매장 복합 검색
 
-     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_day`가 있으면
-    `is_open_on_cal_day`와 `available_slots`를 별도로 반환합니다.
+     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜들의 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_days`가 있으면
+    `is_open`과 `slots`를 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
@@ -352,9 +355,9 @@ async def asyncio_detailed(
         ev_charge_available_only (bool | Unset): True 이면 전기차 충전 가능 매장만 조회 Default: False.
         installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회 Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
-        cal_day (None | str | Unset): 영업/예약 조회 날짜 (YYYYMMDD)
-        open_only (bool | Unset): True 이면 cal_day 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
-        time_after_hour (int | None | Unset): cal_day 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
+        cal_days (list[str] | None | Unset): 영업/예약 조회 날짜 목록 (YYYYMMDD). 여러 번 전달 가능.
+        open_only (bool | Unset): True 이면 cal_days 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
+        time_after_hour (int | None | Unset): cal_days 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
         sort_by (None | str | Unset): 정렬 기준: rating, review_count, distance. 미지정 시 기존 매장 목록 정렬과
             동일.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
@@ -380,7 +383,7 @@ async def asyncio_detailed(
         ev_charge_available_only=ev_charge_available_only,
         installable_only=installable_only,
         chl_sct_cd=chl_sct_cd,
-        cal_day=cal_day,
+        cal_days=cal_days,
         open_only=open_only,
         time_after_hour=time_after_hour,
         sort_by=sort_by,
@@ -407,7 +410,7 @@ async def asyncio(
     ev_charge_available_only: bool | Unset = False,
     installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
-    cal_day: None | str | Unset = UNSET,
+    cal_days: list[str] | None | Unset = UNSET,
     open_only: bool | Unset = False,
     time_after_hour: int | None | Unset = UNSET,
     sort_by: None | str | Unset = UNSET,
@@ -415,8 +418,8 @@ async def asyncio(
 ) -> HTTPValidationError | StoreComplexSearchResponse | None:
     """매장 복합 검색
 
-     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_day`가 있으면
-    `is_open_on_cal_day`와 `available_slots`를 별도로 반환합니다.
+     지역/매장명/좌표 조건에 특화 서비스, 서비스 코드, 특정 날짜들의 영업 여부, 예약 가능 시간 조건을 함께 적용해 매장을 검색합니다. `cal_days`가 있으면
+    `is_open`과 `slots`를 반환합니다.
 
     Args:
         region_code (None | str | Unset): 지역 검색어
@@ -431,9 +434,9 @@ async def asyncio(
         ev_charge_available_only (bool | Unset): True 이면 전기차 충전 가능 매장만 조회 Default: False.
         installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회 Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
-        cal_day (None | str | Unset): 영업/예약 조회 날짜 (YYYYMMDD)
-        open_only (bool | Unset): True 이면 cal_day 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
-        time_after_hour (int | None | Unset): cal_day 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
+        cal_days (list[str] | None | Unset): 영업/예약 조회 날짜 목록 (YYYYMMDD). 여러 번 전달 가능.
+        open_only (bool | Unset): True 이면 cal_days 기준 예약 가능 슬롯이 있는 매장만 반환 Default: False.
+        time_after_hour (int | None | Unset): cal_days 기준 이 시각 이후 예약 가능 슬롯이 있는 매장만 반환
         sort_by (None | str | Unset): 정렬 기준: rating, review_count, distance. 미지정 시 기존 매장 목록 정렬과
             동일.
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
@@ -461,7 +464,7 @@ async def asyncio(
             ev_charge_available_only=ev_charge_available_only,
             installable_only=installable_only,
             chl_sct_cd=chl_sct_cd,
-            cal_day=cal_day,
+            cal_days=cal_days,
             open_only=open_only,
             time_after_hour=time_after_hour,
             sort_by=sort_by,

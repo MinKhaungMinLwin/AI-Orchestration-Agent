@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.store_schedule_slot import StoreScheduleSlot
+
 
 T = TypeVar("T", bound="StoreComplexSearchItem")
 
@@ -47,9 +51,10 @@ class StoreComplexSearchItem:
         rating_idx (float | None | Unset): 매장 평점 환산 지수 (ET_SHOP_SCR_INFO.SHOP_EVAL_CVRT_IDX). 평점 없으면 None.
         review_count (int | None | Unset): 정상 리뷰 수 (ET_SHOP_REV_INFO.SHOP_REV_STAT_SCT_CD = '100').
             sort_by='review_count' 정렬 시에만 계산되어 채워짐. 그 외에는 None.
-        is_open_on_cal_day (bool | None | Unset): cal_day 기준 영업 여부. cal_day 미입력 시 None. 현재 예약 가능 슬롯이 1개 이상 있으면 True, 없으면
-            False.
-        available_slots (list[str] | Unset): cal_day 기준 예약 가능 시간 슬롯 목록. cal_day 미입력 시 빈 배열.
+        is_open (bool | None | Unset): cal_days 기준 영업/예약 가능 여부. cal_days 미입력 시 None. 시간 조건 적용 후 예약 가능 슬롯이 1개 이상 있으면
+            True, 없으면 False.
+        slots (list[StoreScheduleSlot] | Unset): cal_days 기준 예약 가능 시간 슬롯 목록. get_store_schedule 의 StoreScheduleSlot 형식과
+            동일.
     """
 
     shop_id: str
@@ -75,8 +80,8 @@ class StoreComplexSearchItem:
     distance_km: float | None | Unset = UNSET
     rating_idx: float | None | Unset = UNSET
     review_count: int | None | Unset = UNSET
-    is_open_on_cal_day: bool | None | Unset = UNSET
-    available_slots: list[str] | Unset = UNSET
+    is_open: bool | None | Unset = UNSET
+    slots: list[StoreScheduleSlot] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -197,15 +202,18 @@ class StoreComplexSearchItem:
         else:
             review_count = self.review_count
 
-        is_open_on_cal_day: bool | None | Unset
-        if isinstance(self.is_open_on_cal_day, Unset):
-            is_open_on_cal_day = UNSET
+        is_open: bool | None | Unset
+        if isinstance(self.is_open, Unset):
+            is_open = UNSET
         else:
-            is_open_on_cal_day = self.is_open_on_cal_day
+            is_open = self.is_open
 
-        available_slots: list[str] | Unset = UNSET
-        if not isinstance(self.available_slots, Unset):
-            available_slots = self.available_slots
+        slots: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.slots, Unset):
+            slots = []
+            for slots_item_data in self.slots:
+                slots_item = slots_item_data.to_dict()
+                slots.append(slots_item)
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -258,15 +266,17 @@ class StoreComplexSearchItem:
             field_dict["rating_idx"] = rating_idx
         if review_count is not UNSET:
             field_dict["review_count"] = review_count
-        if is_open_on_cal_day is not UNSET:
-            field_dict["is_open_on_cal_day"] = is_open_on_cal_day
-        if available_slots is not UNSET:
-            field_dict["available_slots"] = available_slots
+        if is_open is not UNSET:
+            field_dict["is_open"] = is_open
+        if slots is not UNSET:
+            field_dict["slots"] = slots
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.store_schedule_slot import StoreScheduleSlot
+
         d = dict(src_dict)
         shop_id = d.pop("shop_id")
 
@@ -441,16 +451,23 @@ class StoreComplexSearchItem:
 
         review_count = _parse_review_count(d.pop("review_count", UNSET))
 
-        def _parse_is_open_on_cal_day(data: object) -> bool | None | Unset:
+        def _parse_is_open(data: object) -> bool | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(bool | None | Unset, data)
 
-        is_open_on_cal_day = _parse_is_open_on_cal_day(d.pop("is_open_on_cal_day", UNSET))
+        is_open = _parse_is_open(d.pop("is_open", UNSET))
 
-        available_slots = cast(list[str], d.pop("available_slots", UNSET))
+        _slots = d.pop("slots", UNSET)
+        slots: list[StoreScheduleSlot] | Unset = UNSET
+        if _slots is not UNSET:
+            slots = []
+            for slots_item_data in _slots:
+                slots_item = StoreScheduleSlot.from_dict(slots_item_data)
+
+                slots.append(slots_item)
 
         store_complex_search_item = cls(
             shop_id=shop_id,
@@ -476,8 +493,8 @@ class StoreComplexSearchItem:
             distance_km=distance_km,
             rating_idx=rating_idx,
             review_count=review_count,
-            is_open_on_cal_day=is_open_on_cal_day,
-            available_slots=available_slots,
+            is_open=is_open,
+            slots=slots,
         )
 
         store_complex_search_item.additional_properties = d
