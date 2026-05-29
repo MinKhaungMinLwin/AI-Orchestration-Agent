@@ -1,14 +1,3 @@
-# Docker Swarm stack for tstation-agent (dev).
-#
-# Deploy from this directory (config/ paths are relative here):
-#   export AGENT_AI_IMAGE=10.171.19.103:5000/tstation-ai/aichatbot-agent-ai:dev-latest
-#   export AGENT_INGESTION_IMAGE=10.171.19.103:5000/tstation-ai/aichatbot-agent-ingestion:dev-latest
-#   export AGENT_UI_IMAGE=10.171.19.103:5000/tstation-ai/aichatbot-agent-ui:dev-latest
-#   cp ../.env .env
-#   docker stack deploy -c docker-compose.swarm.yml --with-registry-auth tstation-agent-dev
-#
-# Requires external network: docker network create --driver overlay --attachable tstation-dev-net
-
 services:
   nginx:
     image: nginx:alpine
