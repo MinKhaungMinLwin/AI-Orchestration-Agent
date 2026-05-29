@@ -62,8 +62,8 @@ services:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/liveliness')\""]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 10
+      start_period: 180s
 
   tstation-ai:
     image: ${AGENT_AI_IMAGE}
@@ -91,10 +91,10 @@ services:
         order: start-first
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 40s
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
 
   redis-conversation-management:
     image: redis:7-alpine
