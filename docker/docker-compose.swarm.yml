@@ -43,11 +43,7 @@ services:
     env_file:
       - .env
     environment:
-      - LITELLM_LOG=${LOG_LEVEL}
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /usr/lib/python3.13/site-packages/litellm_proxy_extras/migrations
+      - LITELLM_LOG=INFO
     networks:
       - agent-net
     deploy:
