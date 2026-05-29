@@ -45,6 +45,9 @@ services:
     environment:
       - LITELLM_LOG=INFO
       - LOG_LEVEL=INFO
+      # Use in-stack Postgres (RDS may be unreachable from this EC2)
+      - LITELLM_DB_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/litellm
+      - DATABASE_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/litellm
     networks:
       - agent-net
     deploy:
