@@ -56,7 +56,7 @@ services:
         condition: on-failure
       resources:
         limits:
-          cpus: "2.0"
+          cpus: "1.0"
           memory: 2G
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/liveliness')\""]
@@ -71,12 +71,6 @@ services:
       - .env
     environment:
       - UV_CACHE_DIR=/tmp/uv-cache
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /tmp/uv-cache
-      - /app/logs:mode=1777
-      - /app/static/public:mode=1777
     networks:
       - agent-net
       - tstation-dev-net
@@ -86,8 +80,8 @@ services:
         condition: on-failure
       resources:
         limits:
-          cpus: "8.0"
-          memory: 4G
+          cpus: "1.5"
+          memory: 2G
       update_config:
         parallelism: 1
         delay: 10s
@@ -100,12 +94,15 @@ services:
       start_period: 40s
 
   redis-conversation-management:
-    image: redis
-    command: >
-      redis-server
-      --requirepass ${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}
-      --maxmemory 450mb
-      --maxmemory-policy allkeys-lru
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}
+      - --maxmemory
+      - 450mb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redis-data:/data
     networks:
@@ -186,10 +183,6 @@ services:
     environment:
       - UV_CACHE_DIR=/tmp/uv-cache
       - HOME=/tmp
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /tmp/uv-cache
     networks:
       - agent-net
     deploy:
@@ -381,7 +374,7 @@ services:
       restart_policy:
         condition: on-failure
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://$(hostname -i | awk '{print $1}'):3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://$$(hostname -i | awk '{print $$1}'):3000/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -410,8 +403,7 @@ configs:
   litellm_conf:
     file: ./config/llm/conf-gateway.yaml
   qdrant_config:
-    content: |
-      log_level: INFO
+    file: ./config/qdrant/production.yaml
 
 secrets:
   nginx_cert:
