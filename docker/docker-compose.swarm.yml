@@ -44,6 +44,7 @@ services:
       - .env
     environment:
       - LITELLM_LOG=INFO
+      - LOG_LEVEL=INFO
     networks:
       - agent-net
     deploy:
@@ -67,6 +68,9 @@ services:
       - .env
     environment:
       - UV_CACHE_DIR=/tmp/uv-cache
+      - TZ_OFFSET=9
+      - ENV=staging
+      - LOG_LEVEL=INFO
     networks:
       - agent-net
       - tstation-dev-net
@@ -163,6 +167,10 @@ services:
     command: sh start.sh
     env_file:
       - .env
+    environment:
+      - TZ_OFFSET=9
+      - ENV=staging
+      - LOG_LEVEL=INFO
     volumes:
       - ingestion-data:/app/data
     networks:
@@ -179,6 +187,9 @@ services:
     environment:
       - UV_CACHE_DIR=/tmp/uv-cache
       - HOME=/tmp
+      - TZ_OFFSET=9
+      - ENV=staging
+      - LOG_LEVEL=INFO
     networks:
       - agent-net
     deploy:
