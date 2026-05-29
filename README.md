@@ -1,73 +1,166 @@
-# T-Station AI for Hankook Tire
+# T-Station AI
 
-T-Station AI is a conversational commerce chatbot for Hankook Tire Korea. It uses a multi-agent architecture with FastAPI to handle customer inquiries about tires, providing product recommendations, compatibility checks, and FAQ support.
+T-Station AI는 티스테이션 챗봇의 Agent 서비스입니다. 사용자의 발화를 분류하고, 상품 추천/검색, 가격/재고/주문, FAQ/상담 연결 등의 도메인 Agent를 호출한 뒤 프론트엔드가 렌더링할 수 있는 SSE 이벤트와 템플릿 데이터를 반환합니다.
 
-## Architecture Overview
+## 주요 역할
 
-The system consists of three main components:
+- 채팅 API 제공: `/api/tstation/messages/chat`
+- 멀티 Agent 라우팅: leading, discovery, transaction, support
+- 백엔드 API 호출 도구 실행
+- 상품, 매장, 쿠폰, 차량, 예약 등 리치 UI 템플릿 데이터 생성
+- Langfuse tracing, Redis/Celery 작업 큐, Qdrant 기반 RAG 연동
+- 백엔드 OpenAPI 스펙으로 Python API client 생성
 
-- **tstation-ai** (port 8000/9000): Main AI service with FastAPI, LangChain agents, RAG (Qdrant), and task queue (Celery/Redis)
-- **tstation-be** (port 8001): Backend service connecting to Oracle database
-- **tstation-ui-demo** (port 7777): Streamlit-based demo UI
+## 폴더 구조
 
-## Deployment
-
-### 1. Install Dependencies
-
-Install **Just** (task runner):
-
-```bash
-curl -fsSL https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin
+```text
+tstation-ai/
+├── app/
+│   ├── tstation-ai/
+│   │   ├── main.py                    # FastAPI 앱 진입점
+│   │   ├── api/                       # API 라우터
+│   │   ├── common/                    # 공통 유틸, 생성된 BE API client
+│   │   ├── config/                    # 환경 설정
+│   │   ├── schemas/                   # 요청/응답 스키마
+│   │   ├── services/
+│   │   │   └── tstation/
+│   │   │       ├── chat.py            # 채팅 오케스트레이션
+│   │   │       ├── template_mapper.py # tool 결과를 FE 템플릿으로 매핑
+│   │   │       ├── agents/            # 도메인 Agent
+│   │   │       ├── policies/          # deterministic 정책/가드
+│   │   │       └── rag/               # RAG 검색
+│   │   └── tests/                     # AI 서비스 테스트
+│   ├── tstation-ingestion/            # RAG 데이터 적재/색인
+│   └── tstation-ui-demo/              # Streamlit 데모 UI
+├── docker/                            # Docker Compose 설정
+├── eval/                              # 평가/스모크 테스트 스크립트
+├── example/                           # 로컬 실행용 예시 파일
+├── justfile                           # 개발/실행 태스크
+├── pyproject.toml                     # uv 의존성 정의
+└── .env.example                       # 환경 변수 예시
 ```
 
-### 2. Environment Setup
+## Agent 구성
 
-Create or update the `.env` file with required keys (see `.env.example`).
+Agent는 `app/tstation-ai/services/tstation/agents/` 아래에 있으며, 폴더 prefix 순서가 로딩/라우팅 우선순위와 맞닿아 있습니다.
 
-### 3. Start Application
+| Prefix | Agent | 역할 |
+| --- | --- | --- |
+| `a_` | leading_agent | 인사, 모호한 의도, 일반 안내 |
+| `b_` | discovery_agent | 상품 검색, 추천, 차량 호환, 유튜브 검색 |
+| `c_` | transaction_agent | 가격, 재고, 매장, 주문, 쿠폰, 예약 |
+| `e_` | support_agent | FAQ, 보증, 반품, 1:1 문의 연결 |
+
+## 준비
+
+필수 도구:
+
+- Python 3.12 이상
+- `uv`
+- `just`
+- Docker / Docker Compose
+
+환경 파일을 준비합니다.
 
 ```bash
+cd tstation-ai
+cp .env.example .env
+```
+
+로컬 개발 기본 파일까지 한 번에 준비하려면:
+
+```bash
+just setup
+```
+
+의존성만 설치하려면:
+
+```bash
+just install
+```
+
+## 실행 방법
+
+### Docker로 실행
+
+```bash
+cd tstation-ai
 just start
 ```
 
-### 4. API Access
-
-- **Base URL**: `http://{YOUR_IP}:{NGINX_PORT}/api`
-- **Authentication**: `Authorization: Bearer {API_SECRET_KEY}`
-
-### 5. Test API
+중지:
 
 ```bash
-curl -X GET \
-  "http://{YOUR_IP}:7777/api/test/success" \
-  -H "accept: application/json" \
-  -H "Authorization: Bearer {API_SECRET_KEY}"
+just stop
 ```
 
-## Development
-
-### Prerequisites
-
-- Python 3.12
-- Just (task runner)
-- uv (package manager)
-
-### Running Services
+상태와 로그:
 
 ```bash
-# AI service (port 9000)
-set -a && source .env && set +a && uv run app/tstation-ai/main.py
-
-# BE service (port 8000)
-set -a && source app/tstation-be/.env && set +a && uv run app/tstation-be/main.py
-
-# UI demo (port 7777)
-uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777 --server.address 0.0.0.0
+just ps
+just logs
 ```
 
-### Code Quality
+특정 서비스만 다시 띄우려면:
 
 ```bash
-just lint    # Check code with ruff
-just fmt     # Format code with ruff + isort
+just up-service tstation-ai
 ```
+
+### 로컬 프로세스로 실행
+
+AI 서비스:
+
+```bash
+cd tstation-ai
+set -a && source .env && set +a
+uv run app/tstation-ai/main.py
+```
+
+Streamlit 데모 UI:
+
+```bash
+cd tstation-ai
+uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777
+```
+
+## 개발 명령
+
+```bash
+just lint          # ruff check
+just fmt           # ruff fix + isort
+just install-hooks # pre-commit hook 설치
+```
+
+특정 테스트 실행 예시:
+
+```bash
+uv run pytest app/tstation-ai/tests/test_quickreply_fallback_routing.py -q
+```
+
+## OpenAPI client 갱신
+
+백엔드 OpenAPI 스펙이 바뀌면 BE API client를 재생성합니다.
+
+```bash
+just update-openapi
+```
+
+주의:
+
+- `app/tstation-ai/common/tstation_be_api_client/`는 생성 코드입니다.
+- 이 폴더의 파일을 직접 수정하지 말고 OpenAPI 스펙을 갱신한 뒤 재생성합니다.
+
+## 주요 연동
+
+- Backend API: 상품, 가격, 재고, 매장, 주문, FAQ 데이터 조회
+- Redis/Celery: 비동기 작업 큐
+- Qdrant: RAG vector store
+- Langfuse: trace 및 품질 확인
+- LiteLLM/OpenAI 호환 LLM gateway: Agent 추론
+
+## 작업 시 주의사항
+
+- 프롬프트 변경은 기존 정상 플로우와 충돌 가능성을 먼저 검토합니다.
+- 오류 수정은 특정 케이스만 막지 말고 같은 원인 계열에 적용 가능한 방식으로 처리합니다.
+- FE로 나가는 SSE `type`, `template`, `data` 구조는 `tstation/` 위젯과 호환되어야 합니다.
