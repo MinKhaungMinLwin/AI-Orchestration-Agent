@@ -6380,6 +6380,10 @@ _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED = tuple(
     (re.compile(pattern, re.IGNORECASE), label, rcmd_type)
     for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS
 )
+_SIMILAR_PRICE_SIZE_CONTEXT_RE = re.compile(
+    r"해당\s*사이즈|이\s*사이즈|같은\s*사이즈|방금\s*사이즈|그\s*사이즈",
+    re.IGNORECASE,
+)
 
 
 def _build_discovery_policy_context(
@@ -6443,6 +6447,13 @@ def _build_discovery_policy_context(
             if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
             else {}
         )
+        if (
+            discovery_frame.sub_intent == "similar_price_recommendation"
+            and tire_size
+            and _SIMILAR_PRICE_SIZE_CONTEXT_RE.search(context_text or last_user_text)
+            and "tire_size" not in discovery_tool_patch
+        ):
+            discovery_tool_patch["tire_size"] = tire_size
         logger.debug(
             "[POLICY][discovery] frame=%s tool_plan=%s response_decision=%s",
             discovery_frame.to_dict(),

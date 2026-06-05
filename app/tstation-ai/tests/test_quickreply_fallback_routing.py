@@ -45,6 +45,7 @@ from services.tstation.chat import (
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
+    _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_order_quantity_prompt_event,
     _build_staggered_vehicle_tire_selection_event,
@@ -3290,6 +3291,32 @@ def test_recommendation_tool_does_not_autofill_tire_size_for_price_range(monkeyp
 
     assert result["status"] == "no_results"
     assert captured["tire_size"] is None
+
+
+def test_similar_price_policy_preserves_referenced_latest_size_context() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="해당 사이즈 비슷한 가격대 타이어 몇개 더 추천해줘",
+        context_text="1955515\n해당 사이즈 비슷한 가격대 타이어 몇개 더 추천해줘",
+        tire_size="195/55R15",
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
+    assert patch["tire_size"] == "195/55R15"
+
+
+def test_similar_price_policy_does_not_inject_size_without_size_reference() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="비슷한 가격대의 타이어 더 추천해줘",
+        context_text="키너지 EX 설명좀\n비슷한 가격대의 타이어 더 추천해줘",
+        tire_size="195/55R15",
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
+    assert "tire_size" not in patch
 
 
 def test_recommendation_tool_applies_discovery_policy_patch(monkeypatch: pytest.MonkeyPatch) -> None:

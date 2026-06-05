@@ -117,7 +117,8 @@ def test_tc047_similar_price_does_not_require_size_unconditionally() -> None:
     assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
     assert decision.required_slots == ()
     assert "require_size_unconditionally" in decision.forbidden_behaviors
-    assert "inject_confirmed_tire_size" in decision.forbidden_behaviors
+    assert "inject_stale_confirmed_tire_size" in decision.forbidden_behaviors
+    assert "drop_latest_size_specific_context" in decision.forbidden_behaviors
 
 
 def test_tc215_mileage_product_bias_response_is_neutral() -> None:
