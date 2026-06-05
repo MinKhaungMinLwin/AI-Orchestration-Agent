@@ -3257,28 +3257,6 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     return None
 
 
-def _shop_seq_from_preview_entries(tool_data_list: list[dict], shop_id: str) -> str | None:
-    if not shop_id:
-        return None
-    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
-        raw = _unwrap(entry)
-        if not isinstance(raw, dict):
-            continue
-        stores = raw.get("stores")
-        if not isinstance(stores, list):
-            continue
-        for store in stores:
-            if not isinstance(store, dict):
-                continue
-            sid = _get_str(store, "shop_id") or _get_str(store, "shopId")
-            if sid != shop_id:
-                continue
-            shop_seq = _get_str(store, "shop_seq") or _get_str(store, "shopSeq")
-            if shop_seq:
-                return shop_seq
-    return None
-
-
 def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Map slot-emitting tools to a `datepick` event.
 
@@ -3376,12 +3354,6 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
 
     metadata: dict = {"shopId": shop_id}
-    shop_seq = _get_str(raw, "shop_seq") or _get_str(raw, "shopSeq") or _shop_seq_from_preview_entries(
-        tool_data_list,
-        shop_id,
-    )
-    if shop_seq:
-        metadata["shopSeq"] = shop_seq
     if shop_nm:
         metadata["shopName"] = shop_nm
     event = {
