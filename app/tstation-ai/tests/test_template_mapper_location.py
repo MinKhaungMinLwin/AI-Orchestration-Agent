@@ -1934,6 +1934,52 @@ def test_exact_order_preview_maps_to_datepick_even_if_pending_stock_context_ling
     ]
 
 
+def test_schedule_datepick_carries_shop_seq_from_same_turn_preview() -> None:
+    current_pending_intent.set("order")
+    preview_entry = _preview_entry_with_schedule(
+        args={
+            "goods_no": "G000000309783",
+            "ord_qty": 4,
+            "store_nm": "판교점",
+            "include_price": True,
+        },
+        stores=[{
+            **_stub_store("F00721", "티스테이션 판교점"),
+            "shop_seq": "F100001277",
+        }],
+        schedule_stores=[{
+            "shop_id": "F00721",
+            "shop_nm": "티스테이션 판교점",
+            "slots": [{"cal_day": "20260605", "tm": "17"}],
+        }],
+    )
+    schedule_entry = {
+        "tool": "get_store_schedule_tool",
+        "args": {"shop_id": "F00721", "mode": "general"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "shop_id": "F00721",
+                "mode": "general",
+                "shop_nm": "티스테이션 판교점",
+                "is_installable": True,
+                "is_tna_delivery": True,
+                "slots": [{"cal_day": "20260605", "tm": "17"}],
+            },
+        },
+    }
+
+    result = _map_datepick([preview_entry, schedule_entry], "예약 가능한 날짜와 시간을 선택해 주세요.")
+
+    assert result is not None
+    assert result["data"]["metadata"] == {
+        "shopId": "F00721",
+        "shopSeq": "F100001277",
+        "shopName": "티스테이션 판교점",
+    }
+
+
 def test_general_schedule_maps_to_datepick_even_when_online_install_unavailable() -> None:
     """`is_installable=false` means online tire installation is unavailable,
     not that a general store-visit schedule should be hidden."""
