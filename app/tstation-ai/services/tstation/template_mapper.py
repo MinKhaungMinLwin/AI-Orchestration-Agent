@@ -3615,8 +3615,12 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             },
         }
 
-    # order (quick_order_tool) 는 기존 orderComplete 카드 그대로 노출.
-    default_msg = "주문이 완료되었습니다. 😊" if is_success else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+    # order (quick_order_tool) 는 주문/결제 페이지로 이동하기 전 주문서 생성 단계다.
+    default_msg = (
+        "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
+        if is_success
+        else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+    )
     text = (assistant_text or "").strip()
     assistant_response = text if text and len(text) <= 120 else default_msg
 

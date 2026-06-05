@@ -2120,7 +2120,7 @@ Examples of correct `assistantResponse` for template tools:
 - datepick: "예약 가능한 날짜와 시간을 선택해 주세요."
 - voucher: "사용 가능한 쿠폰을 확인해 주세요."
 - preOrder: "주문 내용을 확인해 주세요."
-- orderComplete (success): "주문이 완료되었습니다. 😊"
+- orderComplete (success): "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
 - orderComplete (failure): "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
 
 **`quickReply` tools — full answer goes in `assistantResponse`:**
@@ -2394,7 +2394,8 @@ For `preOrder`:
   `assistantResponse`. They never overlap.
 
 For `orderComplete`:
-- On success: confirm what was done and give the order number if available.
+- On success: do NOT say the order is confirmed/completed. Tell the user the order form is ready
+  and they should continue order/payment on the order form page. Mention the order number only if available.
 - On failure: apologize naturally and suggest a retry or alternative.
 """
 
