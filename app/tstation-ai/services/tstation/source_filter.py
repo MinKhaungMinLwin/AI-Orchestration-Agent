@@ -50,6 +50,13 @@ _CARD_FIELDS: set[str] = {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_ty
 _ORDER_FIELDS_BASE: set[str] = {
     "ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "sys_reg_dtime",
 }
+_RESERVATION_FIELDS: set[str] = {
+    "ord_no",
+    "shop_nm",
+    "vst_rsv_dtime",
+    "shop_rsv_sct_label",
+    "shop_vst_rsv_sts_label",
+}
 
 # Recommendation product base — shared by QC and CTX.
 # QC adds t_highspd_cd (high-speed tier fact-check label).
@@ -156,6 +163,10 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "list_key": "orders",
         "keep": _ORDER_FIELDS_BASE,
     },
+    "get_my_reservations_tool": {
+        "list_key": "reservations",
+        "keep": _RESERVATION_FIELDS,
+    },
     # 상품별 적용 가능 워런티 — wrt_tp_cd/wrt_nm/is_plus 만 QC 검증/응답 노출용.
     "get_product_warranties_tool": {
         "list_key": "warranties",
@@ -235,6 +246,10 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
     "get_orders_of_user_tool": {
         "list_key": "orders",
         "keep": _ORDER_FIELDS_BASE | {"ord_stat_nm"},
+    },
+    "get_my_reservations_tool": {
+        "list_key": "reservations",
+        "keep": _RESERVATION_FIELDS,
     },
     "check_compatibility_tool": {
         "list_key": "tire_sizes",

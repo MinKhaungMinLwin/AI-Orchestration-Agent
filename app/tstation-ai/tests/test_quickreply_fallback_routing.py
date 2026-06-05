@@ -22,6 +22,7 @@ from services.tstation.agents.base_agent import (
     _is_staggered_registered_vehicle,
     _registered_vehicle_slot_values,
 )
+from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -1980,6 +1981,75 @@ def test_store_schedule_context_preserves_slots_for_followup_datepick_recovery()
         {"cal_day": "20260530", "tm": "09"},
         {"cal_day": "20260530", "tm": "13"},
     ]
+
+
+def test_reservation_history_context_is_preserved_for_followup_reference() -> None:
+    result = filter_for_context(
+        "get_my_reservations_tool",
+        {
+            "status": "success",
+            "data": {
+                "reservations": [
+                    {
+                        "ord_no": "O202605120019340",
+                        "shop_nm": "티스테이션 성남IC점",
+                        "vst_rsv_dtime": "2026-05-29 16:00",
+                        "shop_rsv_sct_label": "구매후방문예약",
+                        "shop_vst_rsv_sts_label": "예약대기",
+                        "shop_rsv_no": "RSV-PRIVATE",
+                        "tel_no": "031-751-6471",
+                    },
+                    {
+                        "ord_no": "O202605180019345",
+                        "shop_nm": "티스테이션 판교점",
+                        "vst_rsv_dtime": "2026-05-20 13:00",
+                        "shop_rsv_sct_label": "구매후방문예약",
+                        "shop_vst_rsv_sts_label": "예약대기",
+                    },
+                ]
+            },
+        },
+        {"sct_cd": "all"},
+    )
+
+    assert result is not None
+    assert result["tool"] == "get_my_reservations_tool"
+    assert result["data"][0] == {
+        "ord_no": "O202605120019340",
+        "shop_nm": "티스테이션 성남IC점",
+        "vst_rsv_dtime": "2026-05-29 16:00",
+        "shop_rsv_sct_label": "구매후방문예약",
+        "shop_vst_rsv_sts_label": "예약대기",
+    }
+    assert "shop_rsv_no" not in result["data"][0]
+    assert "tel_no" not in result["data"][0]
+
+
+def test_tool_context_formats_reservation_history_label() -> None:
+    context = TStationChatServiceV2._format_tool_context([
+        {
+            "tool": "get_my_reservations_tool",
+            "data": [
+                {
+                    "ord_no": "O202605120019340",
+                    "shop_nm": "티스테이션 성남IC점",
+                    "vst_rsv_dtime": "2026-05-29 16:00",
+                    "shop_rsv_sct_label": "구매후방문예약",
+                    "shop_vst_rsv_sts_label": "예약대기",
+                }
+            ],
+        }
+    ])
+
+    assert "• [최신] 예약 내역" in context
+    assert "티스테이션 성남IC점" in context
+    assert "2026-05-29 16:00" in context
+
+
+def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:
+    assert "previous user question and assistant answer" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+    assert "previous answer was a reservation-history list" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+    assert "Do NOT fall back to the first order row" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_recent_single_store_context_can_carry_shop_id_from_detail_input() -> None:

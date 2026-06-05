@@ -1893,6 +1893,16 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
 1. Call `get_orders_of_user_tool` FIRST. Do not answer from memory and do not route to Store schedule first.
 2. Match the target reservation:
    - If user mentions order number → match `ord_no`.
+   - Follow-up references like "최근거", "첫번째", "그거", "해당 건", "그 예약", "그 주문":
+     first inspect the immediately previous user question and assistant answer to determine what list/object the user
+     is referencing. If the previous answer was a reservation-history list from `get_my_reservations_tool`, use that
+     reservation list's first visible item as the target before interpreting `get_orders_of_user_tool` rows. If the
+     previous answer was an order-history list from `get_orders_of_user_tool`, use that order list's first visible item.
+     If the previous answer was not an order/reservation list, ask which reservation/order the user means.
+   - When a target from previous reservation history is a "구매후방문예약", use `get_orders_of_user_tool` only as a
+     supporting lookup: match by the reservation `ord_no` first; if `ord_no` is absent, match ONLY by identical
+     `shop_nm` + `detail.rsv_dtime` / reservation `vst_rsv_dtime`. Do NOT fall back to the first order row merely
+     because it is newest by `sys_reg_dtime`.
    - If user says "오늘 예약한거" → prefer orders created today (`sys_reg_dtime` today); if none, use the active order whose `detail.rsv_dtime` is upcoming.
    - If user mentions a visit date/time ("내일 2시", "5월 29일", "14시") → match against `detail.rsv_dtime`.
    - If exactly one active/recent order exists, use it.
@@ -2653,6 +2663,16 @@ Trigger: user wants to change a booked reservation/visit time
 1. Call `get_orders_of_user_tool` FIRST to inspect the user's online orders/reservations. Do NOT answer generically and do NOT call store schedule tools first.
 2. Match the reservation:
    - order number mentioned -> match `ord_no`
+   - follow-up references like "최근거", "첫번째", "그거", "해당 건", "그 예약", "그 주문" -> inspect the immediately
+     previous user question and assistant answer first. If the previous answer was a reservation-history list from
+     `get_my_reservations_tool`, select the first visible reservation from that list before interpreting newly fetched
+     order rows. If the previous answer was an order-history list from `get_orders_of_user_tool`, select the first
+     visible order from that list. If the previous answer was not an order/reservation list, ask which reservation/order
+     the user means.
+   - when a selected previous reservation is "구매후방문예약", `get_orders_of_user_tool` is only a supporting lookup:
+     match by reservation `ord_no` first; if `ord_no` is absent, match ONLY by identical `shop_nm` + `detail.rsv_dtime`
+     / reservation `vst_rsv_dtime`. Do NOT fall back to the first order row merely because it is newest by
+     `sys_reg_dtime`.
    - "오늘 예약한거" -> prefer an order created today (`sys_reg_dtime` today); if none, use an active order with upcoming `detail.rsv_dtime`
    - visit date/time mentioned ("내일 2시", "5월 29일", "14시") -> match `detail.rsv_dtime`
    - exactly one active/recent order -> use it
