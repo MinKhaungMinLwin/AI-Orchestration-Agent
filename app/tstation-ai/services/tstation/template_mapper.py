@@ -1744,6 +1744,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         return None
     decision = current_discovery_response_decision.get()
     response_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision else ""
+    is_neutral_product_description = response_shape_key == "neutral_product_description"
     if response_shape_key == "similar_price_range_recommendation":
         for entry in _find_entries(
             tool_data_list,
@@ -1808,17 +1809,27 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if not found_product_tool or not rows_by_name:
         return None
 
-    lines = ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
+    lines = [] if is_neutral_product_description else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
+        if is_neutral_product_description:
+            lines.extend([
+                "",
+                f"{name}: {_tire_summary_first_line(row)}",
+                _tire_summary_second_line(row),
+            ])
+        else:
+            lines.extend([
+                "",
+                f"- {name}: {_tire_summary_first_line(row)}",
+                f"  {_tire_summary_second_line(row)}",
+            ])
+    if is_neutral_product_description:
+        lines = [line for line in lines if line]
+    else:
         lines.extend([
             "",
-            f"- {name}: {_tire_summary_first_line(row)}",
-            f"  {_tire_summary_second_line(row)}",
+            "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
         ])
-    lines.extend([
-        "",
-        "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
-    ])
 
     return {
         "type": "data",

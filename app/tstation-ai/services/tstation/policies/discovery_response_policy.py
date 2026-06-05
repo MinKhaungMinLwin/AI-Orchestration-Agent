@@ -151,6 +151,16 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             metadata={"response_shape_key": "product_search_summary"},
         )
 
+    if frame.intent == "product_description":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=("generic_unsized_summary", "unrequested_size_missing_notice"),
+            assistant_guidance="상품 설명 요청에는 상품 특성만 간결히 안내하고, 사용자가 묻지 않은 사이즈 미확정 안내를 덧붙이지 않는다.",
+            metadata={"response_shape_key": "neutral_product_description"},
+        )
+
     return ResponseDecision(
         response_shape=ResponseShape.SUMMARY,
         template=TemplateName.QUICK_REPLY,

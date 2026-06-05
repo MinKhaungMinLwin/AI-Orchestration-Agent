@@ -855,6 +855,37 @@ def _mileage_search_entry() -> dict:
     }
 
 
+def _kinergy_ex_search_entry() -> dict:
+    return {
+        "tool": "search_product_tool",
+        "args": {"keyword": "Kinergy EX", "brand_cd": "HK", "limit": 10},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000309816",
+                        "goods_nm": "키너지 EX",
+                        "tire_size_1": "205/55R16",
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    },
+                    {
+                        "goods_no": "G000000309817",
+                        "goods_nm": "키너지 EX",
+                        "tire_size_1": "215/55R17",
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    },
+                ]
+            },
+        },
+    }
+
+
 def _dynapro_hpx_search_entry() -> dict:
     return {
         "tool": "search_product_tool",
@@ -1126,6 +1157,23 @@ def test_product_search_without_size_question_keeps_generic_unsized_summary() ->
     assistant_response = result["data"]["assistantResponse"]
     assert "사이즈가 아직 확인되지 않아" in assistant_response
     assert "검색된 상품은 현재 아래 사이즈로 확인돼요." not in assistant_response
+
+
+def test_product_description_without_size_omits_unrequested_size_missing_notice() -> None:
+    text = "kinergy ex 설명해줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template([_kinergy_ex_search_entry()], "키너지 EX 설명입니다.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "사이즈가 아직 확인되지 않아" not in assistant_response
+    assert "정확한 장착 가능 여부와 가격" not in assistant_response
+    assert "키너지 EX:" in assistant_response
+    assert "승용차용 사계절" in assistant_response
+    assert "- 키너지 EX:" not in assistant_response
 
 
 def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_cards() -> None:
