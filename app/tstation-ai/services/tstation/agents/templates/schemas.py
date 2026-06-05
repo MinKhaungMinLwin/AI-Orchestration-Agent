@@ -461,9 +461,6 @@ class PreOrderMeta(BaseModel):
     # rationale as OrderInfo.storeName / carInfo — required would fail
     # validation and show fallback chips to the user instead of the cart card.
     shopId: str | None = None
-    # quick_order_tool must send shop_seq to the upstream quick-shopping API,
-    # while shopId remains the site-facing store id used in schedule/location flows.
-    shopSeq: str | None = None
     carNo: str | None = None
     carLncCd: str | None = None
 
