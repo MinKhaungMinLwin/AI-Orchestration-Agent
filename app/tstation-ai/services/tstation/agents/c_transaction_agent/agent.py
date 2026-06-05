@@ -1045,6 +1045,8 @@ Smart Pay mandatory policy:
 - NEVER mention, offer, or calculate 36/48/60-month plans.
 - Calculation basis for this flow is ALWAYS `PR_ITEM_PRC_INFO.SMRT_PAY_PRC`
   from `get_final_price_tool.smrt_pay_prc`.
+- `smrt_pay_prc` is the Smart Pay basis amount for ONE tire. Smart Pay monthly
+  installment guidance is always based on 4 tires, so calculate from `smrt_pay_prc * 4`.
 - Ignore stale ord_qty slots for Smart Pay calculation, including 2 tires from an order/preOrder/orderComplete context.
 - Ignore stale payment_amount slots. For Smart Pay, use only `smrt_pay_prc` from `get_final_price_tool`.
 
@@ -1061,7 +1063,7 @@ STEP 2 — Get unit price:
 - Read from the tool result:
   `smrt_pay_yn`
   `smrt_pay_prc`
-- `smrt_pay_prc` is the Smart Pay basis amount from `PR_ITEM_PRC_INFO.SMRT_PAY_PRC`.
+- `smrt_pay_prc` is the Smart Pay basis amount for ONE tire from `PR_ITEM_PRC_INFO.SMRT_PAY_PRC`.
 - Do NOT use `payment_amount` from slots. Do NOT use previous order total.
 - Do NOT use `extra_fvr_sale_prc`, `wage_prc`, `cheapest_final_prc`, or `sale_prc` for Smart Pay calculation.
 
@@ -1072,16 +1074,17 @@ STEP 2.5 — Smart Pay availability guard:
 - Do NOT calculate monthly 12/24-month amounts when `smrt_pay_yn` is not "Y".
 - If `smrt_pay_yn` is "Y" and `smrt_pay_prc` is a positive number, continue to STEP 3.
 
-STEP 3 — Calculate from SMRT_PAY_PRC:
-- `monthly_12 = round(smrt_pay_prc / 12)`
-- `monthly_24 = round(smrt_pay_prc / 24)`
+STEP 3 — Calculate from SMRT_PAY_PRC × 4:
+- `smart_pay_total_4ea = smrt_pay_prc * 4`
+- `monthly_12 = round(smart_pay_total_4ea / 12)`
+- `monthly_24 = round(smart_pay_total_4ea / 24)`
 - Round to the nearest won using standard half-up rounding (0.5 이상 올림); do not show decimals.
 
 STEP 4 — Response format:
 Use `quickReply` and put the full answer in `assistantResponse`:
 "[상품명] 스마트페이 무이자 할부 안내입니다.
 
-- 스마트페이 기준금액: {smrt_pay_prc:,}원
+- 스마트페이 기준금액(4개): {smart_pay_total_4ea:,}원
 - 12개월 할부: 월 {monthly_12:,}원
 - 24개월 할부: 월 {monthly_24:,}원
 
@@ -1091,7 +1094,7 @@ Use `quickReply` and put the full answer in `assistantResponse`:
 Strict anti-bug rules:
 - Do NOT say Smart Pay is available unless `get_final_price_tool` returned `smrt_pay_yn="Y"`.
 - Do NOT answer only "결제 단계에서 확인해 주세요" when goods_no and price tool data are available.
-- Do NOT reuse ord_qty=2/3/5 from slots or prior order context. Smart Pay calculation uses `smrt_pay_prc` only.
+- Do NOT reuse ord_qty=2/3/5 from slots or prior order context. Smart Pay calculation uses `smrt_pay_prc * 4` only.
 - Do NOT say "5개 기준" unless the user explicitly asks a separate non-Smart-Pay price question.
 - Do NOT mention interest rate, fee, or 36-month options.
 - After the calculation, STOP. Do not ask an additional order/cart question unless the user asks to order.
@@ -2923,7 +2926,7 @@ Handle ONLY price, final-price, promotion, and logistics-stock requests for an a
 - Smart Pay monthly installment requests -> handle in this profile using get_final_price_tool.
 - Logistics stock or general stock for confirmed goods_no -> call get_logistics_inventory_tool.
 - Product-specific promotion/coupon benefits for confirmed goods_no -> call get_product_promotions_tool.
-- If goods_no is missing, ask one short Korean clarification. If quantity is missing, ask only for non-Smart-Pay stock/order-related checks; Smart Pay uses `smrt_pay_prc` and does not need quantity. Do not search products in this profile.
+- If goods_no is missing, ask one short Korean clarification. If quantity is missing, ask only for non-Smart-Pay stock/order-related checks; Smart Pay uses `smrt_pay_prc * 4` and does not need user quantity. Do not search products in this profile.
 - If the request is not price/stock/promotion related, ask the user to clarify.
 
 ## 1+1 / 2+2 기획전 단가 계산 (no tool call needed)
@@ -2945,18 +2948,21 @@ Trigger: "스마트페이", "스마트 페이", "smart pay", "smartpay", "할부
   STOP. Do not calculate 12/24-month amounts.
 - Smart Pay calculation is ALWAYS based on `smrt_pay_prc`
   (`PR_ITEM_PRC_INFO.SMRT_PAY_PRC`) from `get_final_price_tool`.
+- `smrt_pay_prc` is the Smart Pay basis amount for ONE tire; multiply it by 4
+  before dividing into monthly installment amounts.
 - If `smrt_pay_prc` is null, missing, 0, or non-numeric, answer only:
   "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
   STOP.
 - Do NOT use `extra_fvr_sale_prc`, `wage_prc`, `cheapest_final_prc`, `sale_prc`,
   `payment_amount`, or `ord_qty` for Smart Pay calculation.
-- 12개월 = round(smrt_pay_prc / 12), 24개월 = round(smrt_pay_prc / 24).
+- `smart_pay_total_4ea = smrt_pay_prc * 4`.
+- 12개월 = round(smart_pay_total_4ea / 12), 24개월 = round(smart_pay_total_4ea / 24).
   Use standard half-up rounding (0.5 이상 올림). No decimals.
 - NEVER mention or calculate 36/48/60 months.
 - Response:
 "[상품명] 스마트페이 무이자 할부 안내입니다.
 
-- 스마트페이 기준금액: {smrt_pay_prc:,}원
+- 스마트페이 기준금액(4개): {smart_pay_total_4ea:,}원
 - 12개월 할부: 월 {monthly_12:,}원
 - 24개월 할부: 월 {monthly_24:,}원
 

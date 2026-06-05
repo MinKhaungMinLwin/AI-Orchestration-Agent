@@ -313,8 +313,9 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         - smrt_pay_yn: 스마트페이 가능 여부. "Y"이면 스마트페이 월 납부액 계산 가능,
           "N"이면 스마트페이 할부서비스 미지원 상품으로 안내하라.
         - smrt_pay_prc: 스마트페이 월 납부액 계산 기준 금액
-          (PR_ITEM_PRC_INFO.SMRT_PAY_PRC). 스마트페이 문의는 이 값을 12/24로
-          나누고 반올림해 안내하라. extra_fvr_sale_prc, wage_prc,
+          (PR_ITEM_PRC_INFO.SMRT_PAY_PRC). 이 값은 타이어 1개 기준 금액이므로
+          스마트페이 문의는 이 값에 4를 곱한 뒤 12/24로 나누고 반올림해 안내하라.
+          extra_fvr_sale_prc, wage_prc,
           cheapest_final_prc, payment_amount 를 스마트페이 계산에 사용하지 마라.
 
     paymentAmount 우선순위 (preOrder / orderComplete 카드 채울 때):
