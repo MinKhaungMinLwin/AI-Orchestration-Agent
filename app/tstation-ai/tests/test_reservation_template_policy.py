@@ -180,44 +180,6 @@ def test_preview_datepick_keeps_today_inventory_slots_before_reservation_install
     }
 
 
-def test_preview_datepick_metadata_carries_shop_seq_from_preview_store() -> None:
-    result = build_datepick_from_preview_payload(
-        {
-            "stores": [{
-                "shop_id": "F00721",
-                "shop_seq": "F100001277",
-                "shop_nm": "티스테이션 판교점",
-            }],
-            "logistics": {
-                "logistics_qty": 4,
-                "rsv_sale_yn": "N",
-            },
-            "inventory": {
-                "todayShopArray": [{"shopId": "F00721"}],
-                "tnaShopArray": [],
-            },
-            "schedule": {
-                "tier": "in_store_only",
-                "stores": [{
-                    "shop_id": "F00721",
-                    "shop_nm": "티스테이션 판교점",
-                    "slots": [{"cal_day": "20260605", "tm": "1700"}],
-                }],
-            },
-        },
-        assistant_text="예약 가능한 날짜와 시간을 선택해 주세요.",
-        assistant_response_source="test",
-        require_single_store=True,
-    )
-
-    assert result is not None
-    assert result["data"]["metadata"] == {
-        "shopId": "F00721",
-        "shopSeq": "F100001277",
-        "shopName": "티스테이션 판교점",
-    }
-
-
 def test_preview_datepick_filters_before_reservation_install_date_only_for_reservation_sale_fallback() -> None:
     result = build_datepick_from_preview_payload(
         {

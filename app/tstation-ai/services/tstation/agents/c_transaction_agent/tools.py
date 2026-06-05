@@ -1801,15 +1801,6 @@ def _filter_reservation_sale_schedule(schedule_data: Any, preview_payload: dict[
     if not isinstance(stores, list):
         return schedule_data
 
-    shop_seq_by_id: dict[str, str] = {}
-    for candidate in preview_payload.get("stores") or []:
-        if not isinstance(candidate, dict):
-            continue
-        shop_id = str(candidate.get("shop_id") or candidate.get("shopId") or "").strip()
-        shop_seq = str(candidate.get("shop_seq") or candidate.get("shopSeq") or "").strip()
-        if shop_id and shop_seq:
-            shop_seq_by_id[shop_id] = shop_seq
-
     filtered_stores: list[Any] = []
     changed = False
     for store in stores:
@@ -1817,15 +1808,10 @@ def _filter_reservation_sale_schedule(schedule_data: Any, preview_payload: dict[
             filtered_stores.append(store)
             continue
         shop_id = str(store.get("shop_id") or store.get("shopId") or "").strip()
-        shop_seq = shop_seq_by_id.get(shop_id)
-        enriched_store = store
-        if shop_seq and not (store.get("shop_seq") or store.get("shopSeq")):
-            enriched_store = {**store, "shop_seq": shop_seq}
-            changed = True
         slots = store.get("slots")
         min_install_date = reservation_sale_min_install_date(preview_payload, shop_id)
         if not shop_id or not min_install_date or not isinstance(slots, list):
-            filtered_stores.append(enriched_store)
+            filtered_stores.append(store)
             continue
 
         filtered_slots = [
@@ -1835,7 +1821,7 @@ def _filter_reservation_sale_schedule(schedule_data: Any, preview_payload: dict[
         ]
         changed = changed or len(filtered_slots) != len(slots)
         if filtered_slots:
-            filtered_stores.append({**enriched_store, "slots": filtered_slots})
+            filtered_stores.append({**store, "slots": filtered_slots})
         else:
             changed = True
 
@@ -2210,7 +2196,6 @@ def quick_order_tool(
     goods_no: str,
     ord_qty: int,
     shop_id: str,
-    shop_seq: str | None = None,
     car_lnc_cd: str | None = None,
     rsv_date: str | None = None,
     rsv_hour: str | None = None,
@@ -2231,20 +2216,17 @@ def quick_order_tool(
     Args:
         goods_no (str): Product number.
         ord_qty (int): Quantity (min 1).
-        shop_id (str): Store ID from store tool results (e.g., "CXXXXX"). Keep this for context only.
-        shop_seq (str | None): Store sequence from store tool results (e.g., "F203675962"). Send this for quick shopping.
+        shop_id (str): Store ID from store tool results (e.g., "CXXXXX").
         car_lnc_cd (str | None): Vehicle launch code (optional).
         rsv_date (str | None): 방문 예약일자 YYYYMMDD (e.g., "20260423"). datepick 선택값을 변환해서 전달.
         rsv_hour (str | None): 방문 예약시간 HH 00~23 두 자리 (e.g., "11"). datepick 선택값의 시(hour)만 두 자리로 전달.
 
-    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX", "shop_seq": "F203675962", "rsv_date": "20260423", "rsv_hour": "11"}
+    Example: {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id": "CXXXXX", "rsv_date": "20260423", "rsv_hour": "11"}
     """
-    resolved_shop_seq = str(shop_seq or shop_id or "").strip()
     goods_info_arr_str = f"{goods_no}|{ord_qty}"
     logger.debug(
-        "[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, shop_seq=%s, car_lnc_cd=%s, "
-        "rsv_date=%s, rsv_hour=%s",
-        goods_info_arr_str, shop_id, resolved_shop_seq, car_lnc_cd, rsv_date, rsv_hour,
+        "[TOOL][quick_order_tool] Called with: goods_info=%s, shop_id=%s, car_lnc_cd=%s, rsv_date=%s, rsv_hour=%s",
+        goods_info_arr_str, shop_id, car_lnc_cd, rsv_date, rsv_hour,
     )
 
     try:
@@ -2252,7 +2234,7 @@ def quick_order_tool(
             goods_info_arr_str=goods_info_arr_str,
             smrt_pay_yn="N",
             drt_pur_yn="Y",
-            shop_seq=resolved_shop_seq,
+            shop_seq=shop_id,
             car_lnc_cd=car_lnc_cd,
             rsv_date=rsv_date,
             rsv_hour=rsv_hour,

@@ -99,23 +99,6 @@ def reservation_sale_min_install_date(preview_payload: dict, shop_id: str) -> st
     return rsv_install_date if re.fullmatch(r"\d{8}", rsv_install_date) else None
 
 
-def _find_preview_shop_seq(preview_payload: dict, shop_id: str) -> str | None:
-    if not shop_id:
-        return None
-    stores = preview_payload.get("stores")
-    if not isinstance(stores, list):
-        return None
-    for store in stores:
-        if not isinstance(store, dict):
-            continue
-        sid = str(store.get("shop_id") or store.get("shopId") or "").strip()
-        if sid != shop_id:
-            continue
-        shop_seq = str(store.get("shop_seq") or store.get("shopSeq") or "").strip()
-        return shop_seq or None
-    return None
-
-
 def extract_preview_payload(parsed: dict) -> dict | None:
     if parsed.get("status") == "success" and isinstance(parsed.get("data"), dict):
         return parsed["data"]
@@ -211,11 +194,6 @@ def build_datepick_from_preview_payload(
             continue
 
         metadata = {"shopId": shop_id}
-        shop_seq = str(store.get("shop_seq") or store.get("shopSeq") or "").strip()
-        if not shop_seq:
-            shop_seq = _find_preview_shop_seq(preview_payload, shop_id) or ""
-        if shop_seq:
-            metadata["shopSeq"] = shop_seq
         shop_name = str(store.get("shop_nm") or "").strip()
         if shop_name:
             metadata["shopName"] = shop_name
