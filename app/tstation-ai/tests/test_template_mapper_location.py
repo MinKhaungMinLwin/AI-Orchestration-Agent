@@ -2003,6 +2003,60 @@ def test_specific_date_store_availability_maps_detail_slots_to_datepick() -> Non
     }]
 
 
+def _reservation_sale_preview_entry_for_detail(shop_id: str = "C01312") -> dict:
+    return {
+        "tool": "transaction_store_preview_tool",
+        "args": {"goods_no": "G000000309783", "ord_qty": 4, "store_nm": "송파오금점", "include_price": True},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "logistics": {
+                    "logistics_qty": 0,
+                    "rsv_sale_yn": "Y",
+                    "rsv_install_date": "2026-06-25",
+                },
+                "inventory": {"todayShopArray": [], "tnaShopArray": []},
+                "schedule": {"tier": "none", "stores": [], "candidate_shop_ids": [shop_id]},
+                "stores": [_stub_store(shop_id, "티스테이션 송파오금점")],
+                "candidate_shop_ids": [shop_id],
+            },
+        },
+    }
+
+
+def test_specific_date_detail_before_reservation_install_date_returns_guidance_quickreply() -> None:
+    current_store_date_availability.set(True)
+    current_user_text.set("티스테이션 송파오금점 6/6 예약 가능해?")
+    preview_entry = _reservation_sale_preview_entry_for_detail()
+    detail_entry = _store_detail_entry(cal_day="20260606", available_slots=["09", "10"])
+
+    result = try_build_template([preview_entry, detail_entry], "예약 가능한 일정을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assert result["assistant_response_source"] == "code_mapper_reservation_sale_date_guard"
+    assert result["data"]["assistantResponse"] == "해당 상품은 2026년 6월 25일 이후 장착 가능합니다. 다른 날짜를 선택해 주세요."
+
+
+def test_specific_date_detail_on_reservation_install_date_still_maps_to_datepick() -> None:
+    current_store_date_availability.set(True)
+    current_user_text.set("티스테이션 송파오금점 6/25 예약 가능해?")
+    preview_entry = _reservation_sale_preview_entry_for_detail()
+    detail_entry = _store_detail_entry(cal_day="20260625", available_slots=["09", "10"])
+
+    result = try_build_template([preview_entry, detail_entry], "예약 가능한 일정을 확인했어요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["data"]["dates"] == [{
+        "date": "2026년 6월 25일 (목)",
+        "available": True,
+        "availableTimes": [9, 10],
+        "index": 0,
+    }]
+
+
 def test_plain_store_detail_with_slots_still_maps_to_info_quickreply() -> None:
     """Plain store-info lookups should not turn into a reservation picker just
     because `get_store_detail_tool` always returns today's available slots."""
@@ -2480,6 +2534,57 @@ def test_transaction_policy_invalid_store_blocks_datepick() -> None:
     )
 
     assert _map_datepick([schedule_entry], "예약 가능한 시간을 확인했어요.") is None
+
+
+def test_schedule_datepick_filters_reservation_sale_dates_from_same_turn_preview() -> None:
+    preview_entry = {
+        "tool": "transaction_store_preview_tool",
+        "args": {"goods_no": "G000000309783", "ord_qty": 4, "store_nm": "역삼점", "include_price": True},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "logistics": {
+                    "logistics_qty": 0,
+                    "rsv_sale_yn": "Y",
+                    "rsv_install_date": "2026-06-25",
+                },
+                "inventory": {"todayShopArray": [], "tnaShopArray": []},
+                "schedule": {"tier": "none", "stores": [], "candidate_shop_ids": ["F00098"]},
+                "stores": [_stub_store("F00098", "티스테이션 역삼점")],
+                "candidate_shop_ids": ["F00098"],
+            },
+        },
+    }
+    schedule_entry = {
+        "tool": "get_store_schedule_tool",
+        "args": {"shop_id": "F00098", "mode": "general"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "shop_id": "F00098",
+                "mode": "general",
+                "shop_nm": "티스테이션 역삼점",
+                "is_installable": True,
+                "is_tna_delivery": True,
+                "slots": [
+                    {"cal_day": "20260605", "tm": "17"},
+                    {"cal_day": "20260624", "tm": "17"},
+                    {"cal_day": "20260625", "tm": "09"},
+                    {"cal_day": "20260626", "tm": "10"},
+                ],
+            },
+        },
+    }
+
+    result = _map_datepick([preview_entry, schedule_entry], "예약 가능한 날짜와 시간을 선택해 주세요.")
+
+    assert result is not None
+    dates = result["data"]["dates"]
+    assert [d["date"] for d in dates] == ["2026년 6월 25일 (목)", "2026년 6월 26일 (금)"]
+    assert dates[0]["availableTimes"] == [9]
+    assert result["data"]["selectedDate"] == 0
 
 
 def test_tc058_time_filter_location_excludes_blocked_noon_slot() -> None:

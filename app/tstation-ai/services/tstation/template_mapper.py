@@ -17,7 +17,9 @@ from typing import Any
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.reservation_template_policy import (
     build_datepick_from_preview_payload,
+    extract_preview_payload,
     is_other_store_request,
+    reservation_sale_min_install_date,
     should_keep_stock_location,
     yyyymmdd_to_korean_date,
 )
@@ -487,6 +489,45 @@ def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
             continue
         out.append(e)
     return out
+
+
+def _same_turn_reservation_sale_min_install_date(tool_data_list: list[dict], shop_id: str) -> str | None:
+    """Return rsv_install_date when same-turn preview says this shop is reservation-sale fallback only."""
+    if not shop_id:
+        return None
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        raw = entry.get("data")
+        if not isinstance(raw, dict):
+            continue
+        preview_payload = extract_preview_payload(raw)
+        if not isinstance(preview_payload, dict):
+            continue
+        min_install_date = reservation_sale_min_install_date(preview_payload, shop_id)
+        if min_install_date:
+            return min_install_date
+    return None
+
+
+def _yyyymmdd_to_plain_korean_date(s: str) -> str:
+    try:
+        dt = datetime.datetime.strptime(s, "%Y%m%d")
+    except (TypeError, ValueError):
+        return s
+    return f"{dt.year}년 {dt.month}월 {dt.day}일"
+
+
+def _reservation_sale_date_quickreply(min_install_date: str) -> dict:
+    install_date = _yyyymmdd_to_plain_korean_date(min_install_date)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_mapper_reservation_sale_date_guard",
+        "data": {
+            "assistantResponse": f"해당 상품은 {install_date} 이후 장착 가능합니다. 다른 날짜를 선택해 주세요.",
+            "quickReplies": [{"label": "다른 날짜 확인", "domain": "TRANSACTION"}],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
 
 
 def _unverifiable_store_preference_labels(text: str) -> list[str]:
@@ -3319,6 +3360,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
     # but we sort cal_day strings before emitting to avoid relying on that.
+    min_install_date = _same_turn_reservation_sale_min_install_date(tool_data_list, shop_id)
     by_day: dict[str, set[int]] = {}
     for s in slots:
         if not isinstance(s, dict):
@@ -3326,6 +3368,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         cal_day = _get_str(s, "cal_day")
         hour = _parse_tm_to_hour(_get_str(s, "tm"))
         if not cal_day or hour is None:
+            continue
+        if min_install_date and cal_day < min_install_date:
             continue
         bucket = by_day.setdefault(cal_day, set())
         if allow_slots and _is_bookable_hour(hour):
@@ -3401,6 +3445,9 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         shop_id = _get_str(args, "shop_id")
         if not cal_day or not shop_id:
             continue
+        min_install_date = _same_turn_reservation_sale_min_install_date(tool_data_list, shop_id)
+        if min_install_date and cal_day < min_install_date:
+            return _reservation_sale_date_quickreply(min_install_date)
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
