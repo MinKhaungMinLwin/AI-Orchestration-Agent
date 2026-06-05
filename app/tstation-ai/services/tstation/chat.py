@@ -4787,6 +4787,13 @@ _FUTURE_MONTH_DAY_RE = re.compile(
     r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2})\s*년\s*)?"
     r"(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?(?![\dA-Za-z/-])"
 )
+_USER_DECLARED_TODAY_DATE_RE = re.compile(
+    r"오늘\s*은\s*"
+    r"(?:(?:20\d{2})\s*(?:년|[./-])\s*)?"
+    r"(?:1[0-2]|0?[1-9])\s*(?:월|[./-])\s*(?:3[01]|[12]?\d)\s*일?"
+    r"\s*(?:이야|입니다|이에요|예요|임|라고)?[.!。]?",
+    re.IGNORECASE,
+)
 _TIRE_SIZE_TOKEN_FOR_DATE_PARSE_RE = re.compile(
     r"(?<!\d)"
     r"\d{3}"
@@ -4894,9 +4901,15 @@ def _should_preserve_store_date_availability_context(
     return False
 
 
-def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | None = None) -> datetime.date | None:
+def _parse_requested_reservation_date(
+    user_text: str,
+    *,
+    today: datetime.date | None = None,
+    roll_yearless_past: bool = True,
+) -> datetime.date | None:
     today = today or _kst_today()
     text = _TIRE_SIZE_TOKEN_FOR_DATE_PARSE_RE.sub(" ", user_text or "")
+    text = _USER_DECLARED_TODAY_DATE_RE.sub(" ", text)
     relative_requested = _parse_relative_weekday_reservation_date(text, today=today)
     if relative_requested is not None:
         return relative_requested
@@ -4911,7 +4924,7 @@ def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | 
         requested = datetime.date(year, month, day)
     except ValueError:
         return None
-    if not year_text and requested < today:
+    if roll_yearless_past and not year_text and requested < today:
         requested = datetime.date(today.year + 1, month, day)
     return requested
 
@@ -4919,9 +4932,10 @@ def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | 
 def _requested_reservation_cal_day_or_today(
     user_text: str,
     *,
+    today: datetime.date | None = None,
     now_utc: datetime.datetime | None = None,
 ) -> str:
-    requested = _parse_requested_reservation_date(user_text)
+    requested = _parse_requested_reservation_date(user_text, today=today)
     if requested is not None:
         return requested.strftime("%Y%m%d")
     now_utc = now_utc or datetime.datetime.now(datetime.UTC)
@@ -4935,11 +4949,30 @@ def _reservation_date_range_guard_event(
     today: datetime.date | None = None,
 ) -> dict | None:
     today = today or _kst_today()
-    requested = _parse_requested_reservation_date(user_text, today=today)
+    requested = _parse_requested_reservation_date(user_text, today=today, roll_yearless_past=False)
     if requested is None:
         return None
     if not _reservation_context_from_messages(user_text, messages):
         return None
+    if requested < today:
+        today_label = today.strftime("%Y-%m-%d")
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_reservation_past_date_guard",
+            "data": {
+                "assistantResponse": (
+                    "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. "
+                    f"오늘 날짜 {today_label} 이후로 다시 선택해 주세요."
+                ),
+                "quickReplies": [
+                    {"label": "예약 가능 날짜 보기", "domain": "TRANSACTION"},
+                    {"label": "다른 매장 보기", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
     max_date = today + datetime.timedelta(days=30)
     if requested <= max_date:
         return None

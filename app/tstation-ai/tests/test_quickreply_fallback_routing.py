@@ -671,6 +671,31 @@ def test_reservation_date_range_guard_uses_recent_reservation_context() -> None:
     assert "2026년 8월 1일 예약은 아직 오픈 전" in event["data"]["assistantResponse"]
 
 
+def test_reservation_date_range_guard_blocks_past_explicit_date_and_ignores_user_declared_today() -> None:
+    event = _reservation_date_range_guard_event(
+        "오늘은 2026년 5월 25일이야. 2026년 5월 29일 오후 16시 예약 돼?",
+        today=datetime.date(2026, 6, 5),
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_reservation_past_date_guard"
+    assert (
+        event["data"]["assistantResponse"]
+        == "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. 오늘 날짜 2026-06-05 이후로 다시 선택해 주세요."
+    )
+
+
+def test_reservation_date_range_guard_blocks_past_yearless_date() -> None:
+    event = _reservation_date_range_guard_event(
+        "티스테이션 성남IC점 5월 29일 16시 예약 돼?",
+        today=datetime.date(2026, 6, 5),
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_reservation_past_date_guard"
+    assert "오늘 날짜 2026-06-05 이후로 다시 선택해 주세요." in event["data"]["assistantResponse"]
+
+
 def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates() -> None:
     today = datetime.date(2026, 5, 25)
 
@@ -1844,7 +1869,13 @@ def test_store_holiday_period_event_prefers_holiday_match_over_available_slots()
 
 
 def test_store_holiday_period_detail_uses_requested_cal_day_when_present() -> None:
-    assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 5/29 예약 가능해?") == "20260529"
+    assert (
+        _requested_reservation_cal_day_or_today(
+            "티스테이션 성남IC점 5/29 예약 가능해?",
+            today=datetime.date(2026, 5, 26),
+        )
+        == "20260529"
+    )
 
 
 def test_store_holiday_period_detail_falls_back_to_today_when_no_requested_date() -> None:
