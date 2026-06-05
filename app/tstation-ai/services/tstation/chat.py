@@ -6392,6 +6392,7 @@ def _build_discovery_policy_context(
     last_user_text: str,
     context_text: str,
     tire_size: str | None,
+    goods_no: str | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Discovery policy context for tool/mapper integration.
 
@@ -6450,7 +6451,7 @@ def _build_discovery_policy_context(
         if (
             discovery_frame.sub_intent == "similar_price_recommendation"
             and tire_size
-            and _SIMILAR_PRICE_SIZE_CONTEXT_RE.search(context_text or last_user_text)
+            and (goods_no or _SIMILAR_PRICE_SIZE_CONTEXT_RE.search(context_text or last_user_text))
             and "tire_size" not in discovery_tool_patch
         ):
             discovery_tool_patch["tire_size"] = tire_size
@@ -9361,6 +9362,7 @@ class TStationChatServiceV2:
             last_user_text=last_user_text,
             context_text="\n".join(reversed(recent_user_texts)) or last_user_text,
             tire_size=merged_slots.tire_size,
+            goods_no=merged_slots.goods_no,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)

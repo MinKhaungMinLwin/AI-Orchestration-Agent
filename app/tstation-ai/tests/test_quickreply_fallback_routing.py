@@ -3306,6 +3306,20 @@ def test_similar_price_policy_preserves_referenced_latest_size_context() -> None
     assert patch["tire_size"] == "195/55R15"
 
 
+def test_similar_price_policy_preserves_size_after_specific_product_selection() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="비슷한 가격대의 타이어 더 추천해줘",
+        context_text="키너지 ST AS 195/65R15\n비슷한 가격대의 타이어 더 추천해줘",
+        tire_size="195/65R15",
+        goods_no="G000000318500",
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
+    assert patch["tire_size"] == "195/65R15"
+
+
 def test_similar_price_policy_does_not_inject_size_without_size_reference() -> None:
     patch, decision = _build_discovery_policy_context(
         domains=[MultiAgentDomain.Domain.DISCOVERY],
