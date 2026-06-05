@@ -312,6 +312,10 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
           discount_amt}. 자연어 답변에 cpn_nm 인용 권장.
         - smrt_pay_yn: 스마트페이 가능 여부. "Y"이면 스마트페이 월 납부액 계산 가능,
           "N"이면 스마트페이 할부서비스 미지원 상품으로 안내하라.
+        - smrt_pay_prc: 스마트페이 월 납부액 계산 기준 금액
+          (PR_ITEM_PRC_INFO.SMRT_PAY_PRC). 스마트페이 문의는 이 값을 12/24로
+          나누고 반올림해 안내하라. extra_fvr_sale_prc, wage_prc,
+          cheapest_final_prc, payment_amount 를 스마트페이 계산에 사용하지 마라.
 
     paymentAmount 우선순위 (preOrder / orderComplete 카드 채울 때):
         cheapest_final_prc → extra_fvr_sale_prc → sale_prc (fallback 순서).
