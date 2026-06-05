@@ -475,6 +475,35 @@ def test_reservation_sale_schedule_filter_keeps_tna_store_slots_before_rsv_insta
     assert result == schedule
 
 
+def test_reservation_sale_schedule_filter_carries_shop_seq_from_candidates() -> None:
+    payload = {
+        "stores": [{
+            "shop_id": "F00721",
+            "shop_seq": "F100001277",
+            "shop_nm": "티스테이션 판교점",
+        }],
+        "logistics": {
+            "logistics_qty": 4,
+            "rsv_sale_yn": "N",
+        },
+        "inventory": {
+            "todayShopArray": [{"shopId": "F00721"}],
+            "tnaShopArray": [],
+        },
+    }
+    schedule = {
+        "tier": "today_only",
+        "stores": [{
+            "shop_id": "F00721",
+            "slots": [{"cal_day": "20260605", "tm": "17"}],
+        }],
+    }
+
+    result = tools._filter_reservation_sale_schedule(schedule, payload)
+
+    assert result["stores"][0]["shop_seq"] == "F100001277"
+
+
 def test_reservation_sale_schedule_filter_applies_only_when_no_store_or_logistics_inventory() -> None:
     payload = {
         "logistics": {
@@ -503,3 +532,26 @@ def test_reservation_sale_schedule_filter_applies_only_when_no_store_or_logistic
 
     assert result["tier"] == "reservation_sale"
     assert result["stores"][0]["slots"] == [{"cal_day": "20260625", "tm": "09"}]
+
+
+def test_quick_order_tool_sends_shop_seq_instead_of_shop_id(monkeypatch) -> None:
+    bodies: list[dict] = []
+
+    def fake_set_order_form_ai(*, client, body):
+        bodies.append(body.to_dict())
+        return _Response({"result": True, "ord_no": "O202606050001"})
+
+    monkeypatch.setattr(tools, "get_client", lambda: "client")
+    monkeypatch.setattr(tools, "set_order_form_ai", fake_set_order_form_ai)
+
+    result = tools.quick_order_tool.func(
+        goods_no="G000000309783",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_seq="F100001277",
+        rsv_date="20260605",
+        rsv_hour="17",
+    )
+
+    assert result["status"] == "success"
+    assert bodies[0]["shopSeq"] == "F100001277"
