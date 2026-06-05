@@ -445,3 +445,61 @@ def test_multi_store_schedule_uses_combined_mode_for_today_shop_with_logistics(m
     assert result["data"]["tier"] == "in_store_logistics_combined"
     assert calls == [(["F00721"], "in_store_logistics_combined")]
     assert [slot["cal_day"] for slot in result["data"]["stores"][0]["slots"]] == ["20260523", "20260525"]
+
+
+def test_reservation_sale_schedule_filter_keeps_tna_store_slots_before_rsv_install_date() -> None:
+    payload = {
+        "logistics": {
+            "logistics_qty": 0,
+            "rsv_sale_yn": "Y",
+            "rsv_install_date": "2026-06-25",
+        },
+        "inventory": {
+            "todayShopArray": [],
+            "tnaShopArray": [{"shopId": "F00721"}],
+        },
+    }
+    schedule = {
+        "tier": "tna_only",
+        "stores": [{
+            "shop_id": "F00721",
+            "slots": [
+                {"cal_day": "20260605", "tm": "17"},
+                {"cal_day": "20260625", "tm": "09"},
+            ],
+        }],
+    }
+
+    result = tools._filter_reservation_sale_schedule(schedule, payload)
+
+    assert result == schedule
+
+
+def test_reservation_sale_schedule_filter_applies_only_when_no_store_or_logistics_inventory() -> None:
+    payload = {
+        "logistics": {
+            "logistics_qty": 0,
+            "rsv_sale_yn": "Y",
+            "rsv_install_date": "2026-06-25",
+        },
+        "inventory": {
+            "todayShopArray": [],
+            "tnaShopArray": [],
+        },
+    }
+    schedule = {
+        "tier": "reservation_sale",
+        "stores": [{
+            "shop_id": "F00721",
+            "slots": [
+                {"cal_day": "20260605", "tm": "17"},
+                {"cal_day": "20260624", "tm": "17"},
+                {"cal_day": "20260625", "tm": "09"},
+            ],
+        }],
+    }
+
+    result = tools._filter_reservation_sale_schedule(schedule, payload)
+
+    assert result["tier"] == "reservation_sale"
+    assert result["stores"][0]["slots"] == [{"cal_day": "20260625", "tm": "09"}]

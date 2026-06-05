@@ -61,6 +61,44 @@ def parse_slot_hour(tm: object, *, exclude_noon: bool = True) -> int | None:
     return hour if 0 <= hour <= 23 else None
 
 
+def _extract_shop_ids(values: object) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    shop_ids: set[str] = set()
+    for item in values:
+        if isinstance(item, dict):
+            sid = item.get("shop_id") or item.get("shopId") or item.get("shop_seq") or item.get("shopSeq")
+        else:
+            sid = item
+        if sid:
+            shop_ids.add(str(sid))
+    return shop_ids
+
+
+def _parse_positive_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def reservation_sale_min_install_date(preview_payload: dict, shop_id: str) -> str | None:
+    logistics = preview_payload.get("logistics")
+    inventory = preview_payload.get("inventory")
+    if not isinstance(logistics, dict) or not isinstance(inventory, dict):
+        return None
+    if _parse_positive_int(logistics.get("logistics_qty") or logistics.get("logisticsQty") or logistics.get("qty")) > 0:
+        return None
+    if str(logistics.get("rsv_sale_yn") or logistics.get("rsvSaleYn") or "").upper() != "Y":
+        return None
+    if shop_id in _extract_shop_ids(inventory.get("todayShopArray")):
+        return None
+    if shop_id in _extract_shop_ids(inventory.get("tnaShopArray")):
+        return None
+    rsv_install_date = re.sub(r"\D", "", str(logistics.get("rsv_install_date") or logistics.get("rsvInstallDate") or ""))
+    return rsv_install_date if re.fullmatch(r"\d{8}", rsv_install_date) else None
+
+
 def extract_preview_payload(parsed: dict) -> dict | None:
     if parsed.get("status") == "success" and isinstance(parsed.get("data"), dict):
         return parsed["data"]
@@ -125,11 +163,14 @@ def build_datepick_from_preview_payload(
         slots = store.get("slots")
         if not shop_id or not isinstance(slots, list):
             continue
+        min_install_date = reservation_sale_min_install_date(preview_payload, shop_id)
         by_day: dict[str, set[int]] = {}
         for slot in slots:
             if not isinstance(slot, dict):
                 continue
             cal_day = str(slot.get("cal_day") or "").strip()
+            if min_install_date and cal_day < min_install_date:
+                continue
             hour = parse_slot_hour(slot.get("tm"))
             if cal_day and hour is not None:
                 by_day.setdefault(cal_day, set()).add(hour)

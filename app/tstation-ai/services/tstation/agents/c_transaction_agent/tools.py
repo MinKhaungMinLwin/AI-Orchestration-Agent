@@ -14,6 +14,7 @@ from services.tstation.common.tstation_be_client import (
     _to_dict,
 )
 from services.tstation.policies.domestic_region_gate import decide_domestic_search_area
+from services.tstation.policies.reservation_template_policy import reservation_sale_min_install_date
 from langchain.tools import tool
 from common.brand_mapping import normalize_brand_name
 
@@ -1793,6 +1794,46 @@ def _extract_inventory_shop_ids(data: Any, key: str) -> list[str]:
     return shop_ids
 
 
+def _filter_reservation_sale_schedule(schedule_data: Any, preview_payload: dict[str, Any]) -> Any:
+    if not isinstance(schedule_data, dict):
+        return schedule_data
+    stores = schedule_data.get("stores")
+    if not isinstance(stores, list):
+        return schedule_data
+
+    filtered_stores: list[Any] = []
+    changed = False
+    for store in stores:
+        if not isinstance(store, dict):
+            filtered_stores.append(store)
+            continue
+        shop_id = str(store.get("shop_id") or store.get("shopId") or "").strip()
+        slots = store.get("slots")
+        min_install_date = reservation_sale_min_install_date(preview_payload, shop_id)
+        if not shop_id or not min_install_date or not isinstance(slots, list):
+            filtered_stores.append(store)
+            continue
+
+        filtered_slots = [
+            slot
+            for slot in slots
+            if isinstance(slot, dict) and str(slot.get("cal_day") or "").strip() >= min_install_date
+        ]
+        changed = changed or len(filtered_slots) != len(slots)
+        if filtered_slots:
+            filtered_stores.append({**store, "slots": filtered_slots})
+        else:
+            changed = True
+
+    if not changed:
+        return schedule_data
+
+    filtered_schedule = {**schedule_data, "stores": filtered_stores}
+    if not filtered_stores:
+        filtered_schedule["tier"] = "none"
+    return filtered_schedule
+
+
 @tool
 @tool_cache(ttl=120)
 def transaction_store_preview_tool(
@@ -2064,6 +2105,7 @@ def transaction_store_preview_tool(
     }
     if place_fallback is not None:
         result_data["search"] = place_fallback
+    result_data["schedule"] = _filter_reservation_sale_schedule(result_data["schedule"], result_data)
 
     schedule_data = result_data["schedule"] if isinstance(result_data["schedule"], dict) else {}
     tier = schedule_data.get("tier")
