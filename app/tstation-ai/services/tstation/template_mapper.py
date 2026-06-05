@@ -91,6 +91,33 @@ _STOCK_OR_INSTALL_REQUEST_RE = re.compile(
     r"재고|오늘\s*서비스|오늘서비스|오늘\s*장착|당일|지금|바로|당장|장착\s*가능|매장|근처|주변",
     re.IGNORECASE,
 )
+_POSSESSIVE_VEHICLE_MODEL_RE = re.compile(
+    r"(?:내\s*차|내차|내\s*차량|내차량|내)\s+"
+    r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
+    r"\s*(?:인데|인데요|이야|야|은|는|이|가|에|에는|으로|로|타이어|추천|하중|적재|짐|호환|맞|가능|$)"
+    r")",
+    re.IGNORECASE,
+)
+_POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
+    "내",
+    "내차",
+    "차",
+    "차량",
+    "타이어",
+    "상품",
+    "추천",
+    "맞는",
+    "하중",
+    "적재",
+    "짐",
+    "호환",
+    "가능",
+}
+_EXPLICIT_VEHICLE_LIST_REQUEST_RE = re.compile(
+    r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
+    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여",
+    re.IGNORECASE,
+)
 _STORE_QUALITY_PREFERENCE_RE = re.compile(
     r"친절|서비스\s*좋|평점\s*좋|별점\s*높|평이\s*좋|추천\s*매장|매장\s*추천|"
     r"방문하기\s*좋|여성\s*(?:운전자|방문|고객)",
@@ -279,6 +306,55 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
             except (ValueError, TypeError):
                 pass
     return default
+
+
+def _normalize_vehicle_key(value: Any) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _vehicle_aliases(row: dict) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("car_nm", "car_model_det", "car_engine", "ver_opt_choc", "car_maker"):
+        normalized = _normalize_vehicle_key(row.get(key))
+        if len(normalized) >= 2:
+            aliases.add(normalized)
+    for key in ("car_nm", "car_model_det", "car_engine"):
+        value = str(row.get(key) or "")
+        for token in re.findall(r"[A-Za-z가-힣]*\d+[A-Za-z가-힣]*|[A-Za-z]{2,}|[가-힣]{2,}", value):
+            normalized = _normalize_vehicle_key(token)
+            if len(normalized) >= 2:
+                aliases.add(normalized)
+    maker = _normalize_vehicle_key(row.get("car_maker"))
+    model = _normalize_vehicle_key(row.get("car_model_det") or row.get("car_nm"))
+    if maker and model:
+        aliases.add(f"{maker}{model}")
+    return aliases
+
+
+def _possessive_vehicle_model_mentions(user_text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _POSSESSIVE_VEHICLE_MODEL_RE.finditer(user_text or ""):
+        raw = re.sub(r"\s+", " ", match.group("model") or "").strip(" ._-")
+        normalized = _normalize_vehicle_key(raw)
+        if len(normalized) < 2 or normalized in _POSSESSIVE_VEHICLE_MODEL_STOPWORDS:
+            continue
+        mentions.append(normalized)
+    return mentions
+
+
+def _should_suppress_listcar_for_possessive_model_mismatch(rows: list[dict]) -> bool:
+    user_text = current_user_text.get() or ""
+    if _EXPLICIT_VEHICLE_LIST_REQUEST_RE.search(user_text):
+        return False
+    requested_models = _possessive_vehicle_model_mentions(user_text)
+    if not requested_models or not rows:
+        return False
+    for row in rows:
+        aliases = _vehicle_aliases(row)
+        for requested in requested_models:
+            if any(alias and (requested in alias or alias in requested) for alias in aliases):
+                return False
+    return True
 
 
 def _normalize_brand_name(value: str) -> str:
@@ -2015,6 +2091,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     ):
         return None
     items, metadata = [], []
+    all_rows: list[dict] = []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)
         if isinstance(raw, list):
@@ -2030,6 +2107,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            all_rows.append(row)
             car_nm = _get_str(row, "car_model_det", "car_nm")
             car_maker = _get_str(row, "car_maker")
             car_info = f"{car_maker} {car_nm}" if car_maker and car_nm else (car_nm or car_maker)
@@ -2057,6 +2135,8 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "tireSizeRe": _get_str(row, "tire_size_re") or None,
             })
     if not items:
+        return None
+    if _should_suppress_listcar_for_possessive_model_mismatch(all_rows):
         return None
     user_text = current_user_text.get() or ""
     plate_match = _VEHICLE_PLATE_RE.search(user_text)

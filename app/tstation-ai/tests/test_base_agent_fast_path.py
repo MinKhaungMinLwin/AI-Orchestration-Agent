@@ -9,6 +9,7 @@ from services.tstation.agents.base_agent import (
     _normalize_qty_quick_replies,
     _owner_lookup_vehicle_recommendation_args,
     _resolve_registered_vehicle_match,
+    _should_defer_listcar_for_possessive_model_mismatch,
     _vehicle_owner_lookup_args_after_registered_mismatch,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
@@ -380,6 +381,56 @@ def test_registered_vehicle_recommendation_does_not_resolve_generic_model_mentio
     )
 
     assert row is None
+
+
+def test_possessive_model_mismatch_defers_listcar_fast_path():
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                }
+            ]
+        },
+    }
+
+    should_defer = _should_defer_listcar_for_possessive_model_mismatch(
+        "get_my_cars_tool",
+        tool_result,
+        [{"role": "user", "content": "내 차 다마스인데 하중 버틸 수 있어?"}],
+    )
+
+    assert should_defer is True
+
+
+def test_possessive_model_match_keeps_registered_vehicle_flow():
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                }
+            ]
+        },
+    }
+
+    should_defer = _should_defer_listcar_for_possessive_model_mismatch(
+        "get_my_cars_tool",
+        tool_result,
+        [{"role": "user", "content": "내 차 제타에 맞는 타이어 추천"}],
+    )
+
+    assert should_defer is False
 
 
 def test_registered_vehicle_recommendation_uses_current_user_text_only():

@@ -73,11 +73,33 @@ _CAR_NO_RE = re.compile(r"\d{2,3}\s?[가-힣]\s?\d{4}")
 _CAR_NO_OWNER_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
 _REGISTERED_VEHICLE_RECOMMEND_RE = re.compile(r"(타이어|상품).*(추천|맞|보여|찾|알려)|추천.*(타이어|상품)")
 _POSSESSIVE_VEHICLE_RE = re.compile(r"(내\s*차|내차|내\s+[0-9A-Za-z가-힣])")
+_POSSESSIVE_VEHICLE_MODEL_RE = re.compile(
+    r"(?:내\s*차|내차|내\s*차량|내차량|내)\s+"
+    r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
+    r"\s*(?:인데|인데요|이야|야|은|는|이|가|에|에는|으로|로|타이어|추천|하중|적재|짐|호환|맞|가능|$)"
+    r")",
+    re.IGNORECASE,
+)
 _VEHICLE_LIST_REQUEST_RE = re.compile(
     r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
     r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여",
     re.IGNORECASE,
 )
+_POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
+    "내",
+    "내차",
+    "차",
+    "차량",
+    "타이어",
+    "상품",
+    "추천",
+    "맞는",
+    "하중",
+    "적재",
+    "짐",
+    "호환",
+    "가능",
+}
 
 
 def _normalize_vehicle_key(value: Any) -> str:
@@ -226,6 +248,55 @@ def _vehicle_aliases(row: dict) -> set[str]:
     if maker and model:
         aliases.add(f"{maker}{model}")
     return aliases
+
+
+def _possessive_vehicle_model_mentions(user_text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _POSSESSIVE_VEHICLE_MODEL_RE.finditer(user_text or ""):
+        raw = re.sub(r"\s+", " ", match.group("model") or "").strip(" ._-")
+        normalized = _normalize_vehicle_key(raw)
+        if len(normalized) < 2 or normalized in _POSSESSIVE_VEHICLE_MODEL_STOPWORDS:
+            continue
+        mentions.append(normalized)
+    return mentions
+
+
+def _has_registered_vehicle_model_match(rows: list[dict], requested_models: list[str]) -> bool:
+    if not requested_models:
+        return False
+    for row in rows:
+        aliases = _vehicle_aliases(row)
+        for requested in requested_models:
+            if any(alias and (requested in alias or alias in requested) for alias in aliases):
+                return True
+    return False
+
+
+def _should_defer_listcar_for_possessive_model_mismatch(
+    tool_name: str,
+    tool_result: Any,
+    messages: list[dict],
+) -> bool:
+    """Let the LLM answer using the named vehicle when it is not registered.
+
+    For turns like "내 차 다마스인데 하중..." the registered-car lookup is only a
+    first attempt to resolve a size. If none of the user's registered cars match
+    the named model, stopping at listCar makes the user pick an unrelated car.
+    """
+    if tool_name not in {"get_my_cars_tool", "get_user_vehicles_tool"}:
+        return False
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return False
+    if _is_explicit_vehicle_list_request(messages):
+        return False
+    user_text = _latest_user_text(messages)
+    requested_models = _possessive_vehicle_model_mentions(user_text)
+    if not requested_models:
+        return False
+    rows = _extract_tool_rows(tool_result)
+    if not rows:
+        return False
+    return not _has_registered_vehicle_model_match(rows, requested_models)
 
 
 def _resolve_registered_vehicle_match(tool_name: str, tool_result: Any, messages: list[dict]) -> dict | None:
@@ -1128,6 +1199,16 @@ class BaseAgent(ABC):
                                     yield staggered_event
                                     return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
+                                if _should_defer_listcar_for_possessive_model_mismatch(
+                                    message.name,
+                                    tool_result,
+                                    messages,
+                                ):
+                                    logger.info(
+                                        "[%s] Skip listCar fast-path after possessive vehicle model mismatch",
+                                        self.name,
+                                    )
+                                    continue
                                 # When the user already named a unique registered vehicle in a
                                 # recommendation turn, do not terminate at listCar here. Let the
                                 # main Discovery loop continue and issue exactly one

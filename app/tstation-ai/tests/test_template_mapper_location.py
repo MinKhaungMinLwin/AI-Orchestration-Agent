@@ -1571,6 +1571,23 @@ def test_listcar_metadata_includes_member_car_reg_seq_for_auto_selection() -> No
     assert result["data"]["metadata"][0]["mbrCarRegSeq"] == "2000002944"
 
 
+def test_listcar_suppressed_when_possessive_model_not_in_registered_cars() -> None:
+    current_user_text.set("내 차 다마스인데 하중 버틸 수 있어?")
+
+    result = try_build_template([_registered_vehicle_entry()], "등록된 차량 1대를 확인했어요. 안내받으실 차량을 선택해 주세요.")
+
+    assert result is None
+
+
+def test_listcar_kept_when_possessive_model_matches_registered_car() -> None:
+    current_user_text.set("내 차 GV70에 맞는 타이어 추천해줘")
+
+    result = try_build_template([_registered_vehicle_entry()], "등록된 차량 1대를 확인했어요. 안내받으실 차량을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "listCar"
+
+
 def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
     current_ev_suitability_comparison.set(True)
 
