@@ -453,7 +453,9 @@ The question to answer here is NOT "what's the new rcmd_type bucket name" but:
 If the user message contains "비슷한 가격대", "이 가격대", "같은 가격대", "이 정도 가격", "비슷한 가격"
 AND does NOT contain an explicit numeric price range ("X만원~Y만원", "X만원 이하", "X만원 이상" etc.),
 → skip rules 0–5 entirely and follow the **PRICE-SIMILARITY FOLLOW-UP** section in the recommendation prompt.
-⚠️ NEVER pass `tire_size` — user is browsing by budget, not by size (TC-047 bug).
+⚠️ Do NOT pass a stale confirmed `tire_size` when the latest product flow is only an unsized product/pattern explanation
+   (TC-047). However, if the latest flow already selected/searched a specific SKU or size, or the user says
+   "해당 사이즈/이 사이즈/같은 사이즈", preserve that `tire_size`.
 ⚠️ NEVER ask "어떤 사이즈로 찾아드릴까요?" — size is irrelevant when searching by price range.
 
 Decision precedence (first match wins):
@@ -1576,10 +1578,18 @@ AND does NOT contain an explicit numeric price range ("X만원~Y만원", "X만�
    max_price = ceil(ref_price × 1.5 / 10000) × 10000
    Example: ref_price=64,800 → min=40,000, max=100,000
    Example: ref_price=154,300 → min=100,000, max=240,000
-3. Call get_products_recommendations_tool(rcmd_type="tstation", min_price=<min>, max_price=<max>).
-   ⚠️ NEVER pass tire_size — user is browsing by budget, not by size (TC-047 bug).
-   ⚠️ NEVER ask "어떤 사이즈로 찾아드릴까요?" — size is irrelevant when the user only mentions price range.
-4. Emit quickReply (NOT product card) — this stops Transaction Agent from being chained into this flow:
+3. Decide whether to include tire_size:
+   - If the latest product flow is only an unsized pattern/product explanation (for example:
+     "kinergy EX 설명좀" → "비슷한 가격대의 타이어 더 추천해줘"), call without tire_size.
+   - If the latest product flow selected/searched a specific SKU or size (for example:
+     "1955515" → "해당 사이즈 비슷한 가격대 타이어 몇개 더 추천해줘"), preserve that tire_size.
+   - If the user explicitly says "해당 사이즈", "이 사이즈", "같은 사이즈", "방금 사이즈", or includes a tire size
+     in the current message, preserve/derive that tire_size.
+   - Do NOT use an old confirmed tire_size by itself when the latest product flow is unsized.
+   - NEVER ask "어떤 사이즈로 찾아드릴까요?" for this follow-up.
+4. Call get_products_recommendations_tool(rcmd_type="tstation", min_price=<min>, max_price=<max>,
+   tire_size=<latest size> only when Step 3 says to preserve size).
+5. Emit quickReply (NOT product card) — this stops Transaction Agent from being chained into this flow:
    - Results found (1+): list top items as "• [goods_nm]: 할인가 X원" bullets in assistantResponse.
      quickReplies: [{"label":"구매하기","domain":"TRANSACTION"},{"label":"다른 타이어 찾기","domain":"DISCOVERY"}]
    - No results: "해당 가격대(Xmin만원~Xmax만원)로는 현재 추천 가능한 타이어가 없어요."

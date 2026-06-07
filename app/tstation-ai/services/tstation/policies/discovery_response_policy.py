@@ -78,8 +78,17 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
             required_slots=(),
-            forbidden_behaviors=("require_size_unconditionally", "inject_confirmed_tire_size", "price_without_basis"),
-            assistant_guidance="정가 기준 가격대 range로 유사 상품을 추천하고, 최종 구매 가격은 규격 확인 후 안내한다.",
+            forbidden_behaviors=(
+                "require_size_unconditionally",
+                "inject_stale_confirmed_tire_size",
+                "drop_latest_size_specific_context",
+                "price_without_basis",
+            ),
+            assistant_guidance=(
+                "정가 기준 가격대 range로 유사 상품을 추천한다. 최신 흐름이 사이즈 없는 상품군 설명이면 "
+                "사이즈를 주입하지 말고, 최신 흐름에서 특정 사이즈/SKU가 확인됐거나 사용자가 해당 사이즈를 "
+                "가리키면 그 tire_size를 유지한다."
+            ),
             metadata={"response_shape_key": "similar_price_range_recommendation"},
         )
 
@@ -149,6 +158,16 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             forbidden_behaviors=tuple(forbidden_behaviors),
             assistant_guidance="상품명 검색 결과 기준으로 답하고 이전 추천 결과로 대체하지 않는다.",
             metadata={"response_shape_key": "product_search_summary"},
+        )
+
+    if frame.intent == "product_description":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=("generic_unsized_summary", "unrequested_size_missing_notice"),
+            assistant_guidance="상품 설명 요청에는 상품 특성만 간결히 안내하고, 사용자가 묻지 않은 사이즈 미확정 안내를 덧붙이지 않는다.",
+            metadata={"response_shape_key": "neutral_product_description"},
         )
 
     return ResponseDecision(

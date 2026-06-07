@@ -142,6 +142,92 @@ def test_tc233_preview_with_single_confirmed_store_builds_datepick() -> None:
     }]
 
 
+def test_preview_datepick_keeps_today_inventory_slots_before_reservation_install_date() -> None:
+    result = build_datepick_from_preview_payload(
+        {
+            "logistics": {
+                "logistics_qty": 0,
+                "rsv_sale_yn": "Y",
+                "rsv_install_date": "2026-06-25",
+            },
+            "inventory": {
+                "todayShopArray": [{"shopId": "F00721"}],
+                "tnaShopArray": [],
+            },
+            "schedule": {
+                "tier": "in_store_only",
+                "stores": [{
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 판교점",
+                    "slots": [
+                        {"cal_day": "20260605", "tm": "1700"},
+                        {"cal_day": "20260625", "tm": "0900"},
+                    ],
+                }],
+            },
+        },
+        assistant_text="예약 가능한 날짜와 시간을 선택해 주세요.",
+        assistant_response_source="test",
+        require_single_store=True,
+    )
+
+    assert result is not None
+    assert result["data"]["dates"][0] == {
+        "date": "2026년 6월 5일 (금)",
+        "available": True,
+        "availableTimes": [17],
+        "index": 0,
+    }
+
+
+def test_preview_datepick_filters_before_reservation_install_date_only_for_reservation_sale_fallback() -> None:
+    result = build_datepick_from_preview_payload(
+        {
+            "logistics": {
+                "logistics_qty": 0,
+                "rsv_sale_yn": "Y",
+                "rsv_install_date": "2026-06-25",
+            },
+            "inventory": {
+                "todayShopArray": [],
+                "tnaShopArray": [],
+            },
+            "schedule": {
+                "tier": "reservation_sale",
+                "stores": [{
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 판교점",
+                    "slots": [
+                        {"cal_day": "20260605", "tm": "1700"},
+                        {"cal_day": "20260624", "tm": "1700"},
+                        {"cal_day": "20260625", "tm": "0900"},
+                        {"cal_day": "20260626", "tm": "1000"},
+                    ],
+                }],
+            },
+        },
+        assistant_text="예약 가능한 날짜와 시간을 선택해 주세요.",
+        assistant_response_source="test",
+        require_single_store=True,
+    )
+
+    assert result is not None
+    assert result["data"]["dates"] == [
+        {
+            "date": "2026년 6월 25일 (목)",
+            "available": True,
+            "availableTimes": [9],
+            "index": 0,
+        },
+        {
+            "date": "2026년 6월 26일 (금)",
+            "available": True,
+            "availableTimes": [10],
+            "index": 1,
+        },
+    ]
+
+
 def test_reservation_time_quickreply_stock_context_is_not_coerced() -> None:
     event = {
         "type": "data",

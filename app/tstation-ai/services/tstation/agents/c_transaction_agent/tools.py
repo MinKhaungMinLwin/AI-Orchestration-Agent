@@ -14,6 +14,7 @@ from services.tstation.common.tstation_be_client import (
     _to_dict,
 )
 from services.tstation.policies.domestic_region_gate import decide_domestic_search_area
+from services.tstation.policies.reservation_template_policy import reservation_sale_min_install_date
 from langchain.tools import tool
 from common.brand_mapping import normalize_brand_name
 
@@ -311,6 +312,11 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
           discount_amt}. 자연어 답변에 cpn_nm 인용 권장.
         - smrt_pay_yn: 스마트페이 가능 여부. "Y"이면 스마트페이 월 납부액 계산 가능,
           "N"이면 스마트페이 할부서비스 미지원 상품으로 안내하라.
+        - smrt_pay_prc: 스마트페이 월 납부액 계산 기준 금액
+          (PR_ITEM_PRC_INFO.SMRT_PAY_PRC). 이 값은 타이어 1개 기준 금액이므로
+          스마트페이 문의는 이 값에 4를 곱한 뒤 12/24로 나누고 반올림해 안내하라.
+          extra_fvr_sale_prc, wage_prc,
+          cheapest_final_prc, payment_amount 를 스마트페이 계산에 사용하지 마라.
 
     paymentAmount 우선순위 (preOrder / orderComplete 카드 채울 때):
         cheapest_final_prc → extra_fvr_sale_prc → sale_prc (fallback 순서).
@@ -1793,6 +1799,46 @@ def _extract_inventory_shop_ids(data: Any, key: str) -> list[str]:
     return shop_ids
 
 
+def _filter_reservation_sale_schedule(schedule_data: Any, preview_payload: dict[str, Any]) -> Any:
+    if not isinstance(schedule_data, dict):
+        return schedule_data
+    stores = schedule_data.get("stores")
+    if not isinstance(stores, list):
+        return schedule_data
+
+    filtered_stores: list[Any] = []
+    changed = False
+    for store in stores:
+        if not isinstance(store, dict):
+            filtered_stores.append(store)
+            continue
+        shop_id = str(store.get("shop_id") or store.get("shopId") or "").strip()
+        slots = store.get("slots")
+        min_install_date = reservation_sale_min_install_date(preview_payload, shop_id)
+        if not shop_id or not min_install_date or not isinstance(slots, list):
+            filtered_stores.append(store)
+            continue
+
+        filtered_slots = [
+            slot
+            for slot in slots
+            if isinstance(slot, dict) and str(slot.get("cal_day") or "").strip() >= min_install_date
+        ]
+        changed = changed or len(filtered_slots) != len(slots)
+        if filtered_slots:
+            filtered_stores.append({**store, "slots": filtered_slots})
+        else:
+            changed = True
+
+    if not changed:
+        return schedule_data
+
+    filtered_schedule = {**schedule_data, "stores": filtered_stores}
+    if not filtered_stores:
+        filtered_schedule["tier"] = "none"
+    return filtered_schedule
+
+
 @tool
 @tool_cache(ttl=120)
 def transaction_store_preview_tool(
@@ -2064,6 +2110,7 @@ def transaction_store_preview_tool(
     }
     if place_fallback is not None:
         result_data["search"] = place_fallback
+    result_data["schedule"] = _filter_reservation_sale_schedule(result_data["schedule"], result_data)
 
     schedule_data = result_data["schedule"] if isinstance(result_data["schedule"], dict) else {}
     tier = schedule_data.get("tier")

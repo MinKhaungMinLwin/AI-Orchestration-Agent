@@ -22,6 +22,7 @@ from services.tstation.agents.base_agent import (
     _is_staggered_registered_vehicle,
     _registered_vehicle_slot_values,
 )
+from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -44,6 +45,7 @@ from services.tstation.chat import (
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
+    _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_order_quantity_prompt_event,
     _build_staggered_vehicle_tire_selection_event,
@@ -669,6 +671,31 @@ def test_reservation_date_range_guard_uses_recent_reservation_context() -> None:
 
     assert event is not None
     assert "2026년 8월 1일 예약은 아직 오픈 전" in event["data"]["assistantResponse"]
+
+
+def test_reservation_date_range_guard_blocks_past_explicit_date_and_ignores_user_declared_today() -> None:
+    event = _reservation_date_range_guard_event(
+        "오늘은 2026년 5월 25일이야. 2026년 5월 29일 오후 16시 예약 돼?",
+        today=datetime.date(2026, 6, 5),
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_reservation_past_date_guard"
+    assert (
+        event["data"]["assistantResponse"]
+        == "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. 오늘 날짜 2026-06-05 이후로 다시 선택해 주세요."
+    )
+
+
+def test_reservation_date_range_guard_blocks_past_yearless_date() -> None:
+    event = _reservation_date_range_guard_event(
+        "티스테이션 성남IC점 5월 29일 16시 예약 돼?",
+        today=datetime.date(2026, 6, 5),
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_reservation_past_date_guard"
+    assert "오늘 날짜 2026-06-05 이후로 다시 선택해 주세요." in event["data"]["assistantResponse"]
 
 
 def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates() -> None:
@@ -1844,7 +1871,13 @@ def test_store_holiday_period_event_prefers_holiday_match_over_available_slots()
 
 
 def test_store_holiday_period_detail_uses_requested_cal_day_when_present() -> None:
-    assert _requested_reservation_cal_day_or_today("티스테이션 성남IC점 5/29 예약 가능해?") == "20260529"
+    assert (
+        _requested_reservation_cal_day_or_today(
+            "티스테이션 성남IC점 5/29 예약 가능해?",
+            today=datetime.date(2026, 5, 26),
+        )
+        == "20260529"
+    )
 
 
 def test_store_holiday_period_detail_falls_back_to_today_when_no_requested_date() -> None:
@@ -1949,6 +1982,75 @@ def test_store_schedule_context_preserves_slots_for_followup_datepick_recovery()
         {"cal_day": "20260530", "tm": "09"},
         {"cal_day": "20260530", "tm": "13"},
     ]
+
+
+def test_reservation_history_context_is_preserved_for_followup_reference() -> None:
+    result = filter_for_context(
+        "get_my_reservations_tool",
+        {
+            "status": "success",
+            "data": {
+                "reservations": [
+                    {
+                        "ord_no": "O202605120019340",
+                        "shop_nm": "티스테이션 성남IC점",
+                        "vst_rsv_dtime": "2026-05-29 16:00",
+                        "shop_rsv_sct_label": "구매후방문예약",
+                        "shop_vst_rsv_sts_label": "예약대기",
+                        "shop_rsv_no": "RSV-PRIVATE",
+                        "tel_no": "031-751-6471",
+                    },
+                    {
+                        "ord_no": "O202605180019345",
+                        "shop_nm": "티스테이션 판교점",
+                        "vst_rsv_dtime": "2026-05-20 13:00",
+                        "shop_rsv_sct_label": "구매후방문예약",
+                        "shop_vst_rsv_sts_label": "예약대기",
+                    },
+                ]
+            },
+        },
+        {"sct_cd": "all"},
+    )
+
+    assert result is not None
+    assert result["tool"] == "get_my_reservations_tool"
+    assert result["data"][0] == {
+        "ord_no": "O202605120019340",
+        "shop_nm": "티스테이션 성남IC점",
+        "vst_rsv_dtime": "2026-05-29 16:00",
+        "shop_rsv_sct_label": "구매후방문예약",
+        "shop_vst_rsv_sts_label": "예약대기",
+    }
+    assert "shop_rsv_no" not in result["data"][0]
+    assert "tel_no" not in result["data"][0]
+
+
+def test_tool_context_formats_reservation_history_label() -> None:
+    context = TStationChatServiceV2._format_tool_context([
+        {
+            "tool": "get_my_reservations_tool",
+            "data": [
+                {
+                    "ord_no": "O202605120019340",
+                    "shop_nm": "티스테이션 성남IC점",
+                    "vst_rsv_dtime": "2026-05-29 16:00",
+                    "shop_rsv_sct_label": "구매후방문예약",
+                    "shop_vst_rsv_sts_label": "예약대기",
+                }
+            ],
+        }
+    ])
+
+    assert "• [최신] 예약 내역" in context
+    assert "티스테이션 성남IC점" in context
+    assert "2026-05-29 16:00" in context
+
+
+def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:
+    assert "previous user question and assistant answer" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+    assert "previous answer was a reservation-history list" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+    assert "Do NOT fall back to the first order row" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_recent_single_store_context_can_carry_shop_id_from_detail_input() -> None:
@@ -3189,6 +3291,46 @@ def test_recommendation_tool_does_not_autofill_tire_size_for_price_range(monkeyp
 
     assert result["status"] == "no_results"
     assert captured["tire_size"] is None
+
+
+def test_similar_price_policy_preserves_referenced_latest_size_context() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="해당 사이즈 비슷한 가격대 타이어 몇개 더 추천해줘",
+        context_text="1955515\n해당 사이즈 비슷한 가격대 타이어 몇개 더 추천해줘",
+        tire_size="195/55R15",
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
+    assert patch["tire_size"] == "195/55R15"
+
+
+def test_similar_price_policy_preserves_size_after_specific_product_selection() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="비슷한 가격대의 타이어 더 추천해줘",
+        context_text="키너지 ST AS 195/65R15\n비슷한 가격대의 타이어 더 추천해줘",
+        tire_size="195/65R15",
+        goods_no="G000000318500",
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
+    assert patch["tire_size"] == "195/65R15"
+
+
+def test_similar_price_policy_does_not_inject_size_without_size_reference() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="비슷한 가격대의 타이어 더 추천해줘",
+        context_text="키너지 EX 설명좀\n비슷한 가격대의 타이어 더 추천해줘",
+        tire_size="195/55R15",
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
+    assert "tire_size" not in patch
 
 
 def test_recommendation_tool_applies_discovery_policy_patch(monkeypatch: pytest.MonkeyPatch) -> None:

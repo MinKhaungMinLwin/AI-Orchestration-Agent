@@ -17,7 +17,9 @@ from typing import Any
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.reservation_template_policy import (
     build_datepick_from_preview_payload,
+    extract_preview_payload,
     is_other_store_request,
+    reservation_sale_min_install_date,
     should_keep_stock_location,
     yyyymmdd_to_korean_date,
 )
@@ -87,6 +89,33 @@ current_transaction_response_decision: contextvars.ContextVar[ResponseDecision |
 
 _STOCK_OR_INSTALL_REQUEST_RE = re.compile(
     r"재고|오늘\s*서비스|오늘서비스|오늘\s*장착|당일|지금|바로|당장|장착\s*가능|매장|근처|주변",
+    re.IGNORECASE,
+)
+_POSSESSIVE_VEHICLE_MODEL_RE = re.compile(
+    r"(?:내\s*차|내차|내\s*차량|내차량|내)\s+"
+    r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
+    r"\s*(?:인데|인데요|이야|야|은|는|이|가|에|에는|으로|로|타이어|추천|하중|적재|짐|호환|맞|가능|$)"
+    r")",
+    re.IGNORECASE,
+)
+_POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
+    "내",
+    "내차",
+    "차",
+    "차량",
+    "타이어",
+    "상품",
+    "추천",
+    "맞는",
+    "하중",
+    "적재",
+    "짐",
+    "호환",
+    "가능",
+}
+_EXPLICIT_VEHICLE_LIST_REQUEST_RE = re.compile(
+    r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
+    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여",
     re.IGNORECASE,
 )
 _STORE_QUALITY_PREFERENCE_RE = re.compile(
@@ -277,6 +306,55 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
             except (ValueError, TypeError):
                 pass
     return default
+
+
+def _normalize_vehicle_key(value: Any) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _vehicle_aliases(row: dict) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("car_nm", "car_model_det", "car_engine", "ver_opt_choc", "car_maker"):
+        normalized = _normalize_vehicle_key(row.get(key))
+        if len(normalized) >= 2:
+            aliases.add(normalized)
+    for key in ("car_nm", "car_model_det", "car_engine"):
+        value = str(row.get(key) or "")
+        for token in re.findall(r"[A-Za-z가-힣]*\d+[A-Za-z가-힣]*|[A-Za-z]{2,}|[가-힣]{2,}", value):
+            normalized = _normalize_vehicle_key(token)
+            if len(normalized) >= 2:
+                aliases.add(normalized)
+    maker = _normalize_vehicle_key(row.get("car_maker"))
+    model = _normalize_vehicle_key(row.get("car_model_det") or row.get("car_nm"))
+    if maker and model:
+        aliases.add(f"{maker}{model}")
+    return aliases
+
+
+def _possessive_vehicle_model_mentions(user_text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _POSSESSIVE_VEHICLE_MODEL_RE.finditer(user_text or ""):
+        raw = re.sub(r"\s+", " ", match.group("model") or "").strip(" ._-")
+        normalized = _normalize_vehicle_key(raw)
+        if len(normalized) < 2 or normalized in _POSSESSIVE_VEHICLE_MODEL_STOPWORDS:
+            continue
+        mentions.append(normalized)
+    return mentions
+
+
+def _should_suppress_listcar_for_possessive_model_mismatch(rows: list[dict]) -> bool:
+    user_text = current_user_text.get() or ""
+    if _EXPLICIT_VEHICLE_LIST_REQUEST_RE.search(user_text):
+        return False
+    requested_models = _possessive_vehicle_model_mentions(user_text)
+    if not requested_models or not rows:
+        return False
+    for row in rows:
+        aliases = _vehicle_aliases(row)
+        for requested in requested_models:
+            if any(alias and (requested in alias or alias in requested) for alias in aliases):
+                return False
+    return True
 
 
 def _normalize_brand_name(value: str) -> str:
@@ -487,6 +565,45 @@ def _find_entries(tool_data_list: list[dict], *tool_names: str) -> list[dict]:
             continue
         out.append(e)
     return out
+
+
+def _same_turn_reservation_sale_min_install_date(tool_data_list: list[dict], shop_id: str) -> str | None:
+    """Return rsv_install_date when same-turn preview says this shop is reservation-sale fallback only."""
+    if not shop_id:
+        return None
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        raw = entry.get("data")
+        if not isinstance(raw, dict):
+            continue
+        preview_payload = extract_preview_payload(raw)
+        if not isinstance(preview_payload, dict):
+            continue
+        min_install_date = reservation_sale_min_install_date(preview_payload, shop_id)
+        if min_install_date:
+            return min_install_date
+    return None
+
+
+def _yyyymmdd_to_plain_korean_date(s: str) -> str:
+    try:
+        dt = datetime.datetime.strptime(s, "%Y%m%d")
+    except (TypeError, ValueError):
+        return s
+    return f"{dt.year}년 {dt.month}월 {dt.day}일"
+
+
+def _reservation_sale_date_quickreply(min_install_date: str) -> dict:
+    install_date = _yyyymmdd_to_plain_korean_date(min_install_date)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_mapper_reservation_sale_date_guard",
+        "data": {
+            "assistantResponse": f"해당 상품은 {install_date} 이후 장착 가능합니다. 다른 날짜를 선택해 주세요.",
+            "quickReplies": [{"label": "다른 날짜 확인", "domain": "TRANSACTION"}],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
 
 
 def _unverifiable_store_preference_labels(text: str) -> list[str]:
@@ -1627,6 +1744,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         return None
     decision = current_discovery_response_decision.get()
     response_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision else ""
+    is_neutral_product_description = response_shape_key == "neutral_product_description"
     if response_shape_key == "similar_price_range_recommendation":
         for entry in _find_entries(
             tool_data_list,
@@ -1691,17 +1809,27 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if not found_product_tool or not rows_by_name:
         return None
 
-    lines = ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
+    lines = [] if is_neutral_product_description else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
+        if is_neutral_product_description:
+            lines.extend([
+                "",
+                f"{name}: {_tire_summary_first_line(row)}",
+                _tire_summary_second_line(row),
+            ])
+        else:
+            lines.extend([
+                "",
+                f"- {name}: {_tire_summary_first_line(row)}",
+                f"  {_tire_summary_second_line(row)}",
+            ])
+    if is_neutral_product_description:
+        lines = [line for line in lines if line]
+    else:
         lines.extend([
             "",
-            f"- {name}: {_tire_summary_first_line(row)}",
-            f"  {_tire_summary_second_line(row)}",
+            "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
         ])
-    lines.extend([
-        "",
-        "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
-    ])
 
     return {
         "type": "data",
@@ -1974,6 +2102,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     ):
         return None
     items, metadata = [], []
+    all_rows: list[dict] = []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)
         if isinstance(raw, list):
@@ -1989,6 +2118,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            all_rows.append(row)
             car_nm = _get_str(row, "car_model_det", "car_nm")
             car_maker = _get_str(row, "car_maker")
             car_info = f"{car_maker} {car_nm}" if car_maker and car_nm else (car_nm or car_maker)
@@ -2016,6 +2146,8 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "tireSizeRe": _get_str(row, "tire_size_re") or None,
             })
     if not items:
+        return None
+    if _should_suppress_listcar_for_possessive_model_mismatch(all_rows):
         return None
     user_text = current_user_text.get() or ""
     plate_match = _VEHICLE_PLATE_RE.search(user_text)
@@ -3319,6 +3451,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
     # but we sort cal_day strings before emitting to avoid relying on that.
+    min_install_date = _same_turn_reservation_sale_min_install_date(tool_data_list, shop_id)
     by_day: dict[str, set[int]] = {}
     for s in slots:
         if not isinstance(s, dict):
@@ -3326,6 +3459,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         cal_day = _get_str(s, "cal_day")
         hour = _parse_tm_to_hour(_get_str(s, "tm"))
         if not cal_day or hour is None:
+            continue
+        if min_install_date and cal_day < min_install_date:
             continue
         bucket = by_day.setdefault(cal_day, set())
         if allow_slots and _is_bookable_hour(hour):
@@ -3401,6 +3536,9 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         shop_id = _get_str(args, "shop_id")
         if not cal_day or not shop_id:
             continue
+        min_install_date = _same_turn_reservation_sale_min_install_date(tool_data_list, shop_id)
+        if min_install_date and cal_day < min_install_date:
+            return _reservation_sale_date_quickreply(min_install_date)
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
             continue
@@ -3615,8 +3753,12 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             },
         }
 
-    # order (quick_order_tool) 는 기존 orderComplete 카드 그대로 노출.
-    default_msg = "주문이 완료되었습니다. 😊" if is_success else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+    # order (quick_order_tool) 는 주문/결제 페이지로 이동하기 전 주문서 생성 단계다.
+    default_msg = (
+        "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
+        if is_success
+        else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
+    )
     text = (assistant_text or "").strip()
     assistant_response = text if text and len(text) <= 120 else default_msg
 

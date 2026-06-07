@@ -4787,6 +4787,13 @@ _FUTURE_MONTH_DAY_RE = re.compile(
     r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2})\s*년\s*)?"
     r"(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?(?![\dA-Za-z/-])"
 )
+_USER_DECLARED_TODAY_DATE_RE = re.compile(
+    r"오늘\s*은\s*"
+    r"(?:(?:20\d{2})\s*(?:년|[./-])\s*)?"
+    r"(?:1[0-2]|0?[1-9])\s*(?:월|[./-])\s*(?:3[01]|[12]?\d)\s*일?"
+    r"\s*(?:이야|입니다|이에요|예요|임|라고)?[.!。]?",
+    re.IGNORECASE,
+)
 _TIRE_SIZE_TOKEN_FOR_DATE_PARSE_RE = re.compile(
     r"(?<!\d)"
     r"\d{3}"
@@ -4894,9 +4901,15 @@ def _should_preserve_store_date_availability_context(
     return False
 
 
-def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | None = None) -> datetime.date | None:
+def _parse_requested_reservation_date(
+    user_text: str,
+    *,
+    today: datetime.date | None = None,
+    roll_yearless_past: bool = True,
+) -> datetime.date | None:
     today = today or _kst_today()
     text = _TIRE_SIZE_TOKEN_FOR_DATE_PARSE_RE.sub(" ", user_text or "")
+    text = _USER_DECLARED_TODAY_DATE_RE.sub(" ", text)
     relative_requested = _parse_relative_weekday_reservation_date(text, today=today)
     if relative_requested is not None:
         return relative_requested
@@ -4911,7 +4924,7 @@ def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | 
         requested = datetime.date(year, month, day)
     except ValueError:
         return None
-    if not year_text and requested < today:
+    if roll_yearless_past and not year_text and requested < today:
         requested = datetime.date(today.year + 1, month, day)
     return requested
 
@@ -4919,9 +4932,10 @@ def _parse_requested_reservation_date(user_text: str, *, today: datetime.date | 
 def _requested_reservation_cal_day_or_today(
     user_text: str,
     *,
+    today: datetime.date | None = None,
     now_utc: datetime.datetime | None = None,
 ) -> str:
-    requested = _parse_requested_reservation_date(user_text)
+    requested = _parse_requested_reservation_date(user_text, today=today)
     if requested is not None:
         return requested.strftime("%Y%m%d")
     now_utc = now_utc or datetime.datetime.now(datetime.UTC)
@@ -4935,11 +4949,30 @@ def _reservation_date_range_guard_event(
     today: datetime.date | None = None,
 ) -> dict | None:
     today = today or _kst_today()
-    requested = _parse_requested_reservation_date(user_text, today=today)
+    requested = _parse_requested_reservation_date(user_text, today=today, roll_yearless_past=False)
     if requested is None:
         return None
     if not _reservation_context_from_messages(user_text, messages):
         return None
+    if requested < today:
+        today_label = today.strftime("%Y-%m-%d")
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_reservation_past_date_guard",
+            "data": {
+                "assistantResponse": (
+                    "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. "
+                    f"오늘 날짜 {today_label} 이후로 다시 선택해 주세요."
+                ),
+                "quickReplies": [
+                    {"label": "예약 가능 날짜 보기", "domain": "TRANSACTION"},
+                    {"label": "다른 매장 보기", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
     max_date = today + datetime.timedelta(days=30)
     if requested <= max_date:
         return None
@@ -6347,6 +6380,10 @@ _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED = tuple(
     (re.compile(pattern, re.IGNORECASE), label, rcmd_type)
     for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS
 )
+_SIMILAR_PRICE_SIZE_CONTEXT_RE = re.compile(
+    r"해당\s*사이즈|이\s*사이즈|같은\s*사이즈|방금\s*사이즈|그\s*사이즈",
+    re.IGNORECASE,
+)
 
 
 def _build_discovery_policy_context(
@@ -6355,6 +6392,7 @@ def _build_discovery_policy_context(
     last_user_text: str,
     context_text: str,
     tire_size: str | None,
+    goods_no: str | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Discovery policy context for tool/mapper integration.
 
@@ -6410,6 +6448,13 @@ def _build_discovery_policy_context(
             if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
             else {}
         )
+        if (
+            discovery_frame.sub_intent == "similar_price_recommendation"
+            and tire_size
+            and (goods_no or _SIMILAR_PRICE_SIZE_CONTEXT_RE.search(context_text or last_user_text))
+            and "tire_size" not in discovery_tool_patch
+        ):
+            discovery_tool_patch["tire_size"] = tire_size
         logger.debug(
             "[POLICY][discovery] frame=%s tool_plan=%s response_decision=%s",
             discovery_frame.to_dict(),
@@ -7036,6 +7081,7 @@ class TStationChatServiceV2:
             "get_store_list_tool": "매장 검색 결과",
             "get_store_inventory_tool": "매장 재고 현황",
             "get_orders_of_user_tool": "주문 내역",
+            "get_my_reservations_tool": "예약 내역",
             "check_compatibility_tool": "호환 사이즈 조회",
             "get_final_price_tool": "가격 조회",
             "compare_discount_tool": "할인 가격 비교",
@@ -7050,6 +7096,7 @@ class TStationChatServiceV2:
             "사용 규칙:",
             "A) 고객이 *이전 결과를 가리키는 경우* (예: '첫번째', '아까 18인치',",
             "   '가장 저렴한 것', '이 중에서') → 아래 데이터에서 매칭되는 항목으로 응답하세요.",
+            "   '최근거'/'첫번째'/'그거'는 직전 사용자 질문과 직전 AI 답변의 목록 종류를 먼저 확인해 해석하세요.",
             "B) 고객이 *새 조건/시나리오를 제시*하거나(예: '빗길', '주말', '사계절',",
             "   '정숙성', '눈길' 등 새 사용 시나리오) *재시도를 요청*하는 경우",
             "   (예: '다시', '새로', '이번엔', '바꿔서', '다른 거', '이전 추천 말고')",
@@ -9315,6 +9362,7 @@ class TStationChatServiceV2:
             last_user_text=last_user_text,
             context_text="\n".join(reversed(recent_user_texts)) or last_user_text,
             tire_size=merged_slots.tire_size,
+            goods_no=merged_slots.goods_no,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)

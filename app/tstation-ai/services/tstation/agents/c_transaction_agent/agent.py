@@ -1043,10 +1043,12 @@ Trigger: User asks about Smart Pay monthly payment/installments:
 Smart Pay mandatory policy:
 - Interest-free installments are available ONLY for 12 months or 24 months.
 - NEVER mention, offer, or calculate 36/48/60-month plans.
-- Eligibility requires 4 or more tires.
-- Calculation basis for this flow is ALWAYS 4 tires.
+- Calculation basis for this flow is ALWAYS `PR_ITEM_PRC_INFO.SMRT_PAY_PRC`
+  from `get_final_price_tool.smrt_pay_prc`.
+- `smrt_pay_prc` is the Smart Pay basis amount for ONE tire. Smart Pay monthly
+  installment guidance is always based on 4 tires, so calculate from `smrt_pay_prc * 4`.
 - Ignore stale ord_qty slots for Smart Pay calculation, including 2 tires from an order/preOrder/orderComplete context.
-- Ignore stale payment_amount slots. For Smart Pay, recompute from current unit price via `get_final_price_tool`.
+- Ignore stale payment_amount slots. For Smart Pay, use only `smrt_pay_prc` from `get_final_price_tool`.
 
 STEP 1 — Resolve goods_no:
 - If the latest user message names a product/model/size but goods_no is unavailable, use the GOODS_NO RESOLUTION rule: emit Discovery `nextAction` so Discovery resolves the product first.
@@ -1060,36 +1062,39 @@ STEP 2 — Get unit price:
 - Call `get_final_price_tool(goods_no)`.
 - Read from the tool result:
   `smrt_pay_yn`
-  `unit_price = extra_fvr_sale_prc + wage_prc`
+  `smrt_pay_prc`
+- `smrt_pay_prc` is the Smart Pay basis amount for ONE tire from `PR_ITEM_PRC_INFO.SMRT_PAY_PRC`.
 - Do NOT use `payment_amount` from slots. Do NOT use previous order total.
+- Do NOT use `extra_fvr_sale_prc`, `wage_prc`, `cheapest_final_prc`, or `sale_prc` for Smart Pay calculation.
 
 STEP 2.5 — Smart Pay availability guard:
 - If `smrt_pay_yn` is "N", null, missing, or any value other than "Y", STOP and answer:
   "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
+- If `smrt_pay_prc` is null, missing, 0, or non-numeric, STOP and answer the same unsupported sentence.
 - Do NOT calculate monthly 12/24-month amounts when `smrt_pay_yn` is not "Y".
-- If `smrt_pay_yn` is "Y", continue to STEP 3.
+- If `smrt_pay_yn` is "Y" and `smrt_pay_prc` is a positive number, continue to STEP 3.
 
-STEP 3 — Calculate with qty=4 fixed:
-- `total_4ea = unit_price * 4`
-- `monthly_12 = round(total_4ea / 12)`
-- `monthly_24 = round(total_4ea / 24)`
-- Round to the nearest won; do not show decimals.
+STEP 3 — Calculate from SMRT_PAY_PRC × 4:
+- `smart_pay_total_4ea = smrt_pay_prc * 4`
+- `monthly_12 = round(smart_pay_total_4ea / 12)`
+- `monthly_24 = round(smart_pay_total_4ea / 24)`
+- Round to the nearest won using standard half-up rounding (0.5 이상 올림); do not show decimals.
 
 STEP 4 — Response format:
 Use `quickReply` and put the full answer in `assistantResponse`:
-"[상품명] 4개 기준 스마트페이 무이자 할부 안내입니다.
+"[상품명] 스마트페이 무이자 할부 안내입니다.
 
-- 총 결제금액(4개): {total_4ea:,}원
+- 스마트페이 기준금액(4개): {smart_pay_total_4ea:,}원
 - 12개월 할부: 월 {monthly_12:,}원
 - 24개월 할부: 월 {monthly_24:,}원
 
-※ 스마트페이는 12/24개월 무이자 할부만 제공되며, 4개 이상 구매 시 이용 가능합니다.
+※ 스마트페이는 12/24개월 무이자 할부만 제공됩니다.
 ※ 실제 승인 금액은 카드사 심사 결과에 따라 다를 수 있습니다."
 
 Strict anti-bug rules:
 - Do NOT say Smart Pay is available unless `get_final_price_tool` returned `smrt_pay_yn="Y"`.
 - Do NOT answer only "결제 단계에서 확인해 주세요" when goods_no and price tool data are available.
-- Do NOT reuse ord_qty=2/3/5 from slots or prior order context. Smart Pay calculation is 4 tires fixed.
+- Do NOT reuse ord_qty=2/3/5 from slots or prior order context. Smart Pay calculation uses `smrt_pay_prc * 4` only.
 - Do NOT say "5개 기준" unless the user explicitly asks a separate non-Smart-Pay price question.
 - Do NOT mention interest rate, fee, or 36-month options.
 - After the calculation, STOP. Do not ask an additional order/cart question unless the user asks to order.
@@ -1888,6 +1893,16 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
 1. Call `get_orders_of_user_tool` FIRST. Do not answer from memory and do not route to Store schedule first.
 2. Match the target reservation:
    - If user mentions order number → match `ord_no`.
+   - Follow-up references like "최근거", "첫번째", "그거", "해당 건", "그 예약", "그 주문":
+     first inspect the immediately previous user question and assistant answer to determine what list/object the user
+     is referencing. If the previous answer was a reservation-history list from `get_my_reservations_tool`, use that
+     reservation list's first visible item as the target before interpreting `get_orders_of_user_tool` rows. If the
+     previous answer was an order-history list from `get_orders_of_user_tool`, use that order list's first visible item.
+     If the previous answer was not an order/reservation list, ask which reservation/order the user means.
+   - When a target from previous reservation history is a "구매후방문예약", use `get_orders_of_user_tool` only as a
+     supporting lookup: match by the reservation `ord_no` first; if `ord_no` is absent, match ONLY by identical
+     `shop_nm` + `detail.rsv_dtime` / reservation `vst_rsv_dtime`. Do NOT fall back to the first order row merely
+     because it is newest by `sys_reg_dtime`.
    - If user says "오늘 예약한거" → prefer orders created today (`sys_reg_dtime` today); if none, use the active order whose `detail.rsv_dtime` is upcoming.
    - If user mentions a visit date/time ("내일 2시", "5월 29일", "14시") → match against `detail.rsv_dtime`.
    - If exactly one active/recent order exists, use it.
@@ -2120,7 +2135,7 @@ Examples of correct `assistantResponse` for template tools:
 - datepick: "예약 가능한 날짜와 시간을 선택해 주세요."
 - voucher: "사용 가능한 쿠폰을 확인해 주세요."
 - preOrder: "주문 내용을 확인해 주세요."
-- orderComplete (success): "주문이 완료되었습니다. 😊"
+- orderComplete (success): "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
 - orderComplete (failure): "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
 
 **`quickReply` tools — full answer goes in `assistantResponse`:**
@@ -2394,7 +2409,8 @@ For `preOrder`:
   `assistantResponse`. They never overlap.
 
 For `orderComplete`:
-- On success: confirm what was done and give the order number if available.
+- On success: do NOT say the order is confirmed/completed. Tell the user the order form is ready
+  and they should continue order/payment on the order form page. Mention the order number only if available.
 - On failure: apologize naturally and suggest a retry or alternative.
 """
 
@@ -2647,6 +2663,16 @@ Trigger: user wants to change a booked reservation/visit time
 1. Call `get_orders_of_user_tool` FIRST to inspect the user's online orders/reservations. Do NOT answer generically and do NOT call store schedule tools first.
 2. Match the reservation:
    - order number mentioned -> match `ord_no`
+   - follow-up references like "최근거", "첫번째", "그거", "해당 건", "그 예약", "그 주문" -> inspect the immediately
+     previous user question and assistant answer first. If the previous answer was a reservation-history list from
+     `get_my_reservations_tool`, select the first visible reservation from that list before interpreting newly fetched
+     order rows. If the previous answer was an order-history list from `get_orders_of_user_tool`, select the first
+     visible order from that list. If the previous answer was not an order/reservation list, ask which reservation/order
+     the user means.
+   - when a selected previous reservation is "구매후방문예약", `get_orders_of_user_tool` is only a supporting lookup:
+     match by reservation `ord_no` first; if `ord_no` is absent, match ONLY by identical `shop_nm` + `detail.rsv_dtime`
+     / reservation `vst_rsv_dtime`. Do NOT fall back to the first order row merely because it is newest by
+     `sys_reg_dtime`.
    - "오늘 예약한거" -> prefer an order created today (`sys_reg_dtime` today); if none, use an active order with upcoming `detail.rsv_dtime`
    - visit date/time mentioned ("내일 2시", "5월 29일", "14시") -> match `detail.rsv_dtime`
    - exactly one active/recent order -> use it
@@ -2920,7 +2946,7 @@ Handle ONLY price, final-price, promotion, and logistics-stock requests for an a
 - Smart Pay monthly installment requests -> handle in this profile using get_final_price_tool.
 - Logistics stock or general stock for confirmed goods_no -> call get_logistics_inventory_tool.
 - Product-specific promotion/coupon benefits for confirmed goods_no -> call get_product_promotions_tool.
-- If goods_no is missing, ask one short Korean clarification. If quantity is missing, ask only for non-Smart-Pay stock/order-related checks; Smart Pay uses 4 tires fixed. Do not search products in this profile.
+- If goods_no is missing, ask one short Korean clarification. If quantity is missing, ask only for non-Smart-Pay stock/order-related checks; Smart Pay uses `smrt_pay_prc * 4` and does not need user quantity. Do not search products in this profile.
 - If the request is not price/stock/promotion related, ask the user to clarify.
 
 ## 1+1 / 2+2 기획전 단가 계산 (no tool call needed)
@@ -2940,19 +2966,27 @@ Trigger: "스마트페이", "스마트 페이", "smart pay", "smartpay", "할부
 - If `smrt_pay_yn` is not exactly "Y", answer only:
   "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
   STOP. Do not calculate 12/24-month amounts.
-- Smart Pay calculation is ALWAYS based on 4 tires, regardless of `ord_qty` slot or prior order quantity.
-- Unit price = `extra_fvr_sale_prc + wage_prc`.
-- Total = unit price * 4.
-- 12개월 = round(total / 12), 24개월 = round(total / 24). No decimals.
+- Smart Pay calculation is ALWAYS based on `smrt_pay_prc`
+  (`PR_ITEM_PRC_INFO.SMRT_PAY_PRC`) from `get_final_price_tool`.
+- `smrt_pay_prc` is the Smart Pay basis amount for ONE tire; multiply it by 4
+  before dividing into monthly installment amounts.
+- If `smrt_pay_prc` is null, missing, 0, or non-numeric, answer only:
+  "해당 상품은 스마트페이 할부서비스를 지원하지 않는 상품입니다."
+  STOP.
+- Do NOT use `extra_fvr_sale_prc`, `wage_prc`, `cheapest_final_prc`, `sale_prc`,
+  `payment_amount`, or `ord_qty` for Smart Pay calculation.
+- `smart_pay_total_4ea = smrt_pay_prc * 4`.
+- 12개월 = round(smart_pay_total_4ea / 12), 24개월 = round(smart_pay_total_4ea / 24).
+  Use standard half-up rounding (0.5 이상 올림). No decimals.
 - NEVER mention or calculate 36/48/60 months.
 - Response:
-"[상품명] 4개 기준 스마트페이 무이자 할부 안내입니다.
+"[상품명] 스마트페이 무이자 할부 안내입니다.
 
-- 총 결제금액(4개): {total:,}원
+- 스마트페이 기준금액(4개): {smart_pay_total_4ea:,}원
 - 12개월 할부: 월 {monthly_12:,}원
 - 24개월 할부: 월 {monthly_24:,}원
 
-※ 스마트페이는 12/24개월 무이자 할부만 제공되며, 4개 이상 구매 시 이용 가능합니다.
+※ 스마트페이는 12/24개월 무이자 할부만 제공됩니다.
 ※ 실제 승인 금액은 카드사 심사 결과에 따라 다를 수 있습니다."
 - Do not add order/cart chips after this answer unless the user asks to order.
 
