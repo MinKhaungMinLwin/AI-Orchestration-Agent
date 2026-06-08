@@ -39,6 +39,7 @@ from services.tstation.chat import (
     _build_product_coupon_eligibility_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
+    _build_bare_product_search_tool_input,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
     _comparison_query_with_recent_context,
@@ -1103,6 +1104,15 @@ def test_bare_short_alias_can_use_code_product_search_path() -> None:
     assert _is_bare_product_name_search_query("s fit as") is True
     assert _is_bare_product_name_search_query("에스핏") is True
     assert _is_bare_product_name_search_query("s fit as 가격 알려줘") is False
+
+
+def test_bare_product_search_tool_input_preserves_same_turn_size() -> None:
+    assert _build_bare_product_search_tool_input("벤투스 S2 AS 225/45R17") == {
+        "keyword": "벤투스 S2 AS",
+        "limit": 10,
+        "size": "225/45R17",
+        "brand_cd": "HK",
+    }
 
 
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:

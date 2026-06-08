@@ -63,6 +63,18 @@ def test_short_alias_only_query_uses_product_search() -> None:
     assert plan.tool_args_patch == {"keyword": "S FIT AS", "brand_cd": "LF"}
 
 
+def test_product_name_with_size_search_passes_size_to_search_tool() -> None:
+    frame = build_discovery_intent_frame("벤투스 S2 AS 225/45R17")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_name_search"
+    assert frame.entities["product_names"] == ("Ventus S2 AS",)
+    assert frame.entities["tire_size"] == "225/45R17"
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {"keyword": "Ventus S2 AS", "size": "225/45R17", "brand_cd": "HK"}
+
+
 def test_short_alias_infers_non_default_brand_code() -> None:
     frame = build_discovery_intent_frame("p7")
     plan = plan_discovery_tools(frame)

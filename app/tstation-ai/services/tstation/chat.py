@@ -5946,6 +5946,22 @@ def _is_bare_product_name_search_query(user_text: str) -> bool:
     return len(text) <= 48 or bool(_BARE_PRODUCT_SEARCH_ALLOW_RE.search(text))
 
 
+def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
+    frame = build_discovery_intent_frame(user_text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    if not product_names:
+        return None
+
+    product_name = product_names[0]
+    preferred_keyword = _preferred_product_search_keyword(product_name)
+    tool_input = {"keyword": preferred_keyword, "limit": 10}
+    if frame.entities.get("tire_size"):
+        tool_input["size"] = frame.entities["tire_size"]
+    if frame.entities.get("brand_cd"):
+        tool_input["brand_cd"] = frame.entities["brand_cd"]
+    return tool_input
+
+
 def _should_suppress_inherited_recommendation_context_for_product_attribute(user_text: str) -> bool:
     if _is_ev_suitability_turn(user_text):
         return False
@@ -10401,6 +10417,8 @@ class TStationChatServiceV2:
             product_name = product_names[0]
             preferred_keyword = _preferred_product_search_keyword(product_name)
             tool_input = {"keyword": preferred_keyword, "limit": 10}
+            if frame.entities.get("tire_size"):
+                tool_input["size"] = frame.entities["tire_size"]
             if frame.entities.get("brand_cd"):
                 tool_input["brand_cd"] = frame.entities["brand_cd"]
 
@@ -10460,19 +10478,15 @@ class TStationChatServiceV2:
             if not _is_bare_product_name_search_query(user_query):
                 return None
 
-            frame = build_discovery_intent_frame(user_query)
-            product_names = tuple(frame.entities.get("product_names") or ())
-            if not product_names:
+            tool_input = _build_bare_product_search_tool_input(user_query)
+            if tool_input is None:
                 return None
 
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
             from services.tstation.template_mapper import try_build_template
 
-            product_name = product_names[0]
-            preferred_keyword = _preferred_product_search_keyword(product_name)
-            tool_input = {"keyword": preferred_keyword, "limit": 10}
-            if frame.entities.get("brand_cd"):
-                tool_input["brand_cd"] = frame.entities["brand_cd"]
+            product_name = str(tool_input.get("keyword") or "")
+            preferred_keyword = product_name
 
             emitted_events: list[dict] = [{
                 "type": "status",
@@ -10515,7 +10529,7 @@ class TStationChatServiceV2:
             )
             if mapped_event is None:
                 return None
-            if not frame.entities.get("tire_size") and mapped_event.get("template") != "quickReply":
+            if not tool_input.get("size") and mapped_event.get("template") != "quickReply":
                 logger.warning(
                     "[PRODUCT_SEARCH] unsized bare product search mapped to %s; falling back to agent",
                     mapped_event.get("template"),
