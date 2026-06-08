@@ -5523,6 +5523,107 @@ def _pick_product_row_from_search_result(tool_result: dict, product_name: str, *
     return best_row
 
 
+def _unique_product_row_from_sized_search_result(tool_result: dict, product_name: str, tire_size: str) -> dict | None:
+    data = _unwrap_tool_data(tool_result)
+    rows = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return None
+
+    target_terms = _coupon_product_match_keys(product_name)
+    requested_size = normalize_tire_size(tire_size)
+    matched_by_goods_no: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        goods_no = str(row.get("goods_no") or "").strip()
+        if not goods_no:
+            continue
+        row_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
+        if requested_size and row_size and row_size != requested_size:
+            continue
+        row_terms = _coupon_product_match_keys(row.get("goods_nm") or row.get("title"))
+        if target_terms and not (target_terms & row_terms):
+            continue
+        matched_by_goods_no.setdefault(goods_no, row)
+    if len(matched_by_goods_no) != 1:
+        return None
+    return next(iter(matched_by_goods_no.values()))
+
+
+def _format_krw(value: Any) -> str:
+    try:
+        amount = int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return ""
+    if amount <= 0:
+        return ""
+    return f"{amount:,}원"
+
+
+def _build_product_description_quickreply_event(detail_result: dict) -> dict | None:
+    row = _unwrap_tool_data(detail_result)
+    if not isinstance(row, dict) or not row:
+        return None
+
+    name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
+    slogan = _clean_product_sentence(row.get("slogan"))
+    tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
+    pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
+
+    intro_subject = f"{name}는"
+    if slogan:
+        intro = f"{intro_subject} {slogan} 상품이에요."
+    elif pattern:
+        intro = f"{intro_subject} {pattern} 타이어예요."
+    else:
+        intro = f"{intro_subject} 상세 정보가 확인되는 타이어예요."
+
+    lines = [intro]
+    if tech:
+        lines.extend(["", tech[:180]])
+
+    sale_price = _format_krw(row.get("sale_prc"))
+    final_price = _format_krw(row.get("cheapest_final_prc"))
+    coupons = row.get("cheapest_applied_coupons")
+    coupon_names: list[str] = []
+    if isinstance(coupons, list):
+        for coupon in coupons:
+            if isinstance(coupon, dict):
+                coupon_name = str(coupon.get("cpn_nm") or "").strip()
+                if coupon_name and coupon_name not in coupon_names:
+                    coupon_names.append(coupon_name)
+    if sale_price and final_price and sale_price != final_price:
+        coupon_text = f"{', '.join(coupon_names[:2])} 적용 시 " if coupon_names else ""
+        lines.extend(["", f"정가 {sale_price}에서 {coupon_text}최종 혜택가는 {final_price}이에요."])
+    elif sale_price:
+        lines.extend(["", f"정가는 {sale_price}입니다."])
+
+    rating = row.get("rating") if isinstance(row.get("rating"), dict) else {}
+    review_count = row.get("review_count") or rating.get("review_count")
+    rating_avg = row.get("rating_avg") or row.get("rate") or rating.get("rating_avg")
+    if review_count and rating_avg:
+        lines.extend(["", f"리뷰는 {review_count}건, 평균 평점은 {rating_avg}점입니다."])
+    elif review_count:
+        lines.extend(["", f"리뷰는 {review_count}건입니다."])
+    elif rating_avg:
+        lines.extend(["", f"평균 평점은 {rating_avg}점입니다."])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_description",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "구매하기", "domain": "TRANSACTION"},
+                {"label": "장바구니담기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 _PRODUCT_COMPARE_TEXT_RE = re.compile(r"비교|차이|다른|달라|어느\s*게|뭐가\s*(?:더|나아|좋)", re.IGNORECASE)
 _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
     r"(?:상품\s*)?(?:설명|특징|장점|후기|리뷰)\s*비교|비교.*(?:설명|특징|장점|후기|리뷰)",
@@ -5926,7 +6027,7 @@ def _should_apply_product_attribute_resolver(user_text: str, called_tool_names: 
 
 
 _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
-    r"가격|얼마|재고|구매|주문|결제|장착|매장|근처|주변|할인|쿠폰|스마트\s*페이|스마트페이|"
+    r"가격|얼마|재고|구매|주문|결제|장바구니|담아|담기|카트|장착|매장|근처|주변|할인|쿠폰|스마트\s*페이|스마트페이|"
     r"비교|보다|중에|뭐야|무슨|가능|어때|맞아|추천",
     re.IGNORECASE,
 )
@@ -10483,6 +10584,9 @@ class TStationChatServiceV2:
             if tool_input is None:
                 return None
 
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_product_description_tool as _get_product_description_tool,
+            )
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
             from services.tstation.template_mapper import try_build_template
 
@@ -10523,6 +10627,53 @@ class TStationChatServiceV2:
                 "tool": "search_product_tool",
                 "source_domain": "discovery",
             })
+
+            if tool_input.get("size"):
+                row = _unique_product_row_from_sized_search_result(
+                    search_result,
+                    preferred_keyword,
+                    str(tool_input.get("size") or ""),
+                )
+                goods_no = str((row or {}).get("goods_no") or "").strip()
+                if goods_no:
+                    detail_input = {"goods_no": goods_no}
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "get_product_description_tool",
+                        "display_name": "상품 상세 정보 조회 중...",
+                        "source_domain": "discovery",
+                    })
+                    try:
+                        raw_detail = await asyncio.to_thread(_get_product_description_tool.invoke, detail_input)
+                        detail_result = _tool_result_dict(raw_detail)
+                    except Exception as exc:
+                        logger.exception("[PRODUCT_SEARCH] get_product_description_tool failed for %s", goods_no)
+                        detail_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": str(exc),
+                            "data": {},
+                        }
+                    _record_code_tool_result("get_product_description_tool", detail_input, detail_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Description AF]",
+                        "agent_class": "Discovery Agent (Search)",
+                        "status": detail_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": detail_input,
+                        "output": json.dumps(detail_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "get_product_description_tool",
+                        "source_domain": "discovery",
+                    })
+                    detail_event = _build_product_description_quickreply_event(detail_result)
+                    if detail_event is not None:
+                        return emitted_events, detail_event
 
             mapped_event = try_build_template(
                 [{"tool": "search_product_tool", "args": tool_input, "data": search_result}],
