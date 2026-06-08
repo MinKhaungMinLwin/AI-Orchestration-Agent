@@ -72,6 +72,7 @@ from services.tstation.chat import (
     _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
+    _is_sized_product_name_search_query,
     _is_owned_coupon_best_discount_query,
     _coupon_target_product_name_for_query,
     _delivery_policy_guard_event,
@@ -111,6 +112,7 @@ from services.tstation.chat import (
     _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
     _should_prompt_order_quantity_before_store,
+    _is_quantityless_cart_or_order_cta,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
@@ -1142,6 +1144,46 @@ def test_sized_bare_product_search_can_resolve_unique_goods_no_for_detail() -> N
     assert row["goods_no"] == "G000000309783"
 
 
+def test_sized_product_name_search_accepts_compact_numeric_size() -> None:
+    assert _is_sized_product_name_search_query("벤투스 에보 2254517") is True
+
+
+def test_sized_product_name_search_accepts_unknown_model_name() -> None:
+    assert _is_sized_product_name_search_query("새상품 ABC 2356018") is True
+    assert _build_bare_product_search_tool_input("새상품 ABC 2356018") == {
+        "keyword": "새상품 ABC",
+        "limit": 10,
+        "size": "235/60R18",
+    }
+
+
+def test_sized_product_name_search_rejects_size_only_text() -> None:
+    assert _is_sized_product_name_search_query("2356018") is False
+    assert _build_bare_product_search_tool_input("2356018") is None
+
+
+def test_sized_product_name_search_can_resolve_unique_ventus_evo_goods_no() -> None:
+    row = _unique_product_row_from_sized_search_result(
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000320136",
+                        "goods_nm": "벤투스 에보",
+                        "tire_size_1": "225/45R17",
+                    }
+                ]
+            },
+        },
+        "벤투스 에보",
+        "225/45R17",
+    )
+
+    assert row is not None
+    assert row["goods_no"] == "G000000320136"
+
+
 def test_sized_bare_product_search_does_not_guess_ambiguous_goods_no() -> None:
     row = _unique_product_row_from_sized_search_result(
         {
@@ -1173,6 +1215,8 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
         "status": "success",
         "data": {
             "goods_nm": "벤투스 S2 AS",
+            "goods_no": "G000000309783",
+            "tire_size_1": "225/45R17",
             "slogan": "고속 주행에서 느끼는 Comfort Technology",
             "pc_prod_tech_desc": "<ol><li>승차감 : 조용하고 안락한 승차감 제공</li></ol>",
             "sale_prc": 152500,
@@ -1192,6 +1236,11 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     assert "최종 혜택가는 118,800원" in assistant_response
     assert "리뷰는 68건" in assistant_response
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "장바구니담기"]
+    assert event["data"]["metadata"] == {
+        "goodsId": "G000000309783",
+        "tireSize": "225/45R17",
+        "productName": "벤투스 S2 AS",
+    }
 
 
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:
@@ -2531,6 +2580,34 @@ def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> 
     assert _should_prompt_order_quantity_before_store("2개", slots) is False
 
 
+@pytest.mark.parametrize("text", ["장바구니담기", "장바구니 담기", "장바구니에 담아줘", "구매하기", "주문하기"])
+def test_quantityless_cart_order_cta_detects_button_labels(text: str) -> None:
+    assert _is_quantityless_cart_or_order_cta(text) is True
+
+
+def test_confirmed_product_slot_values_from_cart_quickreply_metadata_includes_quantity() -> None:
+    event = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "장바구니에 담았어요.",
+            "quickReplies": [{"label": "주문하기", "domain": "TRANSACTION"}],
+            "metadata": {
+                "goodsId": "G000000309783",
+                "tireSize": "225/45R17",
+                "productName": "벤투스 S2 AS",
+                "quantity": 2,
+            },
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+        "goods_no": "G000000309783",
+        "ord_qty": 2,
+        "tire_model": "벤투스 S2 AS",
+        "tire_size": "225/45R17",
+    }
+
+
 def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() -> None:
     template = {
         "template": "listCar",
@@ -2860,6 +2937,30 @@ def test_confirmed_product_slot_values_from_single_product_event() -> None:
         "goods_no": "G2",
         "tire_model": "벤투스 S1 에보 Z",
         "tire_size": "265/40R21",
+    }
+
+
+def test_confirmed_product_slot_values_from_product_description_quickreply_event() -> None:
+    event = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "벤투스 S2 AS 상세 정보입니다.",
+            "quickReplies": [
+                {"label": "구매하기", "domain": "TRANSACTION"},
+                {"label": "장바구니담기", "domain": "TRANSACTION"},
+            ],
+            "metadata": {
+                "goodsId": "G000000309783",
+                "tireSize": "225/45R17",
+                "productName": "벤투스 S2 AS",
+            },
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+        "goods_no": "G000000309783",
+        "tire_model": "벤투스 S2 AS",
+        "tire_size": "225/45R17",
     }
 
 

@@ -132,6 +132,7 @@ _EV_CHARGE_PREFERENCE_RE = re.compile(
     r"충전\s*(?:가능|되는|되나|지원|되는지)?|충전기|전기차\s*충전",
     re.IGNORECASE,
 )
+_CART_ALREADY_EXISTS_RE = re.compile(r"이미\s*장바구니|장바구니에\s*담겨", re.IGNORECASE)
 
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
@@ -3639,6 +3640,8 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
     outer = entry.get("data") if isinstance(entry.get("data"), dict) else {}
     if outer.get("status") == "error":
         is_success = False
+    result_message = _get_str(raw, "message") if isinstance(raw, dict) else ""
+    is_already_in_cart = bool(result_message and _CART_ALREADY_EXISTS_RE.search(result_message))
 
     ord_no: str | None = None
     if isinstance(raw, dict):
@@ -3753,29 +3756,43 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                 {"label": "주문하기", "domain": "TRANSACTION"},
                 {"label": "처음으로", "domain": "LEADING"},
             ]
+        elif is_already_in_cart:
+            cart_msg = "이미 장바구니에 담겨있는 상품이에요. 장바구니에서 확인해 주세요. 😊"
+            cart_chips = [
+                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                {"label": "주문하기", "domain": "TRANSACTION"},
+            ]
         else:
             cart_msg = "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
             cart_chips = [
                 {"label": "다시 시도", "domain": "TRANSACTION"},
                 {"label": "처음으로", "domain": "LEADING"},
             ]
+        metadata: dict[str, object] = {"goodsId": goods_no, "quantity": ord_qty, "ordQty": ord_qty}
+        if goods_nm:
+            metadata["productName"] = goods_nm
+        if tire_size:
+            metadata["tireSize"] = tire_size
         return {
             "type": "data",
             "template": "quickReply",
             "data": {
                 "assistantResponse": cart_msg,
                 "quickReplies": cart_chips,
+                "metadata": metadata,
             },
         }
 
+    order_form_data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else None
+
     # order (quick_order_tool) 는 주문/결제 페이지로 이동하기 전 주문서 생성 단계다.
     default_msg = (
-        "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
+        "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."
         if is_success
         else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
     )
     text = (assistant_text or "").strip()
-    assistant_response = text if text and len(text) <= 120 else default_msg
+    assistant_response = default_msg if is_success else text if text and len(text) <= 120 else default_msg
 
     if is_success:
         quick_replies = [
@@ -3805,6 +3822,9 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             "isSuccess": is_success,
             "type": flow_type,
             "message": None if is_success else default_msg,
+            "render": False if is_success and order_form_data else True,
+            "autoMoveOrderPage": True if is_success and order_form_data else False,
+            "moveOrderPageData": order_form_data,
             "data": {"status": "success" if is_success else "error"},
             "metadata": {
                 "ordNo": ord_no,

@@ -2103,7 +2103,7 @@ Choose the output template based on the tool called:
 | ~~issue_coupon_tool~~ | 🚫 OFF — `quickReply` 안내문만 |
 | get_store_list_tool, get_nearby_stores_tool, get_stores_with_time_filter_tool | `location` — Flow 5.5T (region + time threshold search) must show available stores as `location` cards when `stores_available` is non-empty. |
 | get_store_schedule_tool, get_store_detail_tool (with slots) | `datepick` |
-| quick_order_tool | `orderComplete` |
+| quick_order_tool | `orderComplete` with order-page navigation payload |
 | save_to_cart_tool (success) | `quickReply` with chips `["주문하기", "처음으로"]` (NOT `orderComplete`) |
 | save_to_cart_tool (failure) | `quickReply` with chips `["다시 시도", "처음으로"]` |
 | Pre-order preview / STEP 5.5 | `preOrder` |
@@ -2111,7 +2111,8 @@ Choose the output template based on the tool called:
 
 ⚠️ HARDCODED RULE — `save_to_cart_tool` / `quick_order_tool` 응답 분기:
 
-**1) `quick_order_tool` (success)** → `orderComplete` 템플릿. `orderComplete` 카드 자체가 완결된 UI(주문 요약 + 액션 버튼)를 표시하므로 별도 chips 불필요.
+**1) `quick_order_tool` (success)** → `orderComplete` 템플릿. 주문은 완료/확정이 아니라 주문서 생성 단계다.
+FE가 주문/결제 페이지로 이동하므로 별도 주문 완료 카드나 chips 를 만들지 말고, "주문/결제 페이지에서 결제를 진행해 주세요." 취지로 안내한다.
 
 **2) `save_to_cart_tool` (success)** → `quickReply` 템플릿 (cart 카드 X). 매장/일정/결제 컨텍스트가 아직 확정되지 않았으므로 풀-요약 카드 대신 짧은 confirmation + 다음 액션 chips 만 노출한다.
 - `assistantResponse`: 예) "장바구니에 담았어요. 😊\n\n바로 주문하시겠어요?"
@@ -2135,7 +2136,7 @@ Examples of correct `assistantResponse` for template tools:
 - datepick: "예약 가능한 날짜와 시간을 선택해 주세요."
 - voucher: "사용 가능한 쿠폰을 확인해 주세요."
 - preOrder: "주문 내용을 확인해 주세요."
-- orderComplete (success): "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
+- orderComplete (success): "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."
 - orderComplete (failure): "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
 
 **`quickReply` tools — full answer goes in `assistantResponse`:**
@@ -2347,6 +2348,9 @@ Schema: `{type:"data", template:"preOrder", data:{assistantResponse:str, orderIn
 `orderComplete` — result of `quick_order_tool` ONLY (NOT `save_to_cart_tool`):
 Schema: `{type:"data", template:"orderComplete", data:{assistantResponse:str, orderInfo:{carInfo:str|null, product:str, quantity:int, storeName:str|null, bookingDateTime:str|null, paymentAmount:int|null}, isSuccess:bool, type:str, message:str|null, data:{status:str}, metadata:{ordNo:str, goodsId:str, shopId:str}}}`
 - `type`: 항상 `"order"`. `message`: null on success | error string on failure.
+- On success, this is only the order-form creation result. Do NOT present it as an order completion/confirmation card.
+  FE uses the order-form payload to move to the order/payment page, so the visible response should only guide the user
+  to continue payment on that page.
 - ⚠️ FIELD CARRY-OVER FROM preOrder (MANDATORY): After `quick_order_tool` succeeds, ALL `orderInfo` fields MUST be copied verbatim from the `preOrder` card emitted in the PREVIOUS turn. Do NOT re-derive from `quick_order_tool` output and do NOT emit null for any field that was populated in preOrder:
   • `storeName` ← copy from preOrder.orderInfo.storeName (e.g. "티스테이션 오목천점" — shop_id 없는 순수 매장명)
   • `bookingDateTime` ← copy from preOrder.orderInfo.bookingDateTime (e.g. "2026년 5월 15일 (금) 17:00")

@@ -3495,6 +3495,10 @@ _TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
     r"추천|찾|검색|재고|가격|주문|구매|장착|진행|볼래|봐줘|알려줘|도\s*추천",
     re.IGNORECASE,
 )
+_QUANTITYLESS_CART_ORDER_CTA_RE = re.compile(
+    r"^\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘|구매하기|주문하기|바로\s*주문|결제하기)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _normalize_vehicle_tire_size_pair(selected_meta: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -3593,6 +3597,10 @@ def _should_prompt_order_quantity_before_store(user_text: str | None, slots: Any
     if ConversationSlots.extract_from_user_text(str(user_text or "")).ord_qty is not None:
         return False
     return True
+
+
+def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
+    return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
 
 
 def _build_staggered_vehicle_tire_selection_event(selected_vehicle: dict) -> dict | None:
@@ -5565,7 +5573,9 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     if not isinstance(row, dict) or not row:
         return None
 
+    goods_no = str(row.get("goods_no") or "").strip()
     name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
+    tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
     slogan = _clean_product_sentence(row.get("slogan"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
     pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
@@ -5608,6 +5618,14 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     elif rating_avg:
         lines.extend(["", f"평균 평점은 {rating_avg}점입니다."])
 
+    metadata: dict[str, str] = {}
+    if goods_no:
+        metadata["goodsId"] = goods_no
+    if tire_size:
+        metadata["tireSize"] = tire_size
+    if name:
+        metadata["productName"] = name
+
     return {
         "type": "data",
         "template": "quickReply",
@@ -5620,6 +5638,7 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
                 {"label": "장바구니담기", "domain": "TRANSACTION"},
             ],
             "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata,
         },
     }
 
@@ -6032,6 +6051,25 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
+_SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
+_SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+
+
+def _fallback_sized_product_keyword(user_text: str) -> str:
+    text = str(user_text or "").strip()
+    if not normalize_tire_size(text):
+        return ""
+    keyword = _SIZED_PRODUCT_SEARCH_SIZE_RE.sub(" ", text)
+    keyword = re.sub(r"\s+", " ", keyword).strip(" ,./")
+    keyword_tokens = [tok for tok in re.findall(r"[0-9A-Za-z가-힣*+.-]+", keyword) if tok]
+    meaningful_tokens = [tok for tok in keyword_tokens if tok not in _SIZED_PRODUCT_KEYWORD_STOPWORDS]
+    if not meaningful_tokens:
+        return ""
+    if sum(len(tok) for tok in meaningful_tokens) < 2:
+        return ""
+    if all(tok.isdigit() for tok in meaningful_tokens):
+        return ""
+    return keyword
 
 
 def _is_bare_product_name_search_query(user_text: str) -> bool:
@@ -6047,17 +6085,28 @@ def _is_bare_product_name_search_query(user_text: str) -> bool:
     return len(text) <= 48 or bool(_BARE_PRODUCT_SEARCH_ALLOW_RE.search(text))
 
 
+def _is_sized_product_name_search_query(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text or _BARE_PRODUCT_SEARCH_BLOCK_RE.search(text):
+        return False
+    frame = build_discovery_intent_frame(text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    return bool((product_names or _fallback_sized_product_keyword(text)) and (frame.entities.get("tire_size") or normalize_tire_size(text)))
+
+
 def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
-    if not product_names:
+    fallback_keyword = _fallback_sized_product_keyword(user_text)
+    if not product_names and not fallback_keyword:
         return None
 
-    product_name = product_names[0]
+    product_name = product_names[0] if product_names else fallback_keyword
     preferred_keyword = _preferred_product_search_keyword(product_name)
     tool_input = {"keyword": preferred_keyword, "limit": 10}
-    if frame.entities.get("tire_size"):
-        tool_input["size"] = frame.entities["tire_size"]
+    tire_size = frame.entities.get("tire_size") or normalize_tire_size(user_text)
+    if tire_size:
+        tool_input["size"] = tire_size
     if frame.entities.get("brand_cd"):
         tool_input["brand_cd"] = frame.entities["brand_cd"]
     return tool_input
@@ -6332,6 +6381,30 @@ def _remove_home_quick_reply_chips(event_data: dict) -> bool:
                 if str(domain).upper() != "LEADING"
             ]
     return True
+
+
+_CART_CHECK_LABELS = {"장바구니 확인", "장바구니보기", "장바구니 보기"}
+def _inject_cart_url_for_cart_check_chip(event_data: dict) -> bool:
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+
+    changed = False
+    normalized: list[object] = []
+    for chip in chips:
+        if not isinstance(chip, dict):
+            normalized.append(chip)
+            continue
+        next_chip = dict(chip)
+        label = str(next_chip.get("label") or "").strip()
+        if label in _CART_CHECK_LABELS and not next_chip.get("url"):
+            next_chip["url"] = CTAUrls.CART
+            changed = True
+        normalized.append(next_chip)
+
+    if changed:
+        event_data["quickReplies"] = normalized
+    return changed
 
 
 def _discovery_recovery_chips_for_text(
@@ -7496,12 +7569,38 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
-        """Extract confirmed product slots from a single-product `product` event."""
-        if event.get("template") != "product":
+        """Extract confirmed product slots from single-product product/detail events."""
+        template = event.get("template")
+        if template not in {"product", "quickReply"}:
             return None
         event_data = event.get("data")
         if not isinstance(event_data, dict):
             return None
+
+        if template == "quickReply":
+            metadata = event_data.get("metadata")
+            if not isinstance(metadata, dict):
+                return None
+            goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+            if not goods_no:
+                return None
+            tire_size = normalize_tire_size(str(metadata.get("tireSize") or metadata.get("tire_size") or ""))
+            tire_model = str(metadata.get("productName") or metadata.get("goodsNm") or "").strip()
+            slot_values: dict[str, Any] = {"goods_no": goods_no}
+            if tire_size:
+                slot_values["tire_size"] = tire_size
+            if tire_model:
+                slot_values["tire_model"] = tire_model
+            raw_qty = metadata.get("quantity") or metadata.get("ordQty") or metadata.get("ord_qty")
+            if raw_qty is not None:
+                try:
+                    qty = int(raw_qty)
+                    if qty > 0:
+                        slot_values["ord_qty"] = qty
+                except (TypeError, ValueError):
+                    pass
+            return slot_values
+
         products = event_data.get("products")
         metadata = event_data.get("metadata")
         if not (
@@ -8469,6 +8568,30 @@ class TStationChatServiceV2:
                     f"[SLOTS] Reused confirmed region={confirmed_region!r} "
                     f"from prior validation prompt"
                 )
+
+            if (
+                current_vehicle_selection_prompt_event.get() is None
+                and _is_quantityless_cart_or_order_cta(last_user_text)
+                and regex_slots.ord_qty is None
+            ):
+                quickreply_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event({
+                    "template": "quickReply",
+                    "data": latest_quickreply_tmpl,
+                })
+                if quickreply_product_slots:
+                    for field, value in quickreply_product_slots.items():
+                        setattr(merged_slots, field, value)
+                    if getattr(merged_slots, "pending_intent", None) is None:
+                        merged_slots.pending_intent = "order"
+                    if getattr(merged_slots, "goal_type", None) is None:
+                        merged_slots.goal_type = "place_order"
+                    if getattr(merged_slots, "ord_qty", None) is None:
+                        logger.info(
+                            "[QTY_GUARD] Prompting quantity before cart/order CTA tool call: goods_no=%r user_text=%r",
+                            merged_slots.goods_no,
+                            last_user_text,
+                        )
+                        current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
 
             # 3.8) Resolve goods_no from the user's list-selection reply matched against
             # the most recent search_product_tool result. Without this, Discovery may
@@ -10577,7 +10700,10 @@ class TStationChatServiceV2:
                 current_tire_size=confirmed_tire_size,
             ):
                 return None
-            if not _is_bare_product_name_search_query(user_query):
+            if not (
+                _is_bare_product_name_search_query(user_query)
+                or _is_sized_product_name_search_query(user_query)
+            ):
                 return None
 
             tool_input = _build_bare_product_search_tool_input(user_query)
@@ -11924,6 +12050,8 @@ class TStationChatServiceV2:
                                 for chip in recovery_chips
                                 if isinstance(chip, dict)
                             ])
+                if isinstance(event_data, dict) and _inject_cart_url_for_cart_check_chip(event_data):
+                    logger.info("[QUICKREPLY_FILTER] injected cart URL for cart-check chip")
                 if isinstance(event_data, dict) and _remove_home_quick_reply_chips(event_data):
                     logger.info(
                         "[QUICKREPLY_FILTER] removed home chip from %s template",
