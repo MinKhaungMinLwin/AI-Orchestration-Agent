@@ -41,6 +41,44 @@ def test_quick_order_success_guides_user_to_order_form_page() -> None:
     assert event["data"]["moveOrderPageData"] == order_form_data
 
 
+def test_quick_order_success_ignores_llm_order_confirm_wording() -> None:
+    event = try_build_template(
+        [
+            {
+                "tool": "quick_order_tool",
+                "args": {
+                    "goods_no": "G000000309783",
+                    "ord_qty": 2,
+                    "shop_id": "F07782",
+                    "rsv_date": "20260609",
+                    "rsv_hour": "17",
+                },
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "result": True,
+                        "message": "",
+                        "drtPurYn": "Y",
+                        "data": {
+                            "cartNoArrStr": "15767",
+                            "goodsInfoArrStr": "G000000309783|2|Y",
+                            "vstRsvDate": "2026060917",
+                        },
+                    },
+                },
+            }
+        ],
+        "주문이 확정됐어요. 2026년 6월 9일 17시에 방문 예약으로 진행됩니다. 😊",
+    )
+
+    assert event is not None
+    message = event["data"]["assistantResponse"]
+    assert message == "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."
+    assert "확정" not in message
+    assert "완료" not in message
+
+
 def test_save_to_cart_success_carries_product_quantity_metadata() -> None:
     event = try_build_template(
         [

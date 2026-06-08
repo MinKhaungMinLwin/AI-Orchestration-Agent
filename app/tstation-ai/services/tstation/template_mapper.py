@@ -3792,7 +3792,7 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
         else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
     )
     text = (assistant_text or "").strip()
-    assistant_response = text if text and len(text) <= 120 else default_msg
+    assistant_response = default_msg if is_success else text if text and len(text) <= 120 else default_msg
 
     if is_success:
         quick_replies = [
