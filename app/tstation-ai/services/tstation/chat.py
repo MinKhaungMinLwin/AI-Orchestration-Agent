@@ -5565,7 +5565,9 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     if not isinstance(row, dict) or not row:
         return None
 
+    goods_no = str(row.get("goods_no") or "").strip()
     name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
+    tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
     slogan = _clean_product_sentence(row.get("slogan"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
     pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
@@ -5608,6 +5610,14 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     elif rating_avg:
         lines.extend(["", f"평균 평점은 {rating_avg}점입니다."])
 
+    metadata: dict[str, str] = {}
+    if goods_no:
+        metadata["goodsId"] = goods_no
+    if tire_size:
+        metadata["tireSize"] = tire_size
+    if name:
+        metadata["productName"] = name
+
     return {
         "type": "data",
         "template": "quickReply",
@@ -5620,6 +5630,7 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
                 {"label": "장바구니담기", "domain": "TRANSACTION"},
             ],
             "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata,
         },
     }
 
@@ -6032,6 +6043,25 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
+_SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
+_SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+
+
+def _fallback_sized_product_keyword(user_text: str) -> str:
+    text = str(user_text or "").strip()
+    if not normalize_tire_size(text):
+        return ""
+    keyword = _SIZED_PRODUCT_SEARCH_SIZE_RE.sub(" ", text)
+    keyword = re.sub(r"\s+", " ", keyword).strip(" ,./")
+    keyword_tokens = [tok for tok in re.findall(r"[0-9A-Za-z가-힣*+.-]+", keyword) if tok]
+    meaningful_tokens = [tok for tok in keyword_tokens if tok not in _SIZED_PRODUCT_KEYWORD_STOPWORDS]
+    if not meaningful_tokens:
+        return ""
+    if sum(len(tok) for tok in meaningful_tokens) < 2:
+        return ""
+    if all(tok.isdigit() for tok in meaningful_tokens):
+        return ""
+    return keyword
 
 
 def _is_bare_product_name_search_query(user_text: str) -> bool:
@@ -6047,17 +6077,28 @@ def _is_bare_product_name_search_query(user_text: str) -> bool:
     return len(text) <= 48 or bool(_BARE_PRODUCT_SEARCH_ALLOW_RE.search(text))
 
 
+def _is_sized_product_name_search_query(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text or _BARE_PRODUCT_SEARCH_BLOCK_RE.search(text):
+        return False
+    frame = build_discovery_intent_frame(text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    return bool((product_names or _fallback_sized_product_keyword(text)) and (frame.entities.get("tire_size") or normalize_tire_size(text)))
+
+
 def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
-    if not product_names:
+    fallback_keyword = _fallback_sized_product_keyword(user_text)
+    if not product_names and not fallback_keyword:
         return None
 
-    product_name = product_names[0]
+    product_name = product_names[0] if product_names else fallback_keyword
     preferred_keyword = _preferred_product_search_keyword(product_name)
     tool_input = {"keyword": preferred_keyword, "limit": 10}
-    if frame.entities.get("tire_size"):
-        tool_input["size"] = frame.entities["tire_size"]
+    tire_size = frame.entities.get("tire_size") or normalize_tire_size(user_text)
+    if tire_size:
+        tool_input["size"] = tire_size
     if frame.entities.get("brand_cd"):
         tool_input["brand_cd"] = frame.entities["brand_cd"]
     return tool_input
@@ -7520,12 +7561,30 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
-        """Extract confirmed product slots from a single-product `product` event."""
-        if event.get("template") != "product":
+        """Extract confirmed product slots from single-product product/detail events."""
+        template = event.get("template")
+        if template not in {"product", "quickReply"}:
             return None
         event_data = event.get("data")
         if not isinstance(event_data, dict):
             return None
+
+        if template == "quickReply":
+            metadata = event_data.get("metadata")
+            if not isinstance(metadata, dict):
+                return None
+            goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+            if not goods_no:
+                return None
+            tire_size = normalize_tire_size(str(metadata.get("tireSize") or metadata.get("tire_size") or ""))
+            tire_model = str(metadata.get("productName") or metadata.get("goodsNm") or "").strip()
+            slot_values: dict[str, Any] = {"goods_no": goods_no}
+            if tire_size:
+                slot_values["tire_size"] = tire_size
+            if tire_model:
+                slot_values["tire_model"] = tire_model
+            return slot_values
+
         products = event_data.get("products")
         metadata = event_data.get("metadata")
         if not (
@@ -10601,7 +10660,10 @@ class TStationChatServiceV2:
                 current_tire_size=confirmed_tire_size,
             ):
                 return None
-            if not _is_bare_product_name_search_query(user_query):
+            if not (
+                _is_bare_product_name_search_query(user_query)
+                or _is_sized_product_name_search_query(user_query)
+            ):
                 return None
 
             tool_input = _build_bare_product_search_tool_input(user_query)
