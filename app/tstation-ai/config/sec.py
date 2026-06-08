@@ -1,4 +1,4 @@
-from common.jwt_utils import decode_jwt
+from common.jwt_utils import TOKEN_EXPIRED_CODE, TOKEN_EXPIRED_MESSAGE, decode_jwt, is_jwt_payload_expired
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -16,6 +16,15 @@ def get_api_key(credentials: HTTPAuthorizationCredentials = Security(security)) 
     payload = decode_jwt(token)
     if not payload or not payload.get("user_id"):
         raise HTTPException(status_code=401, detail="Invalid token")
+    try:
+        expired = is_jwt_payload_expired(payload)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token expiration")
+    if expired:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": TOKEN_EXPIRED_CODE, "message": TOKEN_EXPIRED_MESSAGE},
+        )
 
     # Return user payload with token for further use
     payload["token"] = token

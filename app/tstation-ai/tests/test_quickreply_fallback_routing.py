@@ -39,6 +39,8 @@ from services.tstation.chat import (
     _build_product_coupon_eligibility_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
+    _build_bare_product_search_tool_input,
+    _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
     _comparison_query_with_recent_context,
@@ -86,6 +88,7 @@ from services.tstation.chat import (
     _inject_order_history_chip_for_cancel_guidance,
     _is_ev_suitability_turn,
     _is_bare_product_name_search_query,
+    _unique_product_row_from_sized_search_result,
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
@@ -1103,6 +1106,92 @@ def test_bare_short_alias_can_use_code_product_search_path() -> None:
     assert _is_bare_product_name_search_query("s fit as") is True
     assert _is_bare_product_name_search_query("에스핏") is True
     assert _is_bare_product_name_search_query("s fit as 가격 알려줘") is False
+    assert _is_bare_product_name_search_query("벤투스 S2 AS 225/45R17 2개 장바구니 담아줘") is False
+    assert _is_bare_product_name_search_query("벤투스 S2 AS 225/45R17 4개 구매할래") is False
+    assert _is_bare_product_name_search_query("벤투스 S2 AS 225/45R17 재고 조회") is False
+
+
+def test_bare_product_search_tool_input_preserves_same_turn_size() -> None:
+    assert _build_bare_product_search_tool_input("벤투스 S2 AS 225/45R17") == {
+        "keyword": "벤투스 S2 AS",
+        "limit": 10,
+        "size": "225/45R17",
+        "brand_cd": "HK",
+    }
+
+
+def test_sized_bare_product_search_can_resolve_unique_goods_no_for_detail() -> None:
+    row = _unique_product_row_from_sized_search_result(
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000309783",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R17",
+                    }
+                ]
+            },
+        },
+        "벤투스 S2 AS",
+        "225/45R17",
+    )
+
+    assert row is not None
+    assert row["goods_no"] == "G000000309783"
+
+
+def test_sized_bare_product_search_does_not_guess_ambiguous_goods_no() -> None:
+    row = _unique_product_row_from_sized_search_result(
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R17",
+                    },
+                    {
+                        "goods_no": "G2",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R17",
+                    },
+                ]
+            },
+        },
+        "벤투스 S2 AS",
+        "225/45R17",
+    )
+
+    assert row is None
+
+
+def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
+    event = _build_product_description_quickreply_event({
+        "status": "success",
+        "data": {
+            "goods_nm": "벤투스 S2 AS",
+            "slogan": "고속 주행에서 느끼는 Comfort Technology",
+            "pc_prod_tech_desc": "<ol><li>승차감 : 조용하고 안락한 승차감 제공</li></ol>",
+            "sale_prc": 152500,
+            "cheapest_final_prc": 118800,
+            "cheapest_applied_coupons": [
+                {"cpn_nm": "한국타이어 18% 상품 할인쿠폰(26년)"},
+                {"cpn_nm": "마케팅동의 5% 결제쿠폰"},
+            ],
+            "rating": {"review_count": 68, "rating_avg": 4.5},
+        },
+    })
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assistant_response = event["data"]["assistantResponse"]
+    assert "벤투스 S2 AS" in assistant_response
+    assert "최종 혜택가는 118,800원" in assistant_response
+    assert "리뷰는 68건" in assistant_response
+    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "장바구니담기"]
 
 
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:

@@ -13,19 +13,20 @@ import asyncio
 import json
 import logging
 import re
+from urllib.parse import urlparse
 import urllib.request
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from config.sec import get_api_key
+from common.jwt_utils import TOKEN_EXPIRED_CODE, decode_jwt, is_jwt_payload_expired
+from config.sec import get_api_key, security
 from schemas.tstation.chat_message import (
     ChatMessageRequest,
     ChatMessageResponse,
-    ChatStreamResponse,
     SessionListResponse,
     SessionInfo,
     ChatHistoryResponse,
@@ -41,6 +42,35 @@ from services.tstation.chat import TStationChatServiceV2
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TSTATION_ORIGIN_HOSTS = {
+    "wwwqa.tstation.com",
+    "mqa.tstation.com",
+    "mbiz.tstation.com",
+    "bizqa.tstation.com",
+}
+
+
+def _normalize_tstation_origin_host(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        host = urlparse(raw).hostname
+    else:
+        host = raw.split(",", 1)[0].split(":", 1)[0]
+    host = (host or "").strip().lower()
+    if host in _TSTATION_ORIGIN_HOSTS:
+        return host
+    return None
+
+
+def _origin_host_from_request(request: Request) -> str | None:
+    for header_name in ("origin", "referer", "x-forwarded-host", "host"):
+        host = _normalize_tstation_origin_host(request.headers.get(header_name))
+        if host:
+            return host
+    return None
 
 
 def _log_task_error(task: asyncio.Task) -> None:
@@ -130,7 +160,7 @@ def _ensure_session_owner(service, session_id: str, user_id: str) -> None:
 
 
 @router.post("/chat", dependencies=[Depends(get_api_key)])
-async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
+async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict = Security(get_api_key)):
     """
     Chat endpoint - only content, history managed by service via Redis.
 
@@ -159,7 +189,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id)).add_done_callback(_log_task_error)
 
     # Always generate a trace ID so Langfuse scores are linkable
-    tracing_id = _valid_tracing_id(request.tracing_id) or uuid.uuid4().hex
+    tracing_id = _valid_tracing_id(chat_body.tracing_id) or uuid.uuid4().hex
 
     # ── Monthly token quota check ──────────────────────────────────────────────
     if user_id:
@@ -180,14 +210,14 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     service = get_chat_history_service()
 
     # Redis client is sync; run hot-path calls in worker threads so FastAPI's event loop stays free.
-    session_id = await asyncio.to_thread(service.get_or_create_session_id, request.session_id, user_id)
-    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", request.content, user_id=user_id)
+    session_id = await asyncio.to_thread(service.get_or_create_session_id, chat_body.session_id, user_id)
+    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", chat_body.content, user_id=user_id)
     history = await asyncio.to_thread(service.get_history_for_llm, session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Add current user message only if not duplicate of last history
-    if not (messages and messages[-1].get("role") == "user" and messages[-1].get("content") == request.content):
-        messages.append({"role": "user", "content": request.content})
+    if not (messages and messages[-1].get("role") == "user" and messages[-1].get("content") == chat_body.content):
+        messages.append({"role": "user", "content": chat_body.content})
 
     # Prepare request for chat service
     from schemas.tstation.chat import TStationChatRequest
@@ -195,12 +225,13 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     chat_request = TStationChatRequest(
         messages=messages,
-        stream=request.stream,
+        stream=chat_body.stream,
         user_id=user_id,
         session_id=session_id,
         access_token=user["token"],
-        user_info=request.user_info,
-        chip_context=request.chip_context.model_dump() if request.chip_context else None,
+        origin_host=_origin_host_from_request(http_request),
+        user_info=chat_body.user_info,
+        chip_context=chat_body.chip_context.model_dump() if chat_body.chip_context else None,
         **({"tracing_id": tracing_id} if tracing_id else {}),
     )
 
@@ -208,7 +239,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     if user_id:
         from services.tstation.quota_service import estimate_tokens
         from config.env import settings
-        input_tokens = estimate_tokens(request.content)
+        input_tokens = estimate_tokens(chat_body.content)
         output_estimate = 400  # conservative avg response size in tokens
         asyncio.create_task(asyncio.to_thread(
             _update_quota_score, user_id, input_tokens + output_estimate,
@@ -216,7 +247,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )).add_done_callback(_log_task_error)
 
     # Call chat service
-    if request.stream:
+    if chat_body.stream:
         from services.tstation.chat_history_service import get_async_redis_client
         _redis = get_async_redis_client()
         _streaming_key = _STREAMING_KEY.format(session_id)
@@ -251,7 +282,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
             session_id=session_id,
             message_id=msg_id,
             role="user",
-            content=request.content,
+            content=chat_body.content,
             created_at=get_current_time(),
         )
 
@@ -334,8 +365,11 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
 
         message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
         if message_to_save:
-            logger.debug(f"[CHAT_MESSAGE] Saving assistant message" +
-                      (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
+            logger.debug(
+                "[CHAT_MESSAGE] Saving assistant message"
+                + (" with template_data" if template_data else "")
+                + f": {message_to_save[:50]}..."
+            )
 
             from services.tstation.history_summarizer import refresh_summary
             asyncio.create_task(asyncio.to_thread(
@@ -551,8 +585,8 @@ async def get_user_info(user: dict = Security(get_api_key)):
     return UserInfoResponse(**user_data)
 
 
-@router.post("/validate-token", dependencies=[Depends(get_api_key)], response_model=ValidateTokenResponse)
-async def validate_token_endpoint(user: dict = Security(get_api_key)):
+@router.post("/validate-token", response_model=ValidateTokenResponse)
+async def validate_token_endpoint(credentials: HTTPAuthorizationCredentials = Security(security)):
     """
     Validate JWT token.
 
@@ -566,10 +600,17 @@ async def validate_token_endpoint(user: dict = Security(get_api_key)):
         - user_id (str): User ID if valid
         - reason (str): Reason if invalid
     """
-    # user is already the decoded JWT payload
-    user_id = user.get("user_id")
-    if user_id:
-        return ValidateTokenResponse(valid=True, user_id=user_id)
-    else:
+    if not credentials:
+        return ValidateTokenResponse(valid=False, reason="Missing token")
+
+    payload = decode_jwt(credentials.credentials)
+    user_id = payload.get("user_id") if payload else None
+    if not user_id:
         return ValidateTokenResponse(valid=False, reason="Invalid token")
+    try:
+        if is_jwt_payload_expired(payload):
+            return ValidateTokenResponse(valid=False, user_id=user_id, reason=TOKEN_EXPIRED_CODE)
+    except ValueError:
+        return ValidateTokenResponse(valid=False, user_id=user_id, reason="Invalid token expiration")
+    return ValidateTokenResponse(valid=True, user_id=user_id)
 

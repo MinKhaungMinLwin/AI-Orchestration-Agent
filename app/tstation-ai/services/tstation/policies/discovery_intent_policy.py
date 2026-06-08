@@ -337,6 +337,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     if frame.intent == "product_search":
         keyword = entities.get("product_keyword") or (entities.get("product_names") or ("",))[0]
         args = {"keyword": keyword}
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
