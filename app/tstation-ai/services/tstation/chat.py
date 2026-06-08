@@ -6334,6 +6334,30 @@ def _remove_home_quick_reply_chips(event_data: dict) -> bool:
     return True
 
 
+_CART_CHECK_LABELS = {"장바구니 확인", "장바구니보기", "장바구니 보기"}
+def _inject_cart_url_for_cart_check_chip(event_data: dict) -> bool:
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+
+    changed = False
+    normalized: list[object] = []
+    for chip in chips:
+        if not isinstance(chip, dict):
+            normalized.append(chip)
+            continue
+        next_chip = dict(chip)
+        label = str(next_chip.get("label") or "").strip()
+        if label in _CART_CHECK_LABELS and not next_chip.get("url"):
+            next_chip["url"] = CTAUrls.CART
+            changed = True
+        normalized.append(next_chip)
+
+    if changed:
+        event_data["quickReplies"] = normalized
+    return changed
+
+
 def _discovery_recovery_chips_for_text(
     assistant_text: str | None,
     source_domain: str | None,
@@ -11924,6 +11948,8 @@ class TStationChatServiceV2:
                                 for chip in recovery_chips
                                 if isinstance(chip, dict)
                             ])
+                if isinstance(event_data, dict) and _inject_cart_url_for_cart_check_chip(event_data):
+                    logger.info("[QUICKREPLY_FILTER] injected cart URL for cart-check chip")
                 if isinstance(event_data, dict) and _remove_home_quick_reply_chips(event_data):
                     logger.info(
                         "[QUICKREPLY_FILTER] removed home chip from %s template",
