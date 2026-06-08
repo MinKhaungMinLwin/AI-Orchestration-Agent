@@ -1087,8 +1087,12 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
         ])
         return "\n".join(lines)
 
+    requested_size = ""
     grouped: dict[str, dict[str, object]] = {}
     for entry in _find_entries(tool_data_list, "search_product_tool"):
+        args = _tool_args(entry)
+        if not requested_size:
+            requested_size = _get_str(args, "size", "tire_size")
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
         if not isinstance(rows, list):
@@ -1112,18 +1116,29 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
     lines = [
         "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
         if stock_or_install_request
-        else "검색된 상품 기준으로 안내드릴게요."
+        else (
+            f"입력하신 {requested_size} 규격 기준으로 상품을 확인했어요."
+            if requested_size
+            else "검색된 상품 기준으로 안내드릴게요."
+        )
     ]
     for name, data in list(grouped.items())[:5]:
         row = data["row"] if isinstance(data.get("row"), dict) else {}
         sizes = data["sizes"] if isinstance(data.get("sizes"), list) else []
-        size_text = f" 대표 규격: {', '.join(str(size) for size in sizes[:3])}" if sizes else ""
+        size_label = "입력 규격" if requested_size else "대표 규격"
+        size_text = f" {size_label}: {', '.join(str(size) for size in sizes[:3])}" if sizes else ""
         lines.append(f"- {name}: {_tire_summary_first_line(row)}{size_text}")
         lines.append(f"  {_tire_summary_second_line(row)}")
-    lines.extend([
-        "",
-        "차량에 맞는 규격 확인을 위해 차량번호나 현재 타이어 사이즈를 알려주세요.",
-    ])
+    if requested_size:
+        lines.extend([
+            "",
+            "가격, 재고, 구매를 이어서 확인할 수 있어요.",
+        ])
+    else:
+        lines.extend([
+            "",
+            "차량에 맞는 규격 확인을 위해 차량번호나 현재 타이어 사이즈를 알려주세요.",
+        ])
     return "\n".join(lines)
 
 

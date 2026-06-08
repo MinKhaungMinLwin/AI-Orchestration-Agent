@@ -1192,6 +1192,46 @@ def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_card
     assert "products" not in result["data"]
 
 
+def test_product_search_with_size_acknowledges_input_size_without_size_prompt() -> None:
+    text = "벤투스 S2 AS 225/45R17"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 S2 AS", "limit": 10, "size": "225/45R17", "brand_cd": "HK"},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "items": [
+                            {
+                                "goods_nm": "벤투스 S2 AS",
+                                "tire_size_1": "225/45R17",
+                                "season_nm": "사계절",
+                                "car_knd_nm": "승용차",
+                                "goods_pfm_nm": "COMFORT",
+                                "t_life_span": "4.6",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        "벤투스 S2 AS 검색 결과입니다. 원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "입력하신 225/45R17 규격 기준으로 상품을 확인했어요." in assistant_response
+    assert "입력 규격: 225/45R17" in assistant_response
+    assert "차량에 맞는 규격 확인" not in assistant_response
+    assert "가격, 재고, 구매를 이어서 확인할 수 있어요." in assistant_response
+
+
 def test_discovery_policy_product_search_summary_prevents_generic_unsized_summary() -> None:
     current_user_text.set("마일리지 타이어 이거는 택시기사들이 쓰는거 아냐? 별로지?")
     decision = decide_discovery_response(
