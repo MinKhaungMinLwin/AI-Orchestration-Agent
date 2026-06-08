@@ -20,6 +20,9 @@ _BE_HTTP_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20
 
 
 _tstation_be_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("tstation_be_token", default=None)
+_tstation_origin_host: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "tstation_origin_host", default=None
+)
 
 
 class _InstrumentedBackendClient:
@@ -34,6 +37,9 @@ class _InstrumentedBackendClient:
         headers = dict(kwargs.pop("headers", {}) or {})
         if self._token and "Authorization" not in headers:
             headers["Authorization"] = f"{self._prefix} {self._token}" if self._prefix else self._token
+        origin_host = _tstation_origin_host.get()
+        if origin_host and "X-TStation-Origin-Host" not in headers:
+            headers["X-TStation-Origin-Host"] = origin_host
 
         start = time.perf_counter()
         status_code: int | str = "error"
@@ -91,6 +97,11 @@ class TstationBeClient:
         self._token_state.token = token
         _tstation_be_token.set(token)
 
+    def set_origin_host(self, origin_host: str | None) -> None:
+        """Set original T-Station access host for the current request context."""
+        self._token_state.origin_host = origin_host
+        _tstation_origin_host.set(origin_host)
+
     def get_client(self, token: str | None = None) -> AuthenticatedClient:
         """
         Get authenticated client with access token.
@@ -121,6 +132,11 @@ _tstation_be_client = TstationBeClient()
 def set_tstation_be_token(token: str | None) -> None:
     """Set access token for current request."""
     _tstation_be_client.set_token(token)
+
+
+def set_tstation_origin_host(origin_host: str | None) -> None:
+    """Set original access host for current request."""
+    _tstation_be_client.set_origin_host(origin_host)
 
 
 def get_tstation_be_client(token: str | None = None) -> AuthenticatedClient:

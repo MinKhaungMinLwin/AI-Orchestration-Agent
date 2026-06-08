@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 from services.tstation.common.cta_urls import CTAUrls
-from services.tstation.common.tstation_be_client import set_tstation_be_token
+from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from config.env import settings
 from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
@@ -7807,6 +7807,7 @@ class TStationChatServiceV2:
         _t_classify = _t0  # fallback: if classify fails
 
         set_tstation_be_token(request.access_token)
+        set_tstation_origin_host(request.origin_host)
 
         # PII Guardrail: check the latest user message before any agent processing
         last_user_msg = next(

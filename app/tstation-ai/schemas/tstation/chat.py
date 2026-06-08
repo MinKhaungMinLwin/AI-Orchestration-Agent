@@ -15,6 +15,7 @@ class TStationChatRequest(BaseModel):
 
     # Access token for tstation-be API (per-request, can be different each time)
     access_token: Optional[str] = Field(default=None, description="Access token for tstation-be API calls")
+    origin_host: Optional[str] = Field(default=None, description="Original T-Station access host for BE upstream calls")
 
     # Extra user info from UI (overrides JWT fields if overlap)
     user_info: Optional[dict] = Field(default=None, description="Additional user info from UI")
