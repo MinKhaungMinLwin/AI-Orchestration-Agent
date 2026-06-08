@@ -38,6 +38,7 @@ class CTAUrls:
     """
 
     # Group A — fixed paths
+    CART: Final[str] = f"{_PC}/cart"
     ORDER_HISTORY: Final[str] = f"{_PC}/mypage/tstation/order-history"
     STORE_SERVICE_HISTORY: Final[str] = f"{_PC}/mypage/tstation/custservice/carservice-hist"
     PROMOTION_EVENT_LIST: Final[str] = f"{_PC}/promotion/event-list"
@@ -60,6 +61,7 @@ class CTAUrls:
 # Agent prompts contain `__URL_FOO__` literals; expand_url_sentinels() replaces them.
 _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_ORDER_HISTORY__": CTAUrls.ORDER_HISTORY,
+    "__URL_CART__": CTAUrls.CART,
     "__URL_ORDER_HISTORY_DETAIL__": CTAUrls.ORDER_HISTORY_DETAIL,
     "__URL_STORE_DETAIL__": CTAUrls.STORE_DETAIL,
     "__URL_STORE_SERVICE_HISTORY__": CTAUrls.STORE_SERVICE_HISTORY,

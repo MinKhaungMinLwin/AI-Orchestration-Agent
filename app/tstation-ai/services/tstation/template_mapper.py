@@ -132,6 +132,7 @@ _EV_CHARGE_PREFERENCE_RE = re.compile(
     r"충전\s*(?:가능|되는|되나|지원|되는지)?|충전기|전기차\s*충전",
     re.IGNORECASE,
 )
+_CART_ALREADY_EXISTS_RE = re.compile(r"이미\s*장바구니|장바구니에\s*담겨", re.IGNORECASE)
 
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
@@ -3639,6 +3640,8 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
     outer = entry.get("data") if isinstance(entry.get("data"), dict) else {}
     if outer.get("status") == "error":
         is_success = False
+    result_message = _get_str(raw, "message") if isinstance(raw, dict) else ""
+    is_already_in_cart = bool(result_message and _CART_ALREADY_EXISTS_RE.search(result_message))
 
     ord_no: str | None = None
     if isinstance(raw, dict):
@@ -3752,6 +3755,12 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             cart_chips = [
                 {"label": "주문하기", "domain": "TRANSACTION"},
                 {"label": "처음으로", "domain": "LEADING"},
+            ]
+        elif is_already_in_cart:
+            cart_msg = "이미 장바구니에 담겨있는 상품이에요. 장바구니에서 확인해 주세요. 😊"
+            cart_chips = [
+                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                {"label": "주문하기", "domain": "TRANSACTION"},
             ]
         else:
             cart_msg = "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
