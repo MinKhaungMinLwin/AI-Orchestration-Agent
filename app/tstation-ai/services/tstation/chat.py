@@ -3495,6 +3495,10 @@ _TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
     r"추천|찾|검색|재고|가격|주문|구매|장착|진행|볼래|봐줘|알려줘|도\s*추천",
     re.IGNORECASE,
 )
+_QUANTITYLESS_CART_ORDER_CTA_RE = re.compile(
+    r"^\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘|구매하기|주문하기|바로\s*주문|결제하기)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _normalize_vehicle_tire_size_pair(selected_meta: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -3593,6 +3597,10 @@ def _should_prompt_order_quantity_before_store(user_text: str | None, slots: Any
     if ConversationSlots.extract_from_user_text(str(user_text or "")).ord_qty is not None:
         return False
     return True
+
+
+def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
+    return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
 
 
 def _build_staggered_vehicle_tire_selection_event(selected_vehicle: dict) -> dict | None:
@@ -7583,6 +7591,14 @@ class TStationChatServiceV2:
                 slot_values["tire_size"] = tire_size
             if tire_model:
                 slot_values["tire_model"] = tire_model
+            raw_qty = metadata.get("quantity") or metadata.get("ordQty") or metadata.get("ord_qty")
+            if raw_qty is not None:
+                try:
+                    qty = int(raw_qty)
+                    if qty > 0:
+                        slot_values["ord_qty"] = qty
+                except (TypeError, ValueError):
+                    pass
             return slot_values
 
         products = event_data.get("products")
@@ -8552,6 +8568,30 @@ class TStationChatServiceV2:
                     f"[SLOTS] Reused confirmed region={confirmed_region!r} "
                     f"from prior validation prompt"
                 )
+
+            if (
+                current_vehicle_selection_prompt_event.get() is None
+                and _is_quantityless_cart_or_order_cta(last_user_text)
+                and regex_slots.ord_qty is None
+            ):
+                quickreply_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event({
+                    "template": "quickReply",
+                    "data": latest_quickreply_tmpl,
+                })
+                if quickreply_product_slots:
+                    for field, value in quickreply_product_slots.items():
+                        setattr(merged_slots, field, value)
+                    if getattr(merged_slots, "pending_intent", None) is None:
+                        merged_slots.pending_intent = "order"
+                    if getattr(merged_slots, "goal_type", None) is None:
+                        merged_slots.goal_type = "place_order"
+                    if getattr(merged_slots, "ord_qty", None) is None:
+                        logger.info(
+                            "[QTY_GUARD] Prompting quantity before cart/order CTA tool call: goods_no=%r user_text=%r",
+                            merged_slots.goods_no,
+                            last_user_text,
+                        )
+                        current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
 
             # 3.8) Resolve goods_no from the user's list-selection reply matched against
             # the most recent search_product_tool result. Without this, Discovery may

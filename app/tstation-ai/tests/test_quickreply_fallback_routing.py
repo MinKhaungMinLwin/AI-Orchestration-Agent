@@ -112,6 +112,7 @@ from services.tstation.chat import (
     _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
     _should_prompt_order_quantity_before_store,
+    _is_quantityless_cart_or_order_cta,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
@@ -2577,6 +2578,34 @@ def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> 
     )
 
     assert _should_prompt_order_quantity_before_store("2개", slots) is False
+
+
+@pytest.mark.parametrize("text", ["장바구니담기", "장바구니 담기", "장바구니에 담아줘", "구매하기", "주문하기"])
+def test_quantityless_cart_order_cta_detects_button_labels(text: str) -> None:
+    assert _is_quantityless_cart_or_order_cta(text) is True
+
+
+def test_confirmed_product_slot_values_from_cart_quickreply_metadata_includes_quantity() -> None:
+    event = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "장바구니에 담았어요.",
+            "quickReplies": [{"label": "주문하기", "domain": "TRANSACTION"}],
+            "metadata": {
+                "goodsId": "G000000309783",
+                "tireSize": "225/45R17",
+                "productName": "벤투스 S2 AS",
+                "quantity": 2,
+            },
+        },
+    }
+
+    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+        "goods_no": "G000000309783",
+        "ord_qty": 2,
+        "tire_model": "벤투스 S2 AS",
+        "tire_size": "225/45R17",
+    }
 
 
 def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() -> None:

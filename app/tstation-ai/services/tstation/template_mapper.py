@@ -3768,12 +3768,18 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                 {"label": "다시 시도", "domain": "TRANSACTION"},
                 {"label": "처음으로", "domain": "LEADING"},
             ]
+        metadata: dict[str, object] = {"goodsId": goods_no, "quantity": ord_qty, "ordQty": ord_qty}
+        if goods_nm:
+            metadata["productName"] = goods_nm
+        if tire_size:
+            metadata["tireSize"] = tire_size
         return {
             "type": "data",
             "template": "quickReply",
             "data": {
                 "assistantResponse": cart_msg,
                 "quickReplies": cart_chips,
+                "metadata": metadata,
             },
         }
 
