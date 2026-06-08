@@ -3777,9 +3777,11 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             },
         }
 
+    order_form_data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else None
+
     # order (quick_order_tool) 는 주문/결제 페이지로 이동하기 전 주문서 생성 단계다.
     default_msg = (
-        "주문서가 준비되었습니다. 주문서 작성 페이지에서 주문과 결제를 이어가 주세요. 😊"
+        "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."
         if is_success
         else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
     )
@@ -3814,6 +3816,9 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
             "isSuccess": is_success,
             "type": flow_type,
             "message": None if is_success else default_msg,
+            "render": False if is_success and order_form_data else True,
+            "autoMoveOrderPage": True if is_success and order_form_data else False,
+            "moveOrderPageData": order_form_data,
             "data": {"status": "success" if is_success else "error"},
             "metadata": {
                 "ordNo": ord_no,
