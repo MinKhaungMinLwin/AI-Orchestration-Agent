@@ -20,8 +20,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from config.sec import get_api_key
+from common.jwt_utils import TOKEN_EXPIRED_CODE, decode_jwt, is_jwt_payload_expired
+from config.sec import get_api_key, security
 from schemas.tstation.chat_message import (
     ChatMessageRequest,
     ChatMessageResponse,
@@ -583,8 +585,8 @@ async def get_user_info(user: dict = Security(get_api_key)):
     return UserInfoResponse(**user_data)
 
 
-@router.post("/validate-token", dependencies=[Depends(get_api_key)], response_model=ValidateTokenResponse)
-async def validate_token_endpoint(user: dict = Security(get_api_key)):
+@router.post("/validate-token", response_model=ValidateTokenResponse)
+async def validate_token_endpoint(credentials: HTTPAuthorizationCredentials = Security(security)):
     """
     Validate JWT token.
 
@@ -598,10 +600,17 @@ async def validate_token_endpoint(user: dict = Security(get_api_key)):
         - user_id (str): User ID if valid
         - reason (str): Reason if invalid
     """
-    # user is already the decoded JWT payload
-    user_id = user.get("user_id")
-    if user_id:
-        return ValidateTokenResponse(valid=True, user_id=user_id)
-    else:
+    if not credentials:
+        return ValidateTokenResponse(valid=False, reason="Missing token")
+
+    payload = decode_jwt(credentials.credentials)
+    user_id = payload.get("user_id") if payload else None
+    if not user_id:
         return ValidateTokenResponse(valid=False, reason="Invalid token")
+    try:
+        if is_jwt_payload_expired(payload):
+            return ValidateTokenResponse(valid=False, user_id=user_id, reason=TOKEN_EXPIRED_CODE)
+    except ValueError:
+        return ValidateTokenResponse(valid=False, user_id=user_id, reason="Invalid token expiration")
+    return ValidateTokenResponse(valid=True, user_id=user_id)
 
