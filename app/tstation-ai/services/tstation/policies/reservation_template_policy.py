@@ -427,6 +427,55 @@ def coerce_reservation_quickreply_to_datepick(
     )
 
 
+def coerce_order_preview_quickreply_to_datepick(
+    event: dict,
+    structured_sources: list[tuple[str, dict]],
+    slot_state: Any | None,
+) -> dict | None:
+    """Recover order-preview turns where the LLM emits a generic quickReply.
+
+    `transaction_store_preview_tool` is enough to render the next required step
+    for a named-store order: date/time selection. This guard is intentionally
+    narrower than `coerce_reservation_quickreply_to_datepick()` so pure stock
+    checks can keep their location/stock response.
+    """
+    if event.get("template") != "quickReply":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+
+    pending_intent = getattr(slot_state, "pending_intent", None)
+    goal_type = getattr(slot_state, "goal_type", None)
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if should_keep_stock_location(
+        pending_intent=pending_intent,
+        goal_type=goal_type,
+        assistant_text=assistant_text,
+        exact_order_preview=True,
+    ):
+        return None
+    if pending_intent not in {"order", "reservation"} and goal_type != "place_order":
+        return None
+
+    for tool_name, parsed in reversed(structured_sources):
+        if tool_name != "transaction_store_preview_tool" or not isinstance(parsed, dict):
+            continue
+        preview_payload = extract_preview_payload(parsed)
+        if not isinstance(preview_payload, dict):
+            continue
+        event = build_datepick_from_preview_payload(
+            preview_payload,
+            assistant_text=assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+            source_domain=event.get("source_domain"),
+            assistant_response_source="code_mapper_order_preview_quickreply",
+            require_single_store=True,
+        )
+        if event is not None:
+            return event
+    return None
+
+
 def coerce_schedule_confirmation_quickreply_to_datepick(
     event: dict,
     *,

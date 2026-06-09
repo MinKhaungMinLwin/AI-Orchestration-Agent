@@ -37,6 +37,7 @@ from services.tstation import qc_verifier
 from services.tstation.classifier_feedback import log_classifier_redirect
 from services.tstation.policies.reservation_template_policy import (
     filter_datepick_to_requested_date,
+    coerce_order_preview_quickreply_to_datepick,
     coerce_reservation_quickreply_to_datepick,
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
@@ -11467,6 +11468,20 @@ class TStationChatServiceV2:
                     last_template = "datepick"
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
+                    event_data = event.get("data", {})
+                coerced_event = coerce_order_preview_quickreply_to_datepick(
+                    event,
+                    structured_sources,
+                    pending_slots or initial_slots,
+                )
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] transaction_store_preview order quickReply → datepick"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_order_preview_quickreply"
                     event_data = event.get("data", {})
                 coerced_event = filter_datepick_to_requested_weekday(event, user_query)
                 if coerced_event is not None:

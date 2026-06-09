@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from services.tstation.policies.reservation_template_policy import (
     build_datepick_from_preview_payload,
     build_datepick_from_schedule_payload,
+    coerce_order_preview_quickreply_to_datepick,
     coerce_reservation_quickreply_to_datepick,
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_date,
@@ -261,6 +262,93 @@ def test_non_time_quickreply_is_not_coerced() -> None:
         event,
         [_preview_source()],
         SimpleNamespace(pending_intent="order", goal_type="place_order"),
+    )
+
+    assert result is None
+
+
+def test_order_preview_generic_quickreply_is_coerced_to_datepick() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "검색된 상품 정보를 기준으로 안내드릴게요.",
+            "quickReplies": [
+                {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
+                {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+    preview_source = (
+        "transaction_store_preview_tool",
+        {
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "tier": "in_store_only",
+                    "stores": [{
+                        "shop_id": "F07782",
+                        "shop_nm": "티스테이션 한남점",
+                        "is_installable": True,
+                        "slots": [
+                            {"cal_day": "20260609", "tm": "16"},
+                            {"cal_day": "20260609", "tm": "17"},
+                            {"cal_day": "20260610", "tm": "09"},
+                        ],
+                    }],
+                },
+                "stores": [{"shop_id": "F07782", "shop_nm": "티스테이션 한남점"}],
+                "candidate_shop_ids": ["F07782"],
+            },
+        },
+    )
+
+    result = coerce_order_preview_quickreply_to_datepick(
+        event,
+        [preview_source],
+        SimpleNamespace(pending_intent="order", goal_type="place_order"),
+    )
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["source_domain"] == "transaction"
+    assert result["assistant_response_source"] == "code_mapper_order_preview_quickreply"
+    assert result["data"]["metadata"] == {
+        "shopId": "F07782",
+        "shopName": "티스테이션 한남점",
+    }
+    assert result["data"]["dates"] == [
+        {
+            "date": "2026년 6월 9일 (화)",
+            "available": True,
+            "availableTimes": [16, 17],
+            "index": 0,
+        },
+        {
+            "date": "2026년 6월 10일 (수)",
+            "available": True,
+            "availableTimes": [9],
+            "index": 1,
+        },
+    ]
+
+
+def test_order_preview_generic_quickreply_stock_context_is_not_coerced() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "재고가 확인된 매장입니다.",
+            "quickReplies": [{"label": "주문하기", "domain": "TRANSACTION"}],
+        },
+    }
+
+    result = coerce_order_preview_quickreply_to_datepick(
+        event,
+        [_preview_source()],
+        SimpleNamespace(pending_intent="stock", goal_type="store_with_stock"),
     )
 
     assert result is None
