@@ -7636,6 +7636,59 @@ class TStationChatServiceV2:
         return slot_values
 
     @staticmethod
+    def _preorder_slot_values_from_data(template_data: dict | None) -> dict[str, Any] | None:
+        """Extract durable order slots from a rendered preOrder template payload."""
+        if not isinstance(template_data, dict):
+            return None
+        if template_data.get("template") == "preOrder" and isinstance(template_data.get("data"), dict):
+            template_data = template_data["data"]
+        if not template_data.get("isReadyToOrder"):
+            return None
+
+        metadata = template_data.get("metadata")
+        order_info = template_data.get("orderInfo")
+        if not isinstance(metadata, dict) or not isinstance(order_info, dict):
+            return None
+
+        slot_values: dict[str, Any] = {}
+        goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+        if goods_no:
+            slot_values["goods_no"] = goods_no
+
+        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or "").strip()
+        if shop_id:
+            slot_values["shop_id"] = shop_id
+
+        store_name = str(order_info.get("storeName") or metadata.get("shopName") or "").strip()
+        if store_name:
+            slot_values["shop_name"] = store_name
+
+        raw_qty = order_info.get("quantity") or metadata.get("quantity") or metadata.get("ordQty")
+        if raw_qty is not None:
+            try:
+                qty = int(raw_qty)
+                if qty > 0:
+                    slot_values["ord_qty"] = qty
+            except (TypeError, ValueError):
+                pass
+
+        raw_amount = order_info.get("paymentAmount") or metadata.get("paymentAmount")
+        if raw_amount is not None:
+            try:
+                amount = int(raw_amount)
+                if amount > 0:
+                    slot_values["payment_amount"] = amount
+            except (TypeError, ValueError):
+                pass
+
+        product_text = str(order_info.get("product") or metadata.get("productName") or "").strip()
+        tire_size = normalize_tire_size(product_text)
+        if tire_size:
+            slot_values["tire_size"] = tire_size
+
+        return slot_values or None
+
+    @staticmethod
     def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
         """Match a user's vehicle-selection reply against the metadata of the
         most recent assistant message that rendered a `listCar` template, and
@@ -8248,6 +8301,7 @@ class TStationChatServiceV2:
         predicted_domain_values: list[str] = []
         latest_datepick_tmpl: dict | None = None
         latest_quickreply_tmpl: dict | None = None
+        latest_preorder_tmpl: dict | None = None
         for msg in reversed(request.messages):
             if msg.get("role") == "user":
                 last_user_text = msg.get("content", "")
@@ -8271,6 +8325,7 @@ class TStationChatServiceV2:
             )
             latest_datepick_tmpl = latest_template_data_from_messages(recent_template_msgs, "datepick")
             latest_quickreply_tmpl = latest_template_data_from_messages(recent_template_msgs, "quickReply")
+            latest_preorder_tmpl = latest_template_data_from_messages(recent_template_msgs, "preOrder")
             _t_slots = time.perf_counter()
             logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
@@ -8359,6 +8414,25 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
+            preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
+            if (
+                preorder_slot_values
+                and merged_slots.goal_type == "place_order"
+                and (
+                    merged_slots.shop_id is None
+                    or merged_slots.shop_name is None
+                    or merged_slots.payment_amount is None
+                )
+                and (
+                    merged_slots.goods_no is None
+                    or preorder_slot_values.get("goods_no") is None
+                    or merged_slots.goods_no == preorder_slot_values.get("goods_no")
+                )
+            ):
+                for field, value in preorder_slot_values.items():
+                    if value is not None and getattr(merged_slots, field, None) is None:
+                        setattr(merged_slots, field, value)
+                logger.info("[SLOTS] Recovered order slots from latest preOrder template: %s", preorder_slot_values)
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
             # Region-only follow-ups ("성남은?", "서울은?") are candidate searches,
@@ -11655,6 +11729,20 @@ class TStationChatServiceV2:
                                 "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
                                 confirmed_product_slots,
                             )
+                    preorder_slots = TStationChatServiceV2._preorder_slot_values_from_data(event_data)
+                    if preorder_slots:
+                        from schemas.tstation.slots import ConversationSlots
+
+                        base_slots = pending_slots
+                        if base_slots is None:
+                            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        updated_slots = base_slots.model_copy()
+                        for field, value in preorder_slots.items():
+                            if value is not None:
+                                setattr(updated_slots, field, value)
+                        if updated_slots.model_dump() != base_slots.model_dump():
+                            pending_slots = updated_slots
+                            logger.info("[PREORDER_SLOT_STAGE] staged order slots from preOrder event: %s", preorder_slots)
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
                         event_data["assistantResponse"] = assistant_response

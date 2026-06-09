@@ -3685,6 +3685,42 @@ def test_single_product_search_result_updates_goods_no_and_tire_size() -> None:
     assert slots.tire_size == "235/55R19"
 
 
+def test_preorder_template_payload_recovers_order_slots() -> None:
+    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+        "assistantResponse": "주문 내용을 확인해 주세요.",
+        "orderInfo": {
+            "product": "벤투스 S2 AS 225/45R17",
+            "quantity": 2,
+            "storeName": "티스테이션 한남점",
+            "bookingDateTime": "2026년 6월 9일 (화) 17:00",
+            "paymentAmount": 237600,
+        },
+        "isReadyToOrder": True,
+        "isReadyToAddToCart": False,
+        "metadata": {
+            "goodsId": "G000000309783",
+            "shopId": "F07782",
+        },
+    })
+
+    assert slot_values == {
+        "goods_no": "G000000309783",
+        "shop_id": "F07782",
+        "shop_name": "티스테이션 한남점",
+        "ord_qty": 2,
+        "payment_amount": 237600,
+        "tire_size": "225/45R17",
+    }
+
+
+def test_preorder_template_payload_ignores_non_ready_card() -> None:
+    assert TStationChatServiceV2._preorder_slot_values_from_data({
+        "orderInfo": {"storeName": "티스테이션 한남점"},
+        "isReadyToOrder": False,
+        "metadata": {"shopId": "F07782"},
+    }) is None
+
+
 def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:
     assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344") == "29조3344"
     assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344 홍길동") is None
