@@ -1,20 +1,49 @@
 services:
-  ai-gateway:
+  local-postgres:
+    image: postgres:16-alpine
     environment:
-      # Local-only override: keep LiteLLM migrations separate from Langfuse Prisma schema.
-      - LITELLM_DB_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/litellm
-      - DATABASE_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/litellm
+      POSTGRES_USER: tstation
+      POSTGRES_PASSWORD: tstation
+      POSTGRES_DB: postgres
+    volumes:
+      - local-postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-local-postgres.sql:/docker-entrypoint-initdb.d/init-local-postgres.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tstation -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - internal-net
+
+  ai-gateway:
+    depends_on:
+      local-postgres:
+        condition: service_healthy
+    environment:
+      - LITELLM_DB_URL=postgresql://tstation:tstation@local-postgres:5432/litellm
+      - DATABASE_URL=postgresql://tstation:tstation@local-postgres:5432/litellm
+
+  langfuse-worker:
+    depends_on:
+      local-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
+      DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
+
+  langfuse-server:
+    depends_on:
+      local-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
+      DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
 
   qdrant:
     ports:
       - "6333:6333"
 
-  langfuse-worker:
-    environment:
-      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse_v3
-      DIRECT_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse_v3
-
-  langfuse-server:
-    environment:
-      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse_v3
-      DIRECT_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse_v3
+volumes:
+  local-postgres-data:
