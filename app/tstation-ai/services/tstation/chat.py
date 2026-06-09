@@ -85,6 +85,7 @@ from services.tstation.policies.store_service_gate import (
 )
 from config.tracing import (
     build_trace_config,
+    safe_trace_update,
     trace_span as _trace_span,
     truncate_for_trace as _truncate,
     _tracing_enabled,
@@ -7004,6 +7005,52 @@ def _sanitize_response(text: str) -> str:
     return stripped
 
 
+def _tool_error_summary(tool_name: str, tool_result: Any) -> dict | None:
+    """Return a compact tool error record for trace metadata, or None."""
+    parsed = tool_result if isinstance(tool_result, dict) else qc_verifier.parse_tool_output(tool_result)
+    if not isinstance(parsed, dict):
+        return None
+    status = str(parsed.get("status") or "").lower()
+    http_status = parsed.get("http_status")
+    try:
+        http_status_int = int(http_status) if http_status is not None else None
+    except (TypeError, ValueError):
+        http_status_int = None
+    if status != "error" and (http_status_int is None or http_status_int < 400):
+        return None
+    message = parsed.get("message")
+    reason = parsed.get("reason")
+    return {
+        "tool_name": tool_name,
+        "http_status": http_status_int,
+        "reason": str(reason)[:160] if reason is not None else None,
+        "message": str(message)[:240] if message is not None else None,
+    }
+
+
+def _trace_final_error_state(
+    *,
+    tool_errors: list[dict],
+    draft_response: str,
+    buffered_data_events: list[dict],
+    original_message_events: list[dict],
+    last_assistant_response_source: str | None,
+) -> tuple[str, str, bool]:
+    """Classify user impact for one chat turn without changing response behavior."""
+    if last_assistant_response_source == "validation_fallback":
+        return "error", "template_validation_error", True
+    has_user_visible_output = bool(
+        str(draft_response or "").strip()
+        or buffered_data_events
+        or any(str(evt.get("content") or "").strip() for evt in original_message_events)
+    )
+    if not has_user_visible_output:
+        return "error", "fatal_error", True
+    if tool_errors:
+        return "recovered", "tool_error_recovered", False
+    return "success", "none", False
+
+
 def _strip_qc_verdict_from_user_text(text: str) -> str:
     """Remove standalone QC verdict markers from user-facing text."""
     if not isinstance(text, str):
@@ -9954,6 +10001,7 @@ class TStationChatServiceV2:
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
+        tool_errors: list[dict] = []
         last_template: str | None = None
         last_template_source: str | None = None
         last_assistant_response_source: str | None = None
@@ -10052,6 +10100,8 @@ class TStationChatServiceV2:
 
         def _record_code_tool_result(tool_name: str, tool_input: dict, tool_result: dict) -> None:
             called_tool_names.add(tool_name)
+            if tool_error := _tool_error_summary(tool_name, tool_result):
+                tool_errors.append(tool_error)
             structured_sources.append((tool_name, tool_result))
             filtered = filter_source_data(
                 tool_name,
@@ -11400,6 +11450,8 @@ class TStationChatServiceV2:
                     if ctx_item:
                         tool_context_items.append(ctx_item)
                     parsed_for_verifier = qc_verifier.parse_tool_output(output_data)
+                    if tool_error := _tool_error_summary(tool_name, parsed_for_verifier or output_data):
+                        tool_errors.append(tool_error)
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
                         if tool_name == "search_product_tool":
@@ -12374,13 +12426,34 @@ class TStationChatServiceV2:
             # metadata moves to `metadata` (and the `qc` child span already holds
             # the verdict + result for drill-down).
             _route = "→".join(d.value for d in domains) if domains else ""
+            final_status, error_class, user_visible_error = _trace_final_error_state(
+                tool_errors=tool_errors,
+                draft_response=draft_response,
+                buffered_data_events=buffered_data_events,
+                original_message_events=original_message_events,
+                last_assistant_response_source=last_assistant_response_source,
+            )
             _trace_metadata = {
                 "route": _route,
                 "tools": sorted(called_tool_names),
+                "called_tools": sorted(called_tool_names),
+                "tool_error_count": len(tool_errors),
+                "tool_errors": tool_errors[:10],
+                "final_status": final_status,
+                "error_class": error_class,
+                "user_visible_error": user_visible_error,
                 "template": last_template,
+                "final_template": last_template,
                 "template_source": last_template_source,
                 "template_qc_policy": _TEMPLATE_QC_POLICY.get(last_template or ""),
                 "assistant_response_source": last_assistant_response_source,
+                "source_domain": (
+                    str((buffered_data_events[-1].get("source_domain") or "")).lower()
+                    if buffered_data_events
+                    else None
+                ),
+                "session_id": session_id,
+                "trace_id": trace_id,
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "qc_executed": qc_executed,
                 "qc_skip_reason": qc_skip_reason,
@@ -12397,8 +12470,10 @@ class TStationChatServiceV2:
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)
             # Set both the parent span's own output AND the trace-level output.
-            parent_span.update(output=_trace_output)
-            parent_span.update_trace(
+            safe_trace_update(parent_span, output=_trace_output)
+            safe_trace_update(
+                parent_span,
+                trace=True,
                 name=(_last_user[:60] if _last_user else "chat"),
                 input=_trace_input,
                 output=_trace_output,
@@ -12424,8 +12499,10 @@ class TStationChatServiceV2:
                         trace_context={"trace_id": trace_id, "parent_span_id": parent_span_id},
                         input=_trace_input,
                     )
-                    response_span.update(output=_trace_output)
-                    response_span.update_trace(
+                    safe_trace_update(response_span, output=_trace_output)
+                    safe_trace_update(
+                        response_span,
+                        trace=True,
                         name=_response_span_name,
                         input=_trace_input,
                         output=_trace_output,

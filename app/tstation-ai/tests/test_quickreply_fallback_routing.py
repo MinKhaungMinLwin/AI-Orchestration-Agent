@@ -68,6 +68,8 @@ from services.tstation.chat import (
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
     _is_product_comparison_query,
+    _tool_error_summary,
+    _trace_final_error_state,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
@@ -3867,3 +3869,49 @@ def test_discovery_policy_dead_end_keeps_dead_end_chips() -> None:
 def test_non_discovery_domain_keeps_dead_end_chips() -> None:
     text = "타이어 사이즈나 차량번호를 알려주세요."
     assert not _should_replace_discovery_dead_end_chips(text, "support")
+
+
+def test_tool_error_summary_compacts_error_response() -> None:
+    assert _tool_error_summary(
+        "quick_order_tool",
+        {
+            "status": "error",
+            "http_status": 502,
+            "reason": "upstream_error",
+            "message": "고객사 API 호출 실패",
+            "data": {"ignored": True},
+        },
+    ) == {
+        "tool_name": "quick_order_tool",
+        "http_status": 502,
+        "reason": "upstream_error",
+        "message": "고객사 API 호출 실패",
+    }
+
+
+def test_trace_final_error_state_marks_recovered_tool_error() -> None:
+    final_status, error_class, user_visible_error = _trace_final_error_state(
+        tool_errors=[{"tool_name": "get_store_inventory_tool", "http_status": 500}],
+        draft_response="현재 재고 확인이 지연되어 다른 방법으로 안내드릴게요.",
+        buffered_data_events=[],
+        original_message_events=[],
+        last_assistant_response_source=None,
+    )
+
+    assert final_status == "recovered"
+    assert error_class == "tool_error_recovered"
+    assert user_visible_error is False
+
+
+def test_trace_final_error_state_marks_validation_fallback_user_visible() -> None:
+    final_status, error_class, user_visible_error = _trace_final_error_state(
+        tool_errors=[],
+        draft_response="죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.",
+        buffered_data_events=[],
+        original_message_events=[],
+        last_assistant_response_source="validation_fallback",
+    )
+
+    assert final_status == "error"
+    assert error_class == "template_validation_error"
+    assert user_visible_error is True
