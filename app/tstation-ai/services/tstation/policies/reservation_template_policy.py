@@ -20,6 +20,12 @@ _EXACT_DATE_REQUEST_RE = re.compile(
     r"(?:(?P<year>\d{2,4})\s*년\s*)?(?P<month>\d{1,2})\s*(?:/\s*|월\s*)(?P<day>3[01]|[12]?\d)(?:\s*일)?"
 )
 _STOCK_STORE_TEXT_RE = re.compile(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장")
+_GENERIC_DISCOVERY_FALLBACK_TEXT_RE = re.compile(
+    r"검색된\s*상품\s*정보를\s*기준으로\s*안내|상품명이나\s*조건을\s*조금\s*더\s*구체적으로|"
+    r"차량에\s*맞는\s*규격\s*확인",
+    re.IGNORECASE,
+)
+_GENERIC_DISCOVERY_FALLBACK_LABELS = {"보유차량 중 선택", "차번+이름으로 검색", "사이즈 직접 입력"}
 _OTHER_STORE_REQUEST_RE = re.compile(
     r"(?:다른|추가|더)\s*(?:매장|지점)|(?:매장|지점)\s*(?:더|또|추가)"
 )
@@ -212,6 +218,53 @@ def build_datepick_from_preview_payload(
             event["source_domain"] = source_domain
         return event
     return None
+
+
+def _store_name_from_preview_payload(preview_payload: dict) -> str:
+    schedule = preview_payload.get("schedule")
+    if isinstance(schedule, dict):
+        stores = schedule.get("stores")
+        if isinstance(stores, list):
+            for store in stores:
+                if isinstance(store, dict):
+                    shop_name = str(store.get("shop_nm") or "").strip()
+                    if shop_name:
+                        return shop_name
+    stores = preview_payload.get("stores")
+    if isinstance(stores, list):
+        for store in stores:
+            if isinstance(store, dict):
+                shop_name = str(store.get("shop_nm") or "").strip()
+                if shop_name:
+                    return shop_name
+    return ""
+
+
+def _is_generic_discovery_fallback_quickreply(event_data: dict, assistant_text: str) -> bool:
+    if _GENERIC_DISCOVERY_FALLBACK_TEXT_RE.search(assistant_text):
+        return True
+    quick_replies = event_data.get("quickReplies")
+    if not isinstance(quick_replies, list):
+        return False
+    labels = {
+        str(reply.get("label") or "").strip()
+        for reply in quick_replies
+        if isinstance(reply, dict)
+    }
+    return bool(labels & _GENERIC_DISCOVERY_FALLBACK_LABELS)
+
+
+def _order_preview_datepick_assistant_text(
+    event_data: dict,
+    preview_payload: dict,
+    assistant_text: str,
+) -> str:
+    if assistant_text and not _is_generic_discovery_fallback_quickreply(event_data, assistant_text):
+        return assistant_text
+    shop_name = _store_name_from_preview_payload(preview_payload)
+    if shop_name:
+        return f"{shop_name} 예약 가능한 날짜와 시간을 선택해 주세요."
+    return "예약 가능한 날짜와 시간을 선택해 주세요."
 
 
 def build_datepick_from_schedule_payload(
@@ -464,9 +517,14 @@ def coerce_order_preview_quickreply_to_datepick(
         preview_payload = extract_preview_payload(parsed)
         if not isinstance(preview_payload, dict):
             continue
+        datepick_assistant_text = _order_preview_datepick_assistant_text(
+            event_data,
+            preview_payload,
+            assistant_text,
+        )
         event = build_datepick_from_preview_payload(
             preview_payload,
-            assistant_text=assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+            assistant_text=datepick_assistant_text,
             source_domain=event.get("source_domain"),
             assistant_response_source="code_mapper_order_preview_quickreply",
             require_single_store=True,

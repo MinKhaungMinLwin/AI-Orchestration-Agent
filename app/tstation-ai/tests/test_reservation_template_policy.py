@@ -315,6 +315,7 @@ def test_order_preview_generic_quickreply_is_coerced_to_datepick() -> None:
     assert result["template"] == "datepick"
     assert result["source_domain"] == "transaction"
     assert result["assistant_response_source"] == "code_mapper_order_preview_quickreply"
+    assert result["data"]["assistantResponse"] == "티스테이션 한남점 예약 가능한 날짜와 시간을 선택해 주세요."
     assert result["data"]["metadata"] == {
         "shopId": "F07782",
         "shopName": "티스테이션 한남점",
