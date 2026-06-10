@@ -2400,6 +2400,13 @@ def test_rule_based_classify_keeps_pickup_and_delivery_policy_gates_even_when_di
     assert _rule_based_classify("신청 방법 알려줘", merged_slots) is None
 
 
+def test_rule_based_classify_routes_default_tbot_shopping_cta_to_discovery() -> None:
+    merged_slots = SimpleNamespace(goods_no=None)
+
+    assert _rule_based_classify("T'Bot과 타이어 쇼핑하기", merged_slots) == [MultiAgentDomain.Domain.DISCOVERY]
+    assert _rule_based_classify("T’Bot과 타이어 쇼핑하기", merged_slots) == [MultiAgentDomain.Domain.DISCOVERY]
+
+
 def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
     selected = _select_vehicle_from_listcar_event(
         "내 gv70 에 맞는 타이어 추천",

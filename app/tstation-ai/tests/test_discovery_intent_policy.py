@@ -1,6 +1,7 @@
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_period_from_text,
     build_discovery_intent_frame,
+    is_default_tire_shopping_request,
     plan_discovery_tools,
 )
 
@@ -43,6 +44,18 @@ def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     assert frame.intent == "product_recommendation"
     assert frame.sub_intent == "general_recommendation"
     assert plan.preferred_tool == "get_products_recommendations_tool"
+
+
+def test_default_tbot_shopping_cta_uses_basic_recommendation_flow() -> None:
+    frame = build_discovery_intent_frame("T'Bot과 타이어 쇼핑하기")
+    plan = plan_discovery_tools(frame)
+
+    assert is_default_tire_shopping_request("T’Bot과 타이어 쇼핑하기") is True
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "general_recommendation"
+    assert frame.entities["default_tire_shopping"] is True
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
 
 
 def test_tc006_sized_all_weather_lowest_price_has_size_and_sort() -> None:
