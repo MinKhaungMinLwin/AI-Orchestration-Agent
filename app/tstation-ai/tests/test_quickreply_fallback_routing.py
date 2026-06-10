@@ -33,6 +33,7 @@ from services.tstation.chat import (
     _COUPON_ISSUE_INTENT_RE,
     _all_my_t_benefit_page_event,
     _build_coupon_applicability_event,
+    _build_default_benefit_event,
     _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
     _build_oe_replacement_guidance_event,
@@ -124,6 +125,7 @@ from services.tstation.chat import (
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
 )
+from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
@@ -232,6 +234,55 @@ def test_all_my_t_benefit_page_event_uses_dedicated_cta() -> None:
     assert "쿠폰함" not in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["all my T 혜택 안내", "1:1 문의하기"]
     assert event["data"]["quickReplies"][0]["url"].endswith("/membership/dashboard/benefit")
+
+
+def test_default_benefit_cta_skips_coupon_gate() -> None:
+    assert should_consider_coupon_gate("지금 받을 수 있는 혜택은?") is False
+    assert should_consider_coupon_gate("내 쿠폰 보여줘") is True
+
+
+def test_default_benefit_event_lists_events_and_deals_with_links() -> None:
+    event = _build_default_benefit_event(
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "evt_nm": "한국타이어 페스타",
+                        "evt_strt_dtime": "2026-06-01 00:00:00",
+                        "evt_end_dtime": "2026-06-30 23:59:59",
+                        "evt_url_addr": "https://wwwqa.tstation.com/promotion/event/festa",
+                    }
+                ]
+            },
+        },
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "deal_nm": "여름맞이 기획전",
+                        "deal_strt_dtime": "2026-06-01 00:00:00",
+                        "deal_end_dtime": "2026-07-15 23:59:59",
+                        "dtl_conts_url_addr": "https://wwwqa.tstation.com/promotion/deal/summer",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_default_benefit_event_deal"
+    assistant_response = event["data"]["assistantResponse"]
+    assert "보유 쿠폰" not in assistant_response
+    assert "쿠폰함" not in assistant_response
+    assert "이벤트" in assistant_response
+    assert "한국타이어 페스타 · 2026-06-01 ~ 2026-06-30" in assistant_response
+    assert "https://wwwqa.tstation.com/promotion/event/festa" in assistant_response
+    assert "기획전" in assistant_response
+    assert "여름맞이 기획전 · 2026-06-01 ~ 2026-07-15" in assistant_response
+    assert "https://wwwqa.tstation.com/promotion/deal/summer" in assistant_response
+    assert _labels(event["data"]["quickReplies"]) == ["진행 중인 이벤트 보기", "처음으로"]
 
 
 def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:

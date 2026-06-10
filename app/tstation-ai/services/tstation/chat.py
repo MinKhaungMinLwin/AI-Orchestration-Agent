@@ -5190,6 +5190,94 @@ def _past_event_page_event(user_text: str) -> dict | None:
     }
 
 
+def _date_label(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.split(r"[T\s]", text, maxsplit=1)[0]
+
+
+def _field(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _tool_items(tool_result: dict, *list_keys: str) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    for key in (*list_keys, "items"):
+        rows = data.get(key) if isinstance(data, dict) else None
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _benefit_line(row: dict, *, kind: str) -> str:
+    if kind == "event":
+        name = _field(row, "evt_nm", "eventName", "event_name", "title")
+        start = _date_label(_field(row, "evt_strt_dtime", "evt_strt_date", "startDate", "start_date"))
+        end = _date_label(_field(row, "evt_end_dtime", "evt_end_date", "endDate", "end_date"))
+        link = _field(row, "evt_url_addr", "dtl_conts_url_addr", "eventUrl", "url", "actionLink")
+    else:
+        name = _field(row, "deal_nm", "dealName", "deal_name", "title")
+        start = _date_label(_field(row, "deal_strt_dtime", "deal_strt_date", "startDate", "start_date"))
+        end = _date_label(_field(row, "deal_end_dtime", "deal_end_date", "endDate", "end_date"))
+        link = _field(row, "deal_url_addr", "dtl_conts_url_addr", "dealUrl", "url", "actionLink")
+
+    if not name:
+        return ""
+    period = f"{start} ~ {end}" if start and end else start or end
+    pieces = [name]
+    if period:
+        pieces.append(period)
+    if link:
+        pieces.append(link)
+    return f"- {' · '.join(pieces)}"
+
+
+def _build_default_benefit_event(events_result: dict, deals_result: dict) -> dict:
+    event_rows = _tool_items(events_result, "events")[:5]
+    deal_rows = _tool_items(deals_result, "deals")[:5]
+    event_lines = [line for row in event_rows if (line := _benefit_line(row, kind="event"))]
+    deal_lines = [line for row in deal_rows if (line := _benefit_line(row, kind="deal"))]
+
+    if not event_lines and not deal_lines:
+        assistant_response = "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊"
+    else:
+        lines = ["현재 진행 중인 이벤트와 기획전을 안내드릴게요."]
+        if event_lines:
+            lines.extend(["", "이벤트", *event_lines])
+        if deal_lines:
+            lines.extend(["", "기획전", *deal_lines])
+        lines.extend(["", "자세한 조건은 변경될 수 있어요. 상세 페이지에서 꼭 확인해 주세요 😊"])
+        assistant_response = "\n".join(lines)
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_default_benefit_event_deal",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {
+                    "label": "진행 중인 이벤트 보기",
+                    "url": CTAUrls.PROMOTION_EVENT_LIST,
+                    "domain": "DISCOVERY",
+                },
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "eventCount": len(event_rows),
+                "dealCount": len(deal_rows),
+            },
+        },
+    }
+
+
 def _price_policy_guard_event(user_text: str) -> dict | None:
     """Return a deterministic price/coupon policy guard event, if one applies."""
     if not user_text:
@@ -6951,6 +7039,10 @@ def _rule_based_classify(
     text = last_user_text.strip()
     if not text:
         return None
+
+    if is_default_benefit_request(text):
+        logger.debug("[RULE_ROUTER] Default benefit CTA fast-path → DISCOVERY")
+        return [MultiAgentDomain.Domain.DISCOVERY]
 
     if is_default_tire_shopping_request(text):
         logger.debug("[RULE_ROUTER] Default tire shopping CTA fast-path → DISCOVERY")
@@ -10178,6 +10270,77 @@ class TStationChatServiceV2:
             mapped_event["assistant_response_source"] = "code_best_seller_search"
             return emitted_events, mapped_event
 
+        async def _resolve_default_benefit_with_code() -> tuple[list[dict], dict] | None:
+            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            if not is_default_benefit_request(user_query):
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import get_deals_tool as _deals_tool
+            from services.tstation.agents.b_discovery_agent.tools import get_events_tool as _events_tool
+
+            emitted_events: list[dict] = []
+            events_input = {"lang_cd": "ko"}
+            deals_input: dict[str, Any] = {}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_events_tool",
+                "display_name": "이벤트 조회 중...",
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_deals_tool",
+                "display_name": "기획전 조회 중...",
+                "source_domain": "discovery",
+            })
+            try:
+                events_raw, deals_raw = await asyncio.gather(
+                    asyncio.to_thread(_events_tool.invoke, events_input),
+                    asyncio.to_thread(_deals_tool.invoke, deals_input),
+                )
+                events_result = _tool_result_dict(events_raw)
+                deals_result = _tool_result_dict(deals_raw)
+            except Exception as exc:
+                logger.exception("[DEFAULT_BENEFIT] event/deal tools failed")
+                events_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+                deals_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+
+            for tool_name, tool_input, tool_result in (
+                ("get_events_tool", events_input, events_result),
+                ("get_deals_tool", deals_input, deals_result),
+            ):
+                _record_code_tool_result(tool_name, tool_input, tool_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Recommendation AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": tool_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": tool_input,
+                    "output": json.dumps(tool_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": tool_name,
+                    "source_domain": "discovery",
+                })
+
+            return emitted_events, _build_default_benefit_event(events_result, deals_result)
+
         async def _resolve_default_tire_shopping_with_code() -> tuple[list[dict], dict] | None:
             if domains != [MultiAgentDomain.Domain.DISCOVERY]:
                 return None
@@ -11367,6 +11530,22 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+
+        default_benefit_resolution = await _resolve_default_benefit_with_code()
+        if default_benefit_resolution is not None:
+            code_events, benefit_event = default_benefit_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(benefit_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((benefit_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None

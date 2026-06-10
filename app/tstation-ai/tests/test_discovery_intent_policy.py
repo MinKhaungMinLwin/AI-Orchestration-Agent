@@ -1,6 +1,7 @@
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_period_from_text,
     build_discovery_intent_frame,
+    is_default_benefit_request,
     is_default_tire_shopping_request,
     plan_discovery_tools,
 )
@@ -56,6 +57,19 @@ def test_default_tbot_shopping_cta_uses_basic_recommendation_flow() -> None:
     assert frame.entities["default_tire_shopping"] is True
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch == {"rcmd_type": "tstation"}
+
+
+def test_default_benefit_cta_uses_events_and_deals_not_coupons() -> None:
+    frame = build_discovery_intent_frame("지금 받을 수 있는 혜택은?")
+    plan = plan_discovery_tools(frame)
+
+    assert is_default_benefit_request("지금 받을 수 있는 혜택은?") is True
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "benefit_event_deal_list"
+    assert frame.entities["default_benefit"] is True
+    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
+    assert plan.preferred_tool == "get_events_tool"
+    assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
 def test_tc006_sized_all_weather_lowest_price_has_size_and_sort() -> None:

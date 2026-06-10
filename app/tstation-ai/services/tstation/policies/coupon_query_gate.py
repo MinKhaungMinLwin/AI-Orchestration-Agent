@@ -44,10 +44,18 @@ class CouponQueryGateDecision(BaseModel):
 
 
 _COUPON_GATE_TRIGGER_RE = re.compile(r"쿠폰|할인권|혜택|할인\s*상품|적용\s*상품", re.IGNORECASE)
+_DEFAULT_BENEFIT_RE = re.compile(
+    r"지금\s*받을\s*수\s*있는\s*혜택|현재\s*받을\s*수\s*있는\s*혜택|"
+    r"진행\s*중인\s*(?:이벤트|기획전|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전",
+    re.IGNORECASE,
+)
 
 
 def should_consider_coupon_gate(user_text: str | None) -> bool:
-    return bool(_COUPON_GATE_TRIGGER_RE.search(user_text or ""))
+    text = user_text or ""
+    if _DEFAULT_BENEFIT_RE.search(text):
+        return False
+    return bool(_COUPON_GATE_TRIGGER_RE.search(text))
 
 
 @lru_cache(maxsize=1)
