@@ -307,24 +307,10 @@
     networks:
       - internal-net
 
-  langfuse-redis:
-    image: redis:7-alpine
-    command: redis-server --requirepass ${LANGFUSE_REDIS_PASSWORD:-langfuseredis}
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${LANGFUSE_REDIS_PASSWORD:-langfuseredis} ping | grep PONG"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-    networks:
-      - internal-net
-
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     depends_on:
       langfuse-clickhouse:
-        condition: service_healthy
-      langfuse-redis:
         condition: service_healthy
       langfuse-minio:
         condition: service_started
@@ -354,9 +340,7 @@
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "media/"
-      REDIS_HOST: langfuse-redis
-      REDIS_PORT: 6379
-      REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:-langfuseredis}
+      REDIS_CONNECTION_STRING: ${LANGFUSE_REDIS_URL}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "HOST=$$(hostname); wget -q --spider http://$$HOST:3030/ || exit 1"]
@@ -371,8 +355,6 @@
     image: langfuse/langfuse:3
     depends_on:
       langfuse-clickhouse:
-        condition: service_healthy
-      langfuse-redis:
         condition: service_healthy
       langfuse-minio:
         condition: service_started
@@ -406,9 +388,7 @@
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "media/"
-      REDIS_HOST: langfuse-redis
-      REDIS_PORT: 6379
-      REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:-langfuseredis}
+      REDIS_CONNECTION_STRING: ${LANGFUSE_REDIS_URL}
       # Auto-provision org/project/user/api-keys on first boot
       LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-tstation-org}
       LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-T-Station}

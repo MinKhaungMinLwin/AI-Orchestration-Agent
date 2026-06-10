@@ -41,6 +41,32 @@ services:
       DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
       DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
 
+  langfuse-redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${LANGFUSE_REDIS_PASSWORD:-langfuseredis}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${LANGFUSE_REDIS_PASSWORD:-langfuseredis} ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - internal-net
+
+  langfuse-worker:
+    depends_on:
+      langfuse-redis:
+        condition: service_healthy
+    environment:
+      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
+
+  langfuse-server:
+    depends_on:
+      langfuse-redis:
+        condition: service_healthy
+    environment:
+      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
+
   qdrant:
     ports:
       - "6333:6333"
