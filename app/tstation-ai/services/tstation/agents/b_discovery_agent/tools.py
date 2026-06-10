@@ -1567,7 +1567,8 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
     - "오늘 가장 많이 팔린 상품 / 오늘의 베스트" → period="day"
     - "이번 주 / 금주 베스트" → period="week"
     - "이번 달 / 이달의 / 월별 베스트" → period="month"
-    - "요즘 / 최근 / 인기 / 잘 나가는 / 잘 팔리는" → period="month" (모호한 최근성 표현은 month로 매핑)
+    - "요즘 / 최근 / 지금 가장 인기 있는 / 인기 / 잘 나가는 / 잘 팔리는" → period="3months"
+      (모호한 인기 표현은 최근 3개월 베스트셀러로 매핑)
     - "최근 3개월 / 분기 베스트" → period="3months"
 
     Args:
@@ -1583,7 +1584,7 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
         free_guarantee_yn, t_rlx_isn_yn) 도 함께 반환 — 사용자가 베스트셀러 상품의
         사이즈/계절/브랜드/공임 등을 물으면 동일 응답에서 답변 가능.
 
-    Example: {"period": "month", "limit": 5}
+    Example: {"period": "3months", "limit": 5}
     """
     logger.debug("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
 

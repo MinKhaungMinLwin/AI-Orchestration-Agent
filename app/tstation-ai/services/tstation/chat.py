@@ -44,6 +44,7 @@ from services.tstation.policies.reservation_template_policy import (
     latest_template_data_from_messages,
 )
 from services.tstation.policies.discovery_intent_policy import (
+    best_seller_period_from_text,
     build_discovery_intent_frame,
     normalize_tire_size,
     plan_discovery_tools,
@@ -10113,6 +10114,64 @@ class TStationChatServiceV2:
                 f"Output: {filtered}"
             )
 
+        async def _resolve_best_selling_products_with_code() -> tuple[list[dict], dict] | None:
+            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            period = best_seller_period_from_text(user_query)
+            if not period:
+                return None
+
+            tool_input = {"period": period, "limit": 5}
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_best_selling_products_tool as _best_selling_tool,
+            )
+            from services.tstation.template_mapper import try_build_template
+
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_best_selling_products_tool",
+                "display_name": "인기 상품 조회 중...",
+                "source_domain": "discovery",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_best_selling_tool.invoke, tool_input)
+                best_selling_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[BEST_SELLER] get_best_selling_products_tool failed for period=%s", period)
+                best_selling_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result("get_best_selling_products_tool", tool_input, best_selling_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Recommendation AF]",
+                "agent_class": "Discovery Agent",
+                "status": best_selling_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(best_selling_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_best_selling_products_tool",
+                "source_domain": "discovery",
+            })
+
+            mapped_event = try_build_template(
+                [{"tool": "get_best_selling_products_tool", "args": tool_input, "data": best_selling_result}],
+                "최근 3개월 베스트셀러 상품을 안내드립니다.",
+            )
+            if mapped_event is None:
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+            mapped_event["assistant_response_source"] = "code_best_seller_search"
+            return emitted_events, mapped_event
+
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
                 return None
@@ -11271,6 +11330,22 @@ class TStationChatServiceV2:
             assistant_response = str((coupon_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        best_selling_resolution = await _resolve_best_selling_products_with_code()
+        if best_selling_resolution is not None:
+            code_events, best_selling_event = best_selling_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(best_selling_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((best_selling_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

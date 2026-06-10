@@ -1153,6 +1153,56 @@ def test_unsized_recommendation_maps_to_text_summary_not_product_cards() -> None
     assert "products" not in result["data"]
 
 
+def test_popular_unsized_recommendation_omits_size_missing_notice() -> None:
+    current_user_text.set("지금 가장 인기 있는 타이어는?")
+
+    result = try_build_template([_unsized_recommendation_entry()], "인기 타이어를 안내드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "사이즈가 아직 확인되지 않아" not in assistant_response
+    assert "정확한 장착 가능 여부와 가격" not in assistant_response
+    assert "- 아이온 에보 AS: 전기차용 사계절 스포츠 타이어입니다." in assistant_response
+    assert "- 다이나프로 HPX: SUV용 사계절 컴포트 타이어입니다." in assistant_response
+
+
+def test_best_selling_tool_maps_to_product_cards() -> None:
+    result = try_build_template(
+        [
+            _best_selling_entry(
+                period="3months",
+                items=[
+                    {
+                        "goods_no": "G000000317729",
+                        "goods_nm": "아이온 에보 AS",
+                        "tire_size_1": "235/35R20",
+                        "car_knd_nm": "전기차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "SPORT",
+                    },
+                    {
+                        "goods_no": "G000000317664",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "265/50R20",
+                        "car_knd_nm": "SUV",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    },
+                ],
+            )
+        ],
+        "인기 상품을 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "product"
+    assistant_response = result["data"]["assistantResponse"]
+    assert assistant_response == "최근 3개월 베스트셀러는 아이온 에보 AS예요. 인기 상품 2개를 안내드립니다."
+    assert len(result["data"]["products"]) == 2
+    assert result["data"]["metadata"][0]["goodsId"] == "G000000317729"
+
+
 def test_product_search_size_question_answers_sizes_instead_of_generic_unsized_summary() -> None:
     current_user_text.set("마일리지 타이어 사이즈가 뭐야?\n아니 추천 말고 마일리지 타이어 말야")
 

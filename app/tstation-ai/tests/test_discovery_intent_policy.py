@@ -1,4 +1,5 @@
 from services.tstation.policies.discovery_intent_policy import (
+    best_seller_period_from_text,
     build_discovery_intent_frame,
     plan_discovery_tools,
 )
@@ -14,6 +15,34 @@ def test_tc004_unsized_summer_performance_recommendation_keeps_conditions() -> N
     assert frame.entities["tire_size"] is None
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch == {"rcmd_type": "performance", "season_nm": "여름"}
+
+
+def test_welcome_popular_tire_question_uses_three_month_best_sellers() -> None:
+    frame = build_discovery_intent_frame("지금 가장 인기 있는 타이어는?")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "best_seller_search"
+    assert frame.entities["best_seller_period"] == "3months"
+    assert plan.preferred_tool == "get_best_selling_products_tool"
+    assert plan.tool_args_patch == {"period": "3months", "limit": 5}
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_best_seller_period_mapping_preserves_explicit_periods() -> None:
+    assert best_seller_period_from_text("오늘 인기 타이어는?") == "day"
+    assert best_seller_period_from_text("이번 주 잘 팔리는 타이어") == "week"
+    assert best_seller_period_from_text("이번 달 베스트셀러") == "month"
+    assert best_seller_period_from_text("인기 타이어") == "3months"
+
+
+def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
+    frame = build_discovery_intent_frame("전기차용 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "general_recommendation"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
 
 
 def test_tc006_sized_all_weather_lowest_price_has_size_and_sort() -> None:

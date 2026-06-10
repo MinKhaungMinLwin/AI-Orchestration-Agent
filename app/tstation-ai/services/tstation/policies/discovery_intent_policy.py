@@ -28,6 +28,13 @@ _SIMILAR_PRICE_RE = re.compile(r"비슷한\s*가격|가격대|동급\s*가격", 
 _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNORECASE)
 _COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
+_BEST_SELLER_RE = re.compile(
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
+    re.IGNORECASE,
+)
+_BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
+_BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
+_BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
 _ONE_PER_VARIANT_RE = re.compile(r"1\s*개씩|한\s*개씩|한개씩|각각|브랜드별|종류별|each", re.IGNORECASE)
 _OCCUPATION_RE = re.compile(r"택시|기사|배달|화물", re.IGNORECASE)
 _RESTOCK_RE = re.compile(r"재입고|입고|언제\s*들어|언제\s*오|품절|품절인데|다시\s*들어", re.IGNORECASE)
@@ -191,6 +198,25 @@ def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
     return ()
 
 
+def best_seller_period_from_text(text: str) -> str | None:
+    """Map best-seller wording to BE period values.
+
+    The welcome-screen "지금 가장 인기 있는 타이어는?" button means a current
+    popularity ranking, not a generic recommendation. Use the broadest recent
+    ranking window the BE supports unless the user names a narrower period.
+    """
+    text = text or ""
+    if not _BEST_SELLER_RE.search(text):
+        return None
+    if _BEST_SELLER_DAY_RE.search(text):
+        return "day"
+    if _BEST_SELLER_WEEK_RE.search(text):
+        return "week"
+    if _BEST_SELLER_MONTH_RE.search(text):
+        return "month"
+    return "3months"
+
+
 def build_discovery_intent_frame(
     last_user_text: str,
     *,
@@ -239,12 +265,18 @@ def build_discovery_intent_frame(
         entities["price_goal"] = "lowest"
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
+    best_seller_period = best_seller_period_from_text(text)
+    if best_seller_period:
+        entities["best_seller_period"] = best_seller_period
 
     concept = bool(_CONCEPT_RE.search(text))
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if _MILEAGE_PRODUCT_RE.search(text):
+    if best_seller_period:
+        intent = "product_search"
+        sub_intent = "best_seller_search"
+    elif _MILEAGE_PRODUCT_RE.search(text):
         entities["product_keyword"] = "마일리지"
         if _OCCUPATION_RE.search(text):
             entities["guardrail"] = "occupation_neutral"
@@ -334,6 +366,14 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "best_seller_search":
+        args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}
+        return ToolPlan(
+            allowed_tools=("get_best_selling_products_tool",),
+            preferred_tool="get_best_selling_products_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
+        )
     if frame.intent == "product_search":
         keyword = entities.get("product_keyword") or (entities.get("product_names") or ("",))[0]
         args = {"keyword": keyword}

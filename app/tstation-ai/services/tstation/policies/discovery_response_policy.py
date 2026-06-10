@@ -121,6 +121,16 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             metadata={"response_shape_key": "sized_lowest_price_recommendation"},
         )
 
+    if frame.sub_intent == "best_seller_search":
+        return ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            required_slots=(),
+            forbidden_behaviors=("use_generic_recommendation_engine", "expose_sales_count"),
+            assistant_guidance="최근 3개월 등 요청 기간의 베스트셀러 도구 결과를 product 카드로 안내하고 판매 수량은 노출하지 않는다.",
+            metadata={"response_shape_key": "best_seller_product_cards"},
+        )
+
     if frame.intent == "product_recommendation" and not tire_size:
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,

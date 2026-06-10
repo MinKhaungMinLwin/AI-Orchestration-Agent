@@ -988,6 +988,10 @@ def _tire_summary_second_line(row: dict) -> str:
 
 
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
+_POPULAR_UNSIZED_REQUEST_RE = re.compile(
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
+    re.IGNORECASE,
+)
 
 
 def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
@@ -1761,13 +1765,13 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     decision = current_discovery_response_decision.get()
     response_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision else ""
     is_neutral_product_description = response_shape_key == "neutral_product_description"
+    is_popular_unsized_request = bool(_POPULAR_UNSIZED_REQUEST_RE.search(current_user_text.get() or ""))
     if response_shape_key == "similar_price_range_recommendation":
         for entry in _find_entries(
             tool_data_list,
             "search_product_tool",
             "get_newest_products_tool",
             "get_products_recommendations_tool",
-            "get_best_selling_products_tool",
         ):
             raw = _unwrap(entry)
             rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
@@ -1807,7 +1811,6 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         "search_product_tool",
         "get_newest_products_tool",
         "get_products_recommendations_tool",
-        "get_best_selling_products_tool",
     ):
         found_product_tool = True
         if _has_size_arg(entry):
@@ -1825,7 +1828,8 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if not found_product_tool or not rows_by_name:
         return None
 
-    lines = [] if is_neutral_product_description else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
+    skip_size_missing_notice = is_neutral_product_description or is_popular_unsized_request
+    lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
         if is_neutral_product_description:
             lines.extend([
@@ -1839,9 +1843,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 f"- {name}: {_tire_summary_first_line(row)}",
                 f"  {_tire_summary_second_line(row)}",
             ])
-    if is_neutral_product_description:
+    if skip_size_missing_notice:
         lines = [line for line in lines if line]
-    else:
+    elif not is_popular_unsized_request:
         lines.extend([
             "",
             "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
@@ -1980,7 +1984,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
     short, response_source = _summarize_with_source(assistant_text, "product", len(items))
-    if response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
+    if _find_entries(tool_data_list, "get_best_selling_products_tool"):
+        short = _product_result_context_message(tool_data_list, len(items))
+        response_source = "code_mapper"
+    elif response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
         short = _product_result_context_message(tool_data_list, len(items))
         response_source = "code_mapper"
 

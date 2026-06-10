@@ -16,6 +16,15 @@ def test_tc004_no_size_recommendation_forbids_cards_and_prices() -> None:
     assert "drop_season_constraint" in decision.forbidden_behaviors
 
 
+def test_welcome_popular_tire_question_uses_product_cards_not_generic_summary() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("지금 가장 인기 있는 타이어는?"))
+
+    assert decision.template == TemplateName.PRODUCT
+    assert decision.response_shape == ResponseShape.CARD
+    assert decision.metadata["response_shape_key"] == "best_seller_product_cards"
+    assert "use_generic_recommendation_engine" in decision.forbidden_behaviors
+
+
 def test_tc006_sized_lowest_price_allows_product_template_with_discount_guidance() -> None:
     decision = decide_discovery_response(
         build_discovery_intent_frame("2454518 사이즈 올웨더 타이어 중 가장 저렴한거 알려줘")
