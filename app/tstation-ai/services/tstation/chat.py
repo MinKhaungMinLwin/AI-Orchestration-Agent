@@ -6091,6 +6091,27 @@ def _build_quantity_benefit_comparison_event(price_results: dict[int, dict]) -> 
     }
 
 
+def _goods_no_from_template_event(event: dict | None) -> str:
+    if not isinstance(event, dict):
+        return ""
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return ""
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        goods_no = str(metadata.get("goodsId") or metadata.get("goods_no") or metadata.get("goodsIdList") or "").strip()
+        if goods_no.startswith("G"):
+            return goods_no
+    for key in ("products", "productList", "items"):
+        rows = data.get(key)
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+            continue
+        row_goods_no = str(rows[0].get("goodsId") or rows[0].get("goods_no") or rows[0].get("goodsNo") or "").strip()
+        if row_goods_no.startswith("G"):
+            return row_goods_no
+    return ""
+
+
 def _build_product_comparison_event(
     user_text: str,
     product_rows: list[tuple[str, dict | None]],
@@ -11356,9 +11377,13 @@ class TStationChatServiceV2:
                     )
                     if mapped_event is None:
                         return emitted_events, _build_quantity_benefit_missing_event(frame)
-                    mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
-                    mapped_event["assistant_response_source"] = "code_quantity_benefit_product_selection"
-                    return emitted_events, mapped_event
+                    mapped_goods_no = _goods_no_from_template_event(mapped_event)
+                    if mapped_goods_no:
+                        goods_no = mapped_goods_no
+                    else:
+                        mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                        mapped_event["assistant_response_source"] = "code_quantity_benefit_product_selection"
+                        return emitted_events, mapped_event
 
             from services.tstation.agents.b_discovery_agent.tools import (
                 get_cheapest_price_tool as _get_cheapest_price_tool,
