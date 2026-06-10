@@ -75,6 +75,26 @@ def _store_list_entry(*, args: dict, stores: list[dict]) -> dict:
     }
 
 
+def _nearby_store_entry(*, args: dict, stores: list[dict]) -> dict:
+    return {
+        "tool": "get_nearby_stores_tool",
+        "args": args,
+        "data": {"status": "success", "http_status": 200, "data": {"stores": stores}},
+    }
+
+
+def _logistics_inventory_entry(*, data: dict | None = None) -> dict:
+    return {
+        "tool": "get_logistics_inventory_tool",
+        "args": {"goods_no": "G000000309783"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": data or {"logistics_qty": 0, "rsv_sale_yn": "Y", "rsv_install_date": "2026-06-30"},
+        },
+    }
+
+
 def _stub_store(shop_id: str, shop_nm: str) -> dict:
     return {
         "shop_id": shop_id,
@@ -2526,6 +2546,76 @@ def test_stock_inventory_filters_location_to_available_shops() -> None:
     assert len(result["data"]["stores"]) == 1
     assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 재고점"
     assert result["data"]["stores"][0]["todayInstall"] is True
+
+
+def test_missing_store_order_policy_renders_nearby_store_candidates() -> None:
+    """A purchase flow with nearby candidates should show store cards, not ask for product details again."""
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("store",),
+            metadata={"response_shape_key": "missing_order_slots"},
+        )
+    )
+
+    result = try_build_template(
+        [
+            _logistics_inventory_entry(),
+            _nearby_store_entry(
+                args={"user_xpos": 126.755177, "user_ypos": 37.682977, "radius_km": 10, "limit": 10},
+                stores=[
+                    {
+                        **_stub_store("F00499", "티스테이션 덕이점"),
+                        "distance_km": 1.93,
+                        "rating_idx": 4.1,
+                    }
+                ],
+            )
+        ],
+        "검색된 상품 정보를 기준으로 안내드릴게요.\n정확한 상품 목록은 상품명이나 조건을 조금 더 구체적으로 알려주시면 다시 확인해 드릴 수 있어요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is True
+    assert result["data"]["assistantResponse"] == "요청하신 조건으로 장착 가능 여부가 확인된 매장 1곳입니다. 원하시는 매장을 선택해 주세요."
+    assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 덕이점"
+    assert result["data"]["metadata"] == [{"shopId": "F00499"}]
+
+
+def test_nearby_store_tool_forces_code_mapper_over_llm_quickreply() -> None:
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("store",),
+            metadata={"response_shape_key": "missing_order_slots"},
+        )
+    )
+    llm_quickreply = """```json
+{"template":"quickReply","data":{"assistantResponse":"검색된 상품 정보를 기준으로 안내드릴게요.","quickReplies":[{"label":"보유차량 중 선택","domain":"DISCOVERY"}],"predictedDomains":["DISCOVERY"]}}
+```"""
+
+    result = BaseAgent._try_code_template(
+        [
+            _logistics_inventory_entry(),
+            _nearby_store_entry(
+                args={"user_xpos": 126.755177, "user_ypos": 37.682977, "radius_km": 10, "limit": 10},
+                stores=[_stub_store("F00499", "티스테이션 덕이점")],
+            )
+        ],
+        response_streamer=None,
+        accumulated_text=llm_quickreply,
+    )
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is True
 
 
 def test_preview_location_tna_stock_uses_today_install_copy() -> None:

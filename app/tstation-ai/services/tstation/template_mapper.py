@@ -2683,13 +2683,33 @@ def _store_result_limit(tool_data_list: list[dict]) -> int:
     return 10
 
 
+def _has_store_candidates(tool_data_list: list[dict]) -> bool:
+    for entry in _find_entries(
+        tool_data_list,
+        "search_stores_tool",
+        "search_stores_complex_tool",
+        "get_store_list_tool",
+        "get_nearby_stores_tool",
+        "transaction_store_preview_tool",
+        "get_favorite_stores_tool",
+    ):
+        raw = _unwrap(entry)
+        stores = raw.get("stores") if isinstance(raw, dict) else None
+        if isinstance(stores, list) and any(isinstance(store, dict) for store in stores):
+            return True
+    return False
+
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     transaction_decision = current_transaction_response_decision.get()
+    required_slots = set(transaction_decision.required_slots or ()) if transaction_decision else set()
+    has_store_candidates = _has_store_candidates(tool_data_list)
     if (
         transaction_decision
         and transaction_decision.template == TemplateName.QUICK_REPLY
         and transaction_decision.required_slots
+        and not (required_slots <= {"store"} and has_store_candidates)
         and not _preview_tool_requires_location(tool_data_list)
         and called_tools
         & {

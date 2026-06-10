@@ -1604,6 +1604,7 @@ class BaseAgent(ABC):
             "get_user_vehicles_tool",
             "get_store_detail_tool",
             "get_store_schedule_tool",
+            "get_nearby_stores_tool",
             "get_stores_with_time_filter_tool",
             # Product list tools — items 있으면 product 카드 강제. LLM 이
             # "비슷한 가격대 더 추천" 같은 follow-up 발화에서 fenced JSON 으로
