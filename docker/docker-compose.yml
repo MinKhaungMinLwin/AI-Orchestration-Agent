@@ -128,8 +128,6 @@
     depends_on:
       ai-gateway:
         condition: service_started
-      redis-conversation-management:
-        condition: service_started
       langfuse-server:
         condition: service_healthy
 
@@ -170,39 +168,6 @@
       - internal-net
     restart: on-failure
     # restart: unless-stopped
-
-
-  # === Redis Conversation Management ===
-  redis-conversation-management:
-    image: redis
-    command: >
-      redis-server
-      --requirepass ${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}
-      --maxmemory 450mb
-      --maxmemory-policy allkeys-lru
-    expose:
-      - 6379
-    volumes:
-      - redis-data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "redis-cli", "-a", "${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}", "ping" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 512M
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - internal-net
 
   # === RabbitMQ (Celery Broker) ===
   rabbitmq:
@@ -416,7 +381,6 @@ networks:
 
 # === Volumes ===
 volumes:
-  redis-data:
   qdrant-data:
   rabbitmq-data:
   ingestion-data:
