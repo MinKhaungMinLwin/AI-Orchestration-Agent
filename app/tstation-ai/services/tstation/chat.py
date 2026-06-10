@@ -11716,6 +11716,114 @@ class TStationChatServiceV2:
             car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
             car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
 
+            def _active_purchase_slots() -> Any | None:
+                slots = pending_slots or initial_slots
+                if slots is None:
+                    return None
+                if getattr(slots, "pending_intent", None) == "order" or getattr(slots, "goal_type", None) == "place_order":
+                    return slots
+                return None
+
+            def _recent_product_search_context() -> tuple[str, str | None]:
+                for entry in reversed(prev_tool_data or []):
+                    if entry.get("tool") != "search_product_tool":
+                        continue
+                    tool_input = entry.get("input") if isinstance(entry.get("input"), dict) else entry.get("args")
+                    keyword = ""
+                    brand_cd = None
+                    if isinstance(tool_input, dict):
+                        keyword = str(tool_input.get("keyword") or "").strip()
+                        brand_cd = str(tool_input.get("brand_cd") or "").strip() or None
+                    if keyword:
+                        return _preferred_product_search_keyword(keyword), brand_cd
+                    data = _unwrap_tool_data(entry.get("data"))
+                    rows = data.get("items") if isinstance(data, dict) else None
+                    if isinstance(rows, list):
+                        for row in rows:
+                            if not isinstance(row, dict):
+                                continue
+                            row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+                            if row_name:
+                                return _preferred_product_search_keyword(row_name), brand_cd
+                return "", None
+
+            def _purchase_product_keyword(slots: Any) -> tuple[str, str | None]:
+                slot_model = str(getattr(slots, "tire_model", None) or "").strip()
+                if slot_model:
+                    return _preferred_product_search_keyword(slot_model), None
+                keyword, brand_cd = _recent_product_search_context()
+                if keyword:
+                    return keyword, brand_cd
+                frame = build_discovery_intent_frame(recent_user_context_text)
+                product_names = frame.entities.get("product_names") or ()
+                if product_names:
+                    return _preferred_product_search_keyword(str(product_names[0])), frame.entities.get("brand_cd")
+                transaction_frame = build_transaction_intent_frame(recent_user_context_text)
+                product_name = str(transaction_frame.known_slots.get("product_name") or "").strip()
+                if product_name:
+                    return _preferred_product_search_keyword(product_name), None
+                return "", None
+
+            def _purchase_store_name(slots: Any) -> str:
+                slot_store = str(getattr(slots, "shop_name", None) or "").strip()
+                if slot_store:
+                    return slot_store
+                frame = build_transaction_intent_frame(recent_user_context_text)
+                return str(frame.known_slots.get("store_name") or "").strip()
+
+            def _purchase_quantity(slots: Any) -> int | None:
+                slot_qty = getattr(slots, "ord_qty", None)
+                if slot_qty:
+                    try:
+                        return int(slot_qty)
+                    except (TypeError, ValueError):
+                        pass
+                frame = build_transaction_intent_frame(recent_user_context_text)
+                frame_qty = frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")
+                if frame_qty:
+                    try:
+                        return int(frame_qty)
+                    except (TypeError, ValueError):
+                        return None
+                return None
+
+            def _purchase_vehicle_missing_event(product_keyword: str, tire_size: str, reason: str) -> dict:
+                if reason == "quantity":
+                    response = f"{product_keyword} {tire_size} 상품은 확인했어요. 구매 수량을 알려주시면 이어서 확인할게요."
+                    quick_replies = [
+                        {"label": "2개", "domain": "TRANSACTION"},
+                        {"label": "4개", "domain": "TRANSACTION"},
+                    ]
+                elif reason == "store":
+                    response = (
+                        f"{product_keyword} {tire_size} 상품은 확인했어요. "
+                        "장착 가능 여부를 확인할 매장명이나 지역을 알려주세요."
+                    )
+                    quick_replies = [
+                        {"label": "근처 매장 찾기", "domain": "TRANSACTION"},
+                        {"label": "매장명 입력", "domain": "TRANSACTION"},
+                    ]
+                else:
+                    response = (
+                        f"{product_keyword} 상품은 확인했지만 {car_info} ({car_no})의 규격 {tire_size}에 맞는 "
+                        "상품을 찾지 못했어요. 다른 상품으로 찾아드릴까요?"
+                    )
+                    quick_replies = [
+                        {"label": "대체상품 추천", "domain": "DISCOVERY"},
+                        {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                    ]
+                return {
+                    "type": "data",
+                    "template": "quickReply",
+                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                    "assistant_response_source": "code_vehicle_purchase_continuation",
+                    "data": {
+                        "assistantResponse": response,
+                        "quickReplies": quick_replies,
+                        "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                    },
+                }
+
             if source_domain == MultiAgentDomain.Domain.SUPPORT.value or _MAINTENANCE_DDAY_TEXT_RE.search(user_query):
                 from services.tstation.agents.e_support_agent.tools import (
                     get_maintenance_dday_tool as _maintenance_dday_tool,
@@ -11780,6 +11888,125 @@ class TStationChatServiceV2:
             car_lnc_cd = selected_meta.get("carLncCd")
             if not (tire_size or car_lnc_cd):
                 return [], None
+
+            purchase_slots = _active_purchase_slots()
+            if purchase_slots is not None and tire_size:
+                product_keyword, brand_cd = _purchase_product_keyword(purchase_slots)
+                if product_keyword:
+                    from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+                    from services.tstation.agents.c_transaction_agent.tools import (
+                        transaction_store_preview_tool as _transaction_store_preview_tool,
+                    )
+                    from services.tstation.template_mapper import try_build_template
+
+                    search_input = {"keyword": product_keyword, "size": tire_size, "limit": 10}
+                    if brand_cd:
+                        search_input["brand_cd"] = brand_cd
+                    emitted_events = [{
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "search_product_tool",
+                        "display_name": "상품 검색 중...",
+                        "source_domain": "discovery",
+                    }]
+                    try:
+                        raw_search = await asyncio.to_thread(_search_product_tool.invoke, search_input)
+                        search_result = _tool_result_dict(raw_search)
+                    except Exception as exc:
+                        logger.exception("[VEHICLE_PURCHASE_CONTINUE] search_product_tool failed for %s", product_keyword)
+                        search_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                    _record_code_tool_result("search_product_tool", search_input, search_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Search AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": search_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": search_input,
+                        "output": json.dumps(search_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "search_product_tool",
+                        "source_domain": "discovery",
+                    })
+
+                    row = _unique_product_row_from_sized_search_result(search_result, product_keyword, str(tire_size))
+                    goods_no = str((row or {}).get("goods_no") or "").strip()
+                    if not goods_no:
+                        mapped_event = try_build_template(
+                            [{"tool": "search_product_tool", "args": search_input, "data": search_result}],
+                            (
+                                f"{product_keyword} {tire_size} 기준 상품을 찾았어요. "
+                                "상품을 선택해 주시면 구매를 이어갈게요."
+                            ),
+                        )
+                        if mapped_event is not None:
+                            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                            mapped_event["assistant_response_source"] = "code_vehicle_purchase_product_selection"
+                            return emitted_events, mapped_event
+                        return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "product")
+
+                    ord_qty = _purchase_quantity(purchase_slots)
+                    if not ord_qty:
+                        return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "quantity")
+
+                    store_name = _purchase_store_name(purchase_slots)
+                    if not store_name:
+                        return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "store")
+
+                    preview_input = {
+                        "goods_no": goods_no,
+                        "ord_qty": ord_qty,
+                        "store_nm": store_name,
+                        "include_price": True,
+                    }
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "transaction_store_preview_tool",
+                        "display_name": "장착 가능 일정 확인 중...",
+                        "source_domain": "transaction",
+                    })
+                    try:
+                        raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
+                        preview_result = _tool_result_dict(raw_preview)
+                    except Exception as exc:
+                        logger.exception(
+                            "[VEHICLE_PURCHASE_CONTINUE] transaction_store_preview_tool failed goods_no=%s",
+                            goods_no,
+                        )
+                        preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                    _record_code_tool_result("transaction_store_preview_tool", preview_input, preview_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Store/Stock AF]",
+                        "agent_class": "Transaction Agent",
+                        "status": preview_result.get("status", "success"),
+                        "source_domain": "transaction",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": preview_input,
+                        "output": json.dumps(preview_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "transaction_store_preview_tool",
+                        "source_domain": "transaction",
+                    })
+                    intro = f"{product_keyword} {tire_size} {ord_qty}개 기준으로 {store_name} 장착 가능 여부를 확인했어요."
+                    mapped_event = try_build_template(
+                        [
+                            {"tool": "search_product_tool", "args": search_input, "data": search_result},
+                            {"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result},
+                        ],
+                        intro,
+                    )
+                    if mapped_event is not None:
+                        mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                        mapped_event["assistant_response_source"] = "code_vehicle_purchase_continuation"
+                        return emitted_events, mapped_event
+                    return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "store")
 
             from services.tstation.agents.b_discovery_agent.tools import (
                 get_products_recommendations_tool as _recommendations_tool,
