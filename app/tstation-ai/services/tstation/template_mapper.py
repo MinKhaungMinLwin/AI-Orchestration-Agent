@@ -461,6 +461,72 @@ def _map_inventory_stock_result(tool_data_list: list[dict], assistant_text: str)
     }
 
 
+def _preview_has_no_fulfillment(raw: dict) -> bool:
+    """True when a product/store preview found no stock, logistics, or schedule path."""
+    logistics = raw.get("logistics") if isinstance(raw.get("logistics"), dict) else {}
+    try:
+        logistics_qty = int(logistics.get("logistics_qty") or 0)
+    except (TypeError, ValueError):
+        logistics_qty = 0
+
+    inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+    today_ids = _inventory_shop_ids(inventory, "todayShopArray")
+    tna_ids = _inventory_shop_ids(inventory, "tnaShopArray")
+
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+    schedule_empty = (
+        _get_str(schedule, "tier").lower() == "none"
+        or (isinstance(schedule_stores, list) and not schedule_stores)
+    )
+    return logistics_qty <= 0 and not today_ids and not tna_ids and schedule_empty
+
+
+def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Block product order/stock previews from falling through to a general store schedule."""
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        raw = _unwrap(entry)
+        if not isinstance(args, dict) or not isinstance(raw, dict):
+            continue
+        if not args.get("goods_no"):
+            continue
+        stores = raw.get("stores")
+        if not isinstance(stores, list) or not stores:
+            continue
+        if not _preview_has_no_fulfillment(raw):
+            continue
+
+        region = _get_str(args, "region_code") or _get_str(args, "store_nm")
+        prefix = f"{region} 기준으로 " if region else ""
+        short = (assistant_text or "").strip()
+        if (
+            not short
+            or len(short) > 160
+            or "```" in short
+            or re.search(r"선택|예약 가능|주문 가능|장착 가능 여부가 확인|확인했어요", short)
+            or not re.search(r"없|불가|확인되지|품절|부족|재고", short)
+        ):
+            short = (
+                f"{prefix}요청하신 상품과 수량으로 바로 장착 가능한 재고가 확인되지 않았어요. "
+                "다른 지역이나 다른 상품으로 다시 확인해 드릴게요."
+            )
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "assistant_response_source": "code_mapper",
+            "data": {
+                "assistantResponse": short,
+                "quickReplies": [
+                    {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                    {"label": "다른 상품 보기", "domain": "DISCOVERY"},
+                ],
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            },
+        }
+    return None
+
+
 def _map_store_validation_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Render deterministic quickReply for store-name validation guards.
 
@@ -2792,6 +2858,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if "get_store_schedule_tool" in called_tools:
         return None
 
+    no_fulfillment_preview = _map_preview_no_fulfillment_quickreply(tool_data_list, assistant_text)
+    if no_fulfillment_preview is not None:
+        return no_fulfillment_preview
+
     # `transaction_store_preview_tool` with no available schedule. The preview
     # tool runs in purchase flow ("이 상품 N개 [매장/근처] 오늘 가능?"); when its
     # `schedule.tier == "none"` (or `schedule.stores` is empty), today install
@@ -4232,6 +4302,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("transaction_store_preview_tool", _map_store_validation_quickreply),
         ("get_store_list_tool", _map_store_validation_quickreply),
         ("get_store_inventory_tool", _map_inventory_stock_result),
+        ("transaction_store_preview_tool", _map_preview_no_fulfillment_quickreply),
         ("get_store_schedule_tool", _map_datepick),
         # Date-specific detail lookup (Flow 5.1 / 5.5) — `get_store_detail_tool`
         # with args.cal_day + non-empty available_slots is a datepick signal.
