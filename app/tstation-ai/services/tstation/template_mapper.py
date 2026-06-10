@@ -67,6 +67,9 @@ current_ev_suitability_comparison: contextvars.ContextVar[bool] = contextvars.Co
 current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "current_return_visit_store_flow", default=False
 )
+current_excluded_store_ids: contextvars.ContextVar[set[str]] = contextvars.ContextVar(
+    "current_excluded_store_ids", default=set()
+)
 
 # True when the current turn asks whether a store is open/closed or bookable on
 # a specific date. In that case a single-day `get_store_detail_tool` result
@@ -133,6 +136,10 @@ _EV_CHARGE_PREFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _CART_ALREADY_EXISTS_RE = re.compile(r"이미\s*장바구니|장바구니에\s*담겨", re.IGNORECASE)
+_EXACT_TIME_REQUEST_RE = re.compile(
+    r"(?P<prefix>오전|새벽|오후|저녁|밤)?\s*(?P<hour>\d{1,2})\s*시"
+    r"(?!\s*(?:이후|부터|넘어서|후|뒤))"
+)
 
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
@@ -3050,6 +3057,12 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     items, metadata = [], []
     stock_filtered_preview = False
     stock_filtered_region = ""
+    other_store_request = _is_other_store_request()
+    excluded_store_ids = current_excluded_store_ids.get() if other_store_request else set()
+    exact_schedule_filter = _requested_exact_schedule_filter()
+    had_location_candidate = False
+    filtered_by_exact_time = False
+    filtered_by_other_store = False
     for entry in _find_entries(
         tool_data_list,
         "search_stores_tool",
@@ -3098,9 +3111,24 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             shop_id = _get_str(row, "shop_id")
             if not shop_id:
                 continue
+            had_location_candidate = True
+            if shop_id in excluded_store_ids:
+                filtered_by_other_store = True
+                continue
             stock_label = stock_labels_by_shop_id.get(shop_id)
             if stock_labels_by_shop_id and not stock_label:
                 continue
+            row_slots_for_filter = row.get("slots") if isinstance(row.get("slots"), list) else []
+            if exact_schedule_filter is not None and row_slots_for_filter:
+                filtered_slots = [
+                    slot
+                    for slot in row_slots_for_filter
+                    if isinstance(slot, dict) and _slot_matches_exact_filter(slot, exact_schedule_filter)
+                ]
+                if not filtered_slots:
+                    filtered_by_exact_time = True
+                    continue
+                row = {**row, "slots": filtered_slots}
 
             detail = detail_by_shop_id.get(shop_id, {})
 
@@ -3229,6 +3257,22 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             metadata.append({"shopId": shop_id})
 
     if not items:
+        if filtered_by_exact_time:
+            return _exact_time_no_slot_quickreply()
+        if other_store_request and filtered_by_other_store and had_location_candidate:
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper_other_store",
+                "data": {
+                    "assistantResponse": "앞서 안내한 매장 외에 추가로 확인되는 매장이 없어요. 다른 지역으로 확인해 주세요.",
+                    "quickReplies": [
+                        {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                        {"label": "처음으로", "domain": "LEADING"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
         if require_ev_specialty or require_ev_charge:
             requested_region = ""
             for entry in _find_entries(
@@ -3525,6 +3569,67 @@ def _is_bookable_hour(hour: int) -> bool:
     return hour != 12
 
 
+def _requested_exact_schedule_filter() -> tuple[set[str], int] | None:
+    """Return requested exact schedule days/hour from recent user text.
+
+    "9시" asks for the 9 o'clock slot. "9시 이후/부터" is a range request and is
+    intentionally left to existing time_after_hour handling.
+    """
+    text = current_user_text.get() or ""
+    match = _EXACT_TIME_REQUEST_RE.search(text)
+    if not match:
+        return None
+    try:
+        hour = int(match.group("hour"))
+    except (TypeError, ValueError):
+        return None
+    prefix = match.group("prefix") or ""
+    if prefix in {"오후", "저녁", "밤"} and 1 <= hour <= 11:
+        hour += 12
+    if not (0 <= hour <= 23):
+        return None
+
+    today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+    days: set[str] = set()
+    if re.search(r"오늘|당일", text):
+        days.add(today.strftime("%Y%m%d"))
+    if "내일" in text:
+        days.add((today + datetime.timedelta(days=1)).strftime("%Y%m%d"))
+    return days, hour
+
+
+def _slot_matches_exact_filter(slot: dict, exact_filter: tuple[set[str], int] | None) -> bool:
+    if exact_filter is None:
+        return True
+    days, requested_hour = exact_filter
+    cal_day = _get_str(slot, "cal_day")
+    hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+    if hour != requested_hour:
+        return False
+    return not days or cal_day in days
+
+
+def _exact_time_no_slot_quickreply(shop_nm: str = "") -> dict:
+    exact_filter = _requested_exact_schedule_filter()
+    hour_text = ""
+    if exact_filter is not None:
+        hour_text = f" {exact_filter[1]}시"
+    subject = f"{shop_nm}은" if shop_nm else "요청하신 조건에서는"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_mapper_exact_time",
+        "data": {
+            "assistantResponse": f"{subject} 해당 날짜{hour_text} 예약 가능 시간이 확인되지 않아요. 다른 시간이나 다른 매장으로 확인해 주세요.",
+            "quickReplies": [
+                {"label": "다른 시간 확인", "domain": "TRANSACTION"},
+                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Build a date picker from transaction_store_preview_tool schedule slots.
 
@@ -3642,9 +3747,12 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
     # but we sort cal_day strings before emitting to avoid relying on that.
     min_install_date = _same_turn_reservation_sale_min_install_date(tool_data_list, shop_id)
+    exact_filter = _requested_exact_schedule_filter()
     by_day: dict[str, set[int]] = {}
     for s in slots:
         if not isinstance(s, dict):
+            continue
+        if not _slot_matches_exact_filter(s, exact_filter):
             continue
         cal_day = _get_str(s, "cal_day")
         hour = _parse_tm_to_hour(_get_str(s, "tm"))
@@ -3657,6 +3765,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             bucket.add(hour)
 
     if not by_day:
+        if exact_filter is not None:
+            return _exact_time_no_slot_quickreply(shop_nm)
         return None
 
     dates: list[dict] = []
@@ -3735,13 +3845,18 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         slot_strs = raw.get("available_slots")
         if not isinstance(slot_strs, list) or not slot_strs:
             continue
+        exact_filter = _requested_exact_schedule_filter()
         hours: list[int] = []
         for s in slot_strs:
             h = _parse_tm_to_hour(str(s))
+            if exact_filter is not None and h != exact_filter[1]:
+                continue
             if h is not None and _is_bookable_hour(h):
                 hours.append(h)
         hours = sorted(set(hours))
         if not hours:
+            if exact_filter is not None:
+                return _exact_time_no_slot_quickreply(_get_str(raw, "shop_nm"))
             continue
         shop_nm = _get_str(raw, "shop_nm")
         metadata: dict = {"shopId": shop_id}

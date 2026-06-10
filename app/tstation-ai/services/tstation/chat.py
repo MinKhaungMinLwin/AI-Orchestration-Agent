@@ -9993,6 +9993,7 @@ class TStationChatServiceV2:
         from services.tstation.template_mapper import (
             current_discovery_response_decision,
             current_ev_suitability_comparison,
+            current_excluded_store_ids,
             current_goal_type,
             current_pending_intent,
             current_runflat_comparison,
@@ -10062,6 +10063,20 @@ class TStationChatServiceV2:
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
         ))
+        excluded_store_ids: set[str] = set()
+        if re.search(r"(?:다른|추가|더)\s*(?:매장|지점)|(?:매장|지점)\s*(?:더|또|추가)", last_user_text or ""):
+            if merged_slots.shop_id:
+                excluded_store_ids.add(str(merged_slots.shop_id))
+            if isinstance(latest_location_tmpl, dict):
+                metadata = latest_location_tmpl.get("metadata")
+                if isinstance(metadata, list):
+                    for meta in metadata:
+                        if not isinstance(meta, dict):
+                            continue
+                        shop_id = meta.get("shopId") or meta.get("shop_id")
+                        if shop_id:
+                            excluded_store_ids.add(str(shop_id))
+        current_excluded_store_ids.set(excluded_store_ids)
         current_store_date_availability.set(
             _should_preserve_store_date_availability_context(last_user_text, request.messages)
         )
