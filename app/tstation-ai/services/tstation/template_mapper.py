@@ -152,7 +152,9 @@ _DISCOVERY_POLICY_QUICKREPLY_CHIPS = [
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
 ]
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
-_VEHICLE_OWNER_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}")
+_VEHICLE_OWNER_RE = re.compile(
+    r"(?:\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}|[가-힣]{2,4}\s+\d{2,3}\s*[가-힣]\s*\d{4})"
+)
 _DISCOVERY_RESTOCK_CHIPS = [
     {"label": "지역 입력", "domain": "TRANSACTION"},
     {"label": "매장명 입력", "domain": "TRANSACTION"},
@@ -209,6 +211,32 @@ def _is_goal_booking_followup() -> bool:
     forced True. Returns False when no goal is set (preserves legacy behavior).
     """
     return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
+
+
+def _single_product_transaction_handoff_event(items: list[dict], metadata: list[dict]) -> dict | None:
+    if len(items) != 1 or len(metadata) != 1 or not _is_goal_booking_followup():
+        return None
+    goal_type = current_goal_type.get()
+    pending_intent = current_pending_intent.get()
+    if goal_type == "price_inquiry" or pending_intent == "price":
+        action_text = "가격 확인을 이어갈게요."
+    elif goal_type == "store_with_stock" or pending_intent == "stock":
+        action_text = "장착 가능 매장 확인을 이어갈게요."
+    else:
+        action_text = "오늘서비스 구매 진행을 이어갈게요."
+    title = str(items[0].get("title") or items[0].get("titleProductName") or "상품").strip()
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": f"{title} 상품 확인했어요. {action_text}",
+            "quickReplies": [],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata[0],
+        },
+        "assistant_response_source": "code_single_product_transaction_handoff",
+        "nextAction": {"type": "continue", "domain": "transaction"},
+    }
 
 # ── Domain tool → FE template mapping ──────────────────────────────────────────
 _TOOL_TEMPLATE_MAP: dict[str, str] = {
@@ -2107,6 +2135,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     _COUPON_FOOTNOTE = "*해당 혜택가는 현재 보유 쿠폰 기준으로 적용된 가격입니다."
     if has_cheapest_applied and _COUPON_FOOTNOTE not in short:
         short = f"{short.rstrip()}\n\n{_COUPON_FOOTNOTE}" if short else _COUPON_FOOTNOTE
+
+    handoff_event = _single_product_transaction_handoff_event(items, metadata)
+    if handoff_event is not None:
+        return handoff_event
 
     return {
         "type": "data",

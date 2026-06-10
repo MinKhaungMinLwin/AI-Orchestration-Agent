@@ -992,7 +992,7 @@ class StreamingMultiAgentCoordinator:
     # "찾지 못했어요" reply without calling the carzen API. Force DISCOVERY +
     # `discovery_recommendation` profile so the vehicle-lookup tool is available.
     _CAR_NO_OWNER_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^\s*\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}\s*$"
+        r"^\s*(?:\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}|[가-힣]{2,4}\s+\d{2,3}\s*[가-힣]\s*\d{4})\s*$"
     )
     _TRANSACTION_ORDER_HISTORY_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"내\s*주문|주문\s*내역|주문내역|주문\s*조회|최근\s*주문|주문\s*목록|주문\s*보여줘",
@@ -2921,7 +2921,10 @@ _MAINTENANCE_DDAY_TEXT_RE = re.compile(
     r"배터리|무상점검|all\s*my\s*T|타이어\s*(?:언제|교체\s*시기)|교체\s*언제",
     re.IGNORECASE,
 )
-_VEHICLE_OWNER_TEXT_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
+_VEHICLE_OWNER_TEXT_RE = re.compile(
+    r"(?:(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})"
+    r"|(?P<owner_nm_prefix>[가-힣]{2,4})\s+(?P<car_no_suffix>\d{2,3}\s?[가-힣]\s?\d{4}))"
+)
 _OWNER_NAME_ONLY_RE = re.compile(r"^\s*[가-힣]{2,4}\s*$")
 _VEHICLE_MATCH_STOPWORDS = {
     "내",
@@ -3251,6 +3254,22 @@ def _non_self_vehicle_plate_owner_lookup_plate(user_text: str | None) -> str | N
     if not plate_match:
         return None
     return re.sub(r"[^0-9가-힣]", "", plate_match.group(0))
+
+
+def _normalize_vehicle_owner_lookup_text(user_text: str | None) -> str | None:
+    """Normalize owner/plate lookup input to the tool-friendly "car_no owner_nm" order."""
+    text = (user_text or "").strip()
+    if not text:
+        return None
+    match = _VEHICLE_OWNER_TEXT_RE.fullmatch(text)
+    if not match:
+        return None
+    car_no = match.group("car_no") or match.group("car_no_suffix")
+    owner_nm = match.group("owner_nm") or match.group("owner_nm_prefix")
+    if not car_no or not owner_nm:
+        return None
+    normalized_car_no = re.sub(r"[^0-9가-힣]", "", car_no)
+    return f"{normalized_car_no} {owner_nm}"
 
 
 def _non_self_vehicle_plate_owner_lookup_prompt_event(user_text: str | None) -> dict | None:
@@ -5912,6 +5931,166 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _to_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_price_row(price_result: dict) -> dict | None:
+    data = _unwrap_tool_data(price_result)
+    rows = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return None
+    row = rows[0]
+    return row if isinstance(row, dict) else None
+
+
+def _quantity_price_summary(price_result: dict, quantity: int) -> dict[str, Any] | None:
+    row = _first_price_row(price_result)
+    if row is None:
+        return None
+
+    sale_unit = _to_int(row.get("sale_prc") or row.get("originalPrice"))
+    final_unit = _to_int(row.get("final_prc") or row.get("final_unit_price") or row.get("finalPrice"))
+    if sale_unit is None or final_unit is None:
+        return None
+
+    base_total = sale_unit * quantity
+    final_total = final_unit * quantity
+    discount_total = max(0, base_total - final_total)
+    product_name = str(row.get("goods_nm") or row.get("title") or "선택하신 상품").strip()
+    goods_no = str(row.get("goods_no") or "").strip()
+    applied_coupons = row.get("applied_coupons")
+    coupon_names: list[str] = []
+    if isinstance(applied_coupons, list):
+        for coupon in applied_coupons:
+            if not isinstance(coupon, dict):
+                continue
+            coupon_name = str(coupon.get("cpn_nm") or "").strip()
+            if coupon_name and coupon_name not in coupon_names:
+                coupon_names.append(coupon_name)
+
+    return {
+        "quantity": quantity,
+        "product_name": product_name,
+        "goods_no": goods_no,
+        "sale_unit": sale_unit,
+        "final_unit": final_unit,
+        "base_total": base_total,
+        "final_total": final_total,
+        "discount_total": discount_total,
+        "coupon_names": coupon_names,
+    }
+
+
+def _build_quantity_benefit_missing_event(frame: Any) -> dict:
+    quantities = tuple(frame.entities.get("quantity_options") or (2, 4))
+    quantity_text = "와 ".join(f"{qty}개" for qty in quantities[:2])
+    product_names = tuple(frame.entities.get("product_names") or ())
+    product_text = f"{product_names[0]} " if product_names else ""
+    assistant = (
+        f"{product_text}{quantity_text} 가격/혜택 비교는 정확한 상품 규격(SKU)에 따라 달라요.\n\n"
+        "타이어 사이즈나 차량을 먼저 확인해 주시면 실제 혜택가 기준으로 비교해 드릴게요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_quantity_benefit_missing_slots",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
+                {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "quantityOptions": list(quantities),
+                "productName": product_names[0] if product_names else None,
+            },
+        },
+    }
+
+
+def _build_quantity_benefit_comparison_event(price_results: dict[int, dict]) -> dict | None:
+    summaries: list[dict[str, Any]] = []
+    for quantity in sorted(price_results):
+        summary = _quantity_price_summary(price_results[quantity], quantity)
+        if summary is None:
+            return None
+        summaries.append(summary)
+    if len(summaries) < 2:
+        return None
+
+    left, right = summaries[0], summaries[-1]
+    product_name = str(right.get("product_name") or left.get("product_name") or "선택하신 상품")
+    left_unit_discount = int(left["sale_unit"]) - int(left["final_unit"])
+    right_unit_discount = int(right["sale_unit"]) - int(right["final_unit"])
+    if int(right["final_unit"]) < int(left["final_unit"]):
+        verdict = f"{right['quantity']}개 구매가 개당 기준으로 더 저렴합니다."
+    elif right_unit_discount > left_unit_discount:
+        verdict = f"{right['quantity']}개 구매가 개당 할인 기준으로 더 유리합니다."
+    elif int(right["discount_total"]) > int(left["discount_total"]):
+        verdict = (
+            f"{right['quantity']}개는 총 할인액은 더 크지만, 개당 혜택은 {left['quantity']}개와 동일하거나 "
+            "추가 할인으로 보기는 어렵습니다."
+        )
+    else:
+        verdict = f"{right['quantity']}개 구매라고 해서 추가 할인이 더 적용되지는 않습니다."
+
+    lines = [
+        f"{product_name} 기준으로 {left['quantity']}개와 {right['quantity']}개 실제 혜택가를 비교했어요.",
+        "",
+        "| 수량 | 정상가 합계 | 할인 합계 | 최종 결제금액 | 개당 혜택가 |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for summary in summaries:
+        lines.append(
+            "| {quantity}개 | {base_total} | -{discount_total} | {final_total} | {final_unit} |".format(
+                quantity=summary["quantity"],
+                base_total=_format_krw(summary["base_total"]),
+                discount_total=_format_krw(summary["discount_total"]) or "0원",
+                final_total=_format_krw(summary["final_total"]),
+                final_unit=_format_krw(summary["final_unit"]),
+            )
+        )
+    coupon_names: list[str] = []
+    for summary in summaries:
+        for coupon_name in summary.get("coupon_names") or []:
+            if coupon_name not in coupon_names:
+                coupon_names.append(coupon_name)
+    if coupon_names:
+        lines.extend(["", f"적용 기준 쿠폰: {', '.join(coupon_names[:3])}"])
+    lines.extend(["", verdict])
+
+    goods_no = str(right.get("goods_no") or left.get("goods_no") or "").strip()
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_quantity_benefit_comparison",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": f"{right['quantity']}개로 구매", "domain": "TRANSACTION"},
+                {"label": f"{left['quantity']}개로 구매", "domain": "TRANSACTION"},
+                {"label": "다른 상품 비교", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "goodsId": goods_no or None,
+                "quantityOptions": [summary["quantity"] for summary in summaries],
+                "productName": product_name,
+            },
+        },
+    }
+
+
 def _build_product_comparison_event(
     user_text: str,
     product_rows: list[tuple[str, dict | None]],
@@ -8525,6 +8704,19 @@ class TStationChatServiceV2:
                     "[VEHICLE_OWNER_LOOKUP] combined pending plate with owner name follow-up: %s",
                     effective_vehicle_owner_text,
                 )
+            else:
+                normalized_vehicle_owner_text = _normalize_vehicle_owner_lookup_text(last_user_text)
+                if normalized_vehicle_owner_text and normalized_vehicle_owner_text != last_user_text.strip():
+                    for message_list in (enriched_messages, messages, classifier_messages):
+                        for msg in reversed(message_list):
+                            if msg.get("role") == "user":
+                                msg["content"] = normalized_vehicle_owner_text
+                                break
+                    last_user_text = normalized_vehicle_owner_text
+                    logger.info(
+                        "[VEHICLE_OWNER_LOOKUP] normalized owner-first vehicle lookup text: %s",
+                        normalized_vehicle_owner_text,
+                    )
 
             if _is_manual_tire_size_input_selection(last_user_text, latest_quickreply_tmpl):
                 current_vehicle_selection_prompt_event.set(_build_manual_tire_size_input_event())
@@ -9362,10 +9554,6 @@ class TStationChatServiceV2:
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
             and merged_slots.goods_no is not None
             and regex_slots.pending_intent is not None
-            and not (
-                routing_result is not None
-                and routing_result.agent_prompt_profile == AgentPromptProfile.DISCOVERY_RECOMMENDATION
-            )
         ):
             logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
@@ -9430,10 +9618,6 @@ class TStationChatServiceV2:
                 merged_slots.tire_size is not None
                 or merged_slots.tire_model is not None
                 or ConversationSlots.has_product_keyword(last_user_text)
-            )
-            and not (
-                routing_result is not None
-                and routing_result.agent_prompt_profile == AgentPromptProfile.DISCOVERY_RECOMMENDATION
             )
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
@@ -11043,6 +11227,182 @@ class TStationChatServiceV2:
                 return None
             return emitted_events, event
 
+        def _quantity_benefit_frame_with_recent_context() -> Any | None:
+            known_slots: dict[str, Any] = {}
+            if initial_slots is not None:
+                if getattr(initial_slots, "tire_size", None):
+                    known_slots["tire_size"] = initial_slots.tire_size
+                if getattr(initial_slots, "goods_no", None):
+                    known_slots["goods_no"] = initial_slots.goods_no
+            current_frame = build_discovery_intent_frame(user_query, known_slots=known_slots)
+            if current_frame.sub_intent == "quantity_benefit_comparison":
+                return current_frame
+
+            current_size = normalize_tire_size(user_query)
+            current_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+                user_query,
+                prev_tool_data or [],
+                current_tire_size=known_slots.get("tire_size") or current_size,
+            )
+            if not (current_size or current_goods_no):
+                return None
+
+            for message in reversed(messages[:-1]):
+                if str(message.get("role") or "") != "user":
+                    continue
+                previous_text = str(message.get("content") or "").strip()
+                if not previous_text:
+                    continue
+                previous_frame = build_discovery_intent_frame(previous_text, known_slots=known_slots)
+                if previous_frame.sub_intent != "quantity_benefit_comparison":
+                    continue
+                entities = dict(previous_frame.entities)
+                if current_size:
+                    entities["tire_size"] = current_size
+                    entities["explicit_tire_size"] = current_size
+                merged_slots = dict(previous_frame.known_slots)
+                if current_goods_no:
+                    merged_slots["goods_no"] = current_goods_no
+                return replace(previous_frame, entities=entities, known_slots=merged_slots, missing_slots=())
+            return None
+
+        async def _resolve_quantity_benefit_comparison_with_code() -> tuple[list[dict], dict] | None:
+            if domains and not any(
+                domain in {MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION}
+                for domain in domains
+            ):
+                return None
+
+            frame = _quantity_benefit_frame_with_recent_context()
+            if frame is None:
+                return None
+
+            quantities = tuple(frame.entities.get("quantity_options") or (2, 4))
+            if len(quantities) < 2:
+                return None
+            quantities = tuple(sorted(int(quantity) for quantity in quantities[:2]))
+
+            confirmed_tire_size = (
+                frame.entities.get("tire_size")
+                or (getattr(initial_slots, "tire_size", None) if initial_slots is not None else None)
+            )
+            goods_no = str(frame.known_slots.get("goods_no") or "").strip()
+            if not goods_no and initial_slots is not None:
+                goods_no = str(getattr(initial_slots, "goods_no", None) or "").strip()
+            if not goods_no:
+                goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+                    user_query,
+                    prev_tool_data or [],
+                    current_tire_size=confirmed_tire_size,
+                ) or ""
+
+            emitted_events: list[dict] = []
+            product_names = tuple(frame.entities.get("product_names") or ())
+            if not goods_no:
+                if not confirmed_tire_size or not product_names:
+                    return emitted_events, _build_quantity_benefit_missing_event(frame)
+
+                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+                from services.tstation.template_mapper import try_build_template
+
+                preferred_keyword = _preferred_product_search_keyword(str(product_names[0]))
+                search_input = {"keyword": preferred_keyword, "size": confirmed_tire_size, "limit": 10}
+                if frame.entities.get("brand_cd"):
+                    search_input["brand_cd"] = frame.entities["brand_cd"]
+
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_search = await asyncio.to_thread(_search_product_tool.invoke, search_input)
+                    search_result = _tool_result_dict(raw_search)
+                except Exception as exc:
+                    logger.exception("[QTY_BENEFIT] search_product_tool failed for %s", preferred_keyword)
+                    search_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("search_product_tool", search_input, search_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Search AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": search_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": search_input,
+                    "output": json.dumps(search_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "search_product_tool",
+                    "source_domain": "discovery",
+                })
+
+                row = _unique_product_row_from_sized_search_result(
+                    search_result,
+                    preferred_keyword,
+                    str(confirmed_tire_size),
+                )
+                goods_no = str((row or {}).get("goods_no") or "").strip()
+                if not goods_no:
+                    mapped_event = try_build_template(
+                        [{"tool": "search_product_tool", "args": search_input, "data": search_result}],
+                        (
+                            f"{preferred_keyword} {confirmed_tire_size} 기준 상품을 찾았어요. "
+                            f"상품을 선택해 주시면 {quantities[0]}개/{quantities[1]}개 혜택을 비교해 드릴게요."
+                        ),
+                    )
+                    if mapped_event is None:
+                        return emitted_events, _build_quantity_benefit_missing_event(frame)
+                    mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                    mapped_event["assistant_response_source"] = "code_quantity_benefit_product_selection"
+                    return emitted_events, mapped_event
+
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_cheapest_price_tool as _get_cheapest_price_tool,
+            )
+
+            price_results: dict[int, dict] = {}
+            for quantity in quantities:
+                price_input = {"goods_no_list": [goods_no], "quantity": quantity}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_cheapest_price_tool",
+                    "display_name": "혜택가 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_price = await asyncio.to_thread(_get_cheapest_price_tool.invoke, price_input)
+                    price_result = _tool_result_dict(raw_price)
+                except Exception as exc:
+                    logger.exception("[QTY_BENEFIT] get_cheapest_price_tool failed goods_no=%s qty=%s", goods_no, quantity)
+                    price_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                price_results[quantity] = price_result
+                _record_code_tool_result("get_cheapest_price_tool", price_input, price_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": price_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": price_input,
+                    "output": json.dumps(price_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_cheapest_price_tool",
+                    "source_domain": "transaction",
+                })
+
+            comparison_event = _build_quantity_benefit_comparison_event(price_results)
+            if comparison_event is None:
+                return emitted_events, _build_quantity_benefit_missing_event(frame)
+            return emitted_events, comparison_event
+
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
             if domains != [MultiAgentDomain.Domain.DISCOVERY]:
                 return None
@@ -11547,6 +11907,24 @@ class TStationChatServiceV2:
             assistant_response = str((holiday_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        quantity_benefit_resolution = await _resolve_quantity_benefit_comparison_with_code()
+        if quantity_benefit_resolution is not None:
+            code_events, quantity_event = quantity_benefit_resolution
+            source_domain = str(quantity_event.get("source_domain") or MultiAgentDomain.Domain.TRANSACTION.value)
+            agent_label = "[TRANSACTION AGENT]" if source_domain == "transaction" else "[DISCOVERY AGENT]"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': agent_label, 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': agent_label, 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(quantity_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((quantity_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': agent_label}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

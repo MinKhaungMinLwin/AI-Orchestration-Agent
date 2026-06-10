@@ -26,11 +26,14 @@ _CONCEPT_RE = re.compile(r"뭐야|무슨\s*뜻|의미|차이|설명", re.IGNOREC
 _BUY_RE = re.compile(r"구매|살래|주문|장바구니|결제", re.IGNORECASE)
 _STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|장착\s*가능|예약|매장|근처|주변", re.IGNORECASE)
 _SIMILAR_PRICE_RE = re.compile(r"비슷한\s*가격|가격대|동급\s*가격", re.IGNORECASE)
+_QUANTITY_OPTION_RE = re.compile(r"(\d{1,2})\s*(?:개|본)")
+_QUANTITY_BENEFIT_RE = re.compile(r"할인|혜택|가격|금액|최종가|저렴|싼|싸|쿠폰", re.IGNORECASE)
+_QUANTITY_COMPARE_RE = re.compile(r"비교|중에|살까|고민|더|차이|낫|유리|얼마나", re.IGNORECASE)
 _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNORECASE)
 _COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
 _BEST_SELLER_RE = re.compile(
-    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|젤\s*많이\s*(?:구매한|산)|잘\s*나가",
     re.IGNORECASE,
 )
 _DEFAULT_TIRE_SHOPPING_RE = re.compile(
@@ -237,6 +240,27 @@ def is_default_benefit_request(text: str) -> bool:
     return bool(_DEFAULT_BENEFIT_RE.search(text or ""))
 
 
+def extract_quantity_options(text: str) -> tuple[int, ...]:
+    quantities: list[int] = []
+    for match in _QUANTITY_OPTION_RE.finditer(text or ""):
+        try:
+            quantity = int(match.group(1))
+        except ValueError:
+            continue
+        if quantity > 0 and quantity not in quantities:
+            quantities.append(quantity)
+    return tuple(sorted(quantities))
+
+
+def is_quantity_benefit_comparison_request(text: str) -> bool:
+    quantity_options = extract_quantity_options(text)
+    return (
+        len(quantity_options) >= 2
+        and bool(_QUANTITY_BENEFIT_RE.search(text or ""))
+        and bool(_QUANTITY_COMPARE_RE.search(text or ""))
+    )
+
+
 def build_discovery_intent_frame(
     last_user_text: str,
     *,
@@ -251,6 +275,7 @@ def build_discovery_intent_frame(
     brand_codes = extract_brand_codes(text)
     variant_constraints = extract_variant_constraints(text)
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
+    quantity_options = extract_quantity_options(text)
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -259,6 +284,8 @@ def build_discovery_intent_frame(
         "purchase_intent": bool(_BUY_RE.search(text)),
         "attribute_metrics": attribute_metrics,
     }
+    if quantity_options:
+        entities["quantity_options"] = quantity_options
     if brand_cd:
         entities["brand_cd"] = brand_cd
     if brand_codes:
@@ -303,6 +330,10 @@ def build_discovery_intent_frame(
     if entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
+    elif is_quantity_benefit_comparison_request(text):
+        intent = "product_comparison"
+        sub_intent = "quantity_benefit_comparison"
+        entities["compare_metric"] = "discount"
     elif best_seller_period:
         intent = "product_search"
         sub_intent = "best_seller_search"
@@ -390,6 +421,8 @@ def build_discovery_intent_frame(
     missing_slots: tuple[str, ...] = ()
     if intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
         missing_slots = ("tire_size",)
+    elif sub_intent == "quantity_benefit_comparison" and not tire_size and not slots.get("goods_no"):
+        missing_slots = ("tire_size",)
 
     return IntentFrame(
         domain=PolicyDomain.DISCOVERY,
@@ -443,9 +476,19 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
         )
     if frame.intent == "product_comparison":
+        args: dict[str, Any] = {}
+        if frame.sub_intent == "quantity_benefit_comparison":
+            product_names = entities.get("product_names") or ()
+            if product_names:
+                args["keyword"] = product_names[0]
+            if entities.get("tire_size"):
+                args["size"] = entities["tire_size"]
+            if entities.get("brand_cd"):
+                args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_products_recommendations_tool"),
             preferred_tool="search_product_tool",
+            tool_args_patch=args,
             forbidden_tools=("product_card_first_response",),
         )
     if entities.get("technology") == "sound_absorber":
