@@ -93,35 +93,6 @@ services:
       retries: 10
       start_period: 120s
 
-  redis-conversation-management:
-    image: redis:7-alpine
-    command:
-      - redis-server
-      - --requirepass
-      - ${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}
-      - --maxmemory
-      - 450mb
-      - --maxmemory-policy
-      - allkeys-lru
-    volumes:
-      - redis-data:/data
-    networks:
-      - agent-net
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_CONVERSATION_MANAGEMENT_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-
   rabbitmq:
     image: rabbitmq:3-management
     environment:
@@ -377,7 +348,6 @@ networks:
     external: true
 
 volumes:
-  redis-data:
   qdrant-data:
   rabbitmq-data:
   ingestion-data:
