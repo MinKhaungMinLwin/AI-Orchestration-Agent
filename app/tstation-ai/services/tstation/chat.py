@@ -10341,63 +10341,6 @@ class TStationChatServiceV2:
 
             return emitted_events, _build_default_benefit_event(events_result, deals_result)
 
-        async def _resolve_default_tire_shopping_with_code() -> tuple[list[dict], dict] | None:
-            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
-                return None
-            if not is_default_tire_shopping_request(user_query):
-                return None
-
-            tool_input = {"rcmd_type": "tstation", "limit": 3, "brand_cd": "HK"}
-            from services.tstation.agents.b_discovery_agent.tools import (
-                get_products_recommendations_tool as _recommendations_tool,
-            )
-            from services.tstation.template_mapper import try_build_template
-
-            emitted_events: list[dict] = [{
-                "type": "status",
-                "status": "tool_start",
-                "tool": "get_products_recommendations_tool",
-                "display_name": "상품 추천 조회 중...",
-                "source_domain": "discovery",
-            }]
-            try:
-                raw_result = await asyncio.to_thread(_recommendations_tool.func, **tool_input)
-                recommendation_result = _tool_result_dict(raw_result)
-            except Exception as exc:
-                logger.exception("[DEFAULT_TIRE_SHOPPING] get_products_recommendations_tool failed")
-                recommendation_result = {
-                    "status": "error",
-                    "http_status": None,
-                    "message": str(exc),
-                    "data": {},
-                }
-            _record_code_tool_result("get_products_recommendations_tool", tool_input, recommendation_result)
-            emitted_events.append({
-                "type": "agent_flow",
-                "agent": "[Product Recommendation AF]",
-                "agent_class": "Discovery Agent",
-                "status": recommendation_result.get("status", "success"),
-                "source_domain": "discovery",
-            })
-            emitted_events.append({
-                "type": "tool",
-                "input": tool_input,
-                "output": json.dumps(recommendation_result, ensure_ascii=False),
-                "node": "tools",
-                "tool": "get_products_recommendations_tool",
-                "source_domain": "discovery",
-            })
-
-            mapped_event = try_build_template(
-                [{"tool": "get_products_recommendations_tool", "args": tool_input, "data": recommendation_result}],
-                "기본 타이어 추천을 시작할게요.",
-            )
-            if mapped_event is None:
-                return None
-            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
-            mapped_event["assistant_response_source"] = "code_default_tire_shopping"
-            return emitted_events, mapped_event
-
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
                 return None
@@ -11586,22 +11529,6 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(best_selling_event, ensure_ascii=False)}\n\n"
             assistant_response = str((best_selling_event.get("data") or {}).get("assistantResponse") or "")
-            if assistant_response:
-                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-
-        default_tire_shopping_resolution = await _resolve_default_tire_shopping_with_code()
-        if default_tire_shopping_resolution is not None:
-            code_events, recommendation_event = default_tire_shopping_resolution
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
-            for code_event in code_events:
-                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps(recommendation_event, ensure_ascii=False)}\n\n"
-            assistant_response = str((recommendation_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

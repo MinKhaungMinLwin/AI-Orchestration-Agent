@@ -471,8 +471,6 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("generic_unsized_recommendation",),
         )
     args = {}
-    if entities.get("default_tire_shopping"):
-        args["rcmd_type"] = "tstation"
     if entities.get("recommendation_metric") == "fuel_efficiency":
         args["rcmd_type"] = "fuel_efficiency"
     elif entities.get("performance") == "performance":
