@@ -5,6 +5,7 @@ import ast
 import json
 import logging
 import re
+import time
 
 from langchain.messages import AIMessageChunk, AIMessage, ToolMessage
 from langchain.agents import create_agent
@@ -29,6 +30,7 @@ def _emit_tool_summary_span(
     tool_input: dict,
     tool_result: Any,
     tool_status: str,
+    latency_ms: float | None = None,
 ) -> None:
     """Open a short-lived child span carrying a one-line summary of a tool call.
 
@@ -49,6 +51,9 @@ def _emit_tool_summary_span(
     except Exception as exc:  # never let summary formatting break the agent loop
         logger.debug("[TRACE] tool summary failed for %s: %s", tool_name, exc)
         summary = f"status={tool_status}"
+    http_status = tool_result.get("http_status") if isinstance(tool_result, dict) else None
+    reason = tool_result.get("reason") if isinstance(tool_result, dict) else None
+    message = tool_result.get("message") if isinstance(tool_result, dict) else None
     span_name = f"🔧 {tool_name}: {summary}"
     with _trace_span(
         span_name,
@@ -56,7 +61,15 @@ def _emit_tool_summary_span(
         parent_span_id=parent_span_id,
         input=tool_input,
     ) as _ts:
-        _ts.update(output=_truncate({"summary": summary, "status": tool_status}))
+        _ts.update(output=_truncate({
+            "summary": summary,
+            "tool_name": tool_name,
+            "tool_status": tool_status,
+            "http_status": http_status,
+            "reason": reason,
+            "message": message,
+            "latency_ms": round(latency_ms, 1) if latency_ms is not None else None,
+        }))
 
 T = TypeVar("T")
 
@@ -885,7 +898,11 @@ class BaseAgent(ABC):
                             if hasattr(message, "tool_calls") and message.tool_calls:
                                 for tc in message.tool_calls:
                                     tool_name = tc["name"]
-                                    tool_calls_map[tc["id"]] = {"name": tool_name, "args": tc.get("args", {})}
+                                    tool_calls_map[tc["id"]] = {
+                                        "name": tool_name,
+                                        "args": tc.get("args", {}),
+                                        "started_at": time.perf_counter(),
+                                    }
                                     if tool_name == "get_store_schedule_tool":
                                         gate_decision = decide_schedule_tool_gate(
                                             user_text=_latest_user_text(messages),
@@ -986,6 +1003,12 @@ class BaseAgent(ABC):
                             except (json.JSONDecodeError, TypeError):
                                 pass
                             tool_input = tool_calls_map.get(message.tool_call_id, {})
+                            tool_started_at = tool_input.get("started_at")
+                            tool_latency_ms = (
+                                (time.perf_counter() - tool_started_at) * 1000
+                                if isinstance(tool_started_at, (int, float))
+                                else None
+                            )
                             if tool_result is not None:
                                 # Capture input args alongside the result so the
                                 # template mapper can correlate same-turn tool calls
@@ -1006,6 +1029,7 @@ class BaseAgent(ABC):
                                 tool_input=tool_input.get("args", {}),
                                 tool_result=tool_result,
                                 tool_status=tool_status,
+                                latency_ms=tool_latency_ms,
                             )
                             yield {
                                 "type": "agent_flow",
@@ -1032,7 +1056,9 @@ class BaseAgent(ABC):
                                     from services.tstation.agents.b_discovery_agent.tools import get_user_vehicles_tool
 
                                     owner_tool_name = "get_user_vehicles_tool"
+                                    owner_started_at = time.perf_counter()
                                     owner_tool_result = get_user_vehicles_tool.func(**owner_lookup_args)
+                                    owner_latency_ms = (time.perf_counter() - owner_started_at) * 1000
                                     accumulated_tool_data.append({
                                         "tool": owner_tool_name,
                                         "data": owner_tool_result,
@@ -1048,6 +1074,7 @@ class BaseAgent(ABC):
                                             if isinstance(owner_tool_result, dict)
                                             else "success"
                                         ),
+                                        latency_ms=owner_latency_ms,
                                     )
                                     yield {
                                         "type": "status",
@@ -1096,9 +1123,13 @@ class BaseAgent(ABC):
                                                 "상품 추천 조회 중...",
                                             ),
                                         }
+                                        recommendation_started_at = time.perf_counter()
                                         recommendation_result = get_products_recommendations_tool.invoke(
                                             recommendation_args,
                                         )
+                                        recommendation_latency_ms = (
+                                            time.perf_counter() - recommendation_started_at
+                                        ) * 1000
                                         accumulated_tool_data.append({
                                             "tool": recommendation_tool_name,
                                             "data": recommendation_result,
@@ -1114,6 +1145,7 @@ class BaseAgent(ABC):
                                                 if isinstance(recommendation_result, dict)
                                                 else "success"
                                             ),
+                                            latency_ms=recommendation_latency_ms,
                                         )
                                         yield {
                                             "type": "agent_flow",
@@ -1413,6 +1445,7 @@ class BaseAgent(ABC):
         yield {
             "type": "data",
             "template": "quickReply",
+            "assistant_response_source": "validation_fallback",
             "data": _build_validated_quickreply_data(
                 message, list(_VALIDATION_FALLBACK_QUICK_REPLIES)
             ),
@@ -1571,6 +1604,7 @@ class BaseAgent(ABC):
             "get_user_vehicles_tool",
             "get_store_detail_tool",
             "get_store_schedule_tool",
+            "get_nearby_stores_tool",
             "get_stores_with_time_filter_tool",
             # Product list tools — items 있으면 product 카드 강제. LLM 이
             # "비슷한 가격대 더 추천" 같은 follow-up 발화에서 fenced JSON 으로

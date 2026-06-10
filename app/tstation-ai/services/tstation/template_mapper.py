@@ -461,6 +461,72 @@ def _map_inventory_stock_result(tool_data_list: list[dict], assistant_text: str)
     }
 
 
+def _preview_has_no_fulfillment(raw: dict) -> bool:
+    """True when a product/store preview found no stock, logistics, or schedule path."""
+    logistics = raw.get("logistics") if isinstance(raw.get("logistics"), dict) else {}
+    try:
+        logistics_qty = int(logistics.get("logistics_qty") or 0)
+    except (TypeError, ValueError):
+        logistics_qty = 0
+
+    inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+    today_ids = _inventory_shop_ids(inventory, "todayShopArray")
+    tna_ids = _inventory_shop_ids(inventory, "tnaShopArray")
+
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+    schedule_empty = (
+        _get_str(schedule, "tier").lower() == "none"
+        or (isinstance(schedule_stores, list) and not schedule_stores)
+    )
+    return logistics_qty <= 0 and not today_ids and not tna_ids and schedule_empty
+
+
+def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    """Block product order/stock previews from falling through to a general store schedule."""
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        raw = _unwrap(entry)
+        if not isinstance(args, dict) or not isinstance(raw, dict):
+            continue
+        if not args.get("goods_no"):
+            continue
+        stores = raw.get("stores")
+        if not isinstance(stores, list) or not stores:
+            continue
+        if not _preview_has_no_fulfillment(raw):
+            continue
+
+        region = _get_str(args, "region_code") or _get_str(args, "store_nm")
+        prefix = f"{region} 기준으로 " if region else ""
+        short = (assistant_text or "").strip()
+        if (
+            not short
+            or len(short) > 160
+            or "```" in short
+            or re.search(r"선택|예약 가능|주문 가능|장착 가능 여부가 확인|확인했어요", short)
+            or not re.search(r"없|불가|확인되지|품절|부족|재고", short)
+        ):
+            short = (
+                f"{prefix}요청하신 상품과 수량으로 바로 장착 가능한 재고가 확인되지 않았어요. "
+                "다른 지역이나 다른 상품으로 다시 확인해 드릴게요."
+            )
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "assistant_response_source": "code_mapper",
+            "data": {
+                "assistantResponse": short,
+                "quickReplies": [
+                    {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                    {"label": "다른 상품 보기", "domain": "DISCOVERY"},
+                ],
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            },
+        }
+    return None
+
+
 def _map_store_validation_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Render deterministic quickReply for store-name validation guards.
 
@@ -988,6 +1054,10 @@ def _tire_summary_second_line(row: dict) -> str:
 
 
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
+_POPULAR_UNSIZED_REQUEST_RE = re.compile(
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
+    re.IGNORECASE,
+)
 
 
 def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
@@ -1689,6 +1759,48 @@ def _technology_unsized_policy_response(tool_data_list: list[dict]) -> str:
     return ""
 
 
+def _safe_service_unsized_policy_response(tool_data_list: list[dict]) -> str:
+    rows: list[dict] = []
+    for entry in reversed(_find_entries(tool_data_list, "get_products_recommendations_tool")):
+        args = _tool_args(entry)
+        raw = _unwrap(entry)
+        candidate_rows = raw.get("items") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+        if not isinstance(candidate_rows, list):
+            continue
+        rcmd_type = _get_str(args, "rcmd_type").lower()
+        if rcmd_type in {"safe_kids", "warranty"}:
+            rows = [row for row in candidate_rows if isinstance(row, dict)]
+            break
+
+    lines = [
+        "안심서비스는 티스테이션에서 대상 한국타이어를 구매/장착한 뒤 "
+        "주행 중 예기치 못한 타이어 손상이 생겼을 때 보상받을 수 있는 서비스예요.",
+        "안심플러스는 보장 범위를 더 넓힌 추가 보장 프로그램으로, 가입 조건과 보장 내용은 상품/주문 단계에서 확인돼요.",
+    ]
+
+    names: list[str] = []
+    for row in rows:
+        if _get_str(row, "t_rlx_isn_yn").upper() not in {"", "O", "Y"}:
+            continue
+        name = _get_str(row, "goods_nm", "title")
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= 3:
+            break
+    if names:
+        lines.extend([
+            "",
+            f"현재 확인되는 안심서비스 가능 대표 상품으로는 {', '.join(names)}가 있어요.",
+            "차량이나 타이어 사이즈를 알려주시면 장착 가능한 규격 기준으로 다시 확인해 드릴게요 😊",
+        ])
+    else:
+        lines.extend([
+            "",
+            "차량이나 타이어 사이즈를 알려주시면 안심서비스 가능 상품을 규격 기준으로 확인해 드릴게요 😊",
+        ])
+    return "\n".join(lines)
+
+
 def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Honor Discovery policy decisions that forbid card-first rendering."""
     decision = current_discovery_response_decision.get()
@@ -1697,6 +1809,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
     if response_shape_key not in {
         "technology_explanation_then_unsized_recommendation_summary",
+        "safe_service_explanation_then_unsized_recommendation_summary",
         "metric_comparison_summary",
         "grade_comparison_summary",
         "similar_price_range_recommendation",
@@ -1716,6 +1829,8 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         response = _product_attribute_policy_response(tool_data_list)
     if response_shape_key == "technology_explanation_then_unsized_recommendation_summary":
         response = _technology_unsized_policy_response(tool_data_list) or response
+    if response_shape_key == "safe_service_explanation_then_unsized_recommendation_summary":
+        response = _safe_service_unsized_policy_response(tool_data_list) or response
     if response_shape_key == "metric_comparison_summary":
         response = _product_metric_comparison_policy_response(tool_data_list) or response
     if response_shape_key == "restock_inquiry_summary":
@@ -1761,13 +1876,13 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     decision = current_discovery_response_decision.get()
     response_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision else ""
     is_neutral_product_description = response_shape_key == "neutral_product_description"
+    is_popular_unsized_request = bool(_POPULAR_UNSIZED_REQUEST_RE.search(current_user_text.get() or ""))
     if response_shape_key == "similar_price_range_recommendation":
         for entry in _find_entries(
             tool_data_list,
             "search_product_tool",
             "get_newest_products_tool",
             "get_products_recommendations_tool",
-            "get_best_selling_products_tool",
         ):
             raw = _unwrap(entry)
             rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
@@ -1807,7 +1922,6 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         "search_product_tool",
         "get_newest_products_tool",
         "get_products_recommendations_tool",
-        "get_best_selling_products_tool",
     ):
         found_product_tool = True
         if _has_size_arg(entry):
@@ -1825,7 +1939,8 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if not found_product_tool or not rows_by_name:
         return None
 
-    lines = [] if is_neutral_product_description else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
+    skip_size_missing_notice = is_neutral_product_description or is_popular_unsized_request
+    lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
         if is_neutral_product_description:
             lines.extend([
@@ -1839,9 +1954,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 f"- {name}: {_tire_summary_first_line(row)}",
                 f"  {_tire_summary_second_line(row)}",
             ])
-    if is_neutral_product_description:
+    if skip_size_missing_notice:
         lines = [line for line in lines if line]
-    else:
+    elif not is_popular_unsized_request:
         lines.extend([
             "",
             "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
@@ -1980,7 +2095,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
     short, response_source = _summarize_with_source(assistant_text, "product", len(items))
-    if response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
+    if _find_entries(tool_data_list, "get_best_selling_products_tool"):
+        short = _product_result_context_message(tool_data_list, len(items))
+        response_source = "code_mapper"
+    elif response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
         short = _product_result_context_message(tool_data_list, len(items))
         response_source = "code_mapper"
 
@@ -2683,13 +2801,33 @@ def _store_result_limit(tool_data_list: list[dict]) -> int:
     return 10
 
 
+def _has_store_candidates(tool_data_list: list[dict]) -> bool:
+    for entry in _find_entries(
+        tool_data_list,
+        "search_stores_tool",
+        "search_stores_complex_tool",
+        "get_store_list_tool",
+        "get_nearby_stores_tool",
+        "transaction_store_preview_tool",
+        "get_favorite_stores_tool",
+    ):
+        raw = _unwrap(entry)
+        stores = raw.get("stores") if isinstance(raw, dict) else None
+        if isinstance(stores, list) and any(isinstance(store, dict) for store in stores):
+            return True
+    return False
+
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     transaction_decision = current_transaction_response_decision.get()
+    required_slots = set(transaction_decision.required_slots or ()) if transaction_decision else set()
+    has_store_candidates = _has_store_candidates(tool_data_list)
     if (
         transaction_decision
         and transaction_decision.template == TemplateName.QUICK_REPLY
         and transaction_decision.required_slots
+        and not (required_slots <= {"store"} and has_store_candidates)
         and not _preview_tool_requires_location(tool_data_list)
         and called_tools
         & {
@@ -2719,6 +2857,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # response). Don't second-guess by also producing a location card.
     if "get_store_schedule_tool" in called_tools:
         return None
+
+    no_fulfillment_preview = _map_preview_no_fulfillment_quickreply(tool_data_list, assistant_text)
+    if no_fulfillment_preview is not None:
+        return no_fulfillment_preview
 
     # `transaction_store_preview_tool` with no available schedule. The preview
     # tool runs in purchase flow ("이 상품 N개 [매장/근처] 오늘 가능?"); when its
@@ -4160,6 +4302,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("transaction_store_preview_tool", _map_store_validation_quickreply),
         ("get_store_list_tool", _map_store_validation_quickreply),
         ("get_store_inventory_tool", _map_inventory_stock_result),
+        ("transaction_store_preview_tool", _map_preview_no_fulfillment_quickreply),
         ("get_store_schedule_tool", _map_datepick),
         # Date-specific detail lookup (Flow 5.1 / 5.5) — `get_store_detail_tool`
         # with args.cal_day + non-empty available_slots is a datepick signal.

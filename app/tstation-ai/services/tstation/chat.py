@@ -37,13 +37,17 @@ from services.tstation import qc_verifier
 from services.tstation.classifier_feedback import log_classifier_redirect
 from services.tstation.policies.reservation_template_policy import (
     filter_datepick_to_requested_date,
+    coerce_order_preview_quickreply_to_datepick,
     coerce_reservation_quickreply_to_datepick,
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
     latest_template_data_from_messages,
 )
 from services.tstation.policies.discovery_intent_policy import (
+    best_seller_period_from_text,
     build_discovery_intent_frame,
+    is_default_benefit_request,
+    is_default_tire_shopping_request,
     normalize_tire_size,
     plan_discovery_tools,
 )
@@ -84,6 +88,7 @@ from services.tstation.policies.store_service_gate import (
 )
 from config.tracing import (
     build_trace_config,
+    safe_trace_update,
     trace_span as _trace_span,
     truncate_for_trace as _truncate,
     _tracing_enabled,
@@ -5185,6 +5190,94 @@ def _past_event_page_event(user_text: str) -> dict | None:
     }
 
 
+def _date_label(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.split(r"[T\s]", text, maxsplit=1)[0]
+
+
+def _field(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _tool_items(tool_result: dict, *list_keys: str) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    for key in (*list_keys, "items"):
+        rows = data.get(key) if isinstance(data, dict) else None
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _benefit_line(row: dict, *, kind: str) -> str:
+    if kind == "event":
+        name = _field(row, "evt_nm", "eventName", "event_name", "title")
+        start = _date_label(_field(row, "evt_strt_dtime", "evt_strt_date", "startDate", "start_date"))
+        end = _date_label(_field(row, "evt_end_dtime", "evt_end_date", "endDate", "end_date"))
+        link = _field(row, "evt_url_addr", "dtl_conts_url_addr", "eventUrl", "url", "actionLink")
+    else:
+        name = _field(row, "deal_nm", "dealName", "deal_name", "title")
+        start = _date_label(_field(row, "deal_strt_dtime", "deal_strt_date", "startDate", "start_date"))
+        end = _date_label(_field(row, "deal_end_dtime", "deal_end_date", "endDate", "end_date"))
+        link = _field(row, "deal_url_addr", "dtl_conts_url_addr", "dealUrl", "url", "actionLink")
+
+    if not name:
+        return ""
+    period = f"{start} ~ {end}" if start and end else start or end
+    pieces = [name]
+    if period:
+        pieces.append(period)
+    if link:
+        pieces.append(link)
+    return f"- {' · '.join(pieces)}"
+
+
+def _build_default_benefit_event(events_result: dict, deals_result: dict) -> dict:
+    event_rows = _tool_items(events_result, "events")[:5]
+    deal_rows = _tool_items(deals_result, "deals")[:5]
+    event_lines = [line for row in event_rows if (line := _benefit_line(row, kind="event"))]
+    deal_lines = [line for row in deal_rows if (line := _benefit_line(row, kind="deal"))]
+
+    if not event_lines and not deal_lines:
+        assistant_response = "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요 😊"
+    else:
+        lines = ["현재 진행 중인 이벤트와 기획전을 안내드릴게요."]
+        if event_lines:
+            lines.extend(["", "이벤트", *event_lines])
+        if deal_lines:
+            lines.extend(["", "기획전", *deal_lines])
+        lines.extend(["", "자세한 조건은 변경될 수 있어요. 상세 페이지에서 꼭 확인해 주세요 😊"])
+        assistant_response = "\n".join(lines)
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_default_benefit_event_deal",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {
+                    "label": "진행 중인 이벤트 보기",
+                    "url": CTAUrls.PROMOTION_EVENT_LIST,
+                    "domain": "DISCOVERY",
+                },
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "eventCount": len(event_rows),
+                "dealCount": len(deal_rows),
+            },
+        },
+    }
+
+
 def _price_policy_guard_event(user_text: str) -> dict | None:
     """Return a deterministic price/coupon policy guard event, if one applies."""
     if not user_text:
@@ -6947,6 +7040,14 @@ def _rule_based_classify(
     if not text:
         return None
 
+    if is_default_benefit_request(text):
+        logger.debug("[RULE_ROUTER] Default benefit CTA fast-path → DISCOVERY")
+        return [MultiAgentDomain.Domain.DISCOVERY]
+
+    if is_default_tire_shopping_request(text):
+        logger.debug("[RULE_ROUTER] Default tire shopping CTA fast-path → DISCOVERY")
+        return [MultiAgentDomain.Domain.DISCOVERY]
+
     pickup_decision = decide_pickup_service_gate(user_text=text)
     if pickup_decision.is_pickup:
         logger.debug(
@@ -7001,6 +7102,52 @@ def _sanitize_response(text: str) -> str:
     if _INTERNAL_JARGON_PATTERN.search(stripped) and len(stripped) < 100:
         return _FALLBACK_RESPONSE
     return stripped
+
+
+def _tool_error_summary(tool_name: str, tool_result: Any) -> dict | None:
+    """Return a compact tool error record for trace metadata, or None."""
+    parsed = tool_result if isinstance(tool_result, dict) else qc_verifier.parse_tool_output(tool_result)
+    if not isinstance(parsed, dict):
+        return None
+    status = str(parsed.get("status") or "").lower()
+    http_status = parsed.get("http_status")
+    try:
+        http_status_int = int(http_status) if http_status is not None else None
+    except (TypeError, ValueError):
+        http_status_int = None
+    if status != "error" and (http_status_int is None or http_status_int < 400):
+        return None
+    message = parsed.get("message")
+    reason = parsed.get("reason")
+    return {
+        "tool_name": tool_name,
+        "http_status": http_status_int,
+        "reason": str(reason)[:160] if reason is not None else None,
+        "message": str(message)[:240] if message is not None else None,
+    }
+
+
+def _trace_final_error_state(
+    *,
+    tool_errors: list[dict],
+    draft_response: str,
+    buffered_data_events: list[dict],
+    original_message_events: list[dict],
+    last_assistant_response_source: str | None,
+) -> tuple[str, str, bool]:
+    """Classify user impact for one chat turn without changing response behavior."""
+    if last_assistant_response_source == "validation_fallback":
+        return "error", "template_validation_error", True
+    has_user_visible_output = bool(
+        str(draft_response or "").strip()
+        or buffered_data_events
+        or any(str(evt.get("content") or "").strip() for evt in original_message_events)
+    )
+    if not has_user_visible_output:
+        return "error", "fatal_error", True
+    if tool_errors:
+        return "recovered", "tool_error_recovered", False
+    return "success", "none", False
 
 
 def _strip_qc_verdict_from_user_text(text: str) -> str:
@@ -7635,6 +7782,59 @@ class TStationChatServiceV2:
         return slot_values
 
     @staticmethod
+    def _preorder_slot_values_from_data(template_data: dict | None) -> dict[str, Any] | None:
+        """Extract durable order slots from a rendered preOrder template payload."""
+        if not isinstance(template_data, dict):
+            return None
+        if template_data.get("template") == "preOrder" and isinstance(template_data.get("data"), dict):
+            template_data = template_data["data"]
+        if not template_data.get("isReadyToOrder"):
+            return None
+
+        metadata = template_data.get("metadata")
+        order_info = template_data.get("orderInfo")
+        if not isinstance(metadata, dict) or not isinstance(order_info, dict):
+            return None
+
+        slot_values: dict[str, Any] = {}
+        goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+        if goods_no:
+            slot_values["goods_no"] = goods_no
+
+        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or "").strip()
+        if shop_id:
+            slot_values["shop_id"] = shop_id
+
+        store_name = str(order_info.get("storeName") or metadata.get("shopName") or "").strip()
+        if store_name:
+            slot_values["shop_name"] = store_name
+
+        raw_qty = order_info.get("quantity") or metadata.get("quantity") or metadata.get("ordQty")
+        if raw_qty is not None:
+            try:
+                qty = int(raw_qty)
+                if qty > 0:
+                    slot_values["ord_qty"] = qty
+            except (TypeError, ValueError):
+                pass
+
+        raw_amount = order_info.get("paymentAmount") or metadata.get("paymentAmount")
+        if raw_amount is not None:
+            try:
+                amount = int(raw_amount)
+                if amount > 0:
+                    slot_values["payment_amount"] = amount
+            except (TypeError, ValueError):
+                pass
+
+        product_text = str(order_info.get("product") or metadata.get("productName") or "").strip()
+        tire_size = normalize_tire_size(product_text)
+        if tire_size:
+            slot_values["tire_size"] = tire_size
+
+        return slot_values or None
+
+    @staticmethod
     def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
         """Match a user's vehicle-selection reply against the metadata of the
         most recent assistant message that rendered a `listCar` template, and
@@ -8247,6 +8447,7 @@ class TStationChatServiceV2:
         predicted_domain_values: list[str] = []
         latest_datepick_tmpl: dict | None = None
         latest_quickreply_tmpl: dict | None = None
+        latest_preorder_tmpl: dict | None = None
         for msg in reversed(request.messages):
             if msg.get("role") == "user":
                 last_user_text = msg.get("content", "")
@@ -8270,6 +8471,7 @@ class TStationChatServiceV2:
             )
             latest_datepick_tmpl = latest_template_data_from_messages(recent_template_msgs, "datepick")
             latest_quickreply_tmpl = latest_template_data_from_messages(recent_template_msgs, "quickReply")
+            latest_preorder_tmpl = latest_template_data_from_messages(recent_template_msgs, "preOrder")
             _t_slots = time.perf_counter()
             logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
@@ -8358,6 +8560,25 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
+            preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
+            if (
+                preorder_slot_values
+                and merged_slots.goal_type == "place_order"
+                and (
+                    merged_slots.shop_id is None
+                    or merged_slots.shop_name is None
+                    or merged_slots.payment_amount is None
+                )
+                and (
+                    merged_slots.goods_no is None
+                    or preorder_slot_values.get("goods_no") is None
+                    or merged_slots.goods_no == preorder_slot_values.get("goods_no")
+                )
+            ):
+                for field, value in preorder_slot_values.items():
+                    if value is not None and getattr(merged_slots, field, None) is None:
+                        setattr(merged_slots, field, value)
+                logger.info("[SLOTS] Recovered order slots from latest preOrder template: %s", preorder_slot_values)
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
             # Region-only follow-ups ("성남은?", "서울은?") are candidate searches,
@@ -9879,6 +10100,7 @@ class TStationChatServiceV2:
         tool_context_items = []  # Structured tool results for context preservation
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
+        tool_errors: list[dict] = []
         last_template: str | None = None
         last_template_source: str | None = None
         last_assistant_response_source: str | None = None
@@ -9977,6 +10199,8 @@ class TStationChatServiceV2:
 
         def _record_code_tool_result(tool_name: str, tool_input: dict, tool_result: dict) -> None:
             called_tool_names.add(tool_name)
+            if tool_error := _tool_error_summary(tool_name, tool_result):
+                tool_errors.append(tool_error)
             structured_sources.append((tool_name, tool_result))
             filtered = filter_source_data(
                 tool_name,
@@ -9987,6 +10211,135 @@ class TStationChatServiceV2:
                 f"Input: {json.dumps(tool_input, ensure_ascii=False)}\n"
                 f"Output: {filtered}"
             )
+
+        async def _resolve_best_selling_products_with_code() -> tuple[list[dict], dict] | None:
+            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            period = best_seller_period_from_text(user_query)
+            if not period:
+                return None
+
+            tool_input = {"period": period, "limit": 5}
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_best_selling_products_tool as _best_selling_tool,
+            )
+            from services.tstation.template_mapper import try_build_template
+
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_best_selling_products_tool",
+                "display_name": "인기 상품 조회 중...",
+                "source_domain": "discovery",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_best_selling_tool.invoke, tool_input)
+                best_selling_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[BEST_SELLER] get_best_selling_products_tool failed for period=%s", period)
+                best_selling_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result("get_best_selling_products_tool", tool_input, best_selling_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Recommendation AF]",
+                "agent_class": "Discovery Agent",
+                "status": best_selling_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(best_selling_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_best_selling_products_tool",
+                "source_domain": "discovery",
+            })
+
+            mapped_event = try_build_template(
+                [{"tool": "get_best_selling_products_tool", "args": tool_input, "data": best_selling_result}],
+                "최근 3개월 베스트셀러 상품을 안내드립니다.",
+            )
+            if mapped_event is None:
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+            mapped_event["assistant_response_source"] = "code_best_seller_search"
+            return emitted_events, mapped_event
+
+        async def _resolve_default_benefit_with_code() -> tuple[list[dict], dict] | None:
+            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+                return None
+            if not is_default_benefit_request(user_query):
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import get_deals_tool as _deals_tool
+            from services.tstation.agents.b_discovery_agent.tools import get_events_tool as _events_tool
+
+            emitted_events: list[dict] = []
+            events_input = {"lang_cd": "ko"}
+            deals_input: dict[str, Any] = {}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_events_tool",
+                "display_name": "이벤트 조회 중...",
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_deals_tool",
+                "display_name": "기획전 조회 중...",
+                "source_domain": "discovery",
+            })
+            try:
+                events_raw, deals_raw = await asyncio.gather(
+                    asyncio.to_thread(_events_tool.invoke, events_input),
+                    asyncio.to_thread(_deals_tool.invoke, deals_input),
+                )
+                events_result = _tool_result_dict(events_raw)
+                deals_result = _tool_result_dict(deals_raw)
+            except Exception as exc:
+                logger.exception("[DEFAULT_BENEFIT] event/deal tools failed")
+                events_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+                deals_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+
+            for tool_name, tool_input, tool_result in (
+                ("get_events_tool", events_input, events_result),
+                ("get_deals_tool", deals_input, deals_result),
+            ):
+                _record_code_tool_result(tool_name, tool_input, tool_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Recommendation AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": tool_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": tool_input,
+                    "output": json.dumps(tool_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": tool_name,
+                    "source_domain": "discovery",
+                })
+
+            return emitted_events, _build_default_benefit_event(events_result, deals_result)
 
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
@@ -11121,6 +11474,22 @@ class TStationChatServiceV2:
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
 
+        default_benefit_resolution = await _resolve_default_benefit_with_code()
+        if default_benefit_resolution is not None:
+            code_events, benefit_event = default_benefit_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(benefit_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((benefit_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
         if coupon_decision is not None and coupon_decision.is_actionable:
@@ -11146,6 +11515,22 @@ class TStationChatServiceV2:
             assistant_response = str((coupon_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        best_selling_resolution = await _resolve_best_selling_products_with_code()
+        if best_selling_resolution is not None:
+            code_events, best_selling_event = best_selling_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(best_selling_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((best_selling_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
@@ -11325,6 +11710,8 @@ class TStationChatServiceV2:
                     if ctx_item:
                         tool_context_items.append(ctx_item)
                     parsed_for_verifier = qc_verifier.parse_tool_output(output_data)
+                    if tool_error := _tool_error_summary(tool_name, parsed_for_verifier or output_data):
+                        tool_errors.append(tool_error)
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
                         if tool_name == "search_product_tool":
@@ -11467,6 +11854,20 @@ class TStationChatServiceV2:
                     last_template = "datepick"
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
+                    event_data = event.get("data", {})
+                coerced_event = coerce_order_preview_quickreply_to_datepick(
+                    event,
+                    structured_sources,
+                    pending_slots or initial_slots,
+                )
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] transaction_store_preview order quickReply → datepick"
+                    )
+                    event = coerced_event
+                    last_template = "datepick"
+                    last_template_source = "code_mapper"
+                    last_assistant_response_source = "code_mapper_order_preview_quickreply"
                     event_data = event.get("data", {})
                 coerced_event = filter_datepick_to_requested_weekday(event, user_query)
                 if coerced_event is not None:
@@ -11640,6 +12041,20 @@ class TStationChatServiceV2:
                                 "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
                                 confirmed_product_slots,
                             )
+                    preorder_slots = TStationChatServiceV2._preorder_slot_values_from_data(event_data)
+                    if preorder_slots:
+                        from schemas.tstation.slots import ConversationSlots
+
+                        base_slots = pending_slots
+                        if base_slots is None:
+                            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        updated_slots = base_slots.model_copy()
+                        for field, value in preorder_slots.items():
+                            if value is not None:
+                                setattr(updated_slots, field, value)
+                        if updated_slots.model_dump() != base_slots.model_dump():
+                            pending_slots = updated_slots
+                            logger.info("[PREORDER_SLOT_STAGE] staged order slots from preOrder event: %s", preorder_slots)
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
                         event_data["assistantResponse"] = assistant_response
@@ -12271,13 +12686,34 @@ class TStationChatServiceV2:
             # metadata moves to `metadata` (and the `qc` child span already holds
             # the verdict + result for drill-down).
             _route = "→".join(d.value for d in domains) if domains else ""
+            final_status, error_class, user_visible_error = _trace_final_error_state(
+                tool_errors=tool_errors,
+                draft_response=draft_response,
+                buffered_data_events=buffered_data_events,
+                original_message_events=original_message_events,
+                last_assistant_response_source=last_assistant_response_source,
+            )
             _trace_metadata = {
                 "route": _route,
                 "tools": sorted(called_tool_names),
+                "called_tools": sorted(called_tool_names),
+                "tool_error_count": len(tool_errors),
+                "tool_errors": tool_errors[:10],
+                "final_status": final_status,
+                "error_class": error_class,
+                "user_visible_error": user_visible_error,
                 "template": last_template,
+                "final_template": last_template,
                 "template_source": last_template_source,
                 "template_qc_policy": _TEMPLATE_QC_POLICY.get(last_template or ""),
                 "assistant_response_source": last_assistant_response_source,
+                "source_domain": (
+                    str((buffered_data_events[-1].get("source_domain") or "")).lower()
+                    if buffered_data_events
+                    else None
+                ),
+                "session_id": session_id,
+                "trace_id": trace_id,
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "qc_executed": qc_executed,
                 "qc_skip_reason": qc_skip_reason,
@@ -12294,8 +12730,10 @@ class TStationChatServiceV2:
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)
             # Set both the parent span's own output AND the trace-level output.
-            parent_span.update(output=_trace_output)
-            parent_span.update_trace(
+            safe_trace_update(parent_span, output=_trace_output)
+            safe_trace_update(
+                parent_span,
+                trace=True,
                 name=(_last_user[:60] if _last_user else "chat"),
                 input=_trace_input,
                 output=_trace_output,
@@ -12321,8 +12759,10 @@ class TStationChatServiceV2:
                         trace_context={"trace_id": trace_id, "parent_span_id": parent_span_id},
                         input=_trace_input,
                     )
-                    response_span.update(output=_trace_output)
-                    response_span.update_trace(
+                    safe_trace_update(response_span, output=_trace_output)
+                    safe_trace_update(
+                        response_span,
+                        trace=True,
                         name=_response_span_name,
                         input=_trace_input,
                         output=_trace_output,

@@ -111,6 +111,30 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
         )
 
+    if entities.get("service_program") == "safe_service":
+        if tire_size:
+            return ResponseDecision(
+                response_shape=ResponseShape.CARD,
+                template=TemplateName.PRODUCT,
+                required_slots=("tire_size",),
+                forbidden_behaviors=("drop_safe_service_filter", "claim_safe_service_without_hankook_basis"),
+                assistant_guidance="안심서비스 가능 조건과 요청 규격을 함께 만족하는 한국타이어 상품만 카드/가격으로 안내한다.",
+                metadata={"response_shape_key": "sized_safe_service_recommendation_cards"},
+            )
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=(
+                "generic_unsized_summary",
+                "product_card_without_size",
+                "price_without_size",
+                "claim_safe_service_without_hankook_basis",
+            ),
+            assistant_guidance="안심서비스/안심플러스를 간략히 설명한 뒤 가능 대표 상품을 요약하고 차량/규격 확인으로 유도한다.",
+            metadata={"response_shape_key": "safe_service_explanation_then_unsized_recommendation_summary"},
+        )
+
     if entities.get("price_goal") == "lowest" and tire_size:
         return ResponseDecision(
             response_shape=ResponseShape.CARD,
@@ -119,6 +143,16 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             forbidden_behaviors=("omit_discount_rate", "omit_badge_on_premium_alternatives"),
             assistant_guidance="요청 규격의 최저가 기준 상품을 가격/최대혜택 할인율과 함께 안내한다.",
             metadata={"response_shape_key": "sized_lowest_price_recommendation"},
+        )
+
+    if frame.sub_intent == "best_seller_search":
+        return ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            required_slots=(),
+            forbidden_behaviors=("use_generic_recommendation_engine", "expose_sales_count"),
+            assistant_guidance="최근 3개월 등 요청 기간의 베스트셀러 도구 결과를 product 카드로 안내하고 판매 수량은 노출하지 않는다.",
+            metadata={"response_shape_key": "best_seller_product_cards"},
         )
 
     if frame.intent == "product_recommendation" and not tire_size:

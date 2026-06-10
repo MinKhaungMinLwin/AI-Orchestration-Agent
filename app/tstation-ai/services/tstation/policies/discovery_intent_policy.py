@@ -18,6 +18,7 @@ _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
+_SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
 _MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
 _MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d)", re.IGNORECASE)
 _LATEST_RE = re.compile(r"최신|신제품|최근\s*출시|새로\s*나온|등록일", re.IGNORECASE)
@@ -28,6 +29,22 @@ _SIMILAR_PRICE_RE = re.compile(r"비슷한\s*가격|가격대|동급\s*가격", 
 _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNORECASE)
 _COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
+_BEST_SELLER_RE = re.compile(
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
+    re.IGNORECASE,
+)
+_DEFAULT_TIRE_SHOPPING_RE = re.compile(
+    r"(?:t\s*['’]?\s*bot\s*과\s*)?타이어\s*쇼핑\s*하기",
+    re.IGNORECASE,
+)
+_DEFAULT_BENEFIT_RE = re.compile(
+    r"지금\s*받을\s*수\s*있는\s*혜택|현재\s*받을\s*수\s*있는\s*혜택|"
+    r"진행\s*중인\s*(?:이벤트|기획전|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전",
+    re.IGNORECASE,
+)
+_BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
+_BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
+_BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
 _ONE_PER_VARIANT_RE = re.compile(r"1\s*개씩|한\s*개씩|한개씩|각각|브랜드별|종류별|each", re.IGNORECASE)
 _OCCUPATION_RE = re.compile(r"택시|기사|배달|화물", re.IGNORECASE)
 _RESTOCK_RE = re.compile(r"재입고|입고|언제\s*들어|언제\s*오|품절|품절인데|다시\s*들어", re.IGNORECASE)
@@ -191,6 +208,35 @@ def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
     return ()
 
 
+def best_seller_period_from_text(text: str) -> str | None:
+    """Map best-seller wording to BE period values.
+
+    The welcome-screen "지금 가장 인기 있는 타이어는?" button means a current
+    popularity ranking, not a generic recommendation. Use the broadest recent
+    ranking window the BE supports unless the user names a narrower period.
+    """
+    text = text or ""
+    if not _BEST_SELLER_RE.search(text):
+        return None
+    if _BEST_SELLER_DAY_RE.search(text):
+        return "day"
+    if _BEST_SELLER_WEEK_RE.search(text):
+        return "week"
+    if _BEST_SELLER_MONTH_RE.search(text):
+        return "month"
+    return "3months"
+
+
+def is_default_tire_shopping_request(text: str) -> bool:
+    """Welcome CTA for starting the normal tire recommendation flow."""
+    return bool(_DEFAULT_TIRE_SHOPPING_RE.search(text or ""))
+
+
+def is_default_benefit_request(text: str) -> bool:
+    """Welcome CTA for active event/deal benefits, not owned coupons."""
+    return bool(_DEFAULT_BENEFIT_RE.search(text or ""))
+
+
 def build_discovery_intent_frame(
     last_user_text: str,
     *,
@@ -235,16 +281,35 @@ def build_discovery_intent_frame(
     if _SOUND_ABSORBER_RE.search(text):
         entities["technology"] = "sound_absorber"
         entities["rcmd_type"] = "sound_absorber"
+    if _SAFE_SERVICE_RE.search(text):
+        entities["service_program"] = "safe_service"
+        entities["rcmd_type"] = "safe_kids"
     if _LOWEST_PRICE_RE.search(text):
         entities["price_goal"] = "lowest"
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
+    best_seller_period = best_seller_period_from_text(text)
+    if best_seller_period:
+        entities["best_seller_period"] = best_seller_period
+    if is_default_tire_shopping_request(text):
+        entities["default_tire_shopping"] = True
+    if is_default_benefit_request(text):
+        entities["default_benefit"] = True
 
     concept = bool(_CONCEPT_RE.search(text))
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if _MILEAGE_PRODUCT_RE.search(text):
+    if entities.get("default_benefit"):
+        intent = "product_search"
+        sub_intent = "benefit_event_deal_list"
+    elif best_seller_period:
+        intent = "product_search"
+        sub_intent = "best_seller_search"
+    elif entities.get("default_tire_shopping"):
+        intent = "product_recommendation"
+        sub_intent = "general_recommendation"
+    elif _MILEAGE_PRODUCT_RE.search(text):
         entities["product_keyword"] = "마일리지"
         if _OCCUPATION_RE.search(text):
             entities["guardrail"] = "occupation_neutral"
@@ -297,7 +362,12 @@ def build_discovery_intent_frame(
     elif _SIMILAR_PRICE_RE.search(text):
         intent = "product_recommendation"
         sub_intent = "similar_price_recommendation"
-    elif _SOUND_ABSORBER_RE.search(text) or _PERFORMANCE_RE.search(text) or _LOWEST_PRICE_RE.search(text):
+    elif (
+        _SOUND_ABSORBER_RE.search(text)
+        or _SAFE_SERVICE_RE.search(text)
+        or _PERFORMANCE_RE.search(text)
+        or _LOWEST_PRICE_RE.search(text)
+    ):
         intent = "product_recommendation"
         sub_intent = "condition_recommendation"
     elif products and concept:
@@ -334,6 +404,21 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "benefit_event_deal_list":
+        return ToolPlan(
+            allowed_tools=("get_events_tool", "get_deals_tool"),
+            preferred_tool="get_events_tool",
+            tool_args_patch={"lang_cd": "ko"},
+            forbidden_tools=("get_my_coupons_tool",),
+        )
+    if frame.sub_intent == "best_seller_search":
+        args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}
+        return ToolPlan(
+            allowed_tools=("get_best_selling_products_tool",),
+            preferred_tool="get_best_selling_products_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
+        )
     if frame.intent == "product_search":
         keyword = entities.get("product_keyword") or (entities.get("product_names") or ("",))[0]
         args = {"keyword": keyword}
@@ -374,6 +459,16 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_products_recommendations_tool",
             tool_args_patch=args,
             forbidden_tools=("generic_noise_recommendation",),
+        )
+    if entities.get("service_program") == "safe_service":
+        args = {"rcmd_type": "safe_kids", "brand_cd": entities.get("brand_cd") or "HK"}
+        if entities.get("tire_size"):
+            args["tire_size"] = entities["tire_size"]
+        return ToolPlan(
+            allowed_tools=("get_products_recommendations_tool",),
+            preferred_tool="get_products_recommendations_tool",
+            tool_args_patch=args,
+            forbidden_tools=("generic_unsized_recommendation",),
         )
     args = {}
     if entities.get("recommendation_metric") == "fuel_efficiency":

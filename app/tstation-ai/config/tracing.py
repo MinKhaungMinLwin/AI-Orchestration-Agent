@@ -233,3 +233,20 @@ def trace_span(
             span.end()
         except Exception as exc:
             logger.debug("[TRACE] Failed to end span '%s': %s", name, exc)
+
+
+def safe_trace_update(observation: Any, *, trace: bool = False, **kwargs: Any) -> None:
+    """Best-effort Langfuse observation/trace update.
+
+    Observability must never block or fail a chat response, so callers can use
+    this wrapper for non-critical metadata updates.
+    """
+    if observation is None:
+        return
+    try:
+        if trace:
+            observation.update_trace(**kwargs)
+        else:
+            observation.update(**kwargs)
+    except Exception as exc:
+        logger.debug("[TRACE] update failed: %s", exc)
