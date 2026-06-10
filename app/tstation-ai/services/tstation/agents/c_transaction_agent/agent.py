@@ -251,7 +251,7 @@ Trigger: 사용자 메시지에 다음 중 하나라도 포함될 때.
 
 | 금지 항목 | 예시 |
 |---|---|
-| 매장/지역 chip | `["강남","분당","해운대","다른 지역 찾기"]` |
+| 매장/지역 chip | `["강남","분당","해운대","주변 매장 찾기"]` |
 | 수량 chip | `["1개","2개","3개","4개"]` |
 | Cart/Order 진행 chip | `["장바구니에 담기","주문하기","예약하기","바로 결제"]` |
 | 매장 요청 본문 | "장착 매장을 먼저 선택해야 해요" / "어느 지역 매장을 찾아드릴까요?" |
@@ -423,11 +423,11 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
 
 | 조건 | quickReplies |
 |---|---|
-| 컨텍스트 지명 ≥ 1개 추출됨 | `[<지명1>, (지명2), "다른 지역 찾기"]` (2–3개) |
-| 컨텍스트 지명 없음 (fallback) | `["강남", "분당", "해운대", "다른 지역 찾기"]` (4개 디폴트) |
+| 컨텍스트 지명 ≥ 1개 추출됨 | `[<지명1>, (지명2), "주변 매장 찾기"]` (2–3개) |
+| 컨텍스트 지명 없음 (fallback) | `["강남", "분당", "해운대", "주변 매장 찾기"]` (4개 디폴트) |
 
 - 추가 chip 의 `domain` 은 `"TRANSACTION"`. 라벨에 "점" 접미사 금지 (지명만).
-- "다른 지역 찾기" chip 은 사용자가 free-form 지역 입력을 유도하기 위함. 클릭 시 다음 턴에 사용자가 지역명을 발화하면 룰 4 적용.
+- "주변 매장 찾기" chip 은 사용자의 현재 위치 기준 주변 매장 검색을 유도하기 위함. 클릭 시 룰 5 적용.
 - 컨텍스트 지명 chip 이 fallback 디폴트 지명("강남"/"분당"/"해운대") 중 하나와 겹치면 중복 chip 추가 금지 (컨텍스트 지명만 노출).
 
 **예시 JSON (컨텍스트에 "원주점" 등장 사례)**
@@ -440,7 +440,7 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
     "assistantResponse": "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
     "quickReplies": [
       {"label":"원주","domain":"TRANSACTION"},
-      {"label":"다른 지역 찾기","domain":"TRANSACTION"}
+      {"label":"주변 매장 찾기","domain":"TRANSACTION"}
     ],
     "predictedDomains":["TRANSACTION"]
   }
@@ -459,7 +459,7 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
       {"label":"강남","domain":"TRANSACTION"},
       {"label":"분당","domain":"TRANSACTION"},
       {"label":"해운대","domain":"TRANSACTION"},
-      {"label":"다른 지역 찾기","domain":"TRANSACTION"}
+      {"label":"주변 매장 찾기","domain":"TRANSACTION"}
     ],
     "predictedDomains":["TRANSACTION"]
   }
@@ -468,9 +468,9 @@ Only when ALL FOUR are present (in addition to goods_no + ord_qty) → emit `pre
 
 4. **다음 턴에 사용자가 단답으로 지역만 응답해도 (예: "원주", "한남", "해운대")** → 슬롯의 `지역` 으로 자동 채워짐. 이 턴에서는 **반드시 `get_store_list_tool(region_code=<지역>)` 호출**. 지역을 다시 묻거나 일반 안내문만 출력하면 안 됨.
 
-5. **"내 위치로 찾기" pick** (이전 기록 또는 사용자 직접 발화) → `get_nearby_stores_tool` 호출 (xpos/ypos 슬롯 사용).
+5. **"주변 매장 찾기" / "내 위치로 찾기" pick** (이전 기록 또는 사용자 직접 발화) → `get_nearby_stores_tool` 호출 (xpos/ypos 슬롯 사용).
 
-6. **"다른 지역 찾기" pick** → 같은 턴에서 도구 호출 금지. `assistantResponse` 로 "어느 지역으로 찾아드릴까요? 지역명이나 주소를 알려주세요 😊" 한 줄만 emit (chip 없이 free-form). 다음 턴에 사용자가 지역명을 주면 룰 4 적용.
+6. 사용자가 직접 "다른 지역", "다른 주소", "지역명으로 찾기"처럼 free-form 지역 입력을 원하면 → 같은 턴에서 도구 호출 금지. `assistantResponse` 로 "어느 지역으로 찾아드릴까요? 지역명이나 주소를 알려주세요 😊" 한 줄만 emit (chip 없이 free-form). 다음 턴에 사용자가 지역명을 주면 룰 4 적용.
 
 ⚠️ chip 구성 룰은 STORE FINDER GOAL 의 룰(아래 STORE FINDER GOAL 섹션)과 동일하게 공유. 메시지 도입부만 "구매를 진행하려면" 으로 변경해 사용자가 주문 의도를 잃지 않도록 한다.
 
@@ -937,8 +937,8 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 2. **`지역` 슬롯이 비어있으면 → 지역 quickReply 제시 (단 한 번)**
    - 메시지: "어느 지역 매장을 찾아드릴까요?"
    - quickReplies: **위 CART/PURCHASE READY GUARD 의 `CONTEXT-AWARE REGION CHIP` 룰을 동일 적용**.
-     - 컨텍스트 지명 ≥ 1개 → `[<지명1>, (지명2), "다른 지역 찾기"]`
-     - 컨텍스트 지명 없음 → `["강남", "분당", "해운대", "다른 지역 찾기"]`
+     - 컨텍스트 지명 ≥ 1개 → `[<지명1>, (지명2), "주변 매장 찾기"]`
+     - 컨텍스트 지명 없음 → `["강남", "분당", "해운대", "주변 매장 찾기"]`
    - 동일 턴에서 다른 도구를 호출하지 마세요 — 사용자의 지역 응답을 기다리세요.
 
 3. **다음 턴에 사용자가 단답으로 지역만 응답해도 (예: "분당", "강남")**
@@ -2653,9 +2653,9 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
 - Add the confirmed product to cart -> call save_to_cart_tool only when goods_no and quantity are known.
 - Place a quick order -> call quick_order_tool only after required order fields are confirmed.
 - If required information is missing, ask one short Korean clarification using quickReply.
-- ⚠️ shop_id 누락 시 (quick_order_tool 호출 전 매장 미선택) → 빈 `quickReplies` 평문 응답 금지. 다음 `quickReply` 를 즉시 emit (같은 턴 도구 호출 금지). **chip 구성은 위 CART/PURCHASE READY GUARD 의 `CONTEXT-AWARE REGION CHIP` 룰 동일 적용** (컨텍스트 지명 추출 → 있으면 `[<지명>, "다른 지역 찾기"]`, 없으면 `["강남","분당","해운대","다른 지역 찾기"]`):
+- ⚠️ shop_id 누락 시 (quick_order_tool 호출 전 매장 미선택) → 빈 `quickReplies` 평문 응답 금지. 다음 `quickReply` 를 즉시 emit (같은 턴 도구 호출 금지). **chip 구성은 위 CART/PURCHASE READY GUARD 의 `CONTEXT-AWARE REGION CHIP` 룰 동일 적용** (컨텍스트 지명 추출 → 있으면 `[<지명>, "주변 매장 찾기"]`, 없으면 `["강남","분당","해운대","주변 매장 찾기"]`):
   ```json
-  {"type":"data","template":"quickReply","data":{"assistantResponse":"구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊","quickReplies":[{"label":"강남","domain":"TRANSACTION"},{"label":"분당","domain":"TRANSACTION"},{"label":"해운대","domain":"TRANSACTION"},{"label":"다른 지역 찾기","domain":"TRANSACTION"}],"predictedDomains":["TRANSACTION"]}}
+  {"type":"data","template":"quickReply","data":{"assistantResponse":"구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊","quickReplies":[{"label":"강남","domain":"TRANSACTION"},{"label":"분당","domain":"TRANSACTION"},{"label":"해운대","domain":"TRANSACTION"},{"label":"주변 매장 찾기","domain":"TRANSACTION"}],"predictedDomains":["TRANSACTION"]}}
   ```
   사용자가 다음 턴에 지역 단답 또는 매장명을 응답하면 coordinator 가 transaction_store profile 로 reroute — 그쪽에서 `get_store_list_tool` / `get_nearby_stores_tool` 호출. 이 profile 에서 직접 매장 검색 도구를 호출하지 마라.
 - If the request is not order/cart/status related, ask the user to clarify.
