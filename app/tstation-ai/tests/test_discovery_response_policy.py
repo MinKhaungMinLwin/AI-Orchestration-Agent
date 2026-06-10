@@ -115,6 +115,15 @@ def test_tc044_unsized_sound_absorber_explains_then_summarizes_without_cards() -
     assert "product_card_without_size" in decision.forbidden_behaviors
 
 
+def test_safe_service_unsized_question_explains_service_before_products() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("안심서비스 가능한 타이어는?"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "safe_service_explanation_then_unsized_recommendation_summary"
+    assert "generic_unsized_summary" in decision.forbidden_behaviors
+    assert "claim_safe_service_without_hankook_basis" in decision.forbidden_behaviors
+
+
 def test_tc047_similar_price_does_not_require_size_unconditionally() -> None:
     decision = decide_discovery_response(
         build_discovery_intent_frame(

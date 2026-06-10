@@ -416,6 +416,19 @@ def _sound_absorber_recommendation_entry() -> dict:
     )
 
 
+def _safe_service_recommendation_entry() -> dict:
+    return _recommendation_entry(
+        args={"rcmd_type": "safe_kids", "limit": 3, "brand_cd": "HK"},
+        data={
+            "items": [
+                {"goods_no": "G1", "goods_nm": "아이온 ST AS SUV", "t_rlx_isn_yn": "O"},
+                {"goods_no": "G2", "goods_nm": "벤투스 S1 에보 Z AS", "t_rlx_isn_yn": "O"},
+                {"goods_no": "G3", "goods_nm": "벤투스 S2 AS", "t_rlx_isn_yn": "O"},
+            ]
+        },
+    )
+
+
 def _best_selling_entry(*, period: str, items: list[dict]) -> dict:
     return {
         "tool": "get_best_selling_products_tool",
@@ -1459,6 +1472,27 @@ def test_tc044_unsized_sound_absorber_uses_deterministic_summary_when_results_ex
         "차번+이름으로 검색",
         "사이즈 직접 입력",
     ]
+
+
+def test_safe_service_unsized_question_uses_service_intro_and_product_names() -> None:
+    text = "안심서비스 가능한 타이어는?"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_safe_service_recommendation_entry()],
+        "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "안심서비스" in assistant_response
+    assert "안심플러스" in assistant_response
+    assert "아이온 ST AS SUV" in assistant_response
+    assert "벤투스 S2 AS" in assistant_response
+    assert "사이즈가 아직 확인되지 않아" not in assistant_response
+    assert "정확한 장착 가능 여부와 가격" not in assistant_response
 
 
 def test_product_card_uses_search_context_not_generic_intro() -> None:

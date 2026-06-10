@@ -163,6 +163,17 @@ def test_tc044_sound_absorber_explain_and_buy_keeps_sound_absorber_recommendatio
     assert plan.tool_args_patch == {"rcmd_type": "sound_absorber"}
 
 
+def test_safe_service_question_uses_safe_kids_recommendation_filter() -> None:
+    frame = build_discovery_intent_frame("안심서비스 가능한 타이어는?")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert frame.entities["service_program"] == "safe_service"
+    assert frame.entities["rcmd_type"] == "safe_kids"
+    assert plan.tool_args_patch == {"rcmd_type": "safe_kids", "brand_cd": "HK"}
+
+
 def test_tc047_similar_price_recommendation_does_not_inject_confirmed_size() -> None:
     frame = build_discovery_intent_frame(
         "비슷한 가격대의 타이어 더 추천해줘",

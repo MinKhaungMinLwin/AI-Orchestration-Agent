@@ -18,6 +18,7 @@ _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
+_SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
 _MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
 _MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d)", re.IGNORECASE)
 _LATEST_RE = re.compile(r"최신|신제품|최근\s*출시|새로\s*나온|등록일", re.IGNORECASE)
@@ -261,6 +262,9 @@ def build_discovery_intent_frame(
     if _SOUND_ABSORBER_RE.search(text):
         entities["technology"] = "sound_absorber"
         entities["rcmd_type"] = "sound_absorber"
+    if _SAFE_SERVICE_RE.search(text):
+        entities["service_program"] = "safe_service"
+        entities["rcmd_type"] = "safe_kids"
     if _LOWEST_PRICE_RE.search(text):
         entities["price_goal"] = "lowest"
     if _SIMILAR_PRICE_RE.search(text):
@@ -329,7 +333,12 @@ def build_discovery_intent_frame(
     elif _SIMILAR_PRICE_RE.search(text):
         intent = "product_recommendation"
         sub_intent = "similar_price_recommendation"
-    elif _SOUND_ABSORBER_RE.search(text) or _PERFORMANCE_RE.search(text) or _LOWEST_PRICE_RE.search(text):
+    elif (
+        _SOUND_ABSORBER_RE.search(text)
+        or _SAFE_SERVICE_RE.search(text)
+        or _PERFORMANCE_RE.search(text)
+        or _LOWEST_PRICE_RE.search(text)
+    ):
         intent = "product_recommendation"
         sub_intent = "condition_recommendation"
     elif products and concept:
@@ -414,6 +423,16 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_products_recommendations_tool",
             tool_args_patch=args,
             forbidden_tools=("generic_noise_recommendation",),
+        )
+    if entities.get("service_program") == "safe_service":
+        args = {"rcmd_type": "safe_kids", "brand_cd": entities.get("brand_cd") or "HK"}
+        if entities.get("tire_size"):
+            args["tire_size"] = entities["tire_size"]
+        return ToolPlan(
+            allowed_tools=("get_products_recommendations_tool",),
+            preferred_tool="get_products_recommendations_tool",
+            tool_args_patch=args,
+            forbidden_tools=("generic_unsized_recommendation",),
         )
     args = {}
     if entities.get("recommendation_metric") == "fuel_efficiency":

@@ -1693,6 +1693,48 @@ def _technology_unsized_policy_response(tool_data_list: list[dict]) -> str:
     return ""
 
 
+def _safe_service_unsized_policy_response(tool_data_list: list[dict]) -> str:
+    rows: list[dict] = []
+    for entry in reversed(_find_entries(tool_data_list, "get_products_recommendations_tool")):
+        args = _tool_args(entry)
+        raw = _unwrap(entry)
+        candidate_rows = raw.get("items") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+        if not isinstance(candidate_rows, list):
+            continue
+        rcmd_type = _get_str(args, "rcmd_type").lower()
+        if rcmd_type in {"safe_kids", "warranty"}:
+            rows = [row for row in candidate_rows if isinstance(row, dict)]
+            break
+
+    lines = [
+        "안심서비스는 티스테이션에서 대상 한국타이어를 구매/장착한 뒤 "
+        "주행 중 예기치 못한 타이어 손상이 생겼을 때 보상받을 수 있는 서비스예요.",
+        "안심플러스는 보장 범위를 더 넓힌 추가 보장 프로그램으로, 가입 조건과 보장 내용은 상품/주문 단계에서 확인돼요.",
+    ]
+
+    names: list[str] = []
+    for row in rows:
+        if _get_str(row, "t_rlx_isn_yn").upper() not in {"", "O", "Y"}:
+            continue
+        name = _get_str(row, "goods_nm", "title")
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= 3:
+            break
+    if names:
+        lines.extend([
+            "",
+            f"현재 확인되는 안심서비스 가능 대표 상품으로는 {', '.join(names)}가 있어요.",
+            "차량이나 타이어 사이즈를 알려주시면 장착 가능한 규격 기준으로 다시 확인해 드릴게요 😊",
+        ])
+    else:
+        lines.extend([
+            "",
+            "차량이나 타이어 사이즈를 알려주시면 안심서비스 가능 상품을 규격 기준으로 확인해 드릴게요 😊",
+        ])
+    return "\n".join(lines)
+
+
 def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Honor Discovery policy decisions that forbid card-first rendering."""
     decision = current_discovery_response_decision.get()
@@ -1701,6 +1743,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
     if response_shape_key not in {
         "technology_explanation_then_unsized_recommendation_summary",
+        "safe_service_explanation_then_unsized_recommendation_summary",
         "metric_comparison_summary",
         "grade_comparison_summary",
         "similar_price_range_recommendation",
@@ -1720,6 +1763,8 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         response = _product_attribute_policy_response(tool_data_list)
     if response_shape_key == "technology_explanation_then_unsized_recommendation_summary":
         response = _technology_unsized_policy_response(tool_data_list) or response
+    if response_shape_key == "safe_service_explanation_then_unsized_recommendation_summary":
+        response = _safe_service_unsized_policy_response(tool_data_list) or response
     if response_shape_key == "metric_comparison_summary":
         response = _product_metric_comparison_policy_response(tool_data_list) or response
     if response_shape_key == "restock_inquiry_summary":
