@@ -51,7 +51,13 @@ _DEFAULT_TIRE_SHOPPING_RE = re.compile(
 )
 _DEFAULT_BENEFIT_RE = re.compile(
     r"지금\s*받을\s*수\s*있는\s*혜택|현재\s*받을\s*수\s*있는\s*혜택|"
-    r"진행\s*중인\s*(?:이벤트|기획전|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전",
+    r"진행\s*중인\s*(?:이벤트|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전|"
+    r"이벤트(?:와|과|하고)\s*기획전|기획전(?:와|과|하고)\s*이벤트|"
+    r"이벤트\s*(?:목록|리스트|검색|조회|보여|알려)",
+    re.IGNORECASE,
+)
+_DEAL_LIST_RE = re.compile(
+    r"진행\s*중인\s*기획전|기획전\s*(?:목록|리스트|검색|조회|보여|알려|내용)?",
     re.IGNORECASE,
 )
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
@@ -249,6 +255,11 @@ def is_default_benefit_request(text: str) -> bool:
     return bool(_DEFAULT_BENEFIT_RE.search(text or ""))
 
 
+def is_deal_list_request(text: str) -> bool:
+    """Deal-only listing request. Event listing intentionally returns both events and deals."""
+    return bool(_DEAL_LIST_RE.search(text or "")) and not is_default_benefit_request(text)
+
+
 def extract_quantity_options(text: str) -> tuple[int, ...]:
     quantities: list[int] = []
     for match in _QUANTITY_OPTION_RE.finditer(text or ""):
@@ -343,6 +354,8 @@ def build_discovery_intent_frame(
         entities["default_tire_shopping"] = True
     if is_default_benefit_request(text):
         entities["default_benefit"] = True
+    elif is_deal_list_request(text):
+        entities["deal_list_only"] = True
 
     concept = bool(_CONCEPT_RE.search(text))
     standalone_attribute_metrics = tuple(
@@ -351,6 +364,9 @@ def build_discovery_intent_frame(
     if entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
+    elif entities.get("deal_list_only"):
+        intent = "product_search"
+        sub_intent = "benefit_deal_list"
     elif is_quantity_benefit_comparison_request(text):
         intent = "product_comparison"
         sub_intent = "quantity_benefit_comparison"
@@ -464,6 +480,13 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_events_tool",
             tool_args_patch={"lang_cd": "ko"},
             forbidden_tools=("get_my_coupons_tool",),
+        )
+    if frame.sub_intent == "benefit_deal_list":
+        return ToolPlan(
+            allowed_tools=("get_deals_tool",),
+            preferred_tool="get_deals_tool",
+            tool_args_patch={},
+            forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
         )
     if frame.sub_intent == "best_seller_search":
         args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}
