@@ -1883,7 +1883,16 @@ class StreamingMultiAgentCoordinator:
                     # When present, skip the UI Template stage below.
                     if event_type == "data":
                         domain_data_event_emitted = True
-                        parsed_decision = _parse_agent_declared_next_action(event.pop("nextAction", None))
+                        data_payload = event.get("data")
+                        if isinstance(data_payload, dict):
+                            assistant_response = data_payload.get("assistantResponse")
+                            if isinstance(assistant_response, str) and assistant_response.strip():
+                                accumulated_context[domain_key] = assistant_response
+                                full_response = assistant_response
+                        raw_next_action = event.pop("nextAction", None)
+                        if raw_next_action is None and isinstance(data_payload, dict):
+                            raw_next_action = data_payload.pop("nextAction", None)
+                        parsed_decision = _parse_agent_declared_next_action(raw_next_action)
                         if parsed_decision is not None:
                             agent_declared_decision = parsed_decision
                             logger.debug(
@@ -1891,6 +1900,21 @@ class StreamingMultiAgentCoordinator:
                                 parsed_decision.next_action.value,
                                 parsed_decision.next_domain,
                             )
+                            if parsed_decision.next_action == NextAction.CONTINUE and parsed_decision.next_domain:
+                                next_domain_map = {
+                                    "discovery": MultiAgentDomain.Domain.DISCOVERY,
+                                    "transaction": MultiAgentDomain.Domain.TRANSACTION,
+                                    "support": MultiAgentDomain.Domain.SUPPORT,
+                                }
+                                declared_next_domain = next_domain_map.get(parsed_decision.next_domain.lower())
+                                if declared_next_domain and declared_next_domain not in domains:
+                                    domains.append(declared_next_domain)
+                                    logger.info(
+                                        "[COORDINATOR] Agent-declared nextAction appended domain immediately: "
+                                        "%s -> %s",
+                                        domain_key,
+                                        declared_next_domain.value,
+                                    )
                     yield from _buffer_or_emit(event)
 
                     # Capture message content for context passing
