@@ -433,6 +433,75 @@ def _preview_location_assistant_response(tier: str, region: str, item_count: int
     return None
 
 
+def _kst_today_yyyymmdd() -> str:
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y%m%d")
+
+
+def _preview_schedule_stores_by_shop_id(raw: dict) -> dict[str, dict]:
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+    if not isinstance(schedule_stores, list):
+        return {}
+    stores_by_shop_id: dict[str, dict] = {}
+    for store in schedule_stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = _get_str(store, "shop_id")
+        if shop_id:
+            stores_by_shop_id[shop_id] = store
+    return stores_by_shop_id
+
+
+def _store_has_bookable_slot_on_day(store: dict, cal_day: str) -> bool:
+    slots = store.get("slots")
+    if not isinstance(slots, list):
+        return False
+    for slot in slots:
+        if not isinstance(slot, dict) or _get_str(slot, "cal_day") != cal_day:
+            continue
+        hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+        if hour is not None and _is_bookable_hour(hour):
+            return True
+    return False
+
+
+def _today_service_context(assistant_text: str = "") -> bool:
+    text = "\n".join(part for part in [current_user_text.get() or "", assistant_text or ""] if part)
+    return bool(_TODAY_SERVICE_DATEPICK_RE.search(text))
+
+
+def _earliest_preview_schedule_label(raw: dict) -> str:
+    best_day = ""
+    for store in _preview_schedule_stores_by_shop_id(raw).values():
+        slots = store.get("slots")
+        if not isinstance(slots, list):
+            continue
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = _get_str(slot, "cal_day")
+            hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+            if cal_day and hour is not None and _is_bookable_hour(hour) and (not best_day or cal_day < best_day):
+                best_day = cal_day
+    return yyyymmdd_to_korean_date(best_day) if best_day else ""
+
+
+def _preview_schedule_starts_after_today(raw: dict) -> bool:
+    best_day = ""
+    for store in _preview_schedule_stores_by_shop_id(raw).values():
+        slots = store.get("slots")
+        if not isinstance(slots, list):
+            continue
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = _get_str(slot, "cal_day")
+            hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+            if cal_day and hour is not None and _is_bookable_hour(hour) and (not best_day or cal_day < best_day):
+                best_day = cal_day
+    return bool(best_day and best_day > _kst_today_yyyymmdd())
+
+
 def _same_turn_inventory_has_no_stock(tool_data_list: list[dict]) -> bool:
     """True when get_store_inventory_tool ran this turn and found no eligible shops."""
     labels = _same_turn_inventory_stock_labels(tool_data_list)
@@ -3063,6 +3132,8 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     had_location_candidate = False
     filtered_by_exact_time = False
     filtered_by_other_store = False
+    filtered_by_today_schedule = False
+    earliest_filtered_schedule_label = ""
     for entry in _find_entries(
         tool_data_list,
         "search_stores_tool",
@@ -3079,6 +3150,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not isinstance(stores, list):
             continue
         stock_labels_by_shop_id: dict[str, str] = {}
+        preview_today_schedule_by_shop_id: dict[str, dict] = {}
+        if entry.get("tool") == "transaction_store_preview_tool" and _today_service_context(assistant_text):
+            preview_today_schedule_by_shop_id = _preview_schedule_stores_by_shop_id(raw)
+            earliest_filtered_schedule_label = earliest_filtered_schedule_label or _earliest_preview_schedule_label(raw)
         if entry.get("tool") in {
             "search_stores_tool",
             "search_stores_complex_tool",
@@ -3118,6 +3193,19 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             stock_label = stock_labels_by_shop_id.get(shop_id)
             if stock_labels_by_shop_id and not stock_label:
                 continue
+            preview_schedule_store = preview_today_schedule_by_shop_id.get(shop_id)
+            if preview_schedule_store is not None:
+                today_yyyymmdd = _kst_today_yyyymmdd()
+                if not _store_has_bookable_slot_on_day(preview_schedule_store, today_yyyymmdd):
+                    filtered_by_today_schedule = True
+                    continue
+                today_slots = [
+                    slot
+                    for slot in preview_schedule_store.get("slots", [])
+                    if isinstance(slot, dict) and _get_str(slot, "cal_day") == today_yyyymmdd
+                ]
+                if today_slots:
+                    row = {**row, "slots": today_slots}
             row_slots_for_filter = row.get("slots") if isinstance(row.get("slots"), list) else []
             if exact_schedule_filter is not None and row_slots_for_filter:
                 filtered_slots = [
@@ -3257,6 +3345,25 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             metadata.append({"shopId": shop_id})
 
     if not items:
+        if filtered_by_today_schedule:
+            earliest_suffix = (
+                f" 가장 빠른 예약 가능 일정은 {earliest_filtered_schedule_label}부터예요."
+                if earliest_filtered_schedule_label
+                else ""
+            )
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper_today_schedule_filter",
+                "data": {
+                    "assistantResponse": f"오늘 장착 가능한 매장 일정이 확인되지 않아요.{earliest_suffix} 다른 날짜나 다른 매장으로 확인해 주세요.",
+                    "quickReplies": [
+                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
         if filtered_by_exact_time:
             return _exact_time_no_slot_quickreply()
         if other_store_request and filtered_by_other_store and had_location_candidate:
@@ -3682,7 +3789,12 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
             require_single_store=True,
         )
         if event:
-            today_service_response = _today_service_datepick_response(event)
+            schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+            schedule_tier = _get_str(schedule, "tier").lower()
+            force_today_service_response = (
+                schedule_tier in {"tna_only", "logistics_only"} and _preview_schedule_starts_after_today(raw)
+            )
+            today_service_response = _today_service_datepick_response(event, force=force_today_service_response)
             if today_service_response:
                 event["assistant_response_source"] = "code_mapper_today_service"
                 event["data"]["assistantResponse"] = today_service_response
@@ -4301,9 +4413,9 @@ def _parse_korean_date_label(label: str) -> datetime.date | None:
         return None
 
 
-def _today_service_datepick_response(event: dict) -> str | None:
+def _today_service_datepick_response(event: dict, *, force: bool = False) -> str | None:
     user_text = current_user_text.get() or ""
-    if not _TODAY_SERVICE_DATEPICK_RE.search(user_text):
+    if not force and not _TODAY_SERVICE_DATEPICK_RE.search(user_text):
         return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):
