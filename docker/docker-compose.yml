@@ -117,7 +117,7 @@
       resources:
         limits:
           cpus: "8.0"
-          memory: 4G
+          memory: 8G
     logging:
       driver: json-file
       options:
