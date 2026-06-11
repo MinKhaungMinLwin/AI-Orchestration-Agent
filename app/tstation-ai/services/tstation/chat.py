@@ -5819,6 +5819,11 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
 
 
 _PRODUCT_COMPARE_TEXT_RE = re.compile(r"비교|차이|다른|달라|어느\s*게|뭐가\s*(?:더|나아|좋)", re.IGNORECASE)
+_PRODUCT_COMPARE_FOLLOWUP_RE = re.compile(
+    r"비교|차이|다른|달라|어느\s*게|뭐가\s*(?:더|나아|좋)|어떤\s*게\s*더\s*좋|"
+    r"둘\s*중|두\s*개\s*중|이\s*2\s*개\s*중|이\s*두\s*개\s*중",
+    re.IGNORECASE,
+)
 _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
     r"(?:상품\s*)?(?:설명|특징|장점|후기|리뷰)\s*비교|비교.*(?:설명|특징|장점|후기|리뷰)",
     re.IGNORECASE,
@@ -5837,16 +5842,44 @@ def _product_comparison_names(user_text: str) -> tuple[str, ...]:
     return ()
 
 
+def _product_names_in_text(user_text: str) -> tuple[str, ...]:
+    frame = build_discovery_intent_frame(user_text)
+    return tuple(frame.entities.get("product_names") or ())
+
+
+def _recent_product_names_for_comparison(messages: list[dict]) -> tuple[str, ...]:
+    recent_names: list[str] = []
+    for message in messages[:-1]:
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "")
+        for product_name in _product_names_in_text(content):
+            if product_name in recent_names:
+                recent_names.remove(product_name)
+            recent_names.append(product_name)
+    return tuple(recent_names[-2:])
+
+
 def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) -> str:
     if _product_comparison_names(user_text):
         return user_text
-    if not _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text or ""):
+    user_text = user_text or ""
+    is_description_compare = bool(_PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text))
+    if not (is_description_compare or _PRODUCT_COMPARE_FOLLOWUP_RE.search(user_text)):
         return user_text
-    for message in reversed(messages[:-1]):
-        content = str(message.get("content") or "")
-        names = _product_comparison_names(content)
-        if len(names) >= 2:
-            return f"{names[0]}랑 {names[1]} 상품 설명 비교"
+
+    current_names = _product_names_in_text(user_text)
+    recent_names = _recent_product_names_for_comparison(messages)
+    suffix = "상품 설명 비교" if is_description_compare else "비교"
+
+    if len(current_names) == 1:
+        current_name = current_names[0]
+        for recent_name in reversed(recent_names):
+            if recent_name != current_name:
+                return f"{recent_name}랑 {current_name} {suffix}"
+
+    if len(current_names) == 0 and len(recent_names) >= 2:
+        return f"{recent_names[0]}랑 {recent_names[1]} {suffix}"
     return user_text
 
 
