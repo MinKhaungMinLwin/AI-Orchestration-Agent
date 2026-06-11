@@ -6454,6 +6454,11 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
 _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
 _SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+_SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE = re.compile(
+    r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
+    r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|\d+\s*개",
+    re.IGNORECASE,
+)
 
 
 def _fallback_sized_product_keyword(user_text: str) -> str:
@@ -6471,6 +6476,25 @@ def _fallback_sized_product_keyword(user_text: str) -> str:
     if all(tok.isdigit() for tok in meaningful_tokens):
         return ""
     return keyword
+
+
+def _has_sized_product_name_hint(user_text: str) -> bool:
+    """Return True when a sized transactional turn still contains product-name words.
+
+    `_is_sized_product_name_search_query()` intentionally blocks transactional
+    words such as "구매/주문" so bare search does not steal order flows. For stale
+    slot clearing we need the opposite: detect that the current order turn names
+    a new product even when it also says "구매".
+    """
+    keyword = _fallback_sized_product_keyword(user_text)
+    if not keyword:
+        return False
+    keyword = _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.sub(" ", keyword)
+    keyword = re.sub(r"\s+", " ", keyword).strip(" ,./")
+    tokens = [tok for tok in re.findall(r"[A-Za-z가-힣*+.-]+", keyword) if tok]
+    if not tokens:
+        return False
+    return sum(len(tok) for tok in tokens) >= 2
 
 
 def _is_bare_product_name_search_query(user_text: str) -> bool:
@@ -7143,7 +7167,7 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
     """Return True when the current turn names a tire product and asks for a transactional action."""
     if not text or pending_intent not in {"price", "stock", "order"}:
         return False
-    return ConversationSlots.has_product_keyword(text)
+    return ConversationSlots.has_product_keyword(text) or _has_sized_product_name_hint(text)
 
 
 def _clear_stale_product_identity_for_fresh_transaction(
@@ -9385,6 +9409,7 @@ class TStationChatServiceV2:
 
             if (
                 current_vehicle_selection_prompt_event.get() is None
+                and not fresh_product_transaction_request
                 and _should_prompt_order_quantity_before_store(last_user_text, merged_slots)
             ):
                 logger.debug(
@@ -9937,6 +9962,31 @@ class TStationChatServiceV2:
                     "fresh_product_transaction_request": fresh_product_transaction_request,
                     "fresh_intent_this_turn": regex_slots.pending_intent,
                 },
+            )
+
+        if (
+            fresh_product_transaction_request
+            and merged_slots.goods_no is None
+            and merged_slots.tire_size is not None
+        ):
+            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+            routing_result = MultiAgentDomain(
+                reason="fresh_sized_product_transaction_search_first",
+                domains=domains,
+                execution_plan=["discovery:resolve_product", "transaction:continue_purchase"],
+                user_behavior="providing a new tire product name and size with transactional intent",
+                flow="fresh product transaction",
+                agent_prompt_profile=AgentPromptProfile.DISCOVERY_SEARCH,
+            )
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[COORDINATOR] Fresh sized product transaction route: forcing "
+                "[DISCOVERY, TRANSACTION] with discovery_search profile "
+                "(tire_size=%r, pending_intent=%r, session_id=%s)",
+                merged_slots.tire_size,
+                regex_slots.pending_intent,
+                request.session_id,
             )
 
         # P0d profile upgrade: classifier picked [TRANSACTION] + transaction_price_stock,
