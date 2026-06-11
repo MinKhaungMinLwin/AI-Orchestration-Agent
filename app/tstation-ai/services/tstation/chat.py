@@ -1455,8 +1455,6 @@ class StreamingMultiAgentCoordinator:
     @staticmethod
     def _apply_tool_derived_slots(slots: Any, tool_name: str, parsed_data: dict, tool_input: dict | None = None) -> bool:
         """Apply tool-derived slot changes in memory; caller persists once after streaming."""
-        from schemas.tstation.slots import ConversationSlots
-
         changed = False
 
         fulfilled_intent = StreamingMultiAgentCoordinator._TOOL_TO_FULFILL.get(tool_name)
@@ -1546,12 +1544,7 @@ class StreamingMultiAgentCoordinator:
                         tool_slots["tire_size"] = tire_size
 
         if tool_slots:
-            if tool_slots.get("goods_no") and tool_slots.get("tire_size"):
-                updated = slots.merge(ConversationSlots(goods_no=tool_slots["goods_no"]))
-                remaining_slots = {key: value for key, value in tool_slots.items() if key != "goods_no"}
-                updated = updated.merge(ConversationSlots(**remaining_slots))
-            else:
-                updated = slots.merge(ConversationSlots(**tool_slots))
+            updated = slots.apply_runtime_values(tool_slots, source=f"tool:{tool_name}")
             if updated.model_dump() != slots.model_dump():
                 slots.__dict__.update(updated.__dict__)
                 changed = True
@@ -8977,10 +8970,21 @@ class TStationChatServiceV2:
                     or merged_slots.goods_no == preorder_slot_values.get("goods_no")
                 )
             ):
-                for field, value in preorder_slot_values.items():
-                    if value is not None and getattr(merged_slots, field, None) is None:
-                        setattr(merged_slots, field, value)
-                logger.info("[SLOTS] Recovered order slots from latest preOrder template: %s", preorder_slot_values)
+                missing_preorder_values = {
+                    field: value
+                    for field, value in preorder_slot_values.items()
+                    if value is not None and getattr(merged_slots, field, None) is None
+                }
+                if missing_preorder_values:
+                    merged_slots = merged_slots.apply_runtime_values(
+                        missing_preorder_values,
+                        source="preorder_recovery",
+                        fill_only=True,
+                    )
+                    logger.info(
+                        "[SLOTS] Recovered order slots from latest preOrder template: %s",
+                        missing_preorder_values,
+                    )
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
             # Region-only follow-ups ("성남은?", "서울은?") are candidate searches,
@@ -9202,8 +9206,10 @@ class TStationChatServiceV2:
                     "data": latest_quickreply_tmpl,
                 })
                 if quickreply_product_slots:
-                    for field, value in quickreply_product_slots.items():
-                        setattr(merged_slots, field, value)
+                    merged_slots = merged_slots.apply_runtime_values(
+                        quickreply_product_slots,
+                        source="quickreply_product_cta",
+                    )
                     if getattr(merged_slots, "pending_intent", None) is None:
                         merged_slots.pending_intent = "order"
                     if getattr(merged_slots, "goal_type", None) is None:
@@ -9229,7 +9235,10 @@ class TStationChatServiceV2:
                     current_tire_size=merged_slots.tire_size,
                 )
                 if resolved_goods_no:
-                    merged_slots.goods_no = resolved_goods_no
+                    merged_slots = merged_slots.apply_runtime_values(
+                        {"goods_no": resolved_goods_no},
+                        source="history_product_selection",
+                    )
                     goods_no_resolved_this_turn = True
                     logger.debug(
                         f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
@@ -9258,15 +9267,16 @@ class TStationChatServiceV2:
                 except Exception as e:
                     logger.warning(f"[SLOTS] history vehicle resolver failed: {e}")
             if history_selected_vehicle is not None:
+                previous_tire_size = merged_slots.tire_size
+                vehicle_slot_values = _vehicle_selection_slot_values(history_selected_vehicle)
+                if vehicle_slot_values:
+                    merged_slots = _apply_vehicle_selection_slot_values(merged_slots, vehicle_slot_values)
+                    selected_tire_size = vehicle_slot_values.get("tire_size")
+                    if selected_tire_size and previous_tire_size != selected_tire_size:
+                        tire_size_resolved_from_vehicle_selection = True
                 selected_meta = history_selected_vehicle.get("meta") or {}
                 front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
-                merged_slots.tire_size_front = front_size
-                merged_slots.tire_size_rear = rear_size
                 is_staggered_vehicle = _has_staggered_vehicle_tire_sizes(front_size, rear_size)
-                if is_staggered_vehicle:
-                    merged_slots.tire_size = None
-                    merged_slots.goods_no = None
-                    merged_slots.payment_amount = None
                 if is_staggered_vehicle and _listcar_allows_staggered_tire_prompt(latest_listcar_tmpl):
                     current_vehicle_selection_prompt_event.set(
                         _build_staggered_vehicle_tire_selection_event(history_selected_vehicle)
@@ -9277,7 +9287,10 @@ class TStationChatServiceV2:
                         last_user_text, latest_listcar_tmpl
                     )
                     if resolved_tire_size:
-                        merged_slots.tire_size = resolved_tire_size
+                        merged_slots = merged_slots.apply_runtime_values(
+                            {"tire_size": resolved_tire_size},
+                            source="history_vehicle_size",
+                        )
                         tire_size_resolved_from_vehicle_selection = True
                         logger.debug(
                             f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
@@ -9301,7 +9314,10 @@ class TStationChatServiceV2:
                         merged_slots.tire_size,
                     )
                     if resolved_goods_no:
-                        merged_slots.goods_no = resolved_goods_no
+                        merged_slots = merged_slots.apply_runtime_values(
+                            {"goods_no": resolved_goods_no},
+                            source="recent_product_context",
+                        )
                         goods_no_resolved_this_turn = True
                         logger.debug(
                             f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from recent product context "
@@ -9319,7 +9335,10 @@ class TStationChatServiceV2:
             if merged_slots.shop_id is None and prev_tool_data:
                 resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(last_user_text, prev_tool_data)
                 if resolved_shop_id:
-                    merged_slots.shop_id = resolved_shop_id
+                    merged_slots = merged_slots.apply_runtime_values(
+                        {"shop_id": resolved_shop_id},
+                        source="history_store_selection",
+                    )
                     logger.debug(
                         f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                         f"list-selection against prior store-list tool result"
@@ -9351,7 +9370,10 @@ class TStationChatServiceV2:
                         last_user_text, latest_location_tmpl
                     )
                     if resolved_shop_id:
-                        merged_slots.shop_id = resolved_shop_id
+                        merged_slots = merged_slots.apply_runtime_values(
+                            {"shop_id": resolved_shop_id},
+                            source="location_template_selection",
+                        )
                         logger.debug(
                             f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                             f"list-selection against last `location` template metadata"
@@ -9376,7 +9398,10 @@ class TStationChatServiceV2:
             ):
                 resolved_shop_id = TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data)
                 if resolved_shop_id:
-                    merged_slots.shop_id = resolved_shop_id
+                    merged_slots = merged_slots.apply_runtime_values(
+                        {"shop_id": resolved_shop_id},
+                        source="recent_single_store_context",
+                    )
                     logger.debug(
                         f"[SLOTS] Carried forward shop_id={resolved_shop_id!r} from recent single-store context "
                         f"for fresh pending_intent={regex_slots.pending_intent!r}"
@@ -9384,7 +9409,10 @@ class TStationChatServiceV2:
                 else:
                     resolved_store_name = TStationChatServiceV2._resolve_recent_store_name_from_messages(messages)
                     if resolved_store_name:
-                        merged_slots.shop_name = resolved_store_name
+                        merged_slots = merged_slots.apply_runtime_values(
+                            {"shop_name": resolved_store_name},
+                            source="recent_single_store_context",
+                        )
                         logger.debug(
                             f"[SLOTS] Carried forward shop_name={resolved_store_name!r} from recent assistant text "
                             f"for fresh pending_intent={regex_slots.pending_intent!r}"
@@ -12894,14 +12922,10 @@ class TStationChatServiceV2:
                         base_slots = pending_slots
                         if base_slots is None:
                             base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
-                        updated_slots = base_slots.model_copy()
-                        for field, value in confirmed_product_slots.items():
-                            setattr(updated_slots, field, value)
-                        if (
-                            confirmed_product_slots.get("goods_no") is not None
-                            and getattr(base_slots, "goods_no", None) != confirmed_product_slots["goods_no"]
-                        ):
-                            updated_slots.payment_amount = None
+                        updated_slots = base_slots.apply_runtime_values(
+                            confirmed_product_slots,
+                            source="product_event",
+                        )
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info(
@@ -12915,10 +12939,10 @@ class TStationChatServiceV2:
                         base_slots = pending_slots
                         if base_slots is None:
                             base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
-                        updated_slots = base_slots.model_copy()
-                        for field, value in preorder_slots.items():
-                            if value is not None:
-                                setattr(updated_slots, field, value)
+                        updated_slots = base_slots.apply_runtime_values(
+                            preorder_slots,
+                            source="preorder_event",
+                        )
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info("[PREORDER_SLOT_STAGE] staged order slots from preOrder event: %s", preorder_slots)
