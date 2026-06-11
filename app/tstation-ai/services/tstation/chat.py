@@ -21,6 +21,7 @@ from config.env import settings
 from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.router import (
     DECISION_LLM as _decision_llm,
     leading_agent,
@@ -7022,6 +7023,29 @@ def _is_ev_suitability_turn(
     return bool(_VEHICLE_CATEGORY_CONTEXT_RE.search(text) and _VEHICLE_SUITABILITY_RE.search(text))
 
 
+def _is_fresh_product_transaction_request(text: str, pending_intent: str | None) -> bool:
+    """Return True when the current turn names a tire product and asks for a transactional action."""
+    if not text or pending_intent not in {"price", "stock", "order"}:
+        return False
+    return ConversationSlots.has_product_keyword(text)
+
+
+def _clear_stale_product_identity_for_fresh_transaction(
+    slots: ConversationSlots,
+    text: str,
+    pending_intent: str | None,
+) -> bool:
+    """Clear carried product identity when the current turn names a new transactional product."""
+    if not _is_fresh_product_transaction_request(text, pending_intent):
+        return False
+    if slots.goods_no is None and slots.tire_model is None and slots.payment_amount is None:
+        return False
+    slots.goods_no = None
+    slots.tire_model = None
+    slots.payment_amount = None
+    return True
+
+
 def _infer_followup_recommendation_context(messages: list[dict], last_user_text: str) -> str | None:
     """Infer the scenario/category to preserve when the user replies with only a tire size or car pick.
 
@@ -8642,6 +8666,7 @@ class TStationChatServiceV2:
         last_user_text = ""
         regex_slots = ConversationSlots()
         merged_slots = ConversationSlots()
+        fresh_product_transaction_request = False
         goods_no_resolved_this_turn = False
         quick_reply_domain_values: list[str] = []
         predicted_domain_values: list[str] = []
@@ -8773,6 +8798,25 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
+            fresh_product_transaction_request = _is_fresh_product_transaction_request(
+                last_user_text,
+                regex_slots.pending_intent,
+            )
+            stale_goods_no = merged_slots.goods_no
+            stale_tire_model = merged_slots.tire_model
+            stale_payment_amount = merged_slots.payment_amount
+            if _clear_stale_product_identity_for_fresh_transaction(
+                merged_slots,
+                last_user_text,
+                regex_slots.pending_intent,
+            ):
+                logger.info(
+                    "[SLOTS] Fresh product transaction request in current turn; clearing stale product slots "
+                    "goods_no=%r tire_model=%r payment_amount=%r",
+                    stale_goods_no,
+                    stale_tire_model,
+                    stale_payment_amount,
+                )
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
             if (
                 preorder_slot_values
@@ -9667,17 +9711,19 @@ class TStationChatServiceV2:
 
         # P0b TRANSACTION → DISCOVERY+TRANSACTION redirect: when the classifier
         # picked [TRANSACTION] alone but the user actually provided product
-        # name/model/size with no resolved goods_no, force Discovery to search
-        # first. Transaction has NO search tool (per c_transaction_agent prompt
-        # GOODS_NO RESOLUTION), so without this redirect the classifier mismatch
-        # leads to either (a) a quickReply confirmation prompt asking the user
-        # to click "상품 검색" — the ACT-FIRST anti-pattern — or (b) a fallback
-        # "상품을 검색하겠습니다" line with the chain stopping because domains
-        # has only one entry.
+        # name/model/size, or switched to a different product in the current
+        # transactional turn, force Discovery to search first. Transaction has NO
+        # search tool (per c_transaction_agent prompt GOODS_NO RESOLUTION), so
+        # without this redirect the classifier mismatch leads to either (a) a
+        # quickReply confirmation prompt asking the user to click "상품 검색" — the
+        # ACT-FIRST anti-pattern — or (b) a fallback "상품을 검색하겠습니다" line with
+        # the chain stopping because domains has only one entry.
         #
         # Guard conditions (ALL must hold):
         #   1. Classifier chose exactly [TRANSACTION].
-        #   2. `merged_slots.goods_no is None` — resolved goods_no doesn't need search.
+        #   2. Either `merged_slots.goods_no is None`, or the current turn has a
+        #      fresh product keyword + transactional intent so earlier slot
+        #      handling has cleared stale product identity.
         #   3. ANY product hint via ONE of:
         #        a. `merged_slots.tire_size` — size present (current or inherited).
         #        b. `merged_slots.tire_model` — LLM-confirmed model (current or inherited).
@@ -9713,7 +9759,7 @@ class TStationChatServiceV2:
             # warrants a Discovery search.
             and (
                 (
-                    regex_slots.pending_intent in ("order", "stock")
+                    regex_slots.pending_intent in ("order", "stock", "price")
                     and (
                         regex_slots.tire_size is not None
                         or ConversationSlots.has_product_keyword(last_user_text)
@@ -9738,24 +9784,22 @@ class TStationChatServiceV2:
                         or ConversationSlots.has_product_keyword(last_user_text)
                     )
                 )
-                # Fresh-product case: user mentioned brand keyword + fresh size in
-                # CURRENT turn — treat any prior goods_no as stale (different product
-                # from prior session activity). Without this, P0b would skip the
-                # redirect and Transaction would emit a "정확한 상품을 선택해 주세요"
-                # quickReply with no path forward.
-                or (
-                    ConversationSlots.has_product_keyword(last_user_text)
-                    and regex_slots.tire_size is not None
-                )
+                # Fresh-product case: user mentioned a product keyword and a
+                # transactional action in the CURRENT turn. Earlier slot handling
+                # clears any carried goods_no/tire_model so Discovery resolves the
+                # current product first instead of Transaction acting on stale
+                # product context.
+                or fresh_product_transaction_request
             )
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
             skip_decision = True
             logger.debug(
                 f"[COORDINATOR] P0b TX→DISC+TX redirect: classifier=[TRANSACTION], "
-                f"goods_no=None, tire_size={merged_slots.tire_size!r}, "
+                f"goods_no={merged_slots.goods_no!r}, tire_size={merged_slots.tire_size!r}, "
                 f"tire_model={merged_slots.tire_model!r}, "
                 f"has_product_keyword={ConversationSlots.has_product_keyword(last_user_text)}, "
+                f"fresh_product_transaction_request={fresh_product_transaction_request}, "
                 f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
             )
             log_classifier_redirect(
@@ -9769,6 +9813,8 @@ class TStationChatServiceV2:
                     "tire_size": merged_slots.tire_size,
                     "tire_model": merged_slots.tire_model,
                     "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
+                    "fresh_product_transaction_request": fresh_product_transaction_request,
+                    "fresh_intent_this_turn": regex_slots.pending_intent,
                 },
             )
 
