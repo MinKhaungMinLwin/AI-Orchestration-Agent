@@ -4607,26 +4607,32 @@ def _build_store_holiday_period_event(
     ).strip()
     store_name = str(detail_data.get("shop_nm") or store_row.get("shop_nm") or "선택하신 매장").strip()
     holiday = str(detail_data.get("holiday") or store_row.get("holiday") or "").strip()
-    available_slots = detail_data.get("available_slots") if isinstance(detail_data, dict) else None
 
     period_label = _store_holiday_label_from_text(user_text)
     is_operation_query = bool(_STORE_HOLIDAY_OPERATION_RE.search(user_text or ""))
-    has_slot_data = isinstance(available_slots, list) and any(str(slot).strip() for slot in available_slots)
     holiday_normalized = re.sub(r"\s+", "", holiday)
     period_normalized = re.sub(r"\s+", "", period_label)
+    requested_date = _parse_requested_reservation_date(user_text or "")
+    requested_month_day = requested_date.strftime("%m/%d") if requested_date else ""
     holiday_matches_period = bool(holiday) and (
         holiday_normalized == period_normalized or period_normalized in holiday_normalized
+        or (bool(requested_month_day) and requested_month_day in holiday_normalized)
     )
 
     if is_operation_query:
         if holiday_matches_period:
             lines = [f"{store_name}은 {period_label}에 휴무로 확인돼요."]
-        elif has_slot_data:
-            lines = [f"{store_name}은 {period_label}에 영업 중인 것으로 확인돼요."]
         elif holiday:
-            lines = [f"{store_name}은 {period_label}에 `{holiday}`로 확인돼요."]
+            lines = [
+                f"{store_name}의 {period_label} 휴무 여부는 현재 확인되지 않아요.",
+                f"현재 확인되는 매장 휴무일 정보는 `{holiday}`입니다.",
+                "일요일/공휴일 운영 여부는 매장 사정에 따라 달라질 수 있어 매장에 직접 확인해 주세요.",
+            ]
         else:
-            lines = [f"{store_name}의 {period_label} 영업 여부는 매장 상세 정보 기준으로 확인해 주세요."]
+            lines = [
+                f"{store_name}의 {period_label} 휴무 여부는 현재 확인되지 않아요.",
+                "일요일/공휴일 운영 여부는 매장 사정에 따라 달라질 수 있어 매장에 직접 확인해 주세요.",
+            ]
     else:
         lines = [
             f"{store_name}의 {period_label} 예약 가능 여부는 매장 휴무일과 예약 오픈 일정 기준으로 확인해야 해요.",
