@@ -5636,7 +5636,12 @@ def _preferred_product_search_keyword(product_name: str) -> str:
     return _PRODUCT_SEARCH_KEYWORD_OVERRIDES.get(normalized, raw)
 
 
-def _pick_product_row_from_search_result(tool_result: dict, product_name: str, *match_hints: str) -> dict | None:
+def _pick_product_row_from_search_result(
+    tool_result: dict,
+    product_name: str,
+    *match_hints: str,
+    allow_first_row_fallback: bool = False,
+) -> dict | None:
     data = _unwrap_tool_data(tool_result)
     rows = data.get("items") if isinstance(data, dict) else None
     if not isinstance(rows, list):
@@ -5664,6 +5669,13 @@ def _pick_product_row_from_search_result(tool_result: dict, product_name: str, *
             best_score = score
             best_row = row
     if best_score <= 0:
+        if allow_first_row_fallback:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+                if row_name:
+                    return row
         return None
     return best_row
 
@@ -6268,7 +6280,13 @@ def _build_product_comparison_event_from_search_results(
         for idx, (keyword, result) in enumerate(remaining_results):
             keyword_terms = _coupon_product_match_keys(keyword)
             score = len(target_terms & keyword_terms)
-            row = _pick_product_row_from_search_result(result, product_name, preferred_keyword, keyword)
+            row = _pick_product_row_from_search_result(
+                result,
+                product_name,
+                preferred_keyword,
+                keyword,
+                allow_first_row_fallback=score > 0,
+            )
             if row is None:
                 continue
             if score > best_score:
@@ -6281,7 +6299,13 @@ def _build_product_comparison_event_from_search_results(
         else:
             if best_idx >= 0:
                 remaining_results.pop(best_idx)
-            best_row = _pick_product_row_from_search_result(best_result, product_name, preferred_keyword, best_keyword)
+            best_row = _pick_product_row_from_search_result(
+                best_result,
+                product_name,
+                preferred_keyword,
+                best_keyword,
+                allow_first_row_fallback=best_score > 0,
+            )
         product_rows.append((product_name, best_row))
 
     if any(row is None for _, row in product_rows):
@@ -11228,7 +11252,12 @@ class TStationChatServiceV2:
                     "tool": "search_product_tool",
                     "source_domain": "discovery",
                 })
-                row = _pick_product_row_from_search_result(search_result, product_name, preferred_keyword)
+                row = _pick_product_row_from_search_result(
+                    search_result,
+                    product_name,
+                    preferred_keyword,
+                    allow_first_row_fallback=True,
+                )
                 if row and row.get("goods_no"):
                     detail_input = {"goods_no": row["goods_no"]}
                     emitted_events.append({
