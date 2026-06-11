@@ -5186,6 +5186,19 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         ]
         source = "code_online_store_price_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
+    elif decision.intent == DeliveryPolicyIntent.REGIONAL_PRICE_POLICY:
+        assistant_response = (
+            "같은 상품이라도 지역, 장착점, 행사, 쿠폰, 재고, 배송 조건에 따라 최종 결제금액이 달라질 수 있어요.\n\n"
+            "특히 제주 지역은 상품 1개당 배송비 1만 원이 추가될 수 있어 서울 지역과 최종 금액이 다를 수 있습니다. "
+            "정확한 가격은 상품 규격과 장착점을 선택한 뒤 주문/결제 단계에서 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "상품 검색", "domain": "DISCOVERY"},
+            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+        source = "code_regional_price_policy_guard"
+        predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
     else:
         return None
     return {
