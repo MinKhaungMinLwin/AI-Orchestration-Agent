@@ -158,6 +158,11 @@ _DISCOVERY_POLICY_QUICKREPLY_CHIPS = [
     {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
 ]
+_DISCOVERY_SIZED_PRODUCT_CHIPS = [
+    {"label": "가격 확인", "domain": "TRANSACTION"},
+    {"label": "재고/장착 매장 확인", "domain": "TRANSACTION"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
+]
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
 _VEHICLE_OWNER_RE = re.compile(
     r"(?:\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}|[가-힣]{2,4}\s+\d{2,3}\s*[가-힣]\s*\d{4})"
@@ -1288,15 +1293,13 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
         return ""
 
     stock_or_install_request = bool(_STOCK_OR_INSTALL_REQUEST_RE.search(current_user_text.get() or ""))
-    lines = [
-        "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
-        if stock_or_install_request
-        else (
-            f"입력하신 {requested_size} 규격 기준으로 상품을 확인했어요."
-            if requested_size
-            else "검색된 상품 기준으로 안내드릴게요."
-        )
-    ]
+    if requested_size:
+        intro = f"입력하신 {requested_size} 규격 기준으로 상품을 확인했어요."
+    elif stock_or_install_request:
+        intro = "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
+    else:
+        intro = "검색된 상품 기준으로 안내드릴게요."
+    lines = [intro]
     for name, data in list(grouped.items())[:5]:
         row = data["row"] if isinstance(data.get("row"), dict) else {}
         sizes = data["sizes"] if isinstance(data.get("sizes"), list) else []
@@ -1315,6 +1318,15 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
             "차량에 맞는 규격 확인을 위해 차량번호나 현재 타이어 사이즈를 알려주세요.",
         ])
     return "\n".join(lines)
+
+
+def _product_search_policy_requested_size(tool_data_list: list[dict]) -> str:
+    for entry in _find_entries(tool_data_list, "search_product_tool"):
+        args = _tool_args(entry)
+        requested_size = _get_str(args, "size", "tire_size")
+        if requested_size:
+            return requested_size
+    return ""
 
 
 def _product_search_policy_fallback_response(tool_data_list: list[dict] | None = None) -> str:
@@ -1951,8 +1963,12 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     response = sanitize_user_facing_response(response)
     if not response:
         return None
-    quick_replies = _DISCOVERY_POLICY_QUICKREPLY_CHIPS
-    predicted_domains = ["DISCOVERY"]
+    if response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
+        quick_replies = _DISCOVERY_SIZED_PRODUCT_CHIPS
+        predicted_domains = ["TRANSACTION"]
+    else:
+        quick_replies = _DISCOVERY_POLICY_QUICKREPLY_CHIPS
+        predicted_domains = ["DISCOVERY"]
     if response_shape_key == "restock_inquiry_summary":
         quick_replies = _DISCOVERY_RESTOCK_CHIPS
         predicted_domains = ["DISCOVERY", "SUPPORT"]
