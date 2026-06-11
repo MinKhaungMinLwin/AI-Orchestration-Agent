@@ -3576,7 +3576,17 @@ def _requested_exact_schedule_filter() -> tuple[set[str], int] | None:
     intentionally left to existing time_after_hour handling.
     """
     text = current_user_text.get() or ""
-    match = _EXACT_TIME_REQUEST_RE.search(text)
+    selected_text = text
+    match = None
+    for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
+        line_matches = list(_EXACT_TIME_REQUEST_RE.finditer(line))
+        if line_matches:
+            selected_text = line
+            match = line_matches[-1]
+            break
+    if match is None:
+        matches = list(_EXACT_TIME_REQUEST_RE.finditer(text))
+        match = matches[-1] if matches else None
     if not match:
         return None
     try:
@@ -3591,9 +3601,10 @@ def _requested_exact_schedule_filter() -> tuple[set[str], int] | None:
 
     today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
     days: set[str] = set()
-    if re.search(r"오늘|당일", text):
+    date_text = selected_text if re.search(r"오늘|당일|내일", selected_text) else text
+    if re.search(r"오늘|당일", date_text):
         days.add(today.strftime("%Y%m%d"))
-    if "내일" in text:
+    if "내일" in date_text:
         days.add((today + datetime.timedelta(days=1)).strftime("%Y%m%d"))
     return days, hour
 
