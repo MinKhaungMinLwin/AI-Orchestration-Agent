@@ -403,6 +403,14 @@ def test_direct_tire_delivery_guard_blocks_casual_home_delivery_request() -> Non
     assert "지원하지 않아요" in event["data"]["assistantResponse"]
 
 
+def test_direct_tire_delivery_guard_blocks_order_context_home_delivery_request() -> None:
+    event = _direct_tire_delivery_guard_event("집으로 배송해줘")
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_direct_tire_delivery_guard"
+    assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in event["data"]["assistantResponse"]
+
+
 def test_direct_tire_delivery_guard_ignores_shipping_fee_policy_question() -> None:
     assert _direct_tire_delivery_guard_event("제주도는 배송비 더 들어?") is None
     assert _direct_tire_delivery_guard_event("주문 배송 상태 확인해줘") is None
@@ -2680,6 +2688,11 @@ def test_delivery_policy_force_routes_to_support() -> None:
     assert result is not None
     assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
 
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("집으로 배송해줘")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
+
 
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("신청 방법 안내해줘")
@@ -2690,6 +2703,7 @@ def test_generic_application_question_does_not_force_route_to_pickup_support() -
 def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
     assert _support_fast_path("픽업서비스 어떻게 신청해?") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("타이어 집으로 걍 배송받고 싶어") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("집으로 배송해줘") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
 
