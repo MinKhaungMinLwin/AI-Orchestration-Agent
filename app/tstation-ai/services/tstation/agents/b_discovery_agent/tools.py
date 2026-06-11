@@ -634,11 +634,11 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
     차량번호+소유주명으로 차량 조회.
 
     When to use:
-    - FALLBACK only: after get_my_cars_tool returns 0 cars AND user provides car_no + owner_nm
+    - DIRECTLY when the same user message provides car_no + owner_nm
     - Also when user provides someone else's vehicle number
 
     When NOT to use:
-    - Do NOT use before trying get_my_cars_tool first
+    - Do NOT call get_my_cars_tool first when car_no + owner_nm are already present
     - Do NOT use if tire_size is already confirmed
 
     Args:
@@ -690,8 +690,12 @@ def get_my_cars_tool(mbr_no: str):
     사용자 등록 차량 조회 (회원번호 기준).
 
     When to use:
-    - FIRST step for ANY vehicle-related request (tire recommendation, compatibility, price by vehicle)
+    - FIRST step for vehicle-related request when the user asks for their registered cars/my car
     - Call immediately using mbr_no from JWT — do NOT ask user questions first
+
+    When NOT to use:
+    - If the same user message already includes car_no + owner_nm, do NOT call this tool.
+      Use get_user_vehicles_tool(car_no, owner_nm) directly.
 
     Result handling:
     - 1 car → auto-select, use tire_size_fr and car_lnc_cd

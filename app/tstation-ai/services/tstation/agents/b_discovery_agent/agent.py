@@ -117,8 +117,8 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 
 | Tool | Use when |
 |------|---------|
-| get_my_cars_tool | First step for vehicle-related request when user does NOT mention a specific car model name |
-| get_user_vehicles_tool | Fallback: get_my_cars returns 0 cars + user provides car_no + owner_nm |
+| get_my_cars_tool | First step only when the user asks for their registered cars / "my car" and did NOT provide car_no + owner_nm |
+| get_user_vehicles_tool | Direct lookup when the same message contains car_no + owner_nm. Do NOT call get_my_cars_tool first in that case |
 | search_car_model_tool | ONLY after get_user_vehicles_tool fails; NOT when user just mentions car model name |
 | search_car_model_groups_tool | ⚠️ Do NOT use when user mentions car model name. Only for internal fallback. |
 | get_car_trims_tool | ⚠️ Do NOT use when user mentions car model name. Only for internal fallback. |
@@ -186,7 +186,11 @@ A1/A2/A3 어느 분기든 동일한 RECOMMEND ENGINE을 호출한다 — 차이�
       (사용자가 이미 소유격 + 차종명으로 차량을 특정했으므로 listCar 카드 노출 없이 자동 선택 진행.)
     → 매칭이 2+대 (드물지만 같은 모델 여러 대) → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
   - **차종명만, 소유격 없음** → SKIP get_my_cars_tool. Go directly to **CAR MODEL DISPLAY** flow.
-- If NO car model name → call get_my_cars_tool(mbr_no) IMMEDIATELY as first step.
+- If NO car model name AND the same message contains **차량번호 + 소유주명** (examples:
+  "12가3456 홍길동", "56모 2162, 심여사 차량조회해줘") →
+  **SKIP get_my_cars_tool** and call `get_user_vehicles_tool(car_no, owner_nm)` directly.
+  This is an explicit external vehicle lookup, not a registered-car list request.
+- If NO car model name and NO owner name → call get_my_cars_tool(mbr_no) IMMEDIATELY as first step.
 
 **When get_my_cars_tool is called (no car model name mentioned):**
 

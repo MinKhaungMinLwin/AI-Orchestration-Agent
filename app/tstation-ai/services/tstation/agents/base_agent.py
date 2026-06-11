@@ -83,7 +83,9 @@ T = TypeVar("T")
 # the raw guard text.
 _SSE_TOOL_OUTPUT_STRIPPED_KEYS: frozenset[str] = frozenset({"instruction_to_agent"})
 _CAR_NO_RE = re.compile(r"\d{2,3}\s?[가-힣]\s?\d{4}")
-_CAR_NO_OWNER_RE = re.compile(r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})\s+(?P<owner_nm>[가-힣]{2,4})")
+_CAR_NO_OWNER_RE = re.compile(
+    r"(?P<car_no>\d{2,3}\s?[가-힣]\s?\d{4})(?:\s*[,，、/|]+\s*|\s+)(?P<owner_nm>[가-힣]{2,4})"
+)
 _REGISTERED_VEHICLE_RECOMMEND_RE = re.compile(r"(타이어|상품).*(추천|맞|보여|찾|알려)|추천.*(타이어|상품)")
 _POSSESSIVE_VEHICLE_RE = re.compile(r"(내\s*차|내차|내\s+[0-9A-Za-z가-힣])")
 _POSSESSIVE_VEHICLE_MODEL_RE = re.compile(

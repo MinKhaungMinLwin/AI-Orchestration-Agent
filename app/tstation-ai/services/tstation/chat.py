@@ -993,7 +993,14 @@ class StreamingMultiAgentCoordinator:
     # "찾지 못했어요" reply without calling the carzen API. Force DISCOVERY +
     # `discovery_recommendation` profile so the vehicle-lookup tool is available.
     _CAR_NO_OWNER_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^\s*(?:\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}|[가-힣]{2,4}\s+\d{2,3}\s*[가-힣]\s*\d{4})\s*$"
+        r"^\s*(?:"
+        r"\d{2,3}\s*[가-힣]\s*\d{4}(?:\s*[,，、/|]+\s*|\s+)[가-힣]{2,4}"
+        r"|[가-힣]{2,4}(?:\s*[,，、/|]+\s*|\s+)\d{2,3}\s*[가-힣]\s*\d{4}"
+        r")\s*(?:차량?\s*)?(?:조회|확인|검색|찾아|알려).*$"
+        r"|^\s*(?:"
+        r"\d{2,3}\s*[가-힣]\s*\d{4}(?:\s*[,，、/|]+\s*|\s+)[가-힣]{2,4}"
+        r"|[가-힣]{2,4}(?:\s*[,，、/|]+\s*)\d{2,3}\s*[가-힣]\s*\d{4}"
+        r")\s*$"
     )
     _TRANSACTION_ORDER_HISTORY_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"내\s*주문|주문\s*내역|주문내역|주문\s*조회|최근\s*주문|주문\s*목록|주문\s*보여줘",
