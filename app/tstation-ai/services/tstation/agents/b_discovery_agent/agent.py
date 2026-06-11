@@ -1698,7 +1698,10 @@ Override only when the user already gave a scenario:
 - long distance -> long_distance
 - city/urban -> urban
 - family/comfort -> family
-- EV/electric -> ev
+- EV/electric -> vehicle_type="ev" (use rcmd_type="ev" only for legacy single-axis EV recommendations)
+- SUV -> vehicle_type="suv"
+- 승용차/세단 -> vehicle_type="passenger"
+- 트럭/밴/화물차 -> vehicle_type="truck_van"
 - heavy load/SUV load -> heavy_load
 - weekend -> weekend
 - kids/safety -> safe_kids
@@ -1716,14 +1719,17 @@ Override only when the user already gave a scenario:
 
 If the user gives a price budget/range, pass min_price/max_price to the recommendation tool.
 If the user asks for cheapest/rating/review order, pass sort_by when supported by the tool.
+Vehicle type is orthogonal to rcmd_type. For combined requests, pass both:
+- "전기차 저소음" -> rcmd_type="low_vibration", vehicle_type="ev"
+- "SUV 가성비" -> rcmd_type="value", vehicle_type="suv"
+- "전기차 사계절" -> rcmd_type="all_weather", season_nm="사계절", vehicle_type="ev"
 
 ⚠️ FOLLOW-UP SIZE INPUT CONTEXT:
 If the system prompt includes `## 후속 추천 조건`, the current user entered only a tire size after a prior
 recommendation/fitment scenario. Preserve that scenario generically — not just EV. Examples:
-- prior EV/electric context → use rcmd_type="ev" with the new tire_size.
+- prior EV/electric context → use vehicle_type="ev" with the new tire_size.
 - prior winter/wet/quiet/value/discount/family/etc. context → keep the matching rcmd_type with the new tire_size.
-- prior SUV/세단/경차/트럭 등 vehicle-category context with no direct rcmd_type → use rcmd_type="tstation" with the
-  new tire_size, then keep/filter/explain results according to the vehicle category metadata when available.
+- prior SUV/세단/경차/트럭 등 vehicle-category context → pass the matching vehicle_type separately.
 Do NOT reset to a plain T'Station recommendation if the follow-up context names a scenario-specific rcmd_type.
 
 Discounted tire ranking is a product recommendation flow. For requests asking to

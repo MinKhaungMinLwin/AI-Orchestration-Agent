@@ -6882,35 +6882,35 @@ _RECOMMENDATION_BRIDGE_RE = re.compile(
 )
 _ONE_PER_VARIANT_RE = re.compile(r"1\s*개씩|한\s*개씩|한개씩|각각|브랜드별|each", re.IGNORECASE)
 _VARIANT_COUNT_RE = re.compile(r"(?:각각\s*)?(\d+|한)\s*개씩", re.IGNORECASE)
-_FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS: tuple[tuple[str, str, str | None], ...] = (
-    (r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])", "전기차용", "ev"),
-    (r"SUV|스포츠\s*유틸리티", "SUV 차량용", None),
-    (r"세단|승용차", "승용/세단 차량용", None),
-    (r"경차|소형차", "경차/소형차용", None),
-    (r"화물차|트럭|밴|승합차|고하중|무거운\s*짐", "하중 중심 차량용", "heavy_load"),
-    (r"가성비|저렴|싼|cheap|value", "가성비", "value"),
-    (r"연비|회전\s*저항|rr\b", "연비", "fuel_efficiency"),
-    (r"할인|세일|할인율", "할인", "discount"),
-    (r"조용|정숙|소음|진동", "정숙/저진동", "low_vibration"),
-    (r"빗길|젖은\s*노면|wet|비\s*오는", "빗길", "wet"),
-    (r"눈길|겨울|윈터|winter|스노우", "겨울/눈길", "snow"),
-    (r"사계절|올시즌", "사계절", "all_weather"),
-    (r"올웨더|전천후|all[-\s]?weather", "올웨더", "all_weather"),
-    (r"여름|summer", "여름", "summer"),
-    (r"고속|고속도로|high\s*speed", "고속 주행", "high_speed"),
-    (r"퍼포먼스|스포츠|코너링|핸들링|performance|handling", "퍼포먼스/핸들링", "performance"),
-    (r"패밀리|가족|승차감|컴포트|comfort", "가족/승차감", "family"),
-    (r"출퇴근|통근|commute", "출퇴근", "commute"),
-    (r"장거리|long\s*distance", "장거리", "long_distance"),
-    (r"도심|시내|urban", "도심 주행", "urban"),
-    (r"주말|weekend", "주말 주행", "weekend"),
-    (r"아이|키즈|안전", "아이/안전", "safe_kids"),
-    (r"흡음재|노이즈\s*흡수", "흡음재", "sound_absorber"),
-    (r"보증|warranty", "보증", "warranty"),
+_FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS: tuple[tuple[str, str, str | None, str | None], ...] = (
+    (r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])", "전기차용", None, "ev"),
+    (r"SUV|스포츠\s*유틸리티", "SUV 차량용", None, "suv"),
+    (r"세단|승용차", "승용/세단 차량용", None, "passenger"),
+    (r"경차|소형차", "경차/소형차용", None, None),
+    (r"화물차|트럭|밴|승합차|고하중|무거운\s*짐", "하중 중심 차량용", "heavy_load", "truck_van"),
+    (r"가성비|저렴|싼|cheap|value", "가성비", "value", None),
+    (r"연비|회전\s*저항|rr\b", "연비", "fuel_efficiency", None),
+    (r"할인|세일|할인율", "할인", "discount", None),
+    (r"조용|정숙|소음|진동", "정숙/저진동", "low_vibration", None),
+    (r"빗길|젖은\s*노면|wet|비\s*오는", "빗길", "wet", None),
+    (r"눈길|겨울|윈터|winter|스노우", "겨울/눈길", "snow", None),
+    (r"사계절|올시즌", "사계절", "all_weather", None),
+    (r"올웨더|전천후|all[-\s]?weather", "올웨더", "all_weather", None),
+    (r"여름|summer", "여름", "summer", None),
+    (r"고속|고속도로|high\s*speed", "고속 주행", "high_speed", None),
+    (r"퍼포먼스|스포츠|코너링|핸들링|performance|handling", "퍼포먼스/핸들링", "performance", None),
+    (r"패밀리|가족|승차감|컴포트|comfort", "가족/승차감", "family", None),
+    (r"출퇴근|통근|commute", "출퇴근", "commute", None),
+    (r"장거리|long\s*distance", "장거리", "long_distance", None),
+    (r"도심|시내|urban", "도심 주행", "urban", None),
+    (r"주말|weekend", "주말 주행", "weekend", None),
+    (r"아이|키즈|안전", "아이/안전", "safe_kids", None),
+    (r"흡음재|노이즈\s*흡수", "흡음재", "sound_absorber", None),
+    (r"보증|warranty", "보증", "warranty", None),
 )
 _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED = tuple(
-    (re.compile(pattern, re.IGNORECASE), label, rcmd_type)
-    for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS
+    (re.compile(pattern, re.IGNORECASE), label, rcmd_type, vehicle_type)
+    for pattern, label, rcmd_type, vehicle_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS
 )
 _SIMILAR_PRICE_SIZE_CONTEXT_RE = re.compile(
     r"해당\s*사이즈|이\s*사이즈|같은\s*사이즈|방금\s*사이즈|그\s*사이즈",
@@ -6965,14 +6965,23 @@ def _build_discovery_policy_context(
                 context_text,
                 known_slots={"tire_size": tire_size} if tire_size else {},
             )
-            if (
-                context_frame.intent == "product_recommendation"
-                and context_frame.entities.get("recommendation_metric")
-                and not discovery_frame.entities.get("recommendation_metric")
-            ):
+            if context_frame.intent == "product_recommendation":
                 merged_entities = dict(discovery_frame.entities)
-                merged_entities["recommendation_metric"] = context_frame.entities["recommendation_metric"]
-                discovery_frame = replace(discovery_frame, entities=merged_entities)
+                for key in (
+                    "recommendation_metric",
+                    "vehicle_category",
+                    "quiet_focus",
+                    "performance",
+                    "season",
+                    "technology",
+                    "service_program",
+                    "rcmd_type",
+                    "price_goal",
+                ):
+                    if context_frame.entities.get(key) and not merged_entities.get(key):
+                        merged_entities[key] = context_frame.entities[key]
+                if merged_entities != discovery_frame.entities:
+                    discovery_frame = replace(discovery_frame, entities=merged_entities)
         discovery_tool_plan = plan_discovery_tools(discovery_frame)
         discovery_response_decision = decide_discovery_response(discovery_frame)
         discovery_tool_patch = (
@@ -7142,10 +7151,10 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
     if not _RECOMMENDATION_BRIDGE_RE.search(context_blob):
         return None
 
-    def _find_context_matches(blob: str) -> list[tuple[str, str | None]]:
+    def _find_context_matches(blob: str) -> list[tuple[str, str | None, str | None]]:
         return [
-            (label, rcmd_type)
-            for pattern, label, rcmd_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED
+            (label, rcmd_type, vehicle_type)
+            for pattern, label, rcmd_type, vehicle_type in _FOLLOWUP_RECOMMENDATION_CONTEXT_COMPILED
             if pattern.search(blob)
         ]
 
@@ -7162,11 +7171,14 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
 
     labels: list[str] = []
     rcmd_type: str | None = None
-    for label, candidate_rcmd_type in matches:
+    vehicle_type: str | None = None
+    for label, candidate_rcmd_type, candidate_vehicle_type in matches:
         if label not in labels:
             labels.append(label)
         if rcmd_type is None and candidate_rcmd_type:
             rcmd_type = candidate_rcmd_type
+        if vehicle_type is None and candidate_vehicle_type:
+            vehicle_type = candidate_vehicle_type
 
     lines = [
         "## 후속 추천 조건",
@@ -7186,6 +7198,8 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
             "- 해당 조건에 직접 대응하는 rcmd_type 이 없으면 rcmd_type='tstation' 으로 조회하되, "
             "결과 설명/필터링에서 위 차량 카테고리 조건을 유지하세요."
         )
+    if vehicle_type:
+        lines.append(f"- 차량 타입 조건은 rcmd_type 과 별도로 vehicle_type='{vehicle_type}' 로 함께 전달하세요.")
     lines.append("- 이 규격 입력을 새 일반 추천으로 초기화하지 마세요.")
     return "\n".join(lines)
 

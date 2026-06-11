@@ -16,12 +16,16 @@ _ALL_WEATHER_RE = re.compile(r"올웨더|all\s*weather", re.IGNORECASE)
 _ALL_SEASON_RE = re.compile(r"사계절|올시즌|all\s*season", re.IGNORECASE)
 _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re.IGNORECASE)
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
+_VALUE_RECOMMENDATION_RE = re.compile(r"가성비|합리적|가격\s*대비|value", re.IGNORECASE)
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
 _EV_RECOMMENDATION_RE = re.compile(
     r"전기차|전기차용|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
     re.IGNORECASE,
 )
+_SUV_RECOMMENDATION_RE = re.compile(r"SUV|스포츠\s*유틸리티", re.IGNORECASE)
+_PASSENGER_RECOMMENDATION_RE = re.compile(r"승용차|세단|SEDAN|스포츠카", re.IGNORECASE)
+_TRUCK_VAN_RECOMMENDATION_RE = re.compile(r"경트럭|화물차|카고트럭|덤프트럭|트럭|밴|승합차", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
 _SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
 _MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
@@ -312,6 +316,12 @@ def build_discovery_intent_frame(
         entities["quiet_focus"] = True
     if _EV_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "ev"
+    elif _SUV_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "suv"
+    elif _TRUCK_VAN_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "truck_van"
+    elif _PASSENGER_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "passenger"
     if "noise" in attribute_metrics:
         entities["label_metric"] = "noise"
     if _SOUND_ABSORBER_RE.search(text):
@@ -322,6 +332,8 @@ def build_discovery_intent_frame(
         entities["rcmd_type"] = "safe_kids"
     if _LOWEST_PRICE_RE.search(text):
         entities["price_goal"] = "lowest"
+    if _VALUE_RECOMMENDATION_RE.search(text):
+        entities["value_focus"] = True
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
     best_seller_period = best_seller_period_from_text(text)
@@ -523,26 +535,28 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("generic_unsized_recommendation",),
         )
     args = {}
-    if entities.get("vehicle_category") == "ev":
-        args["rcmd_type"] = "ev"
-    elif entities.get("quiet_focus"):
+    if entities.get("vehicle_category"):
+        args["vehicle_type"] = entities["vehicle_category"]
+    if entities.get("quiet_focus"):
         args["rcmd_type"] = "low_vibration"
+    elif entities.get("value_focus"):
+        args["rcmd_type"] = "value"
     elif entities.get("recommendation_metric") == "fuel_efficiency":
         args["rcmd_type"] = "fuel_efficiency"
     elif entities.get("performance") == "performance":
         args["rcmd_type"] = "performance"
     if entities.get("season") == "winter":
-        if args.get("rcmd_type") == "ev":
+        if args.get("rcmd_type"):
             args["season_nm"] = "겨울"
         else:
             args.update({"rcmd_type": "snow", "season_nm": "겨울"})
     elif entities.get("season") == "all_weather":
-        if args.get("rcmd_type") == "ev":
+        if args.get("rcmd_type"):
             args["season_nm"] = "올웨더"
         else:
             args.update({"rcmd_type": "all_weather"})
     elif entities.get("season") == "all_season":
-        if args.get("rcmd_type") == "ev":
+        if args.get("rcmd_type"):
             args["season_nm"] = "사계절"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "사계절"})
