@@ -127,6 +127,8 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("cup2", "CUP2", "MC"),
     ("cup 2", "CUP2", "MC"),
     ("p7", "P7", "PI"),
+    ("세레니티 플러스", "세레니티 플러스", "BS"),
+    ("serenity plus", "세레니티 플러스", "BS"),
 )
 _BRAND_ALIASES: tuple[tuple[str, str], ...] = (
     ("한국타이어", "HK"),

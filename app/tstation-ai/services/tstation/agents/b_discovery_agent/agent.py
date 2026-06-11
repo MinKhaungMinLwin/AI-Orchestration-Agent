@@ -662,7 +662,7 @@ Format: "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 다�
 Trigger: User searches by name/keyword
 
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
-2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
+2. Detect brand from name → set brand_cd only when the user explicitly named a brand or the product family is a known Hankook/Laufenn family (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=Hankook). If brand is unknown/unspecified, omit brand_cd so BE searches all brands.
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
 2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
    - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
@@ -672,7 +672,8 @@ Trigger: User searches by name/keyword
 4. **모델명 포함 분기**: 모델명이 함께 들어온 경우만 keyword 사용
    → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
    - 예: "브리지스톤 포텐자 235/55R19" → keyword="포텐자", brand_cd="BS"
-   - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2" (한국타이어 디폴트), brand_cd="HK"
+   - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2", brand_cd="HK" (known Hankook family)
+   - 예: "세레니티 플러스" → keyword="세레니티 플러스" (brand_cd 생략; BE all-brand search)
 5. search_product_tool 호출 (위 3 또는 4 중 적절한 분기 선택).
    ⚠️ 사용자 메시지에 정렬 의도 키워드("가장 저렴한", "비싼 순", "평점 높은", "리뷰 많은", "최신", "신제품" 등)가 있으면 RECOMMEND ENGINE Step D 의 매핑 규칙에 따라 `sort_by` 를 함께 전달한다.
      - 예: "가장 저렴한 벤투스 S2 225/45R17" → search_product_tool(keyword="벤투스 S2", size="225/45R17", sort_by="price_asc")
@@ -2087,7 +2088,7 @@ Policy:
 Trigger: User searches by name/keyword
 
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
-2. Detect brand from name → set brand_cd (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=default)
+2. Detect brand from name → set brand_cd only when the user explicitly named a brand or the product family is a known Hankook/Laufenn family (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=Hankook). If brand is unknown/unspecified, omit brand_cd so BE searches all brands.
    - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
 2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
    - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
@@ -2097,7 +2098,8 @@ Trigger: User searches by name/keyword
 4. **모델명 포함 분기**: 모델명이 함께 들어온 경우만 keyword 사용
    → `search_product_tool(keyword=<모델명만>, size=if_provided, brand_cd=detected)`
    - 예: "브리지스톤 포텐자 235/55R19" → keyword="포텐자", brand_cd="BS"
-   - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2" (한국타이어 디폴트), brand_cd="HK"
+   - 예: "벤투스 S2 225/45R17" → keyword="벤투스 S2", brand_cd="HK" (known Hankook family)
+   - 예: "세레니티 플러스" → keyword="세레니티 플러스" (brand_cd 생략; BE all-brand search)
 5. search_product_tool 호출 (위 3 또는 4 중 적절한 분기 선택).
    ⚠️ 사용자 메시지에 정렬 의도 키워드("가장 저렴한", "비싼 순", "평점 높은", "리뷰 많은" 등)가 있으면 `sort_by` 를 함께 전달한다.
      - 예: "가장 저렴한 벤투스 S2 225/45R17" → search_product_tool(keyword="벤투스 S2", size="225/45R17", sort_by="price_asc")

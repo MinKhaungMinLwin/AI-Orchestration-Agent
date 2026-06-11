@@ -35,6 +35,7 @@ from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_
 from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 from common.tstation_be_api_client.hkt_api_client.models import VehicleType
+from common.tstation_be_api_client.hkt_api_client.types import UNSET
 
 
 # Event/Deal
@@ -506,7 +507,7 @@ def search_product_tool(
     keyword: str | None = None,
     limit: int = 10,
     size: str | None = None,
-    brand_cd: str = "HK",
+    brand_cd: str | None = None,
     sort_by: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
@@ -528,8 +529,9 @@ def search_product_tool(
     - ❌ NEVER translate Korean → English
     - ❌ NEVER put a brand name into keyword — use brand_cd instead
 
-    Brand codes: HK=Hankook (default), LF=Laufenn, MC=Michelin, PI=Pirelli,
+    Brand codes: HK=Hankook, LF=Laufenn, MC=Michelin, PI=Pirelli,
                  BS=Bridgestone, CT=Continental, GY=Goodyear.
+    If the user did not specify a brand, omit brand_cd and search all brands.
     Unsupported brands (금호, 넥센 etc.) → decline, do not search.
 
     Args:
@@ -538,7 +540,7 @@ def search_product_tool(
             방어적으로, 브랜드명만 들어오면 자동으로 None 으로 정규화된다.
         limit (int): 반환할 최대 상품 수 Default: 10.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
-        brand_cd (str): 브랜드 코드. Default: HK.
+        brand_cd (str | None): 브랜드 코드. 미지정 시 전체 브랜드 검색.
             - HK: Hankook 한국타이어
             - LF: Laufenn 라우펜
             - MC: Michelin 미쉐린
@@ -597,13 +599,21 @@ def search_product_tool(
     fetch_limit = limit * 4 if has_price_filter else limit
     if has_newest_sort:
         fetch_limit = max(fetch_limit, 100)
+    normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
+    brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
     logger.debug(
         "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
-        normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
+        normalized_keyword, limit, size, normalized_brand_cd, sort_by, min_price, max_price,
     )
 
     try:
-        response = search_product(client=get_client(), keyword=normalized_keyword, limit=fetch_limit, size=size, brand_cd=brand_cd)
+        response = search_product(
+            client=get_client(),
+            keyword=normalized_keyword,
+            limit=fetch_limit,
+            size=size,
+            brand_cd=brand_arg,
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,
