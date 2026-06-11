@@ -1526,7 +1526,7 @@ def _comparison_metric_from_decision() -> str:
         if metric:
             return metric
     user_text = current_user_text.get()
-    if re.search(r"최신|신제품|최근\s*출시|등록일", user_text, re.IGNORECASE):
+    if re.search(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|등록일", user_text, re.IGNORECASE):
         return "release"
     if re.search(r"연비|회전\s*저항|rr\b", user_text, re.IGNORECASE):
         return "fuel_efficiency"
