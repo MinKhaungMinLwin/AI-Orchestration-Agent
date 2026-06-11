@@ -2848,6 +2848,18 @@ _OWNED_COUPON_BEST_DISCOUNT_RE = re.compile(
     r"(?:내|내가\s*가진|가진|보유|보유한).{0,12}쿠폰.{0,30}(?:제일|가장|최대|많이|큰|높은)",
     re.IGNORECASE,
 )
+_ORDER_DIRECT_NO_RE = re.compile(r"\bO[A-Za-z0-9]{8,}\b", re.IGNORECASE)
+_ORDER_ARRIVAL_STATUS_RE = re.compile(
+    r"(?:주문|상품|타이어|그거|그\s*주문|해당\s*건|첫\s*번째|1\s*번|최근|배송|도착|매장|그\s*이후)"
+    r".{0,60}(?:매장\s*(?:도착|입고)|배송\s*예정|도착\s*(?:예정|상태|일|했|해)|언제\s*(?:와|오|도착)|"
+    r"이후에\s*매장|매장\s*가면)"
+    r"|(?:매장\s*(?:도착|입고)|배송\s*예정|도착\s*(?:예정|상태|일)|언제\s*(?:와|오|도착)|"
+    r"이후에\s*매장|매장\s*가면).{0,60}(?:주문|상품|타이어|그거|그\s*주문|해당\s*건|첫\s*번째|1\s*번|최근|배송|도착)"
+    r"|그\s*이후.{0,30}매장\s*가",
+    re.IGNORECASE,
+)
+_ORDER_FIRST_REF_RE = re.compile(r"첫\s*번째|1\s*번|최근|그거|그\s*주문|해당\s*건|그\s*이후|이후에\s*매장", re.IGNORECASE)
+_ORDER_TEXT_LINE_RE = re.compile(r"\b(?P<ord_no>O[A-Za-z0-9]{8,})\b(?P<tail>[^\n]*)", re.IGNORECASE)
 _COUPON_DIRECT_ID_RE = re.compile(r"\bC[A-Za-z0-9]{8,}\b")
 _COUPON_DISCOUNT_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _COUPON_MATCH_STOPWORDS = {
@@ -2868,6 +2880,22 @@ _COUPON_MATCH_STOPWORDS = {
     "어디",
     "알려줘",
     "확인",
+    "혹시",
+    "내",
+    "제",
+    "나의",
+    "제가",
+    "내가",
+    "보유",
+    "보유중",
+    "가지고",
+    "갖고",
+    "있는지",
+    "있어",
+    "있나요",
+    "있니",
+    "있냐",
+    "좀",
     "해줘",
     "가능한",
     "적용받고",
@@ -3273,7 +3301,11 @@ def _vehicle_owner_lookup_prompt_event(plate: str, owner_provided: bool) -> dict
 def _non_self_vehicle_plate_owner_lookup_plate(user_text: str | None) -> str | None:
     """Return the plate for "not my car + plate only" owner-lookup requests."""
     text = user_text or ""
-    if not _NON_SELF_CAR_RE.search(text) or _VEHICLE_OWNER_TEXT_RE.search(text):
+    non_self_match = _NON_SELF_CAR_RE.search(text)
+    if not non_self_match:
+        return None
+    remainder = _NON_SELF_CAR_RE.sub(" ", text, count=1).strip()
+    if _normalize_vehicle_owner_lookup_text(remainder):
         return None
     plate_match = _VEHICLE_PLATE_RE.search(text)
     if not plate_match:
@@ -3286,6 +3318,8 @@ def _normalize_vehicle_owner_lookup_text(user_text: str | None) -> str | None:
     text = (user_text or "").strip()
     if not text:
         return None
+    if _NON_SELF_CAR_RE.search(text):
+        text = _NON_SELF_CAR_RE.sub(" ", text, count=1).strip()
     match = _VEHICLE_OWNER_TEXT_RE.fullmatch(text)
     if not match:
         return None
@@ -4287,7 +4321,103 @@ def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
 def _is_owned_coupon_best_discount_query(user_text: str) -> bool:
     if _COUPON_ISSUE_INTENT_RE.search(user_text or ""):
         return False
+    if _is_product_coupon_eligibility_query(user_text or ""):
+        return False
     return bool(_OWNED_COUPON_BEST_DISCOUNT_RE.search(user_text or ""))
+
+
+def _is_specific_owned_coupon_lookup_query(user_text: str) -> bool:
+    hint = _specific_owned_coupon_lookup_hint(user_text)
+    return bool(hint)
+
+
+def _specific_owned_coupon_lookup_hint(user_text: str) -> str | None:
+    text = user_text or ""
+    if not re.search(r"쿠폰|할인권", text, re.IGNORECASE):
+        return None
+    if _COUPON_ISSUE_INTENT_RE.search(text):
+        return None
+    if (
+        _is_strong_coupon_applicability_query(text)
+        or _is_product_coupon_eligibility_query(text)
+        or _is_owned_coupon_best_discount_query(text)
+    ):
+        return None
+    if re.search(r"적용|사용|쓸\s*수|살\s*수|상품|가장\s*싸|제일\s*싸|최대\s*혜택|혜택", text):
+        return None
+    if not re.search(r"있|보유|가지|갖|확인", text):
+        return None
+
+    raw_terms = re.findall(r"[0-9a-zA-Z가-힣]+", text)
+    terms: list[str] = []
+    extra_stopwords = {
+        "쿠폰",
+        "할인쿠폰",
+        "할인권",
+        "혹시",
+        "내",
+        "제",
+        "나의",
+        "제가",
+        "내가",
+        "나",
+        "보유",
+        "보유중",
+        "가지고",
+        "갖고",
+        "있는지",
+        "있어",
+        "있나요",
+        "있니",
+        "있냐",
+        "있을까",
+        "확인",
+        "좀",
+        "알려줘",
+    }
+    for raw in raw_terms:
+        normalized = _normalize_coupon_match_text(raw)
+        for suffix in (
+            "보유중이야",
+            "보유중인가",
+            "보유중인지",
+            "보유중",
+            "보유한가",
+            "보유인지",
+            "있나요",
+            "있는지",
+            "있을까",
+            "있어",
+            "있니",
+            "있냐",
+            "확인해줘",
+            "확인",
+        ):
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+        if not normalized or normalized in extra_stopwords:
+            continue
+        for suffix in ("할인쿠폰", "쿠폰", "할인권"):
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+        if len(normalized) >= 2 and normalized not in extra_stopwords:
+            terms.append(normalized)
+    if not terms:
+        return None
+    return " ".join(terms[:3])
+
+
+def _owned_coupon_lookup_summary_text(user_text: str, tool_result: dict) -> str | None:
+    hint = _specific_owned_coupon_lookup_hint(user_text)
+    if not hint:
+        return None
+    matched_coupon = _find_coupon_from_owned_coupons(f"{hint} 쿠폰", tool_result)
+    if matched_coupon:
+        coupon_name = str(
+            matched_coupon.get("cpn_nm") or matched_coupon.get("disp_nm") or matched_coupon.get("cpn_d_nm") or hint
+        ).strip()
+        return f"‘{coupon_name}’ 관련 쿠폰을 보유 중이에요.\n아래에서 현재 보유 쿠폰 목록도 함께 확인해 주세요."
+    return f"현재 보유 쿠폰에서 ‘{hint}’ 관련 쿠폰은 확인되지 않아요.\n아래에서 현재 보유 쿠폰 목록을 확인해 주세요."
 
 
 def _coupon_numeric_value(row: dict) -> float | None:
@@ -4754,6 +4884,132 @@ def _resolve_recent_order_summary_from_context(tool_data_list: list[dict]) -> st
             goods_nm = str(order.get("goods_nm") or order.get("goodsName") or "").strip() or None
             return goods_nm
     return None
+
+
+def _is_order_arrival_status_query(user_text: str | None) -> bool:
+    text = user_text or ""
+    if not text:
+        return False
+    if re.search(r"예약\s*가능|예약\s*시간|몇\s*시\s*예약|스케줄|시간표", text):
+        return False
+    return bool(_ORDER_DIRECT_NO_RE.search(text) or _ORDER_ARRIVAL_STATUS_RE.search(text))
+
+
+def _order_rows_from_orders_result(tool_result: dict) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    rows = data.get("orders") if isinstance(data, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _order_rows_from_messages(messages: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for msg in reversed(messages[-12:]):
+        if not isinstance(msg, dict):
+            continue
+        content = str(msg.get("content") or "")
+        if not content:
+            continue
+        for match in _ORDER_TEXT_LINE_RE.finditer(content):
+            ord_no = match.group("ord_no").upper()
+            if ord_no in seen:
+                continue
+            tail = match.group("tail") or ""
+            parts = [part.strip() for part in re.split(r"\t+|\s{2,}", tail) if part.strip()]
+            goods_nm = parts[1] if len(parts) >= 2 and re.search(r"주문완료|출하지시|장착완료|배송", parts[0]) else None
+            if goods_nm is None and parts:
+                goods_nm = parts[0]
+            rows.append({"ord_no": ord_no, "goods_nm": goods_nm or ""})
+            seen.add(ord_no)
+    return rows
+
+
+def _resolve_order_row_for_arrival_query(
+    user_text: str,
+    *,
+    messages: list[dict] | None = None,
+    orders_result: dict | None = None,
+) -> dict | None:
+    direct_match = _ORDER_DIRECT_NO_RE.search(user_text or "")
+    direct_ord_no = direct_match.group(0).upper() if direct_match else None
+    rows = _order_rows_from_orders_result(orders_result or {}) if orders_result is not None else []
+    if not rows and messages is not None:
+        rows = _order_rows_from_messages(messages)
+    if direct_ord_no:
+        return next((row for row in rows if str(row.get("ord_no") or "").upper() == direct_ord_no), {"ord_no": direct_ord_no})
+    if not rows:
+        return None
+
+    query_norm = _normalize_coupon_match_text(user_text)
+    best_row: dict | None = None
+    best_score = 0
+    for row in rows:
+        goods_nm = str(row.get("goods_nm") or row.get("goodsName") or "").strip()
+        goods_norm = _normalize_coupon_match_text(goods_nm)
+        if goods_norm and (goods_norm in query_norm or query_norm in goods_norm):
+            return row
+        score = sum(1 for term in _coupon_query_terms(user_text) if term and term in goods_norm)
+        if score > best_score:
+            best_score = score
+            best_row = row
+    if best_score > 0 and best_row is not None:
+        return best_row
+    if _ORDER_FIRST_REF_RE.search(user_text or ""):
+        return rows[0]
+    return rows[0] if len(rows) == 1 else None
+
+
+def _date_only(value: object) -> str:
+    text = str(value or "").strip()
+    return text[:10] if re.match(r"\d{4}-\d{2}-\d{2}", text) else text
+
+
+def _build_order_arrival_status_event(order_status_result: dict, order_row: dict | None = None) -> dict:
+    data = _unwrap_tool_data(order_status_result)
+    if not isinstance(data, dict):
+        data = {}
+    order_row = order_row or {}
+    ord_no = str(data.get("ord_no") or order_row.get("ord_no") or data.get("query_no") or "").strip()
+    goods_nm = str(order_row.get("goods_nm") or order_row.get("goodsName") or "").strip()
+    dlv_fcst_date = _date_only(data.get("dlv_fcst_dtime"))
+    rsv_dtime = str(data.get("rsv_dtime") or "").strip()
+    shop_nm = str(data.get("shop_nm") or "").strip()
+    tel_no = str(data.get("tel_no") or "").strip()
+
+    lines = ["주문 배송/매장 도착 정보를 확인했어요."]
+    if ord_no:
+        lines.append(f"- 주문번호: {ord_no}")
+    if goods_nm:
+        lines.append(f"- 상품명: {goods_nm}")
+    if data.get("ord_prgs_stat_nm"):
+        lines.append(f"- 주문상태: {data['ord_prgs_stat_nm']}")
+    if data.get("dlv_prgs_stat_nm"):
+        lines.append(f"- 배송상태: {data['dlv_prgs_stat_nm']}")
+    if dlv_fcst_date:
+        lines.append(f"- 매장 도착 예정일: {dlv_fcst_date}")
+    if shop_nm:
+        lines.append(f"- 예약 매장: {shop_nm}")
+    if tel_no:
+        lines.append(f"- 매장 전화: {tel_no}")
+    if rsv_dtime:
+        lines.append(f"- 예약 방문 시간: {rsv_dtime}")
+    else:
+        lines.append("배송 도착 후 매장과 방문 일정을 먼저 확인해 주세요.")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_arrival_status",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+                {"label": "다른 주문 확인", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
 
 
 def _inject_order_history_chip_for_cancel_guidance(
@@ -10806,6 +11062,87 @@ class TStationChatServiceV2:
 
             return emitted_events, _build_default_benefit_event(events_result, deals_result)
 
+        async def _resolve_order_arrival_status_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_order_arrival_status_query(user_query):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_order_status_tool as _order_status_tool,
+                get_orders_of_user_tool as _orders_tool,
+            )
+
+            emitted_events: list[dict] = []
+            orders_result: dict | None = None
+            order_row = _resolve_order_row_for_arrival_query(user_query, messages=messages)
+            if order_row is None:
+                orders_input: dict[str, Any] = {}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_orders_of_user_tool",
+                    "display_name": "주문 내역 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
+                    orders_result = _tool_result_dict(raw_orders)
+                except Exception as exc:
+                    logger.exception("[ORDER_ARRIVAL] orders tool failed")
+                    orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Order / Delivery AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": orders_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": orders_input,
+                    "output": json.dumps(orders_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_orders_of_user_tool",
+                    "source_domain": "transaction",
+                })
+                order_row = _resolve_order_row_for_arrival_query(user_query, orders_result=orders_result)
+
+            ord_no = str((order_row or {}).get("ord_no") or (order_row or {}).get("ordNo") or "").strip()
+            if not ord_no:
+                return None
+
+            status_input = {"query_no": ord_no}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_order_status_tool",
+                "display_name": "주문 현황 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_status = await asyncio.to_thread(_order_status_tool.invoke, status_input)
+                status_result = _tool_result_dict(raw_status)
+            except Exception as exc:
+                logger.exception("[ORDER_ARRIVAL] status tool failed")
+                status_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_order_status_tool", status_input, status_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": status_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": status_input,
+                "output": json.dumps(status_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_order_status_tool",
+                "source_domain": "transaction",
+            })
+            return emitted_events, _build_order_arrival_status_event(status_result, order_row)
+
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
                 return None
@@ -11058,7 +11395,7 @@ class TStationChatServiceV2:
 
             mapped_event = try_build_template(
                 [{"tool": "get_my_coupons_tool", "args": my_coupons_input, "data": my_coupons_result}],
-                "보유 쿠폰을 확인했어요.",
+                _owned_coupon_lookup_summary_text(user_query, my_coupons_result) or "보유 쿠폰을 확인했어요.",
             )
             if mapped_event is not None:
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
@@ -12367,18 +12704,37 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
+        order_arrival_resolution = await _resolve_order_arrival_status_with_code()
+        if order_arrival_resolution is not None:
+            code_events, order_event = order_arrival_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(order_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((order_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
         if coupon_decision is not None and coupon_decision.is_actionable:
             if coupon_decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP:
                 coupon_gate_resolution = await _resolve_owned_coupon_lookup_with_code()
-            elif coupon_decision.intent == CouponQueryIntent.BEST_DISCOUNT:
-                coupon_gate_resolution = await _resolve_owned_coupon_best_discount_with_code()
             elif coupon_decision.intent == CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY:
                 product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
                     target_product_name=coupon_decision.product_name
                 )
                 coupon_gate_resolution = product_coupon_resolution
+            elif coupon_decision.intent == CouponQueryIntent.BEST_DISCOUNT:
+                product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
+                    target_product_name=coupon_decision.product_name
+                )
+                coupon_gate_resolution = product_coupon_resolution or await _resolve_owned_coupon_best_discount_with_code()
             elif coupon_decision.intent == CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS:
                 coupon_gate_resolution = await _resolve_coupon_applicability_with_code()
 
@@ -12615,6 +12971,25 @@ class TStationChatServiceV2:
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
+                        tool_name == "get_my_coupons_tool"
+                        and not coupon_resolver_ran
+                        and (
+                            _is_product_coupon_eligibility_decision(coupon_decision)
+                            or _is_product_coupon_eligibility_query(user_query)
+                        )
+                    ):
+                        coupon_resolver_ran = True
+                        product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
+                            parsed_for_verifier,
+                            target_product_name=(
+                                coupon_decision.product_name if coupon_decision is not None else None
+                            ),
+                        )
+                        if product_coupon_resolution is not None:
+                            code_events, deterministic_coupon_event = product_coupon_resolution
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    elif (
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
                         and (
@@ -13116,26 +13491,8 @@ class TStationChatServiceV2:
                             MultiAgentDomain.Domain.DISCOVERY.value,
                         }
                         and (
-                            _is_owned_coupon_best_discount_decision(coupon_decision)
-                            or _is_owned_coupon_best_discount_query(user_query)
-                        )
-                    ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_owned_coupon_best_discount_with_code()
-                        )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
-                    elif (
-                        deterministic_coupon_event is None
-                        and not coupon_resolver_ran
-                        and source_domain in {
-                            MultiAgentDomain.Domain.TRANSACTION.value,
-                            MultiAgentDomain.Domain.DISCOVERY.value,
-                        }
-                        and (
                             _is_product_coupon_eligibility_decision(coupon_decision)
-                            or (coupon_decision is None and _is_product_coupon_eligibility_query(user_query))
+                            or _is_product_coupon_eligibility_query(user_query)
                         )
                     ):
                         coupon_resolver_ran = True
@@ -13148,6 +13505,24 @@ class TStationChatServiceV2:
                             code_events, deterministic_coupon_event = product_coupon_resolution
                             for code_event in code_events:
                                 yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    elif (
+                        deterministic_coupon_event is None
+                        and not coupon_resolver_ran
+                        and source_domain in {
+                            MultiAgentDomain.Domain.TRANSACTION.value,
+                            MultiAgentDomain.Domain.DISCOVERY.value,
+                        }
+                        and (
+                            _is_owned_coupon_best_discount_decision(coupon_decision)
+                            or _is_owned_coupon_best_discount_query(user_query)
+                        )
+                    ):
+                        coupon_resolver_ran = True
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_owned_coupon_best_discount_with_code()
+                        )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                     elif (
                         deterministic_coupon_event is None
                         and not coupon_resolver_ran
