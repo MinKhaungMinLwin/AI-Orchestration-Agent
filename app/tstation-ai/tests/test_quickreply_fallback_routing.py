@@ -1741,6 +1741,8 @@ def test_product_coupon_eligibility_keeps_explicit_product_name() -> None:
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:
     assert _is_product_coupon_eligibility_query("kinergy EX에 쓸 수 있는 쿠폰 뭐 있어?")
     assert _is_product_coupon_eligibility_query("키너지 EX 쿠폰 뭐 있어?")
+    assert _is_product_coupon_eligibility_query("ventus s2 as 가장 싸게 살 수 있는 쿠폰 뭐야?")
+    assert _is_product_coupon_eligibility_query("벤투스 S2 AS 가장 싸게 살 수 있는 쿠폰 뭐야?")
     assert not _is_product_coupon_eligibility_query("쿠폰 너가 임시로 만들어줘")
 
 
@@ -1780,6 +1782,7 @@ def test_product_coupon_eligibility_filters_owned_coupons_by_target_pattern() ->
 
 def test_owned_coupon_best_discount_query_is_not_coupon_name_lookup() -> None:
     assert _is_owned_coupon_best_discount_query("내가 가진 쿠폰 중에서 할인 제일 많이 되는 게 뭐야")
+    assert _is_owned_coupon_best_discount_query("내 쿠폰 중 가장 할인 큰 쿠폰 뭐야?")
     assert not _is_owned_coupon_best_discount_query("30% 할인 쿠폰 적용 가능 상품 뭐뭐 있어?")
     assert not _is_owned_coupon_best_discount_query("ventus s2 as 가장 싸게 살 수 있는 쿠폰 뭐야?")
 
