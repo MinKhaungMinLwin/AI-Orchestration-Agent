@@ -45,6 +45,11 @@ _BEST_SELLER_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|젤\s*많이\s*(?:구매한|산)|잘\s*나가",
     re.IGNORECASE,
 )
+_DEMOGRAPHIC_ATTRIBUTE_RE = re.compile(
+    r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
+    re.IGNORECASE,
+)
+_DEMOGRAPHIC_PREFERENCE_RE = re.compile(r"선호|좋아하는|많이\s*사는|인기|추천", re.IGNORECASE)
 _DEFAULT_TIRE_SHOPPING_RE = re.compile(
     r"(?:t\s*['’]?\s*bot\s*과\s*)?타이어\s*쇼핑\s*하기",
     re.IGNORECASE,
@@ -236,7 +241,10 @@ def best_seller_period_from_text(text: str) -> str | None:
     ranking window the BE supports unless the user names a narrower period.
     """
     text = text or ""
-    if not _BEST_SELLER_RE.search(text):
+    is_demographic_preference = bool(
+        _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text)
+    )
+    if not _BEST_SELLER_RE.search(text) and not is_demographic_preference:
         return None
     if _BEST_SELLER_DAY_RE.search(text):
         return "day"

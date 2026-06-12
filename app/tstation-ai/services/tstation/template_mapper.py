@@ -201,7 +201,8 @@ _GENERIC_PRODUCT_RESPONSE_RE = re.compile(
 )
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)
 _DEMOGRAPHIC_AGE_GENDER_RE = re.compile(
-    r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자", re.IGNORECASE
+    r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
+    re.IGNORECASE,
 )
 _DEMOGRAPHIC_PREFERENCE_RE = re.compile(r"선호|좋아하는|많이\s*사는|인기|추천", re.IGNORECASE)
 _DEMOGRAPHIC_CAVEAT_TEXT = "특정 나이대나 성별 기준으로 추천드리기는 어렵지만, 최근 인기 상품 위주로 안내드릴게요. "
