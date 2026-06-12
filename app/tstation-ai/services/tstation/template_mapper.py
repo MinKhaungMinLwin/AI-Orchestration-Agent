@@ -195,6 +195,11 @@ _GENERIC_PRODUCT_RESPONSE_RE = re.compile(
     re.IGNORECASE,
 )
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)
+_DEMOGRAPHIC_AGE_GENDER_RE = re.compile(
+    r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자", re.IGNORECASE
+)
+_DEMOGRAPHIC_PREFERENCE_RE = re.compile(r"선호|좋아하는|많이\s*사는|인기|추천", re.IGNORECASE)
+_DEMOGRAPHIC_CAVEAT_TEXT = "특정 나이대나 성별 기준으로 추천드리기는 어렵지만, 최근 인기 상품 위주로 안내드릴게요. "
 
 
 def _current_turn_user_text() -> str:
@@ -1769,14 +1774,19 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
             if isinstance(first, dict):
                 top_name = _get_str(first, "goods_nm", "title")
 
-        if top_name and _BEST_SELLER_COUNT_QUERY_RE.search(_current_turn_user_text()):
+        user_text = _current_turn_user_text()
+        caveat = ""
+        if _DEMOGRAPHIC_AGE_GENDER_RE.search(user_text) and _DEMOGRAPHIC_PREFERENCE_RE.search(user_text):
+            caveat = _DEMOGRAPHIC_CAVEAT_TEXT
+
+        if top_name and _BEST_SELLER_COUNT_QUERY_RE.search(user_text):
             return (
-                f"{period_label} 베스트셀러는 {top_name}예요. "
+                f"{caveat}{period_label} 베스트셀러는 {top_name}예요. "
                 f"정확한 판매 개수는 바로 안내드리기 어렵지만, 인기 상품 {item_count}개를 안내드립니다."
             )
         if top_name:
-            return f"{period_label} 베스트셀러는 {top_name}예요. 인기 상품 {item_count}개를 안내드립니다."
-        return f"{period_label} 인기 상품 {item_count}개를 안내드립니다. 원하시는 상품을 선택해 주세요."
+            return f"{caveat}{period_label} 베스트셀러는 {top_name}예요. 인기 상품 {item_count}개를 안내드립니다."
+        return f"{caveat}{period_label} 인기 상품 {item_count}개를 안내드립니다. 원하시는 상품을 선택해 주세요."
 
     for entry in reversed(_find_entries(tool_data_list, "search_product_tool")):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
