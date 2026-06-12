@@ -113,6 +113,7 @@ from .store_schedule_slot import StoreScheduleSlot
 from .tire_spec import TireSpec
 from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
+from .vehicle_type import VehicleType
 
 __all__ = (
     "AppliedCouponItem",
@@ -224,4 +225,5 @@ __all__ = (
     "TireSpec",
     "ValidationError",
     "ValidationErrorContext",
+    "VehicleType",
 )

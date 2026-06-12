@@ -20,6 +20,12 @@ _PRODUCT_HINT_RE = re.compile(
 )
 _STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|장착\s*가능|예약|매장|근처|주변", re.IGNORECASE)
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_REGIONAL_PRICE_POLICY_RE = re.compile(
+    r"(?=.*(?:가격|판매가|최종가))"
+    r"(?=.*(?:똑같|같(?:아|은|나요|을까)?|동일|다르|차이|왜))"
+    r"(?=.*(?:제주(?:도|특별자치도)?|서귀포(?:시)?|도서산간|서울|부산|대구|인천|광주|대전|울산|지역|매장|지점))",
+    re.IGNORECASE,
+)
 _PATTERN_COUPON_KEYWORD = r"패밀리|family|생일|birthday|임직원|employee|직원"
 _PATTERN_COUPON_RE = re.compile(
     rf"(?:{_PATTERN_COUPON_KEYWORD}).{{0,20}}(?:쿠폰|할인권)|"
@@ -133,6 +139,20 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
+    needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
+
+    if needs_regional_price_policy:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.SUPPORT,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="price_policy_faq",
+                    reason="지역/매장별 가격 동일 여부는 실제 가격 조회가 아닌 가격 정책 FAQ임",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
 
     if needs_support and not has_product_hint:
         return CrossDomainPlan(

@@ -67,6 +67,9 @@ current_ev_suitability_comparison: contextvars.ContextVar[bool] = contextvars.Co
 current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "current_return_visit_store_flow", default=False
 )
+current_excluded_store_ids: contextvars.ContextVar[set[str]] = contextvars.ContextVar(
+    "current_excluded_store_ids", default=set()
+)
 
 # True when the current turn asks whether a store is open/closed or bookable on
 # a specific date. In that case a single-day `get_store_detail_tool` result
@@ -133,6 +136,10 @@ _EV_CHARGE_PREFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _CART_ALREADY_EXISTS_RE = re.compile(r"이미\s*장바구니|장바구니에\s*담겨", re.IGNORECASE)
+_EXACT_TIME_REQUEST_RE = re.compile(
+    r"(?P<prefix>오전|새벽|오후|저녁|밤)?\s*(?P<hour>\d{1,2})\s*시"
+    r"(?!\s*(?:이후|부터|넘어서|후|뒤))"
+)
 
 # Goals whose checklist ends in a downstream tool call after a list-pick.
 # Card emits in these goals get isBookingFlow=True so the FE click handler
@@ -151,8 +158,15 @@ _DISCOVERY_POLICY_QUICKREPLY_CHIPS = [
     {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
 ]
+_DISCOVERY_SIZED_PRODUCT_CHIPS = [
+    {"label": "가격 확인", "domain": "TRANSACTION"},
+    {"label": "재고/장착 매장 확인", "domain": "TRANSACTION"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
+]
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
-_VEHICLE_OWNER_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}")
+_VEHICLE_OWNER_RE = re.compile(
+    r"(?:\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}|[가-힣]{2,4}\s+\d{2,3}\s*[가-힣]\s*\d{4})"
+)
 _DISCOVERY_RESTOCK_CHIPS = [
     {"label": "지역 입력", "domain": "TRANSACTION"},
     {"label": "매장명 입력", "domain": "TRANSACTION"},
@@ -186,6 +200,12 @@ _GENERIC_PRODUCT_RESPONSE_RE = re.compile(
     re.IGNORECASE,
 )
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)
+_DEMOGRAPHIC_AGE_GENDER_RE = re.compile(
+    r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
+    re.IGNORECASE,
+)
+_DEMOGRAPHIC_PREFERENCE_RE = re.compile(r"선호|좋아하는|많이\s*사는|인기|추천", re.IGNORECASE)
+_DEMOGRAPHIC_CAVEAT_TEXT = "특정 나이대나 성별 기준으로 추천드리기는 어렵지만, 최근 인기 상품 위주로 안내드릴게요. "
 
 
 def _current_turn_user_text() -> str:
@@ -209,6 +229,32 @@ def _is_goal_booking_followup() -> bool:
     forced True. Returns False when no goal is set (preserves legacy behavior).
     """
     return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
+
+
+def _single_product_transaction_handoff_event(items: list[dict], metadata: list[dict]) -> dict | None:
+    if len(items) != 1 or len(metadata) != 1 or not _is_goal_booking_followup():
+        return None
+    goal_type = current_goal_type.get()
+    pending_intent = current_pending_intent.get()
+    if goal_type == "price_inquiry" or pending_intent == "price":
+        action_text = "가격 확인을 이어갈게요."
+    elif goal_type == "store_with_stock" or pending_intent == "stock":
+        action_text = "장착 가능 매장 확인을 이어갈게요."
+    else:
+        action_text = "오늘서비스 구매 진행을 이어갈게요."
+    title = str(items[0].get("title") or items[0].get("titleProductName") or "상품").strip()
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": f"{title} 상품 확인했어요. {action_text}",
+            "quickReplies": [],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata[0],
+        },
+        "assistant_response_source": "code_single_product_transaction_handoff",
+        "nextAction": {"type": "continue", "domain": "transaction"},
+    }
 
 # ── Domain tool → FE template mapping ──────────────────────────────────────────
 _TOOL_TEMPLATE_MAP: dict[str, str] = {
@@ -396,6 +442,75 @@ def _preview_location_assistant_response(tier: str, region: str, item_count: int
     if tier_normalized in {"today_only", "tna_only"}:
         return f"{region_prefix}오늘 장착 가능한 매장 {count_text}입니다. 원하시는 매장을 선택해 주세요."
     return None
+
+
+def _kst_today_yyyymmdd() -> str:
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y%m%d")
+
+
+def _preview_schedule_stores_by_shop_id(raw: dict) -> dict[str, dict]:
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+    if not isinstance(schedule_stores, list):
+        return {}
+    stores_by_shop_id: dict[str, dict] = {}
+    for store in schedule_stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = _get_str(store, "shop_id")
+        if shop_id:
+            stores_by_shop_id[shop_id] = store
+    return stores_by_shop_id
+
+
+def _store_has_bookable_slot_on_day(store: dict, cal_day: str) -> bool:
+    slots = store.get("slots")
+    if not isinstance(slots, list):
+        return False
+    for slot in slots:
+        if not isinstance(slot, dict) or _get_str(slot, "cal_day") != cal_day:
+            continue
+        hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+        if hour is not None and _is_bookable_hour(hour):
+            return True
+    return False
+
+
+def _today_service_context(assistant_text: str = "") -> bool:
+    text = "\n".join(part for part in [current_user_text.get() or "", assistant_text or ""] if part)
+    return bool(_TODAY_SERVICE_DATEPICK_RE.search(text))
+
+
+def _earliest_preview_schedule_label(raw: dict) -> str:
+    best_day = ""
+    for store in _preview_schedule_stores_by_shop_id(raw).values():
+        slots = store.get("slots")
+        if not isinstance(slots, list):
+            continue
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = _get_str(slot, "cal_day")
+            hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+            if cal_day and hour is not None and _is_bookable_hour(hour) and (not best_day or cal_day < best_day):
+                best_day = cal_day
+    return yyyymmdd_to_korean_date(best_day) if best_day else ""
+
+
+def _preview_schedule_starts_after_today(raw: dict) -> bool:
+    best_day = ""
+    for store in _preview_schedule_stores_by_shop_id(raw).values():
+        slots = store.get("slots")
+        if not isinstance(slots, list):
+            continue
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            cal_day = _get_str(slot, "cal_day")
+            hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+            if cal_day and hour is not None and _is_bookable_hour(hour) and (not best_day or cal_day < best_day):
+                best_day = cal_day
+    return bool(best_day and best_day > _kst_today_yyyymmdd())
 
 
 def _same_turn_inventory_has_no_stock(tool_data_list: list[dict]) -> bool:
@@ -1184,15 +1299,13 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
         return ""
 
     stock_or_install_request = bool(_STOCK_OR_INSTALL_REQUEST_RE.search(current_user_text.get() or ""))
-    lines = [
-        "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
-        if stock_or_install_request
-        else (
-            f"입력하신 {requested_size} 규격 기준으로 상품을 확인했어요."
-            if requested_size
-            else "검색된 상품 기준으로 안내드릴게요."
-        )
-    ]
+    if requested_size:
+        intro = f"입력하신 {requested_size} 규격 기준으로 상품을 확인했어요."
+    elif stock_or_install_request:
+        intro = "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
+    else:
+        intro = "검색된 상품 기준으로 안내드릴게요."
+    lines = [intro]
     for name, data in list(grouped.items())[:5]:
         row = data["row"] if isinstance(data.get("row"), dict) else {}
         sizes = data["sizes"] if isinstance(data.get("sizes"), list) else []
@@ -1211,6 +1324,15 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
             "차량에 맞는 규격 확인을 위해 차량번호나 현재 타이어 사이즈를 알려주세요.",
         ])
     return "\n".join(lines)
+
+
+def _product_search_policy_requested_size(tool_data_list: list[dict]) -> str:
+    for entry in _find_entries(tool_data_list, "search_product_tool"):
+        args = _tool_args(entry)
+        requested_size = _get_str(args, "size", "tire_size")
+        if requested_size:
+            return requested_size
+    return ""
 
 
 def _product_search_policy_fallback_response(tool_data_list: list[dict] | None = None) -> str:
@@ -1491,7 +1613,7 @@ def _comparison_metric_from_decision() -> str:
         if metric:
             return metric
     user_text = current_user_text.get()
-    if re.search(r"최신|신제품|최근\s*출시|등록일", user_text, re.IGNORECASE):
+    if re.search(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|등록일", user_text, re.IGNORECASE):
         return "release"
     if re.search(r"연비|회전\s*저항|rr\b", user_text, re.IGNORECASE):
         return "fuel_efficiency"
@@ -1665,14 +1787,19 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
             if isinstance(first, dict):
                 top_name = _get_str(first, "goods_nm", "title")
 
-        if top_name and _BEST_SELLER_COUNT_QUERY_RE.search(_current_turn_user_text()):
+        user_text = _current_turn_user_text()
+        caveat = ""
+        if _DEMOGRAPHIC_AGE_GENDER_RE.search(user_text) and _DEMOGRAPHIC_PREFERENCE_RE.search(user_text):
+            caveat = _DEMOGRAPHIC_CAVEAT_TEXT
+
+        if top_name and _BEST_SELLER_COUNT_QUERY_RE.search(user_text):
             return (
-                f"{period_label} 베스트셀러는 {top_name}예요. "
+                f"{caveat}{period_label} 베스트셀러는 {top_name}예요. "
                 f"정확한 판매 개수는 바로 안내드리기 어렵지만, 인기 상품 {item_count}개를 안내드립니다."
             )
         if top_name:
-            return f"{period_label} 베스트셀러는 {top_name}예요. 인기 상품 {item_count}개를 안내드립니다."
-        return f"{period_label} 인기 상품 {item_count}개를 안내드립니다. 원하시는 상품을 선택해 주세요."
+            return f"{caveat}{period_label} 베스트셀러는 {top_name}예요. 인기 상품 {item_count}개를 안내드립니다."
+        return f"{caveat}{period_label} 인기 상품 {item_count}개를 안내드립니다. 원하시는 상품을 선택해 주세요."
 
     for entry in reversed(_find_entries(tool_data_list, "search_product_tool")):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
@@ -1847,8 +1974,12 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     response = sanitize_user_facing_response(response)
     if not response:
         return None
-    quick_replies = _DISCOVERY_POLICY_QUICKREPLY_CHIPS
-    predicted_domains = ["DISCOVERY"]
+    if response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
+        quick_replies = _DISCOVERY_SIZED_PRODUCT_CHIPS
+        predicted_domains = ["TRANSACTION"]
+    else:
+        quick_replies = _DISCOVERY_POLICY_QUICKREPLY_CHIPS
+        predicted_domains = ["DISCOVERY"]
     if response_shape_key == "restock_inquiry_summary":
         quick_replies = _DISCOVERY_RESTOCK_CHIPS
         predicted_domains = ["DISCOVERY", "SUPPORT"]
@@ -2107,6 +2238,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     _COUPON_FOOTNOTE = "*해당 혜택가는 현재 보유 쿠폰 기준으로 적용된 가격입니다."
     if has_cheapest_applied and _COUPON_FOOTNOTE not in short:
         short = f"{short.rstrip()}\n\n{_COUPON_FOOTNOTE}" if short else _COUPON_FOOTNOTE
+
+    handoff_event = _single_product_transaction_handoff_event(items, metadata)
+    if handoff_event is not None:
+        return handoff_event
 
     return {
         "type": "data",
@@ -3018,6 +3153,14 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     items, metadata = [], []
     stock_filtered_preview = False
     stock_filtered_region = ""
+    other_store_request = _is_other_store_request()
+    excluded_store_ids = current_excluded_store_ids.get() if other_store_request else set()
+    exact_schedule_filter = _requested_exact_schedule_filter()
+    had_location_candidate = False
+    filtered_by_exact_time = False
+    filtered_by_other_store = False
+    filtered_by_today_schedule = False
+    earliest_filtered_schedule_label = ""
     for entry in _find_entries(
         tool_data_list,
         "search_stores_tool",
@@ -3034,6 +3177,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not isinstance(stores, list):
             continue
         stock_labels_by_shop_id: dict[str, str] = {}
+        preview_today_schedule_by_shop_id: dict[str, dict] = {}
+        if entry.get("tool") == "transaction_store_preview_tool" and _today_service_context(assistant_text):
+            preview_today_schedule_by_shop_id = _preview_schedule_stores_by_shop_id(raw)
+            earliest_filtered_schedule_label = earliest_filtered_schedule_label or _earliest_preview_schedule_label(raw)
         if entry.get("tool") in {
             "search_stores_tool",
             "search_stores_complex_tool",
@@ -3066,9 +3213,37 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             shop_id = _get_str(row, "shop_id")
             if not shop_id:
                 continue
+            had_location_candidate = True
+            if shop_id in excluded_store_ids:
+                filtered_by_other_store = True
+                continue
             stock_label = stock_labels_by_shop_id.get(shop_id)
             if stock_labels_by_shop_id and not stock_label:
                 continue
+            preview_schedule_store = preview_today_schedule_by_shop_id.get(shop_id)
+            if preview_schedule_store is not None:
+                today_yyyymmdd = _kst_today_yyyymmdd()
+                if not _store_has_bookable_slot_on_day(preview_schedule_store, today_yyyymmdd):
+                    filtered_by_today_schedule = True
+                    continue
+                today_slots = [
+                    slot
+                    for slot in preview_schedule_store.get("slots", [])
+                    if isinstance(slot, dict) and _get_str(slot, "cal_day") == today_yyyymmdd
+                ]
+                if today_slots:
+                    row = {**row, "slots": today_slots}
+            row_slots_for_filter = row.get("slots") if isinstance(row.get("slots"), list) else []
+            if exact_schedule_filter is not None and row_slots_for_filter:
+                filtered_slots = [
+                    slot
+                    for slot in row_slots_for_filter
+                    if isinstance(slot, dict) and _slot_matches_exact_filter(slot, exact_schedule_filter)
+                ]
+                if not filtered_slots:
+                    filtered_by_exact_time = True
+                    continue
+                row = {**row, "slots": filtered_slots}
 
             detail = detail_by_shop_id.get(shop_id, {})
 
@@ -3197,6 +3372,41 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             metadata.append({"shopId": shop_id})
 
     if not items:
+        if filtered_by_today_schedule:
+            earliest_suffix = (
+                f" 가장 빠른 예약 가능 일정은 {earliest_filtered_schedule_label}부터예요."
+                if earliest_filtered_schedule_label
+                else ""
+            )
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper_today_schedule_filter",
+                "data": {
+                    "assistantResponse": f"오늘 장착 가능한 매장 일정이 확인되지 않아요.{earliest_suffix} 다른 날짜나 다른 매장으로 확인해 주세요.",
+                    "quickReplies": [
+                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
+        if filtered_by_exact_time:
+            return _exact_time_no_slot_quickreply()
+        if other_store_request and filtered_by_other_store and had_location_candidate:
+            return {
+                "type": "data",
+                "template": "quickReply",
+                "assistant_response_source": "code_mapper_other_store",
+                "data": {
+                    "assistantResponse": "앞서 안내한 매장 외에 추가로 확인되는 매장이 없어요. 다른 지역으로 확인해 주세요.",
+                    "quickReplies": [
+                        {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                        {"label": "처음으로", "domain": "LEADING"},
+                    ],
+                    "predictedDomains": ["TRANSACTION"],
+                },
+            }
         if require_ev_specialty or require_ev_charge:
             requested_region = ""
             for entry in _find_entries(
@@ -3493,6 +3703,78 @@ def _is_bookable_hour(hour: int) -> bool:
     return hour != 12
 
 
+def _requested_exact_schedule_filter() -> tuple[set[str], int] | None:
+    """Return requested exact schedule days/hour from recent user text.
+
+    "9시" asks for the 9 o'clock slot. "9시 이후/부터" is a range request and is
+    intentionally left to existing time_after_hour handling.
+    """
+    text = current_user_text.get() or ""
+    selected_text = text
+    match = None
+    for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
+        line_matches = list(_EXACT_TIME_REQUEST_RE.finditer(line))
+        if line_matches:
+            selected_text = line
+            match = line_matches[-1]
+            break
+    if match is None:
+        matches = list(_EXACT_TIME_REQUEST_RE.finditer(text))
+        match = matches[-1] if matches else None
+    if not match:
+        return None
+    try:
+        hour = int(match.group("hour"))
+    except (TypeError, ValueError):
+        return None
+    prefix = match.group("prefix") or ""
+    if prefix in {"오후", "저녁", "밤"} and 1 <= hour <= 11:
+        hour += 12
+    if not (0 <= hour <= 23):
+        return None
+
+    today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+    days: set[str] = set()
+    date_text = selected_text if re.search(r"오늘|당일|내일", selected_text) else text
+    if re.search(r"오늘|당일", date_text):
+        days.add(today.strftime("%Y%m%d"))
+    if "내일" in date_text:
+        days.add((today + datetime.timedelta(days=1)).strftime("%Y%m%d"))
+    return days, hour
+
+
+def _slot_matches_exact_filter(slot: dict, exact_filter: tuple[set[str], int] | None) -> bool:
+    if exact_filter is None:
+        return True
+    days, requested_hour = exact_filter
+    cal_day = _get_str(slot, "cal_day")
+    hour = _parse_tm_to_hour(_get_str(slot, "tm"))
+    if hour != requested_hour:
+        return False
+    return not days or cal_day in days
+
+
+def _exact_time_no_slot_quickreply(shop_nm: str = "") -> dict:
+    exact_filter = _requested_exact_schedule_filter()
+    hour_text = ""
+    if exact_filter is not None:
+        hour_text = f" {exact_filter[1]}시"
+    subject = f"{shop_nm}은" if shop_nm else "요청하신 조건에서는"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_mapper_exact_time",
+        "data": {
+            "assistantResponse": f"{subject} 해당 날짜{hour_text} 예약 가능 시간이 확인되지 않아요. 다른 시간이나 다른 매장으로 확인해 주세요.",
+            "quickReplies": [
+                {"label": "다른 시간 확인", "domain": "TRANSACTION"},
+                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Build a date picker from transaction_store_preview_tool schedule slots.
 
@@ -3534,7 +3816,12 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
             require_single_store=True,
         )
         if event:
-            today_service_response = _today_service_datepick_response(event)
+            schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+            schedule_tier = _get_str(schedule, "tier").lower()
+            force_today_service_response = (
+                schedule_tier in {"tna_only", "logistics_only"} and _preview_schedule_starts_after_today(raw)
+            )
+            today_service_response = _today_service_datepick_response(event, force=force_today_service_response)
             if today_service_response:
                 event["assistant_response_source"] = "code_mapper_today_service"
                 event["data"]["assistantResponse"] = today_service_response
@@ -3610,9 +3897,12 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Group slots by cal_day, dedupe to hour integers. BE returns ascending,
     # but we sort cal_day strings before emitting to avoid relying on that.
     min_install_date = _same_turn_reservation_sale_min_install_date(tool_data_list, shop_id)
+    exact_filter = _requested_exact_schedule_filter()
     by_day: dict[str, set[int]] = {}
     for s in slots:
         if not isinstance(s, dict):
+            continue
+        if not _slot_matches_exact_filter(s, exact_filter):
             continue
         cal_day = _get_str(s, "cal_day")
         hour = _parse_tm_to_hour(_get_str(s, "tm"))
@@ -3625,6 +3915,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             bucket.add(hour)
 
     if not by_day:
+        if exact_filter is not None:
+            return _exact_time_no_slot_quickreply(shop_nm)
         return None
 
     dates: list[dict] = []
@@ -3703,13 +3995,18 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
         slot_strs = raw.get("available_slots")
         if not isinstance(slot_strs, list) or not slot_strs:
             continue
+        exact_filter = _requested_exact_schedule_filter()
         hours: list[int] = []
         for s in slot_strs:
             h = _parse_tm_to_hour(str(s))
+            if exact_filter is not None and h != exact_filter[1]:
+                continue
             if h is not None and _is_bookable_hour(h):
                 hours.append(h)
         hours = sorted(set(hours))
         if not hours:
+            if exact_filter is not None:
+                return _exact_time_no_slot_quickreply(_get_str(raw, "shop_nm"))
             continue
         shop_nm = _get_str(raw, "shop_nm")
         metadata: dict = {"shopId": shop_id}
@@ -4143,9 +4440,9 @@ def _parse_korean_date_label(label: str) -> datetime.date | None:
         return None
 
 
-def _today_service_datepick_response(event: dict) -> str | None:
+def _today_service_datepick_response(event: dict, *, force: bool = False) -> str | None:
     user_text = current_user_text.get() or ""
-    if not _TODAY_SERVICE_DATEPICK_RE.search(user_text):
+    if not force and not _TODAY_SERVICE_DATEPICK_RE.search(user_text):
         return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):

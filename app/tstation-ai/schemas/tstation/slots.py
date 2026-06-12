@@ -1,6 +1,6 @@
-import re
 import logging
-from typing import Any, ClassVar, Literal, Optional
+import re
+from typing import Any, ClassVar, Literal, Mapping, Optional
 
 from pydantic import BaseModel
 
@@ -97,6 +97,38 @@ class ConversationSlots(BaseModel):
         # the "매장 선택" step after a region-only follow-up like "성남은?".
         "goal_type": ["user_preferences_text"],
         "region": ["shop_id", "shop_name"],
+    }
+    RUNTIME_DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
+        # Runtime product resolution is usually "same size, different model".
+        # Keep tire_size so Discovery/Transaction can re-query the new SKU under
+        # the user's active size, but never keep old product label or amount.
+        "goods_no": ["tire_model", "payment_amount"],
+        "tire_model": ["goods_no", "payment_amount"],
+        "tire_size": ["goods_no", "payment_amount"],
+        "ord_qty": ["payment_amount"],
+        "shop_name": ["shop_id", "payment_amount"],
+        "shop_id": ["payment_amount"],
+        "region": ["shop_id", "shop_name"],
+        "car_model": [
+            "car_no",
+            "car_lnc_cd",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "goods_no",
+            "payment_amount",
+        ],
+        "car_no": [
+            "car_model",
+            "car_lnc_cd",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "goods_no",
+            "payment_amount",
+        ],
     }
 
     # Regex patterns for extracting slots from user messages
@@ -367,6 +399,46 @@ class ConversationSlots(BaseModel):
         # Store reset fields for merge_fill_only to reference
         object.__setattr__(merged, "_reset_fields", reset_fields)
         return merged
+
+    def apply_runtime_values(
+        self,
+        values: Mapping[str, Any],
+        *,
+        source: str = "runtime",
+        fill_only: bool = False,
+    ) -> "ConversationSlots":
+        """Apply non-None runtime slot values with source-safe dependency resets.
+
+        This is for slots recovered from tools/templates/history after routing
+        has started. It intentionally differs from `merge()`: a newly resolved
+        goods_no should not erase the active tire_size unless the incoming
+        payload says so, because product switches often reuse size/qty/region.
+        """
+        del source  # reserved for trace/debug-specific policies if needed
+        incoming = {field: value for field, value in dict(values).items() if value is not None}
+        updated = self.model_copy()
+
+        for field, new_val in incoming.items():
+            if not hasattr(updated, field):
+                continue
+            old_val = getattr(updated, field)
+            if fill_only and old_val is not None:
+                continue
+            if old_val is not None and old_val != new_val:
+                for dep in self.RUNTIME_DEPENDENT_RESETS.get(field, []):
+                    if dep in incoming:
+                        continue
+                    logger.info(
+                        "[SLOTS] runtime %s changed (%r -> %r), resetting %s",
+                        field,
+                        old_val,
+                        new_val,
+                        dep,
+                    )
+                    setattr(updated, dep, None)
+            setattr(updated, field, new_val)
+
+        return updated
 
     def merge_fill_only(
         self,

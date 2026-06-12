@@ -32,6 +32,39 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             metadata={"response_shape_key": "metric_comparison_summary", "compare_metric": "mileage"},
         )
 
+    if frame.sub_intent == "quantity_benefit_comparison":
+        quantity_options = tuple(entities.get("quantity_options") or ())
+        if tire_size or frame.known_slots.get("goods_no"):
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("answer_without_price_tool", "summarize_product_family_instead_of_comparing"),
+                assistant_guidance="확정 상품의 2개/4개 실제 혜택가를 각각 조회한 뒤 총액과 개당가 기준으로 비교한다.",
+                metadata={
+                    "response_shape_key": "quantity_benefit_comparison",
+                    "quantity_options": quantity_options,
+                },
+            )
+        return ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("tire_size",),
+            forbidden_behaviors=(
+                "product_search_summary_as_final_answer",
+                "price_without_size",
+                "answer_without_price_tool",
+            ),
+            assistant_guidance=(
+                "2개/4개 혜택 비교는 정확한 상품 규격이 필요하므로 상품군 설명으로 끝내지 말고 "
+                "타이어 사이즈 또는 차량 확인을 요청한다."
+            ),
+            metadata={
+                "response_shape_key": "quantity_benefit_comparison_missing_product_or_size",
+                "quantity_options": quantity_options,
+            },
+        )
+
     if frame.sub_intent in ("attribute_compare", "latest_compare"):
         compare_metric = str(entities.get("compare_metric") or "detail")
         return ResponseDecision(

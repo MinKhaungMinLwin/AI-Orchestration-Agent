@@ -22,7 +22,7 @@ class ProductSearchItem:
         score (int | Unset): 검색 관련도 점수 Default: 0.
         match_type (str | Unset): 매칭 유형 (exact/prefix/partial/alias) Default: 'none'.
         smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
-        image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
+        image_url (None | str | Unset): 대표 이미지 URL (패턴 대표 이미지, 없으면 VW_PR_GOODS_BASE 상품 이미지 + IMAGE_BASE_URL)
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''
         label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB, VARCHAR2)

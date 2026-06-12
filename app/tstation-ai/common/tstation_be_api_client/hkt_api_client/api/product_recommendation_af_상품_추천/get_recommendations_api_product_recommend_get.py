@@ -8,6 +8,7 @@ from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
 from ...models.rcmd_type import RcmdType
 from ...models.recommendation_response import RecommendationResponse
+from ...models.vehicle_type import VehicleType
 from ...types import UNSET, Response, Unset
 
 
@@ -22,6 +23,7 @@ def _get_kwargs(
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
     prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> dict[str, Any]:
@@ -71,6 +73,15 @@ def _get_kwargs(
     else:
         json_prc_grd = prc_grd
     params["prc_grd"] = json_prc_grd
+
+    json_vehicle_type: None | str | Unset
+    if isinstance(vehicle_type, Unset):
+        json_vehicle_type = UNSET
+    elif isinstance(vehicle_type, VehicleType):
+        json_vehicle_type = vehicle_type.value
+    else:
+        json_vehicle_type = vehicle_type
+    params["vehicle_type"] = json_vehicle_type
 
     json_min_price: int | None | Unset
     if isinstance(min_price, Unset):
@@ -139,6 +150,7 @@ def sync_detailed(
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
     prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
@@ -181,6 +193,10 @@ def sync_detailed(
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
     가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
 
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -198,6 +214,8 @@ def sync_detailed(
         prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
             '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
             rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -221,6 +239,7 @@ def sync_detailed(
         season_nm=season_nm,
         pfm_nm=pfm_nm,
         prc_grd=prc_grd,
+        vehicle_type=vehicle_type,
         min_price=min_price,
         max_price=max_price,
     )
@@ -244,6 +263,7 @@ def sync(
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
     prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
@@ -286,6 +306,10 @@ def sync(
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
     가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
 
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -303,6 +327,8 @@ def sync(
         prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
             '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
             rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -327,6 +353,7 @@ def sync(
         season_nm=season_nm,
         pfm_nm=pfm_nm,
         prc_grd=prc_grd,
+        vehicle_type=vehicle_type,
         min_price=min_price,
         max_price=max_price,
     ).parsed
@@ -344,6 +371,7 @@ async def asyncio_detailed(
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
     prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
@@ -386,6 +414,10 @@ async def asyncio_detailed(
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
     가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
 
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -403,6 +435,8 @@ async def asyncio_detailed(
         prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
             '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
             rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -426,6 +460,7 @@ async def asyncio_detailed(
         season_nm=season_nm,
         pfm_nm=pfm_nm,
         prc_grd=prc_grd,
+        vehicle_type=vehicle_type,
         min_price=min_price,
         max_price=max_price,
     )
@@ -447,6 +482,7 @@ async def asyncio(
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
     prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
     min_price: int | None | Unset = UNSET,
     max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
@@ -489,6 +525,10 @@ async def asyncio(
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
     가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
 
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
+
     Args:
         rcmd_type (RcmdType):
         limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
@@ -506,6 +546,8 @@ async def asyncio(
         prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
             '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
             rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
         min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
             min_price. 모든 rcmd_type 에 적용.
         max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
@@ -531,6 +573,7 @@ async def asyncio(
             season_nm=season_nm,
             pfm_nm=pfm_nm,
             prc_grd=prc_grd,
+            vehicle_type=vehicle_type,
             min_price=min_price,
             max_price=max_price,
         )

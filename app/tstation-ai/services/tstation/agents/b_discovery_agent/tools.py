@@ -34,6 +34,8 @@ from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_best_sellers_api_product_best_sellers_get import sync_detailed as get_best_sellers
 from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
+from common.tstation_be_api_client.hkt_api_client.models import VehicleType
+from common.tstation_be_api_client.hkt_api_client.types import UNSET
 
 
 # Event/Deal
@@ -68,8 +70,9 @@ def _apply_recommendation_policy_patch(
     season_nm: str | None,
     pfm_nm: str | None,
     prc_grd: str | None,
+    vehicle_type: str | None,
     car_lnc_cd: str | None,
-) -> tuple[RcmdType, str, str | None, str | None, str | None, str | None, str | None]:
+) -> tuple[RcmdType, str, str | None, str | None, str | None, str | None, str | None, str | None]:
     """Apply deterministic Discovery policy arguments to recommendation calls.
 
     This is intentionally conservative: only Discovery policy keys produced
@@ -77,7 +80,7 @@ def _apply_recommendation_policy_patch(
     over an explicit vehicle/size argument.
     """
     if not patch:
-        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd
+        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
 
     patched_rcmd_type = patch.get("rcmd_type")
     if patched_rcmd_type:
@@ -94,7 +97,9 @@ def _apply_recommendation_policy_patch(
         pfm_nm = str(patch["pfm_nm"])
     if not prc_grd and patch.get("prc_grd"):
         prc_grd = str(patch["prc_grd"])
-    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd
+    if not vehicle_type and patch.get("vehicle_type"):
+        vehicle_type = str(patch["vehicle_type"])
+    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
 
 
 _WINTER_RECOMMENDATION_FALLBACKS: tuple[tuple[RcmdType, str, str], ...] = (
@@ -502,7 +507,7 @@ def search_product_tool(
     keyword: str | None = None,
     limit: int = 10,
     size: str | None = None,
-    brand_cd: str = "HK",
+    brand_cd: str | None = None,
     sort_by: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
@@ -524,8 +529,9 @@ def search_product_tool(
     - ❌ NEVER translate Korean → English
     - ❌ NEVER put a brand name into keyword — use brand_cd instead
 
-    Brand codes: HK=Hankook (default), LF=Laufenn, MC=Michelin, PI=Pirelli,
+    Brand codes: HK=Hankook, LF=Laufenn, MC=Michelin, PI=Pirelli,
                  BS=Bridgestone, CT=Continental, GY=Goodyear.
+    If the user did not specify a brand, omit brand_cd and search all brands.
     Unsupported brands (금호, 넥센 etc.) → decline, do not search.
 
     Args:
@@ -534,7 +540,7 @@ def search_product_tool(
             방어적으로, 브랜드명만 들어오면 자동으로 None 으로 정규화된다.
         limit (int): 반환할 최대 상품 수 Default: 10.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
-        brand_cd (str): 브랜드 코드. Default: HK.
+        brand_cd (str | None): 브랜드 코드. 미지정 시 전체 브랜드 검색.
             - HK: Hankook 한국타이어
             - LF: Laufenn 라우펜
             - MC: Michelin 미쉐린
@@ -593,13 +599,21 @@ def search_product_tool(
     fetch_limit = limit * 4 if has_price_filter else limit
     if has_newest_sort:
         fetch_limit = max(fetch_limit, 100)
+    normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
+    brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
     logger.debug(
         "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
-        normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
+        normalized_keyword, limit, size, normalized_brand_cd, sort_by, min_price, max_price,
     )
 
     try:
-        response = search_product(client=get_client(), keyword=normalized_keyword, limit=fetch_limit, size=size, brand_cd=brand_cd)
+        response = search_product(
+            client=get_client(),
+            keyword=normalized_keyword,
+            limit=fetch_limit,
+            size=size,
+            brand_cd=brand_arg,
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -630,11 +644,11 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
     차량번호+소유주명으로 차량 조회.
 
     When to use:
-    - FALLBACK only: after get_my_cars_tool returns 0 cars AND user provides car_no + owner_nm
+    - DIRECTLY when the same user message provides car_no + owner_nm
     - Also when user provides someone else's vehicle number
 
     When NOT to use:
-    - Do NOT use before trying get_my_cars_tool first
+    - Do NOT call get_my_cars_tool first when car_no + owner_nm are already present
     - Do NOT use if tire_size is already confirmed
 
     Args:
@@ -686,8 +700,12 @@ def get_my_cars_tool(mbr_no: str):
     사용자 등록 차량 조회 (회원번호 기준).
 
     When to use:
-    - FIRST step for ANY vehicle-related request (tire recommendation, compatibility, price by vehicle)
+    - FIRST step for vehicle-related request when the user asks for their registered cars/my car
     - Call immediately using mbr_no from JWT — do NOT ask user questions first
+
+    When NOT to use:
+    - If the same user message already includes car_no + owner_nm, do NOT call this tool.
+      Use get_user_vehicles_tool(car_no, owner_nm) directly.
 
     Result handling:
     - 1 car → auto-select, use tire_size_fr and car_lnc_cd
@@ -887,6 +905,7 @@ def get_products_recommendations_tool(
     season_nm: str | None = None,
     pfm_nm: str | None = None,
     prc_grd: str | None = None,
+    vehicle_type: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
     ignore_policy_patch: bool = False,
@@ -966,6 +985,13 @@ def get_products_recommendations_tool(
             ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
             "프리미엄 타이어 추천" / "프리미엄급으로 추천" 의도면 prc_grd="프리미엄" 사용.
             sort_by="price_desc" 는 "비싼 순" (정렬) 일 뿐 등급 필터가 아님 — 헷갈리지 말 것.
+        vehicle_type (str | None, optional): 차량 타입 직교 필터. rcmd_type 과 별도로 적용한다.
+            - "ev": 전기차용 (CAR_KND_NM='전기차')
+            - "suv": SUV용 (CAR_KND_NM='SUV')
+            - "passenger": 승용/세단/스포츠카용
+            - "truck_van": 경트럭/밴/트럭용
+            ⚠️ "전기차 저소음" 같은 복합 의도는 rcmd_type="low_vibration", vehicle_type="ev" 로 전달한다.
+            기존 rcmd_type="ev" 는 하위 호환용 단일 전기차 추천일 때만 사용한다.
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -980,6 +1006,8 @@ def get_products_recommendations_tool(
         - "프리미엄급으로 추천" → rcmd_type="tstation", prc_grd="프리미엄"
         - "올웨더 말고 프리미엄급으로" (직전 올웨더 추천 후 redo) → rcmd_type="tstation", prc_grd="프리미엄"
         - "프리미엄 사계절" → rcmd_type="tstation", prc_grd="프리미엄", season_nm="사계절"
+        - "전기차 저소음" → rcmd_type="low_vibration", vehicle_type="ev"
+        - "SUV 가성비" → rcmd_type="value", vehicle_type="suv"
 
     Notes:
         - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
@@ -995,6 +1023,8 @@ def get_products_recommendations_tool(
         - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
         - {"rcmd_type": "tstation", "pfm_nm": "RUNFLAT", "limit": 3}  # 런플랫 단독 추천
         - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
+        - {"rcmd_type": "low_vibration", "vehicle_type": "ev"}  # 전기차 저소음
+        - {"rcmd_type": "value", "vehicle_type": "suv"}  # SUV 가성비
         - {"rcmd_type": "value", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 가성비
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
 
@@ -1055,17 +1085,21 @@ def get_products_recommendations_tool(
             "season_nm": season_nm,
             "pfm_nm": pfm_nm,
             "prc_grd": prc_grd,
+            "vehicle_type": vehicle_type,
         }
-        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd = _apply_recommendation_policy_patch(
-            patch=policy_patch,
-            rcmd_type=rcmd_type,
-            brand_cd=brand_cd,
-            tire_size=tire_size,
-            sort_by=sort_by,
-            season_nm=season_nm,
-            pfm_nm=pfm_nm,
-            prc_grd=prc_grd,
-            car_lnc_cd=car_lnc_cd,
+        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type = (
+            _apply_recommendation_policy_patch(
+                patch=policy_patch,
+                rcmd_type=rcmd_type,
+                brand_cd=brand_cd,
+                tire_size=tire_size,
+                sort_by=sort_by,
+                season_nm=season_nm,
+                pfm_nm=pfm_nm,
+                prc_grd=prc_grd,
+                vehicle_type=vehicle_type,
+                car_lnc_cd=car_lnc_cd,
+            )
         )
         logger.info(
             "[TOOL][get_products_recommendations_tool] Applied discovery policy patch=%s before=%s after=%s",
@@ -1079,6 +1113,7 @@ def get_products_recommendations_tool(
                 "season_nm": season_nm,
                 "pfm_nm": pfm_nm,
                 "prc_grd": prc_grd,
+                "vehicle_type": vehicle_type,
             },
         )
 
@@ -1099,8 +1134,8 @@ def get_products_recommendations_tool(
     requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
     requested_season_nm = season_nm
     logger.debug(
-        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, min_price=%s, max_price=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, min_price, max_price,
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, vehicle_type=%s, min_price=%s, max_price=%s",
+        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price,
     )
 
     def _fetch_recommendation_once(
@@ -1108,6 +1143,15 @@ def get_products_recommendations_tool(
         call_rcmd_type: RcmdType,
         call_season_nm: str | None,
     ) -> dict:
+        try:
+            vehicle_type_param = VehicleType(str(vehicle_type)) if vehicle_type else None
+        except ValueError:
+            return _error_response(
+                http_status=422,
+                reason="INVALID_VEHICLE_TYPE",
+                message=f"지원하지 않는 vehicle_type: {vehicle_type}",
+            )
+
         response = get_products_recommendations(
             client=get_client(),
             rcmd_type=call_rcmd_type,
@@ -1119,6 +1163,7 @@ def get_products_recommendations_tool(
             season_nm=call_season_nm,
             pfm_nm=pfm_nm,
             prc_grd=prc_grd,
+            vehicle_type=vehicle_type_param,
             min_price=min_price,
             max_price=max_price,
         )

@@ -16,30 +16,53 @@ _ALL_WEATHER_RE = re.compile(r"올웨더|all\s*weather", re.IGNORECASE)
 _ALL_SEASON_RE = re.compile(r"사계절|올시즌|all\s*season", re.IGNORECASE)
 _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re.IGNORECASE)
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
+_VALUE_RECOMMENDATION_RE = re.compile(r"가성비|합리적|가격\s*대비|value", re.IGNORECASE)
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
+_QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
+_EV_RECOMMENDATION_RE = re.compile(
+    r"전기차|전기차용|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_SUV_RECOMMENDATION_RE = re.compile(r"SUV|스포츠\s*유틸리티", re.IGNORECASE)
+_PASSENGER_RECOMMENDATION_RE = re.compile(r"승용차|세단|SEDAN|스포츠카", re.IGNORECASE)
+_TRUCK_VAN_RECOMMENDATION_RE = re.compile(r"경트럭|화물차|카고트럭|덤프트럭|트럭|밴|승합차", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
 _SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
 _MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
 _MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d)", re.IGNORECASE)
-_LATEST_RE = re.compile(r"최신|신제품|최근\s*출시|새로\s*나온|등록일", re.IGNORECASE)
+_LATEST_RE = re.compile(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|새로\s*나온|등록일", re.IGNORECASE)
 _CONCEPT_RE = re.compile(r"뭐야|무슨\s*뜻|의미|차이|설명", re.IGNORECASE)
 _BUY_RE = re.compile(r"구매|살래|주문|장바구니|결제", re.IGNORECASE)
 _STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|장착\s*가능|예약|매장|근처|주변", re.IGNORECASE)
 _SIMILAR_PRICE_RE = re.compile(r"비슷한\s*가격|가격대|동급\s*가격", re.IGNORECASE)
+_QUANTITY_OPTION_RE = re.compile(r"(\d{1,2})\s*(?:개|본)")
+_QUANTITY_BENEFIT_RE = re.compile(r"할인|혜택|가격|금액|최종가|저렴|싼|싸|쿠폰", re.IGNORECASE)
+_QUANTITY_COMPARE_RE = re.compile(r"비교|중에|살까|고민|더|차이|낫|유리|얼마나", re.IGNORECASE)
 _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNORECASE)
 _COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
 _BEST_SELLER_RE = re.compile(
-    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|젤\s*많이\s*(?:구매한|산)|잘\s*나가",
     re.IGNORECASE,
 )
+_DEMOGRAPHIC_ATTRIBUTE_RE = re.compile(
+    r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
+    re.IGNORECASE,
+)
+_DEMOGRAPHIC_PREFERENCE_RE = re.compile(r"선호|좋아하는|많이\s*사는|인기|추천", re.IGNORECASE)
 _DEFAULT_TIRE_SHOPPING_RE = re.compile(
     r"(?:t\s*['’]?\s*bot\s*과\s*)?타이어\s*쇼핑\s*하기",
     re.IGNORECASE,
 )
 _DEFAULT_BENEFIT_RE = re.compile(
     r"지금\s*받을\s*수\s*있는\s*혜택|현재\s*받을\s*수\s*있는\s*혜택|"
-    r"진행\s*중인\s*(?:이벤트|기획전|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전",
+    r"진행\s*중인\s*(?:이벤트|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전|"
+    r"이벤트(?:와|과|하고)\s*기획전|기획전(?:와|과|하고)\s*이벤트|"
+    r"이벤트\s*(?:목록|리스트|검색|조회|보여|알려)",
+    re.IGNORECASE,
+)
+_DEAL_LIST_RE = re.compile(
+    r"진행\s*중인\s*기획전|기획전\s*(?:목록|리스트|검색|조회|보여|알려|내용)?",
     re.IGNORECASE,
 )
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
@@ -109,6 +132,8 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("cup2", "CUP2", "MC"),
     ("cup 2", "CUP2", "MC"),
     ("p7", "P7", "PI"),
+    ("세레니티 플러스", "세레니티 플러스", "BS"),
+    ("serenity plus", "세레니티 플러스", "BS"),
 )
 _BRAND_ALIASES: tuple[tuple[str, str], ...] = (
     ("한국타이어", "HK"),
@@ -216,7 +241,10 @@ def best_seller_period_from_text(text: str) -> str | None:
     ranking window the BE supports unless the user names a narrower period.
     """
     text = text or ""
-    if not _BEST_SELLER_RE.search(text):
+    is_demographic_preference = bool(
+        _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text)
+    )
+    if not _BEST_SELLER_RE.search(text) and not is_demographic_preference:
         return None
     if _BEST_SELLER_DAY_RE.search(text):
         return "day"
@@ -237,6 +265,32 @@ def is_default_benefit_request(text: str) -> bool:
     return bool(_DEFAULT_BENEFIT_RE.search(text or ""))
 
 
+def is_deal_list_request(text: str) -> bool:
+    """Deal-only listing request. Event listing intentionally returns both events and deals."""
+    return bool(_DEAL_LIST_RE.search(text or "")) and not is_default_benefit_request(text)
+
+
+def extract_quantity_options(text: str) -> tuple[int, ...]:
+    quantities: list[int] = []
+    for match in _QUANTITY_OPTION_RE.finditer(text or ""):
+        try:
+            quantity = int(match.group(1))
+        except ValueError:
+            continue
+        if quantity > 0 and quantity not in quantities:
+            quantities.append(quantity)
+    return tuple(sorted(quantities))
+
+
+def is_quantity_benefit_comparison_request(text: str) -> bool:
+    quantity_options = extract_quantity_options(text)
+    return (
+        len(quantity_options) >= 2
+        and bool(_QUANTITY_BENEFIT_RE.search(text or ""))
+        and bool(_QUANTITY_COMPARE_RE.search(text or ""))
+    )
+
+
 def build_discovery_intent_frame(
     last_user_text: str,
     *,
@@ -251,6 +305,7 @@ def build_discovery_intent_frame(
     brand_codes = extract_brand_codes(text)
     variant_constraints = extract_variant_constraints(text)
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
+    quantity_options = extract_quantity_options(text)
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -259,6 +314,8 @@ def build_discovery_intent_frame(
         "purchase_intent": bool(_BUY_RE.search(text)),
         "attribute_metrics": attribute_metrics,
     }
+    if quantity_options:
+        entities["quantity_options"] = quantity_options
     if brand_cd:
         entities["brand_cd"] = brand_cd
     if brand_codes:
@@ -276,6 +333,16 @@ def build_discovery_intent_frame(
 
     if _PERFORMANCE_RE.search(text):
         entities["performance"] = "performance"
+    if _QUIET_RECOMMENDATION_RE.search(text):
+        entities["quiet_focus"] = True
+    if _EV_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "ev"
+    elif _SUV_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "suv"
+    elif _TRUCK_VAN_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "truck_van"
+    elif _PASSENGER_RECOMMENDATION_RE.search(text):
+        entities["vehicle_category"] = "passenger"
     if "noise" in attribute_metrics:
         entities["label_metric"] = "noise"
     if _SOUND_ABSORBER_RE.search(text):
@@ -286,6 +353,8 @@ def build_discovery_intent_frame(
         entities["rcmd_type"] = "safe_kids"
     if _LOWEST_PRICE_RE.search(text):
         entities["price_goal"] = "lowest"
+    if _VALUE_RECOMMENDATION_RE.search(text):
+        entities["value_focus"] = True
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
     best_seller_period = best_seller_period_from_text(text)
@@ -295,6 +364,8 @@ def build_discovery_intent_frame(
         entities["default_tire_shopping"] = True
     if is_default_benefit_request(text):
         entities["default_benefit"] = True
+    elif is_deal_list_request(text):
+        entities["deal_list_only"] = True
 
     concept = bool(_CONCEPT_RE.search(text))
     standalone_attribute_metrics = tuple(
@@ -303,6 +374,13 @@ def build_discovery_intent_frame(
     if entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
+    elif entities.get("deal_list_only"):
+        intent = "product_search"
+        sub_intent = "benefit_deal_list"
+    elif is_quantity_benefit_comparison_request(text):
+        intent = "product_comparison"
+        sub_intent = "quantity_benefit_comparison"
+        entities["compare_metric"] = "discount"
     elif best_seller_period:
         intent = "product_search"
         sub_intent = "best_seller_search"
@@ -390,6 +468,8 @@ def build_discovery_intent_frame(
     missing_slots: tuple[str, ...] = ()
     if intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
         missing_slots = ("tire_size",)
+    elif sub_intent == "quantity_benefit_comparison" and not tire_size and not slots.get("goods_no"):
+        missing_slots = ("tire_size",)
 
     return IntentFrame(
         domain=PolicyDomain.DISCOVERY,
@@ -410,6 +490,13 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_events_tool",
             tool_args_patch={"lang_cd": "ko"},
             forbidden_tools=("get_my_coupons_tool",),
+        )
+    if frame.sub_intent == "benefit_deal_list":
+        return ToolPlan(
+            allowed_tools=("get_deals_tool",),
+            preferred_tool="get_deals_tool",
+            tool_args_patch={},
+            forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
         )
     if frame.sub_intent == "best_seller_search":
         args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}
@@ -443,9 +530,19 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
         )
     if frame.intent == "product_comparison":
+        args: dict[str, Any] = {}
+        if frame.sub_intent == "quantity_benefit_comparison":
+            product_names = entities.get("product_names") or ()
+            if product_names:
+                args["keyword"] = product_names[0]
+            if entities.get("tire_size"):
+                args["size"] = entities["tire_size"]
+            if entities.get("brand_cd"):
+                args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_products_recommendations_tool"),
             preferred_tool="search_product_tool",
+            tool_args_patch=args,
             forbidden_tools=("product_card_first_response",),
         )
     if entities.get("technology") == "sound_absorber":
@@ -471,14 +568,31 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("generic_unsized_recommendation",),
         )
     args = {}
-    if entities.get("recommendation_metric") == "fuel_efficiency":
+    if entities.get("vehicle_category"):
+        args["vehicle_type"] = entities["vehicle_category"]
+    if entities.get("quiet_focus"):
+        args["rcmd_type"] = "low_vibration"
+    elif entities.get("value_focus"):
+        args["rcmd_type"] = "value"
+    elif entities.get("recommendation_metric") == "fuel_efficiency":
         args["rcmd_type"] = "fuel_efficiency"
     elif entities.get("performance") == "performance":
         args["rcmd_type"] = "performance"
     if entities.get("season") == "winter":
-        args.update({"rcmd_type": "snow", "season_nm": "겨울"})
+        if args.get("rcmd_type"):
+            args["season_nm"] = "겨울"
+        else:
+            args.update({"rcmd_type": "snow", "season_nm": "겨울"})
     elif entities.get("season") == "all_weather":
-        args.update({"rcmd_type": "all_weather"})
+        if args.get("rcmd_type"):
+            args["season_nm"] = "올웨더"
+        else:
+            args.update({"rcmd_type": "all_weather"})
+    elif entities.get("season") == "all_season":
+        if args.get("rcmd_type"):
+            args["season_nm"] = "사계절"
+        else:
+            args.update({"rcmd_type": "all_weather", "season_nm": "사계절"})
     elif entities.get("season") == "summer":
         args["season_nm"] = "여름"
     if entities.get("explicit_tire_size") or entities.get("price_goal") != "similar_range":

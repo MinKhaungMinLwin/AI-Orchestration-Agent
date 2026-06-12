@@ -14,6 +14,7 @@ class DeliveryPolicyIntent(str, Enum):
     SHIPPING_FEE_REGION = "shipping_fee_region"
     SHIPPING_FEE_FOLLOWUP = "shipping_fee_followup"
     ONLINE_STORE_PRICE_POLICY = "online_store_price_policy"
+    REGIONAL_PRICE_POLICY = "regional_price_policy"
 
 
 class DeliveryPolicyGateDecision(BaseModel):
@@ -30,7 +31,8 @@ class DeliveryPolicyGateDecision(BaseModel):
 _DELIVERY_TRIGGER_RE = re.compile(
     r"배송비|추가\s*배송|추가\s*비용|도서산간|제주|서귀포|집으로|집에|자택|택배|"
     r"직접\s*(?:갈아|교체|장착)|자가\s*장착|셀프\s*(?:교체|장착)|"
-    r"온라인.{0,12}(?:매장|오프라인)|(?:매장|오프라인).{0,12}온라인",
+    r"온라인.{0,12}(?:매장|오프라인)|(?:매장|오프라인).{0,12}온라인|"
+    r"(?:지역|서울|부산|대구|인천|광주|대전|울산).{0,24}(?:가격|판매가|최종가)",
     re.IGNORECASE,
 )
 _DIRECT_HOME_DELIVERY_RE = re.compile(
@@ -38,7 +40,7 @@ _DIRECT_HOME_DELIVERY_RE = re.compile(
     r"(?:배송\s*받|배송받|받고\s*싶|보내|택배|수령)|"
     r"(?:집|자택|우리\s*집|집으로|집에|배송지|주소지|택배).{0,20}(?:타이어|상품).{0,20}"
     r"(?:배송\s*받|배송받|받고\s*싶|보내|택배|수령)|"
-    r"(?:집으로|집에|자택으로).{0,12}(?:배송\s*받|배송받|받고\s*싶|보내|택배|수령)|"
+    r"(?:집으로|집에|자택으로).{0,12}(?:배송\s*받|배송받|배송\s*해|배송해|받고\s*싶|보내|택배|수령)|"
     r"(?:내가|직접|셀프|자가).{0,12}(?:갈아|교체|장착|끼워)",
     re.IGNORECASE,
 )
@@ -50,6 +52,12 @@ _SHIPPING_FEE_REGION_RE = re.compile(
 _ONLINE_STORE_PRICE_RE = re.compile(
     r"(?:온라인|닷컴).{0,18}(?:매장|오프라인).{0,18}(?:가격|동일|같|차이)|"
     r"(?:매장|오프라인).{0,18}(?:온라인|닷컴).{0,18}(?:가격|동일|같|차이)",
+    re.IGNORECASE,
+)
+_REGIONAL_PRICE_POLICY_RE = re.compile(
+    r"(?=.*(?:가격|판매가|최종가))"
+    r"(?=.*(?:똑같|같(?:아|은|나요|을까)?|동일|다르|차이|왜))"
+    r"(?=.*(?:제주(?:도|특별자치도)?|서귀포(?:시)?|도서산간|서울|부산|대구|인천|광주|대전|울산|지역|매장|지점))",
     re.IGNORECASE,
 )
 _REGION_ONLY_FOLLOWUP_RE = re.compile(r"^\s*(제주(?:도)?|서귀포(?:시)?|도서산간)(?:은|는|도|요|呢)?\s*[?.!]*\s*$")
@@ -123,6 +131,14 @@ def decide_delivery_policy_gate(
             confidence=0.85,
             region_hint=_region_hint(text),
             reason="User asks online versus store price policy.",
+        )
+
+    if _REGIONAL_PRICE_POLICY_RE.search(text):
+        return DeliveryPolicyGateDecision(
+            intent=DeliveryPolicyIntent.REGIONAL_PRICE_POLICY,
+            confidence=0.85,
+            region_hint=_region_hint(text),
+            reason="User asks regional product price policy.",
         )
 
     return DeliveryPolicyGateDecision(
