@@ -3131,6 +3131,12 @@ def _normalize_existing_reservation_change_quickreply(event_data: dict[str, Any]
         return False
     if normalized == assistant_text:
         normalized = f"{assistant_text.rstrip()}\n\n{guidance}"
+    direct_sentence = "예약 시간은 제가 직접 변경해 드릴 수는 없어요."
+    if normalized.count(direct_sentence) > 1:
+        first_idx = normalized.find(direct_sentence)
+        head = normalized[: first_idx + len(direct_sentence)]
+        tail = normalized[first_idx + len(direct_sentence):].replace(direct_sentence, "").strip()
+        normalized = f"{head}\n\n{tail}" if tail else head
 
     event_data["assistantResponse"] = normalized
     chips = event_data.get("quickReplies")
