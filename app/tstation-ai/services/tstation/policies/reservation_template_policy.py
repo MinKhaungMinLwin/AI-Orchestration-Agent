@@ -42,6 +42,12 @@ _SCHEDULE_REQUEST_RE = re.compile(
     r"스케줄(?:표)?|시간표",
     re.IGNORECASE,
 )
+_NEW_STORE_SCOPE_REQUEST_RE = re.compile(
+    r"(?:오늘|내일|모레).{0,30}(?:지역|근처|주변|매장|지점)|"
+    r"(?:지역|근처|주변).{0,20}(?:매장|지점)|"
+    r"(?:매장|지점).{0,20}(?:찾|검색|알려|보여)",
+    re.IGNORECASE,
+)
 
 
 def yyyymmdd_to_korean_date(s: str) -> str:
@@ -561,6 +567,8 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
         or _SCHEDULE_REQUEST_RE.search(user_text or "")
     )
     if not is_schedule_followup:
+        return None
+    if _NEW_STORE_SCOPE_REQUEST_RE.search(user_text or ""):
         return None
 
     assistant_text = str(event_data.get("assistantResponse") or "")
