@@ -1013,6 +1013,8 @@ class StreamingMultiAgentCoordinator:
     _TRANSACTION_RESERVATION_CHANGE_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"(?:예약한\s*거|예약한거|잡힌\s*예약|예약인데|방문\s*예약|예약|방문|일정|시간).{0,18}"
         r"(?:변경|바꾸|바꿔|미루|당기)"
+        r"|(?:\d{1,2}\s*시|\d{1,2}\s*:\s*\d{2}).{0,8}(?:로|으로)?.{0,8}"
+        r"(?:변경|바꾸|바꿔|미루|당기)"
         r"|시간\s*변경|방문\s*시간\s*변경|예약\s*시간\s*변경|일정\s*변경|시간\s*바꿀\s*수\s*있",
         re.IGNORECASE,
     )
@@ -1040,6 +1042,20 @@ class StreamingMultiAgentCoordinator:
                 cls._TRANSACTION_RESERVATION_LOOKUP_RE,
                 cls._TRANSACTION_RESERVATION_CHANGE_RE,
                 cls._TRANSACTION_MAINTENANCE_HISTORY_RE,
+                cls._TRANSACTION_CANCELLATION_RE,
+            )
+        )
+
+    @classmethod
+    def _is_existing_reservation_management_current_turn_query(cls, text: str) -> bool:
+        normalized = (text or "").strip()
+        if not normalized:
+            return False
+        return any(
+            pattern.search(normalized)
+            for pattern in (
+                cls._TRANSACTION_RESERVATION_LOOKUP_RE,
+                cls._TRANSACTION_RESERVATION_CHANGE_RE,
                 cls._TRANSACTION_CANCELLATION_RE,
             )
         )
@@ -8156,6 +8172,8 @@ class TStationChatServiceV2:
         tool_data: list[dict],
         slots: Any,
         max_items: int = 3,
+        *,
+        intent_group: str | None = None,
     ) -> list[dict]:
         """Select prompt context by confirmed data and recency.
 
@@ -8165,19 +8183,27 @@ class TStationChatServiceV2:
         if not tool_data:
             return []
 
+        candidate_tool_data = [
+            item
+            for item in tool_data
+            if not TStationChatServiceV2._should_exclude_tool_context_for_intent_group(item, intent_group)
+        ]
+        if not candidate_tool_data:
+            return []
+
         active_values = TStationChatServiceV2._active_context_values(slots)
         selected: list[dict] = []
         selected_ids: set[int] = set()
 
         if active_values:
-            for item in tool_data:
+            for item in candidate_tool_data:
                 if TStationChatServiceV2._value_contains_active_context(item, active_values):
                     selected.append(TStationChatServiceV2._compact_context_item(item, active_values))
                     selected_ids.add(id(item))
                     if len(selected) >= max_items:
                         break
 
-        for item in tool_data:
+        for item in candidate_tool_data:
             if len(selected) >= max_items:
                 break
             if id(item) in selected_ids:
@@ -8185,6 +8211,24 @@ class TStationChatServiceV2:
             selected.append(item)
 
         return selected
+
+    @staticmethod
+    def _should_exclude_tool_context_for_intent_group(item: dict, intent_group: str | None) -> bool:
+        if intent_group != "existing_reservation_management":
+            return False
+        tool_name = str(item.get("tool") or "")
+        return tool_name in {
+            "get_store_schedule_tool",
+            "get_multi_store_schedule_tool",
+            "get_store_detail_tool",
+            "transaction_store_preview_tool",
+        }
+
+    @staticmethod
+    def _should_drop_template_for_intent_group(event: dict, intent_group: str | None) -> bool:
+        if intent_group != "existing_reservation_management":
+            return False
+        return event.get("template") in {"datepick", "location"}
 
     @staticmethod
     def _messages_chars(messages: list[dict]) -> int:
@@ -9062,6 +9106,7 @@ class TStationChatServiceV2:
         merged_slots = ConversationSlots()
         fresh_product_transaction_request = False
         goods_no_resolved_this_turn = False
+        intent_group: str | None = None
         quick_reply_domain_values: list[str] = []
         predicted_domain_values: list[str] = []
         latest_datepick_tmpl: dict | None = None
@@ -9189,6 +9234,8 @@ class TStationChatServiceV2:
 
             # 2) Extract regex-based slots from the LATEST user message only
             regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
+            if StreamingMultiAgentCoordinator._is_existing_reservation_management_current_turn_query(last_user_text):
+                intent_group = "existing_reservation_management"
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
@@ -9767,7 +9814,11 @@ class TStationChatServiceV2:
                 if suppress_inherited_recommendation_context:
                     logger.debug("[TOOL_CTX] Skipped recent tool context for product attribute lookup turn")
                 else:
-                    prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(prev_tool_data, merged_slots)
+                    prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(
+                        prev_tool_data,
+                        merged_slots,
+                        intent_group=intent_group,
+                    )
                     tool_context = TStationChatServiceV2._format_tool_context(prompt_tool_data)
                     # Cap tool context to avoid consuming too much of the context window
                     if len(tool_context) > 4000:
@@ -10641,6 +10692,7 @@ class TStationChatServiceV2:
                     request_started_at=_t0,
                     latest_datepick_tmpl=latest_datepick_tmpl,
                     prev_tool_data=prev_tool_data,
+                    intent_group=intent_group,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -10673,6 +10725,7 @@ class TStationChatServiceV2:
                 request_started_at=_t0,
                 latest_datepick_tmpl=latest_datepick_tmpl,
                 prev_tool_data=prev_tool_data,
+                intent_group=intent_group,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -10795,6 +10848,7 @@ class TStationChatServiceV2:
         request_started_at: float | None = None,
         latest_datepick_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
+        intent_group: str | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -13111,11 +13165,13 @@ class TStationChatServiceV2:
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_vehicle_owner_lookup_prompt"
                         event_data = event.get("data", {})
-                coerced_event = coerce_reservation_quickreply_to_datepick(
-                    event,
-                    structured_sources,
-                    pending_slots or initial_slots,
-                )
+                coerced_event = None
+                if intent_group != "existing_reservation_management":
+                    coerced_event = coerce_reservation_quickreply_to_datepick(
+                        event,
+                        structured_sources,
+                        pending_slots or initial_slots,
+                    )
                 if coerced_event is not None:
                     logger.warning(
                         "[TEMPLATE_COERCE] transaction_store_preview quickReply time chips → datepick"
@@ -13125,11 +13181,13 @@ class TStationChatServiceV2:
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_preview_quickreply"
                     event_data = event.get("data", {})
-                coerced_event = coerce_order_preview_quickreply_to_datepick(
-                    event,
-                    structured_sources,
-                    pending_slots or initial_slots,
-                )
+                coerced_event = None
+                if intent_group != "existing_reservation_management":
+                    coerced_event = coerce_order_preview_quickreply_to_datepick(
+                        event,
+                        structured_sources,
+                        pending_slots or initial_slots,
+                    )
                 if coerced_event is not None:
                     logger.warning(
                         "[TEMPLATE_COERCE] transaction_store_preview order quickReply → datepick"
@@ -13179,6 +13237,14 @@ class TStationChatServiceV2:
                     last_template_source = "code_mapper"
                     last_assistant_response_source = "code_mapper_listcar_advice_guard"
                     event_data = event.get("data", {})
+                if TStationChatServiceV2._should_drop_template_for_intent_group(event, intent_group):
+                    logger.warning(
+                        "[CONTEXT_POLICY] dropped stale template=%s intent_group=%s user_query=%r",
+                        event.get("template"),
+                        intent_group,
+                        user_query[:80],
+                    )
+                    continue
                 for value in _quick_reply_domain_values_from_event(event):
                     if value not in next_quick_reply_domain_values:
                         next_quick_reply_domain_values.append(value)
@@ -13641,7 +13707,10 @@ class TStationChatServiceV2:
                             "agent": "[DISCOVERY AGENT]",
                         }]
                     coerced_event = None
-                    if last_assistant_response_source != "discovery_policy":
+                    if (
+                        intent_group != "existing_reservation_management"
+                        and last_assistant_response_source != "discovery_policy"
+                    ):
                         coerced_event = coerce_schedule_confirmation_quickreply_to_datepick(
                             event,
                             user_text=user_query,

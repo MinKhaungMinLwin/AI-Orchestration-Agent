@@ -2500,6 +2500,45 @@ def test_tool_context_formats_reservation_history_label() -> None:
     assert "2026-05-29 16:00" in context
 
 
+def test_existing_reservation_management_filters_stale_store_schedule_context() -> None:
+    selected = TStationChatServiceV2._select_tool_context_for_prompt(
+        [
+            {
+                "tool": "get_store_schedule_tool",
+                "data": {"shop_nm": "티스테이션 고양시청점", "slots": [{"cal_day": "20260617"}]},
+            },
+            {
+                "tool": "get_my_reservations_tool",
+                "data": [
+                    {
+                        "shop_nm": "티스테이션 정관점",
+                        "vst_rsv_dtime": "2026-06-16 17:00",
+                    }
+                ],
+            },
+        ],
+        SimpleNamespace(shop_name="티스테이션 정관점"),
+        intent_group="existing_reservation_management",
+    )
+
+    assert [item["tool"] for item in selected] == ["get_my_reservations_tool"]
+
+
+def test_existing_reservation_management_drops_schedule_templates() -> None:
+    assert TStationChatServiceV2._should_drop_template_for_intent_group(
+        {"type": "data", "template": "datepick"},
+        "existing_reservation_management",
+    )
+    assert TStationChatServiceV2._should_drop_template_for_intent_group(
+        {"type": "data", "template": "location"},
+        "existing_reservation_management",
+    )
+    assert not TStationChatServiceV2._should_drop_template_for_intent_group(
+        {"type": "data", "template": "quickReply"},
+        "existing_reservation_management",
+    )
+
+
 def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:
     assert "previous user question and assistant answer" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
     assert "previous answer was a reservation-history list" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
@@ -2646,6 +2685,14 @@ def test_reservation_time_change_force_routes_to_transaction_order() -> None:
     assert result.agent_prompt_profile == "transaction_order"
 
 
+def test_bare_target_time_change_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("18시로 바꿔줘")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
 def test_owned_reservation_lookup_force_routes_to_transaction_order() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("내 예약 어떻게 돼있어?")
 
@@ -2668,6 +2715,12 @@ def test_store_schedule_question_force_routes_to_transaction_store() -> None:
     assert result is not None
     assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
     assert result.agent_prompt_profile == "transaction_store"
+
+
+def test_after_hours_store_search_does_not_force_route_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("서울에서 18시 이후 서비스 받을 수 있는 매장 있어?")
+
+    assert result is None or result.agent_prompt_profile != "transaction_order"
 
 
 def test_reservation_change_with_store_name_stays_transaction_order() -> None:
