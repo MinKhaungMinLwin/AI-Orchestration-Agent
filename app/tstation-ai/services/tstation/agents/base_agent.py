@@ -97,7 +97,8 @@ _POSSESSIVE_VEHICLE_MODEL_RE = re.compile(
 )
 _VEHICLE_LIST_REQUEST_RE = re.compile(
     r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
-    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여",
+    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여|"
+    r"내\s*차\s*(?:사이즈|규격|로\s*다시)|내차\s*(?:사이즈|규격|로\s*다시)",
     re.IGNORECASE,
 )
 _POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {

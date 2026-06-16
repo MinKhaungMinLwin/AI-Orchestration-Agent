@@ -3075,6 +3075,7 @@ def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> 
         "내 차로 확인",
         "아니 이거 말고 내 차 확인한다고",
         "아니 내 차목록 보여달라고",
+        "내차 사이즈로 다시",
         "내 쿠폰 보여줘",
         "예약내역 확인",
         "다른 상품 추천해줘",
