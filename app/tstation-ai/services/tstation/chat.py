@@ -7396,6 +7396,7 @@ _FRESH_TOPIC_KEYWORD_RE = re.compile(
 def _is_context_continuation_turn(
     text: str,
     *,
+    latest_quickreply_tmpl: dict | None = None,
     latest_listcar_tmpl: dict | None = None,
     latest_location_tmpl: dict | None = None,
     latest_preorder_tmpl: dict | None = None,
@@ -7409,6 +7410,8 @@ def _is_context_continuation_turn(
     if _SIZE_ONLY_RE.match(stripped):
         return True
     if _SELECTION_OR_REFERENCE_RE.search(stripped):
+        return True
+    if stripped in _quickreply_labels(latest_quickreply_tmpl):
         return True
     if latest_preorder_tmpl and _PREORDER_CONFIRMATION_RE.match(stripped):
         return True
@@ -7431,6 +7434,7 @@ def _classify_context_boundary(
     text: str,
     regex_slots: ConversationSlots,
     *,
+    latest_quickreply_tmpl: dict | None = None,
     latest_listcar_tmpl: dict | None = None,
     latest_location_tmpl: dict | None = None,
     latest_preorder_tmpl: dict | None = None,
@@ -7444,6 +7448,7 @@ def _classify_context_boundary(
         return _CONTEXT_BOUNDARY_AMBIGUOUS
     if _is_context_continuation_turn(
         text,
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
         latest_listcar_tmpl=latest_listcar_tmpl,
         latest_location_tmpl=latest_location_tmpl,
         latest_preorder_tmpl=latest_preorder_tmpl,
@@ -9511,6 +9516,7 @@ class TStationChatServiceV2:
             context_boundary = _classify_context_boundary(
                 last_user_text,
                 regex_slots,
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
                 latest_listcar_tmpl=latest_listcar_tmpl,
                 latest_location_tmpl=latest_location_tmpl,
                 latest_preorder_tmpl=latest_preorder_tmpl,

@@ -209,6 +209,28 @@ def test_context_boundary_keeps_preorder_confirmation_as_continuation() -> None:
     assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
 
 
+def test_context_boundary_keeps_latest_quickreply_label_as_continuation() -> None:
+    regex_slots = ConversationSlots.extract_from_user_text("구매하기")
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "구매를 계속 진행하려면 구매하기 버튼을 눌러주세요.",
+            "quickReplies": [
+                {"label": "구매하기", "domain": "TRANSACTION"},
+                {"label": "다른 상품 보기", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+
+    boundary = _classify_context_boundary(
+        "구매하기",
+        regex_slots,
+        latest_quickreply_tmpl=latest_quickreply,
+    )
+
+    assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
+
+
 def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:
     row = {
         "car_no": "56모2162",
