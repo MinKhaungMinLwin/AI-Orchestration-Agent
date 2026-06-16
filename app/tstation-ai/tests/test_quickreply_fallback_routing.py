@@ -3287,6 +3287,26 @@ def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> No
     assert resolved is None
 
 
+def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "33가3333", "info": "더 뉴 A-class(W177) F/L A 220 Hatchback A/T"},
+                {"licensePlate": "56모2162", "info": "3-series(F30) 320d A/T"},
+            ],
+            "metadata": [
+                {"carNo": "33가3333", "tireSize": "205/55R17", "tireSizeRe": "205/55R17"},
+                {"carNo": "56모2162", "tireSize": "225/50R18", "tireSizeRe": "255/50R18"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("벤투스 S2 AS 225/50R18", template)
+
+    assert resolved is None
+
+
 def test_unmatched_vehicle_listcar_is_coerced_to_owner_prompt() -> None:
     event = {
         "template": "listCar",
@@ -4260,6 +4280,35 @@ def test_single_product_search_result_updates_goods_no_and_tire_size() -> None:
     assert changed is True
     assert slots.goods_no == "GNEW00000001"
     assert slots.tire_size == "235/55R19"
+    assert slots.tire_model is None
+    assert slots.payment_amount is None
+
+
+def test_product_description_result_updates_tire_size_with_goods_no() -> None:
+    slots = ConversationSlots(
+        goods_no="GOLD00000001",
+        tire_model="이전 상품",
+        tire_size="205/55R17",
+        payment_amount=300000,
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_product_description_tool",
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000309855",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "225/50R18",
+            },
+        },
+        {"goods_no": "G000000309855"},
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000309855"
+    assert slots.tire_size == "225/50R18"
     assert slots.tire_model is None
     assert slots.payment_amount is None
 

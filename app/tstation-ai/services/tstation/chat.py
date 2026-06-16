@@ -1500,6 +1500,13 @@ class StreamingMultiAgentCoordinator:
             input_goods_no = tool_input.get("goods_no")
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
+            data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, dict) else {}
+            if isinstance(data, dict):
+                tire_size = normalize_tire_size(
+                    str(data.get("tire_size") or data.get("tire_size_1") or data.get("tireSize") or "")
+                )
+                if tire_size:
+                    tool_slots["tire_size"] = tire_size
 
         # `get_store_schedule_tool` / `get_store_detail_tool` 은 사용자가 매장을 확정한 뒤
         # 호출되는 도구다 (datepick / 매장 상세 페이지 진입). list-tool 의 result-count
@@ -8725,21 +8732,29 @@ class TStationChatServiceV2:
                 if isinstance(car, dict) and isinstance(meta, dict):
                     return {"car": car, "meta": meta}
 
-        tokens = [t for t in re.findall(r"[A-Za-z가-힣0-9]+", str(user_text or "")) if len(t) >= 2]
+        tokens = _vehicle_match_tokens(str(user_text or ""))
         if tokens:
-            scored: list[tuple[int, dict, dict]] = []
+            scored: list[tuple[int, int, dict, dict]] = []
             for car, meta in zip(cars, metadata):
                 if not isinstance(car, dict) or not isinstance(meta, dict):
                     continue
-                info = (car.get("info") or car.get("description") or "").lower()
-                score = sum(1 for token in tokens if token.lower() in info)
-                if score > 0:
-                    scored.append((score, car, meta))
+                candidate_tokens = _vehicle_candidate_tokens(car, meta)
+                matched_tokens = [token for token in tokens if token in candidate_tokens]
+                if not matched_tokens:
+                    continue
+                strong_matches = sum(
+                    1 for token in matched_tokens if any(ch.isdigit() for ch in token) or len(token) >= 3
+                )
+                scored.append((len(matched_tokens), strong_matches, car, meta))
             if scored:
-                max_score = max(score for score, _, _ in scored)
-                top = [(car, meta) for score, car, meta in scored if score == max_score]
+                max_score = max(score for score, _, _, _ in scored)
+                top = [entry for entry in scored if entry[0] == max_score]
+                max_strong = max(strong for _, strong, _, _ in top)
+                top = [entry for entry in top if entry[1] == max_strong]
+                if max_score == 1 and max_strong == 0:
+                    return None
                 if len(top) == 1:
-                    car, meta = top[0]
+                    _, _, car, meta = top[0]
                     return {"car": car, "meta": meta}
 
         return _select_vehicle_from_listcar_event(user_text, latest_listcar)
