@@ -1839,6 +1839,44 @@ def _filter_reservation_sale_schedule(schedule_data: Any, preview_payload: dict[
     return filtered_schedule
 
 
+def _filter_schedule_by_cal_day(schedule_data: Any, requested_cal_day: str | None) -> Any:
+    cal_day = str(requested_cal_day or "").strip()
+    if not cal_day or not isinstance(schedule_data, dict):
+        return schedule_data
+    stores = schedule_data.get("stores")
+    if not isinstance(stores, list):
+        return schedule_data
+
+    filtered_stores: list[Any] = []
+    changed = False
+    for store in stores:
+        if not isinstance(store, dict):
+            changed = True
+            continue
+        slots = store.get("slots")
+        if not isinstance(slots, list):
+            changed = True
+            continue
+        filtered_slots = [
+            slot
+            for slot in slots
+            if isinstance(slot, dict) and str(slot.get("cal_day") or "").strip() == cal_day
+        ]
+        changed = changed or len(filtered_slots) != len(slots)
+        if filtered_slots:
+            filtered_stores.append({**store, "slots": filtered_slots})
+        else:
+            changed = True
+
+    if not changed:
+        return schedule_data
+
+    filtered_schedule = {**schedule_data, "stores": filtered_stores, "requested_cal_day": cal_day}
+    if not filtered_stores:
+        filtered_schedule["tier"] = "none"
+    return filtered_schedule
+
+
 @tool
 @tool_cache(ttl=120)
 def transaction_store_preview_tool(
@@ -1853,6 +1891,7 @@ def transaction_store_preview_tool(
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
     chl_sct_cd: str | None = None,
+    requested_cal_day: str | None = None,
 ):
     """
     Composite preview for purchase/store flow: store candidates + price + stock + earliest schedule.
@@ -1869,6 +1908,7 @@ def transaction_store_preview_tool(
             "store_nm": store_nm,
             "user_xpos": user_xpos,
             "user_ypos": user_ypos,
+            "requested_cal_day": requested_cal_day,
         }
         goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
             patch=policy_patch,
@@ -1879,6 +1919,8 @@ def transaction_store_preview_tool(
             user_xpos=user_xpos,
             user_ypos=user_ypos,
         )
+        if not requested_cal_day and policy_patch.get("requested_cal_day"):
+            requested_cal_day = str(policy_patch["requested_cal_day"])
         logger.info(
             "[TOOL][transaction_store_preview_tool] Applied transaction policy patch=%s before=%s after=%s",
             policy_patch,
@@ -1890,6 +1932,7 @@ def transaction_store_preview_tool(
                 "store_nm": store_nm,
                 "user_xpos": user_xpos,
                 "user_ypos": user_ypos,
+                "requested_cal_day": requested_cal_day,
             },
         )
 
@@ -2094,8 +2137,13 @@ def transaction_store_preview_tool(
         has_logistics=logistics_qty > 0,
     )
     schedule_data = schedule.get("data") if isinstance(schedule, dict) else schedule
+    schedule_data = _filter_schedule_by_cal_day(schedule_data, requested_cal_day)
     scheduled_shop_ids = _scheduled_shop_ids_with_slots(schedule_data)
-    if scheduled_shop_ids:
+    if requested_cal_day:
+        scheduled_set = set(scheduled_shop_ids)
+        candidates = [store for store in candidates if (_shop_id(store) in scheduled_set)]
+        shop_ids = [sid for sid in shop_ids if sid in scheduled_set]
+    elif scheduled_shop_ids:
         scheduled_set = set(scheduled_shop_ids)
         candidates = [store for store in candidates if (_shop_id(store) in scheduled_set)]
         shop_ids = [sid for sid in shop_ids if sid in scheduled_set]
@@ -2108,6 +2156,8 @@ def transaction_store_preview_tool(
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
     }
+    if requested_cal_day:
+        result_data["requested_cal_day"] = str(requested_cal_day)
     if place_fallback is not None:
         result_data["search"] = place_fallback
     result_data["schedule"] = _filter_reservation_sale_schedule(result_data["schedule"], result_data)

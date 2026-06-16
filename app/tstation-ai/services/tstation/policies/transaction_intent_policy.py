@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import datetime
 from typing import Any
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
@@ -12,6 +13,7 @@ from services.tstation.policies.response_decision import ToolPlan
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
 _TODAY_RE = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
+_RELATIVE_RESERVATION_DATE_RE = re.compile(r"내일|모레", re.IGNORECASE)
 _STOCK_RE = re.compile(r"재고|오늘\s*서비스|오늘서비스|T\s*바로\s*배송|T바로배송", re.IGNORECASE)
 _RESERVATION_RE = re.compile(r"예약|장착|방문|갈게|가고\s*싶|작업", re.IGNORECASE)
 _STORE_SCHEDULE_RE = re.compile(
@@ -116,6 +118,20 @@ def extract_result_limit(text: str) -> int | None:
     return None
 
 
+def _kst_today() -> datetime.date:
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+
+
+def extract_requested_cal_day(text: str, *, today: datetime.date | None = None) -> str | None:
+    match = _RELATIVE_RESERVATION_DATE_RE.search(text or "")
+    if not match:
+        return None
+    base = today or _kst_today()
+    token = match.group(0)
+    offset = 1 if token == "내일" else 2
+    return (base + datetime.timedelta(days=offset)).strftime("%Y%m%d")
+
+
 def build_transaction_intent_frame(
     last_user_text: str,
     *,
@@ -128,6 +144,7 @@ def build_transaction_intent_frame(
     tire_size = explicit_tire_size or slots.get("tire_size")
     quantity = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
     result_limit = extract_result_limit(text) or slots.get("limit")
+    requested_cal_day = extract_requested_cal_day(text)
     goods_no = slots.get("goods_no")
     product_name = slots.get("product_name") or slots.get("pattern_name") or _extract_product_name(text)
     store_name = slots.get("store_name") or _extract_store_name(text)
@@ -146,6 +163,7 @@ def build_transaction_intent_frame(
         "region": region,
         "nearby": bool(_NEARBY_RE.search(text)),
         "today_requested": today_requested,
+        "requested_cal_day": requested_cal_day,
         "noon_requested": bool(_NOON_RE.search(text)),
         "result_limit": result_limit,
     }
@@ -193,6 +211,7 @@ def build_transaction_intent_frame(
         **({"store_name": store_name} if store_name else {}),
         **({"region": region} if region else {}),
         **({"limit": result_limit} if result_limit else {}),
+        **({"requested_cal_day": requested_cal_day} if requested_cal_day else {}),
     }
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:
         known["store_exact_match"] = False
@@ -212,7 +231,7 @@ def build_transaction_intent_frame(
 def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
     """Return the preferred Transaction tool family for the intent frame."""
     if frame.intent == "stock_store_search":
-        args = _slot_args(frame, "goods_no", "tire_size", "quantity", "region", "store_name")
+        args = _slot_args(frame, "goods_no", "tire_size", "quantity", "region", "store_name", "requested_cal_day")
         if frame.entities.get("today_requested"):
             args["today_only"] = True
         return ToolPlan(
@@ -253,7 +272,9 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_multi_store_schedule_tool", "get_store_schedule_tool"),
             preferred_tool="transaction_store_preview_tool",
-            tool_args_patch=_slot_args(frame, "goods_no", "tire_size", "quantity", "store_name", "region"),
+            tool_args_patch=_slot_args(
+                frame, "goods_no", "tire_size", "quantity", "store_name", "region", "requested_cal_day"
+            ),
             forbidden_tools=("store_hours_instead_of_slots", "order_summary_with_null_required_fields"),
             required_slots=frame.missing_slots,
             metadata={"response_intent": "quick_order_reservation"},
