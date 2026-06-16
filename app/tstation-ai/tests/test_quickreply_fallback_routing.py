@@ -101,8 +101,10 @@ from services.tstation.chat import (
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
+    _normalize_existing_reservation_change_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
+    _store_detail_quickreply_from_sources,
     _normalize_vehicle_owner_lookup_text,
     _non_self_vehicle_plate_owner_lookup_plate,
     _non_self_vehicle_plate_owner_lookup_prompt_event,
@@ -2537,6 +2539,55 @@ def test_existing_reservation_management_drops_schedule_templates() -> None:
         {"type": "data", "template": "quickReply"},
         "existing_reservation_management",
     )
+
+
+def test_existing_reservation_change_copy_does_not_imply_bot_can_change_time() -> None:
+    event_data = {
+        "assistantResponse": (
+            "정관점 방문예약을 확인했어요.\n\n"
+            "예약 유형: 단순 방문예약\n"
+            "예약 매장: 티스테이션 정관점\n"
+            "예약 일시: 2026-06-16 17:00\n\n"
+            "해당 예약은 주문번호가 없는 단순 방문예약이라, 내일로 변경 가능 여부는 예약 확인 후 진행이 필요해요."
+        ),
+        "quickReplies": [{"label": "다른 예약 확인", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert _normalize_existing_reservation_change_quickreply(event_data)
+    assistant = event_data["assistantResponse"]
+    assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
+    assert "변경 가능 여부는 예약 확인 후 진행이 필요해요" not in assistant
+
+
+def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
+    event = _store_detail_quickreply_from_sources(
+        [
+            (
+                "get_store_detail_tool",
+                {
+                    "shop_nm": "티스테이션 고양시청점",
+                    "tel_no": "0319719333",
+                    "shop_biz_strt_time": "0900",
+                    "shop_biz_end_time": "1900",
+                    "shop_sat_strt_time": "0900",
+                    "shop_sat_end_time": "1700",
+                    "is_all_my_t": False,
+                    "is_installable": True,
+                    "is_tna_delivery": True,
+                    "is_imported_car": False,
+                    "svc_codes": ["04"],
+                },
+            )
+        ],
+        "고객님, 고양시청점 정보를 확인했어요.",
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "매장명: 티스테이션 고양시청점" in assistant
+    assert "전화번호: 031-971-9333" in assistant
+    assert "영업시간: 09:00~19:00" in assistant
 
 
 def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:

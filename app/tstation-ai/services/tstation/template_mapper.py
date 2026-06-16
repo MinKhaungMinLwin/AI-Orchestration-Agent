@@ -4371,7 +4371,11 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
         "assistant_response_source": "code_mapper",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [],
+            "quickReplies": [
+                {"label": "다른 매장 정보", "domain": "TRANSACTION"},
+                {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
             "predictedDomains": ["TRANSACTION"],
         },
     }

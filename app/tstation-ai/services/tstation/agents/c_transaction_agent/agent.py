@@ -1947,8 +1947,10 @@ Trigger: user asks to change a booked visit/reservation time, e.g. "오늘 예�
    - 예약 매장
    - 예약 일시
 4. Reschedule availability wording:
-   - If the matched order has an upcoming `rsv_dtime` and is not delivered/completed/cancelled, say "예약 시간 변경이 가능한 상태로 보여요."
-   - If status data is insufficient, say "정확한 변경 가능 여부는 주문 상세에서 확인이 필요해요."
+   - Always say the chatbot cannot directly change reservation time: "예약 시간은 제가 직접 변경해 드릴 수는 없어요."
+   - For online reservations with `ord_no`, tell the user to open 주문 내역 상세 and check/change there.
+   - For simple visit reservations without `ord_no`, tell the user to check the reservation list/detail directly or cancel and reserve again.
+   - Do NOT say "변경 가능 여부는 확인 후 진행이 필요해요" or "예약 시간 변경이 가능한 상태로 보여요" because it sounds like the chatbot can proceed with the change.
    - Never claim the time was changed. There is no reschedule mutation tool.
 5. CTA requirement (minimum): include quickReply chips with:
    - `{"label":"주문 내역 상세 보기","url":"__URL_ORDER_HISTORY_DETAIL__","domain":"TRANSACTION"}`
@@ -2721,8 +2723,10 @@ Trigger: user wants to change a booked reservation/visit time
    - 예약 매장
    - 예약 일시
 4. Then state reschedule availability:
-   - if `rsv_dtime` is upcoming and order status is not delivered/completed/cancelled -> "예약 시간 변경이 가능한 상태로 보여요."
-   - otherwise or if status is unclear -> "정확한 변경 가능 여부는 주문 상세에서 확인이 필요해요."
+   - Always say the chatbot cannot directly change reservation time: "예약 시간은 제가 직접 변경해 드릴 수는 없어요."
+   - For online reservations with `ord_no`, tell the user to open 주문 내역 상세 and check/change there.
+   - For simple visit reservations without `ord_no`, tell the user to check the reservation list/detail directly or cancel and reserve again.
+   - Do NOT say "변경 가능 여부는 확인 후 진행이 필요해요" or "예약 시간 변경이 가능한 상태로 보여요" because it sounds like the chatbot can proceed with the change.
 5. Minimum CTA: tell the user to open 주문 내역 상세 페이지 to change the time, and include quickReplies:
    `[{"label":"주문 내역 상세 보기","url":"__URL_ORDER_HISTORY_DETAIL__","domain":"TRANSACTION"},{"label":"다른 예약 확인","domain":"TRANSACTION"}]`
    - ⚠️ URL placeholder `<ord_no>` must be substituted with the matched reservation's actual `ord_no` value (e.g. "O202605120019340") from `get_orders_of_user_tool`. Never leave `<ord_no>` as a literal placeholder. If `ord_no` is missing for the matched order, omit the `url` field entirely.

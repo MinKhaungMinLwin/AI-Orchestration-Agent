@@ -3104,6 +3104,87 @@ def _normalize_booking_preview_quickreply(event_data: dict, called_tool_names: s
     event_data["predictedDomains"] = ["TRANSACTION"]
     return True
 
+
+_RESERVATION_CHANGE_POSSIBLE_COPY_RE = re.compile(
+    r"예약\s*시간\s*변경이\s*가능한\s*상태로\s*보여요\.?"
+    r"|(?:정확한\s*)?변경\s*가능\s*여부는\s*[^\n.。]*확인[^\n.。]*필요해요\.?"
+    r"|(?:오늘|내일|모레|\d{1,2}\s*시|\d{1,2}\s*:\s*\d{2}|[^\n.。]{0,12})로\s*변경\s*가능\s*여부는\s*"
+    r"예약\s*확인\s*후\s*진행이\s*필요해요\.?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_existing_reservation_change_quickreply(event_data: dict[str, Any]) -> bool:
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not assistant_text:
+        return False
+
+    guidance = (
+        "예약 시간은 제가 직접 변경해 드릴 수는 없어요. "
+        "예약 내역 또는 주문 상세에서 직접 처리하거나, 필요하면 취소 후 재예약 또는 1:1 문의로 확인해 주세요."
+    )
+    normalized = _RESERVATION_CHANGE_POSSIBLE_COPY_RE.sub(guidance, assistant_text)
+    if normalized == assistant_text and "직접 변경" in assistant_text:
+        return False
+    if normalized == assistant_text:
+        normalized = f"{assistant_text.rstrip()}\n\n{guidance}"
+
+    event_data["assistantResponse"] = normalized
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list) or not chips:
+        event_data["quickReplies"] = [
+            {"label": "내 예약 조회", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    event_data["predictedDomains"] = _dedupe_domain_values(
+        [
+            *(event_data.get("predictedDomains") or []),
+            "TRANSACTION",
+            "SUPPORT",
+        ]
+    )
+    return True
+
+
+_VAGUE_STORE_DETAIL_TEXT_RE = re.compile(
+    r"(?:매장|지점)?.{0,12}(?:정보|상세(?:정보)?).{0,12}확인(?:했|됐|되었)",
+    re.IGNORECASE,
+)
+
+
+def _store_detail_quickreply_from_sources(
+    structured_sources: list[tuple[str, dict]],
+    assistant_text: str,
+) -> dict | None:
+    if not structured_sources:
+        return None
+    tool_data = [
+        {"tool": tool_name, "data": data}
+        for tool_name, data in structured_sources
+        if tool_name == "get_store_detail_tool" and isinstance(data, dict)
+    ]
+    if not tool_data:
+        return None
+    try:
+        from services.tstation.template_mapper import try_build_template
+
+        mapped = try_build_template(tool_data, assistant_text)
+    except Exception:
+        logger.exception("[STORE_DETAIL] failed to rebuild vague quickReply from tool sources")
+        return None
+    if isinstance(mapped, dict) and mapped.get("template") == "quickReply":
+        return mapped
+    return None
+
+
+def _should_replace_vague_store_detail_quickreply(event_data: dict[str, Any]) -> bool:
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not assistant_text:
+        return False
+    if "• 매장명:" in assistant_text or "전화번호" in assistant_text or "영업시간" in assistant_text:
+        return False
+    return bool(_VAGUE_STORE_DETAIL_TEXT_RE.search(assistant_text))
+
 _LISTCAR_SELECTION_NEEDLES: tuple[str, ...] = (
     "선택",
     "골라",
@@ -13548,6 +13629,44 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]" if source_domain == "discovery" else "[TRANSACTION AGENT]",
                         }]
+                    if (
+                        intent_group == "existing_reservation_management"
+                        and event.get("template") == "quickReply"
+                        and _normalize_existing_reservation_change_quickreply(event_data)
+                    ):
+                        logger.info("[RESERVATION_CHANGE] normalized direct-change guidance")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
+                    if (
+                        source_domain == MultiAgentDomain.Domain.TRANSACTION.value
+                        and event.get("template") == "quickReply"
+                        and _should_replace_vague_store_detail_quickreply(event_data)
+                    ):
+                        store_detail_event = _store_detail_quickreply_from_sources(
+                            structured_sources,
+                            str(event_data.get("assistantResponse") or ""),
+                        )
+                        if store_detail_event is not None:
+                            logger.info("[STORE_DETAIL] replaced vague quickReply with deterministic store detail")
+                            event = store_detail_event
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_store_detail_resolver"
+                            event_data = event.get("data", {})
+                            assistant_response = str(event_data.get("assistantResponse") or "")
+                            draft_response = assistant_response
+                            draft_for_qc = assistant_response
+                            original_message_events = [{
+                                "type": "message",
+                                "content": assistant_response,
+                                "agent": "[TRANSACTION AGENT]",
+                            }]
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
                         deterministic_coupon_event is None
