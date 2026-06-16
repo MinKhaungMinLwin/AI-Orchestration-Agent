@@ -4807,6 +4807,33 @@ def _extract_store_holiday_store_name(user_text: str | None) -> str | None:
     return re.sub(r"\s+", " ", match.group(1)).strip()
 
 
+_PLAIN_STORE_INFO_RE = re.compile(
+    r"정보|상세|주소|전화|연락처|영업\s*시간|운영\s*시간|휴무|서비스|올마이T|올마이티|"
+    r"T\s*바로\s*배송|T바로배송|온라인\s*장착|수입차",
+    re.IGNORECASE,
+)
+_STORE_RESERVATION_ACTION_RE = re.compile(
+    r"예약\s*(?:가능|시간|일정|변경|바꾸|바꿔|취소|해줘|잡아)|"
+    r"방문\s*(?:가능|시간|일정|변경)|"
+    r"장착\s*(?:가능|예약|해줘)|"
+    r"\d{1,2}\s*시\s*로\s*(?:변경|바꿔)",
+    re.IGNORECASE,
+)
+
+
+def _extract_plain_store_info_store_name(user_text: str | None) -> str | None:
+    text = user_text or ""
+    if not _PLAIN_STORE_INFO_RE.search(text):
+        return None
+    if _STORE_RESERVATION_ACTION_RE.search(text):
+        return None
+    match = _STORE_HOLIDAY_STORE_NAME_RE.search(text)
+    if not match:
+        return None
+    store_name = re.sub(r"\s+", " ", match.group(1)).strip()
+    return re.sub(r"^티스테이션\s+", "", store_name).strip()
+
+
 def _store_holiday_label_from_text(user_text: str | None) -> str:
     text = user_text or ""
     for pattern in _STORE_HOLIDAY_LABEL_PATTERNS:
@@ -11382,6 +11409,97 @@ class TStationChatServiceV2:
             })
             return emitted_events, _build_store_holiday_period_event(user_query, store_row, detail_result)
 
+        async def _resolve_plain_store_info_with_code() -> tuple[list[dict], dict] | None:
+            store_name = _extract_plain_store_info_store_name(user_query)
+            if not store_name:
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_store_detail_tool as _store_detail_tool,
+                get_store_list_tool as _store_list_tool,
+            )
+            from services.tstation.template_mapper import try_build_template
+
+            emitted_events: list[dict] = []
+            list_input = {"store_nm": store_name, "limit": 3}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_list_tool",
+                "display_name": "매장 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_list = await asyncio.to_thread(_store_list_tool.invoke, list_input)
+                list_result = _tool_result_dict(raw_list)
+            except Exception as exc:
+                logger.exception("[STORE_INFO] store list tool failed")
+                list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_list_tool", list_input, list_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": list_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": list_input,
+                "output": json.dumps(list_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_list_tool",
+                "source_domain": "transaction",
+            })
+
+            list_data = _unwrap_tool_data(list_result)
+            stores = list_data.get("stores") if isinstance(list_data, dict) else None
+            if not isinstance(stores, list) or not stores:
+                return None
+            store_row = stores[0] if isinstance(stores[0], dict) else {}
+            shop_id = str(store_row.get("shop_id") or "").strip()
+            if not shop_id:
+                return None
+
+            detail_input = {"shop_id": shop_id, "cal_day": _requested_reservation_cal_day_or_today(user_query)}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_detail_tool",
+                "display_name": "매장 상세 정보 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_detail = await asyncio.to_thread(_store_detail_tool.invoke, detail_input)
+                detail_result = _tool_result_dict(raw_detail)
+            except Exception as exc:
+                logger.exception("[STORE_INFO] store detail tool failed")
+                detail_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_detail_tool", detail_input, detail_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": detail_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": detail_input,
+                "output": json.dumps(detail_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_detail_tool",
+                "source_domain": "transaction",
+            })
+
+            detail_event = try_build_template(
+                [{"tool": "get_store_detail_tool", "data": detail_result}],
+                f"{store_name} 정보를 확인했어요.",
+            )
+            if not isinstance(detail_event, dict) or detail_event.get("template") != "quickReply":
+                return None
+            return emitted_events, detail_event
+
         async def _resolve_coupon_applicability_with_code(
             my_coupons_result: dict | None = None,
         ) -> tuple[list[dict], dict]:
@@ -12902,6 +13020,22 @@ class TStationChatServiceV2:
             assistant_response = str((best_selling_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        plain_store_info_resolution = await _resolve_plain_store_info_with_code()
+        if plain_store_info_resolution is not None:
+            code_events, store_info_event = plain_store_info_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(store_info_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((store_info_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

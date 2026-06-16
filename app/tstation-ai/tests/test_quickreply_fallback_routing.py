@@ -94,6 +94,7 @@ from services.tstation.chat import (
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
     _is_ev_suitability_turn,
+    _extract_plain_store_info_store_name,
     _is_bare_product_name_search_query,
     _is_fresh_product_transaction_request,
     _unique_product_row_from_sized_search_result,
@@ -2610,6 +2611,13 @@ def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
     assert "매장명: 티스테이션 고양시청점" in assistant
     assert "전화번호: 031-971-9333" in assistant
     assert "영업시간: 09:00~19:00" in assistant
+
+
+def test_plain_store_info_query_extracts_store_name_without_reservation_action() -> None:
+    assert _extract_plain_store_info_store_name("고양시청점 정보") == "고양시청점"
+    assert _extract_plain_store_info_store_name("티스테이션 고양시청점 전화번호 알려줘") == "고양시청점"
+    assert _extract_plain_store_info_store_name("고양시청점 예약시간 내일 18시로 변경해줘") is None
+    assert _extract_plain_store_info_store_name("고양시청점 18시 예약 가능해?") is None
 
 
 def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:
