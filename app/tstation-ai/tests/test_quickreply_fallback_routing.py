@@ -40,8 +40,6 @@ from services.tstation.chat import (
     _build_product_coupon_eligibility_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
-    _apply_prompt_context_boundary,
-    _clamp_datepick_selection_route,
     _build_bare_product_search_tool_input,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
@@ -102,10 +100,6 @@ from services.tstation.chat import (
     _is_fresh_product_transaction_request,
     _unique_product_row_from_sized_search_result,
     _clear_stale_product_identity_for_fresh_transaction,
-    _classify_context_boundary,
-    _CONTEXT_BOUNDARY_CONTINUATION,
-    _CONTEXT_BOUNDARY_FRESH_TOPIC,
-    AgentPromptProfile,
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
@@ -160,115 +154,6 @@ from services.tstation.source_filter import filter_for_context
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
-
-
-def test_context_boundary_scopes_prompt_for_fresh_support_topic_after_recommendation() -> None:
-    regex_slots = ConversationSlots.extract_from_user_text("픽업서비스 가능해?")
-
-    boundary = _classify_context_boundary("픽업서비스 가능해?", regex_slots)
-
-    assert boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC
-
-    stale_slots = ConversationSlots(
-        tire_size="225/45R17",
-        tire_model="벤투스 S2 AS",
-        goods_no="G000000309783",
-        shop_id="F00098",
-        shop_name="한남점",
-        payment_amount=620000,
-        pending_intent="order",
-        goal_type="place_order",
-    )
-    prompt_slots = _apply_prompt_context_boundary(stale_slots, "픽업서비스 가능해?")
-
-    assert prompt_slots.pending_intent is None
-    assert prompt_slots.goal_type is None
-    assert prompt_slots.goods_no is None
-    assert prompt_slots.shop_id is None
-    assert prompt_slots.shop_name is None
-    assert prompt_slots.payment_amount is None
-    assert prompt_slots.tire_size is None
-    assert prompt_slots.tire_model is None
-
-    # The persisted slot object is not mutated; a later explicit reference can still recover context.
-    assert stale_slots.pending_intent == "order"
-    assert stale_slots.goods_no == "G000000309783"
-
-
-def test_context_boundary_keeps_reference_turn_as_continuation_after_topic_switch() -> None:
-    regex_slots = ConversationSlots.extract_from_user_text("1번")
-
-    boundary = _classify_context_boundary("1번", regex_slots)
-
-    assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
-
-
-def test_context_boundary_keeps_preorder_confirmation_as_continuation() -> None:
-    regex_slots = ConversationSlots.extract_from_user_text("네")
-
-    boundary = _classify_context_boundary("네", regex_slots, latest_preorder_tmpl={"template": "preOrder"})
-
-    assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
-
-
-def test_context_boundary_keeps_datepick_selection_as_continuation() -> None:
-    text = "2026년 6월 17일 (수)\n17:00"
-    regex_slots = ConversationSlots.extract_from_user_text(text)
-
-    boundary = _classify_context_boundary(text, regex_slots)
-
-    assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
-
-
-def test_datepick_selection_route_clamp_removes_discovery_prefix() -> None:
-    text = "2026년 6월 17일 (수)\n17:00"
-    domains = [
-        MultiAgentDomain.Domain.TRANSACTION,
-        MultiAgentDomain.Domain.DISCOVERY,
-        MultiAgentDomain.Domain.TRANSACTION,
-    ]
-    routing_result = MultiAgentDomain(
-        reason="cross_domain_policy_route",
-        domains=domains,
-        execution_plan=["transaction:store_schedule", "discovery:resolve_product"],
-        user_behavior="selecting reservation date and time",
-        flow="datepick selection",
-        agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
-    )
-
-    routing_result, previous_domains = _clamp_datepick_selection_route(text, domains, routing_result)
-
-    assert previous_domains == [
-        MultiAgentDomain.Domain.TRANSACTION,
-        MultiAgentDomain.Domain.DISCOVERY,
-        MultiAgentDomain.Domain.TRANSACTION,
-    ]
-    assert domains == [MultiAgentDomain.Domain.TRANSACTION]
-    assert routing_result is not None
-    assert routing_result.domains == [MultiAgentDomain.Domain.TRANSACTION]
-    assert routing_result.agent_prompt_profile == AgentPromptProfile.FULL
-
-
-def test_context_boundary_keeps_latest_quickreply_label_as_continuation() -> None:
-    regex_slots = ConversationSlots.extract_from_user_text("구매하기")
-    latest_quickreply = {
-        "template": "quickReply",
-        "data": {
-            "assistantResponse": "구매를 계속 진행하려면 구매하기 버튼을 눌러주세요.",
-            "quickReplies": [
-                {"label": "구매하기", "domain": "TRANSACTION"},
-                {"label": "다른 상품 보기", "domain": "DISCOVERY"},
-            ],
-        },
-    }
-
-    boundary = _classify_context_boundary(
-        "구매하기",
-        regex_slots,
-        latest_quickreply_tmpl=latest_quickreply,
-    )
-
-    assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
 
 
 def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:

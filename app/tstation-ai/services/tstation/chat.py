@@ -1317,7 +1317,6 @@ class StreamingMultiAgentCoordinator:
             if (
                 last_user_text
                 and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
-                and not _DATEPICK_SELECTION_RE.match(last_user_text)
                 and self.__class__._is_store_schedule_current_turn_query(last_user_text)
                 and result.agent_prompt_profile != AgentPromptProfile.TRANSACTION_STORE
             ):
@@ -7371,156 +7370,6 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
     return None
 
 
-_CONTEXT_BOUNDARY_CONTINUATION = "continuation"
-_CONTEXT_BOUNDARY_FRESH_TOPIC = "fresh_topic"
-_CONTEXT_BOUNDARY_AMBIGUOUS = "ambiguous"
-_SELECTION_OR_REFERENCE_RE = re.compile(
-    r"^\s*\d+\s*[\.\)번:]|"
-    r"\b(?:첫\s*번째|두\s*번째|세\s*번째|네\s*번째|마지막|그거|그\s*상품|그\s*타이어|"
-    r"그\s*매장|그\s*지점|아까|방금|이\s*중|위\s*상품|위\s*매장)\b",
-    re.IGNORECASE,
-)
-_PREORDER_CONFIRMATION_RE = re.compile(
-    r"^\s*(?:네|예|응|ㅇㅇ|좋아|진행|진행해줘|주문해줘|결제해줘|구매해줘|"
-    r"주문할게|결제할게|구매할게)\s*[.!?。]*\s*$",
-    re.IGNORECASE,
-)
-_FRESH_TOPIC_KEYWORD_RE = re.compile(
-    r"추천|골라줘|찾아줘|검색|상품|타이어|쿠폰|쿠폰함|주문\s*내역|주문조회|내\s*주문|"
-    r"예약\s*조회|정비\s*이력|정비내역|서비스\s*이력|매장|지점|근처|픽업서비스|"
-    r"스마트픽업|보증|환불|반품|상담원|상담사|1:1|배송비|온라인\s*가격|"
-    r"흡음재|런플랫|전기차|EV|SUV|사계절|빗길|눈길|정숙|소음|가성비|할인",
-    re.IGNORECASE,
-)
-
-
-def _is_context_continuation_turn(
-    text: str,
-    *,
-    latest_quickreply_tmpl: dict | None = None,
-    latest_listcar_tmpl: dict | None = None,
-    latest_location_tmpl: dict | None = None,
-    latest_preorder_tmpl: dict | None = None,
-) -> bool:
-    """Return True for short replies that intentionally refer to prior UI/context."""
-    if not text:
-        return False
-    stripped = text.strip()
-    if _DATEPICK_SELECTION_RE.match(stripped):
-        return True
-    if _SIZE_ONLY_RE.match(stripped):
-        return True
-    if _SELECTION_OR_REFERENCE_RE.search(stripped):
-        return True
-    if stripped in _quickreply_labels(latest_quickreply_tmpl):
-        return True
-    if latest_preorder_tmpl and _PREORDER_CONFIRMATION_RE.match(stripped):
-        return True
-    if latest_listcar_tmpl:
-        try:
-            if TStationChatServiceV2._resolve_vehicle_from_history_template(stripped, latest_listcar_tmpl):
-                return True
-        except Exception:
-            pass
-    if latest_location_tmpl:
-        try:
-            if TStationChatServiceV2._resolve_shop_id_from_history_template(stripped, latest_location_tmpl):
-                return True
-        except Exception:
-            pass
-    return False
-
-
-def _classify_context_boundary(
-    text: str,
-    regex_slots: ConversationSlots,
-    *,
-    latest_quickreply_tmpl: dict | None = None,
-    latest_listcar_tmpl: dict | None = None,
-    latest_location_tmpl: dict | None = None,
-    latest_preorder_tmpl: dict | None = None,
-) -> str:
-    """Classify how much prior context should influence the current turn prompt.
-
-    This is a prompt-scoping policy only. It must not delete Redis slots/tool data,
-    because a later explicit reference ("1번", "그 상품") may still need them.
-    """
-    if not text or not text.strip():
-        return _CONTEXT_BOUNDARY_AMBIGUOUS
-    if _is_context_continuation_turn(
-        text,
-        latest_quickreply_tmpl=latest_quickreply_tmpl,
-        latest_listcar_tmpl=latest_listcar_tmpl,
-        latest_location_tmpl=latest_location_tmpl,
-        latest_preorder_tmpl=latest_preorder_tmpl,
-    ):
-        return _CONTEXT_BOUNDARY_CONTINUATION
-
-    has_fresh_intent = (
-        bool(getattr(regex_slots, "pending_intent", None))
-        or bool(getattr(regex_slots, "goal_type", None))
-        or ConversationSlots.has_recommend_intent(text)
-        or _support_fast_path(text) is not None
-        or bool(_FRESH_TOPIC_KEYWORD_RE.search(text))
-    )
-    if has_fresh_intent:
-        return _CONTEXT_BOUNDARY_FRESH_TOPIC
-    return _CONTEXT_BOUNDARY_AMBIGUOUS
-
-
-def _clamp_datepick_selection_route(
-    text: str,
-    domains: list[MultiAgentDomain.Domain],
-    routing_result: MultiAgentDomain | None,
-) -> tuple[MultiAgentDomain | None, list[MultiAgentDomain.Domain] | None]:
-    """Force FE datepick clicks to stay in Transaction/FULL preorder flow."""
-    if not text or not _DATEPICK_SELECTION_RE.match(text):
-        return routing_result, None
-
-    previous_domains = list(domains) if domains != [MultiAgentDomain.Domain.TRANSACTION] else None
-    domains[:] = [MultiAgentDomain.Domain.TRANSACTION]
-    if routing_result is None:
-        routing_result = MultiAgentDomain(
-            reason="datepick_selection_transaction_flow",
-            domains=[MultiAgentDomain.Domain.TRANSACTION],
-            execution_plan=["transaction:build_preorder_preview"],
-            user_behavior="selecting reservation date and time",
-            flow="datepick selection -> preorder preview",
-            agent_prompt_profile=AgentPromptProfile.FULL,
-        )
-    else:
-        routing_result.domains = [MultiAgentDomain.Domain.TRANSACTION]
-        routing_result.agent_prompt_profile = AgentPromptProfile.FULL
-    return routing_result, previous_domains
-
-
-def _apply_prompt_context_boundary(slots: ConversationSlots, text: str) -> ConversationSlots:
-    """Return a prompt-only slot view for a clear new-topic turn."""
-    prompt_slots = slots.model_copy()
-    prompt_slots.pending_intent = None
-    prompt_slots.goal_type = None
-    prompt_slots.goods_no = None
-    prompt_slots.shop_id = None
-    prompt_slots.shop_name = None
-    prompt_slots.payment_amount = None
-    prompt_slots.recommendation_variants = None
-    prompt_slots.recommendation_limit_per_variant = None
-    prompt_slots.recommendation_source_text = None
-
-    # If the user starts a new vehicle/product/recommendation topic without
-    # explicitly typing a size, do not leak an old vehicle/product size.
-    if not normalize_tire_size(text):
-        prompt_slots.tire_size = None
-        prompt_slots.tire_size_front = None
-        prompt_slots.tire_size_rear = None
-        prompt_slots.tire_model = None
-        prompt_slots.car_model = None
-        prompt_slots.car_no = None
-        prompt_slots.car_lnc_cd = None
-        prompt_slots.mbr_car_reg_seq = None
-    return prompt_slots
-
-
 _VEHICLE_CATEGORY_CONTEXT_RE = re.compile(
     r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])|"
     r"SUV|세단|승용차|경차|소형차|중형차|대형차|화물차|트럭|밴|승합차|"
@@ -9418,8 +9267,6 @@ class TStationChatServiceV2:
         fresh_product_transaction_request = False
         goods_no_resolved_this_turn = False
         intent_group: str | None = None
-        context_boundary = _CONTEXT_BOUNDARY_AMBIGUOUS
-        prompt_slots = merged_slots.model_copy()
         quick_reply_domain_values: list[str] = []
         predicted_domain_values: list[str] = []
         latest_datepick_tmpl: dict | None = None
@@ -9536,32 +9383,6 @@ class TStationChatServiceV2:
                     resolved_position_size,
                 )
 
-            # 2) Extract regex-based slots from the LATEST user message only
-            regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
-            if StreamingMultiAgentCoordinator._is_existing_reservation_management_current_turn_query(last_user_text):
-                intent_group = "existing_reservation_management"
-            context_boundary = _classify_context_boundary(
-                last_user_text,
-                regex_slots,
-                latest_quickreply_tmpl=latest_quickreply_tmpl,
-                latest_listcar_tmpl=latest_listcar_tmpl,
-                latest_location_tmpl=latest_location_tmpl,
-                latest_preorder_tmpl=latest_preorder_tmpl,
-            )
-            if context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC:
-                current_user_classifier_messages = [
-                    dict(message)
-                    for message in reversed(messages)
-                    if message.get("role") == "user"
-                    and not TStationChatServiceV2._is_user_context_message(message)
-                ]
-                if current_user_classifier_messages:
-                    classifier_messages = [current_user_classifier_messages[0]]
-                logger.info(
-                    "[CONTEXT_BOUNDARY] fresh_topic: using current-turn classifier context only text=%r",
-                    last_user_text[:80],
-                )
-
             classify_future = _try_submit_speculative(
                 _coordinator.classify_multi_intent,
                 classifier_messages,
@@ -9570,6 +9391,11 @@ class TStationChatServiceV2:
                 trace_id=request.tracing_id,
                 parent_span_id=_parent_span_id,
             )
+
+            # 2) Extract regex-based slots from the LATEST user message only
+            regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
+            if StreamingMultiAgentCoordinator._is_existing_reservation_management_current_turn_query(last_user_text):
+                intent_group = "existing_reservation_management"
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
@@ -10098,12 +9924,6 @@ class TStationChatServiceV2:
                 _should_suppress_inherited_recommendation_context_for_product_attribute(last_user_text)
             )
             prompt_slots = merged_slots.model_copy() if merged_slots is not None else None
-            if prompt_slots is not None and context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC:
-                prompt_slots = _apply_prompt_context_boundary(prompt_slots, last_user_text)
-                logger.info(
-                    "[CONTEXT_BOUNDARY] fresh_topic: scoped prompt slots for current turn text=%r",
-                    last_user_text[:80],
-                )
             if prompt_slots is not None and suppress_inherited_recommendation_context:
                 prompt_slots.tire_size = None
                 if prompt_slots.goal_type == "product_recommend":
@@ -10157,11 +9977,6 @@ class TStationChatServiceV2:
             if prev_tool_data:
                 if suppress_inherited_recommendation_context:
                     logger.debug("[TOOL_CTX] Skipped recent tool context for product attribute lookup turn")
-                elif context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC:
-                    logger.info(
-                        "[TOOL_CTX] Skipped recent tool context for fresh-topic turn text=%r",
-                        last_user_text[:80],
-                    )
                 else:
                     prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(
                         prev_tool_data,
@@ -10215,17 +10030,12 @@ class TStationChatServiceV2:
                     parent_span_id=_classify_span.id or _parent_span_id,
                 )
 
-            policy_slot_source = (
-                prompt_slots
-                if context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC and prompt_slots is not None
-                else merged_slots
-            )
             policy_known_slots = {
-                "goods_no": policy_slot_source.goods_no,
-                "product_name": policy_slot_source.tire_model,
-                "tire_size": policy_slot_source.tire_size,
-                "region": policy_slot_source.region,
-                "shop_id": policy_slot_source.shop_id,
+                "goods_no": merged_slots.goods_no,
+                "product_name": merged_slots.tire_model,
+                "tire_size": merged_slots.tire_size,
+                "region": merged_slots.region,
+                "shop_id": merged_slots.shop_id,
             }
             policy_plan = plan_cross_domain_turn(last_user_text, known_slots=policy_known_slots)
             policy_domains = _agent_domains_from_cross_domain_values(
@@ -10329,19 +10139,13 @@ class TStationChatServiceV2:
                     predicted_domains = [MultiAgentDomain.Domain[_chip_domain]]
                     _classify_path = "chip_speculative"
                 else:
-                    if context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC:
-                        predicted_domains = (
-                            _support_fast_path(last_user_text)
-                            or _rule_based_classify(last_user_text, prompt_slots or merged_slots)
-                        )
-                    else:
-                        predicted_domains = (
-                            _domains_from_strings(quick_reply_domain_values)
-                            or _domains_from_strings(predicted_domain_values)
-                            or _goal_based_classify(last_user_text, merged_slots)
-                            or _support_fast_path(last_user_text)
-                            or _rule_based_classify(last_user_text, merged_slots)
-                        )
+                    predicted_domains = (
+                        _domains_from_strings(quick_reply_domain_values)
+                        or _domains_from_strings(predicted_domain_values)
+                        or _goal_based_classify(last_user_text, merged_slots)
+                        or _support_fast_path(last_user_text)
+                        or _rule_based_classify(last_user_text, merged_slots)
+                    )
                     _classify_path = "speculative"
 
                 transaction_predicted = (
@@ -10363,9 +10167,6 @@ class TStationChatServiceV2:
                 domains, routing_result = await asyncio.to_thread(classify_future.result)
                 _classify_path = "llm"
 
-            if routing_result is not None and context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC:
-                routing_result.user_behavior = "asking a new standalone topic"
-                routing_result.flow = ""
             if routing_result is not None:
                 messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
             messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
@@ -10521,10 +10322,6 @@ class TStationChatServiceV2:
         if (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
-            and (
-                context_boundary != _CONTEXT_BOUNDARY_FRESH_TOPIC
-                or regex_slots.pending_intent is not None
-            )
             and merged_slots.pending_intent is not None
             and merged_slots.goods_no is None
             and (
@@ -10589,11 +10386,6 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
-            # A datepick click is already a concrete reservation-slot selection.
-            # It must stay in Transaction/FULL so the preOrder preview can be
-            # built; product context carried from earlier turns must not trigger
-            # a Discovery prefix here.
-            and not _DATEPICK_SELECTION_RE.match(last_user_text)
             # P0b assumes the user intends to buy/order — Discovery resolves
             # goods_no first. Favorite-store queries ("내 단골매장 / 단골 가게 /
             # 자주 가는 매장 / 마이샵 / 단골점") are info-only Transaction calls
@@ -10810,11 +10602,11 @@ class TStationChatServiceV2:
         # ordered differently from the deterministic task decomposition.
         try:
             known_slots = {
-                "goods_no": policy_slot_source.goods_no,
-                "product_name": policy_slot_source.tire_model,
-                "tire_size": policy_slot_source.tire_size,
-                "region": policy_slot_source.region,
-                "shop_id": policy_slot_source.shop_id,
+                "goods_no": merged_slots.goods_no,
+                "product_name": merged_slots.tire_model,
+                "tire_size": merged_slots.tire_size,
+                "region": merged_slots.region,
+                "shop_id": merged_slots.shop_id,
             }
             cross_domain_plan = plan_cross_domain_turn(last_user_text, known_slots=known_slots)
             planned_domains = _agent_domains_from_cross_domain_values(
@@ -10907,24 +10699,6 @@ class TStationChatServiceV2:
         except Exception:
             logger.exception("[POLICY][cross-domain] Failed to normalize route")
 
-        routing_result, datepick_previous_domains = _clamp_datepick_selection_route(
-            last_user_text, domains, routing_result
-        )
-        if datepick_previous_domains is not None:
-            logger.info(
-                "[COORDINATOR] Datepick selection route clamp: %s -> [transaction]",
-                [domain.value for domain in datepick_previous_domains],
-            )
-            log_classifier_redirect(
-                trace_id=request.tracing_id,
-                rule="datepick_selection_route_clamp",
-                classifier_domains=[domain.value for domain in datepick_previous_domains],
-                corrected_domains=["transaction"],
-                user_text=last_user_text,
-                user_behavior=getattr(routing_result, "user_behavior", "") or "",
-                slots={"reason": "datepick selection must continue transaction preOrder flow"},
-            )
-
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set
         # isBookingFlow=True when a downstream tool call (inventory / price /
@@ -10962,34 +10736,29 @@ class TStationChatServiceV2:
                 recent_user_texts.append(extracted)
             if len(recent_user_texts) >= 3:
                 break
-        context_slot_source = (
-            prompt_slots
-            if context_boundary == _CONTEXT_BOUNDARY_FRESH_TOPIC and prompt_slots is not None
-            else merged_slots
-        )
-        current_goal_type.set(context_slot_source.goal_type)
-        current_pending_intent.set(context_slot_source.pending_intent)
-        current_confirmed_tire_size.set(context_slot_source.tire_size)
+        current_goal_type.set(merged_slots.goal_type)
+        current_pending_intent.set(merged_slots.pending_intent)
+        current_confirmed_tire_size.set(merged_slots.tire_size)
         current_user_text.set("\n".join(reversed(recent_user_texts)) or last_user_text)
-        current_user_preferences_text.set(context_slot_source.user_preferences_text or "")
+        current_user_preferences_text.set(merged_slots.user_preferences_text or "")
         discovery_tool_patch, discovery_response_decision = _build_discovery_policy_context(
             domains=domains,
             last_user_text=last_user_text,
             context_text="\n".join(reversed(recent_user_texts)) or last_user_text,
-            tire_size=context_slot_source.tire_size,
-            goods_no=context_slot_source.goods_no,
+            tire_size=merged_slots.tire_size,
+            goods_no=merged_slots.goods_no,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)
         transaction_known_slots = {
-            "tire_size": context_slot_source.tire_size,
-            "goods_no": context_slot_source.goods_no,
-            "product_name": context_slot_source.tire_model,
-            "quantity": context_slot_source.ord_qty,
-            "ord_qty": context_slot_source.ord_qty,
-            "shop_id": context_slot_source.shop_id,
-            "store_name": context_slot_source.shop_name,
-            "region": context_slot_source.region,
+            "tire_size": merged_slots.tire_size,
+            "goods_no": merged_slots.goods_no,
+            "product_name": merged_slots.tire_model,
+            "quantity": merged_slots.ord_qty,
+            "ord_qty": merged_slots.ord_qty,
+            "shop_id": merged_slots.shop_id,
+            "store_name": merged_slots.shop_name,
+            "region": merged_slots.region,
         }
         transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
             domains=domains,
@@ -11004,8 +10773,8 @@ class TStationChatServiceV2:
         ))
         current_ev_suitability_comparison.set(_is_ev_suitability_turn(
             last_user_text,
-            context_slot_source.pending_intent,
-            context_slot_source.goal_type,
+            merged_slots.pending_intent,
+            merged_slots.goal_type,
         ))
         current_return_visit_store_flow.set(bool(
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
