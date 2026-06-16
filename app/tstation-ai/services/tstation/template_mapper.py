@@ -3561,7 +3561,11 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         today_prefix = "오늘 " if re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "") else ""
         short = f"요청하신 조건으로 {today_prefix}장착 가능 여부가 확인된 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
         response_source = "code_mapper"
-    short = _maybe_prepend_unverifiable_store_guidance(short)
+    # Favorite-store lookup is an explicit new user request ("내 단골매장").
+    # Do not carry over stale special-store preferences such as a previous
+    # "리프트 있는 매장" query into this independent list response.
+    if not has_favorite_stores:
+        short = _maybe_prepend_unverifiable_store_guidance(short)
     return {
         "type": "data",
         "template": "location",
