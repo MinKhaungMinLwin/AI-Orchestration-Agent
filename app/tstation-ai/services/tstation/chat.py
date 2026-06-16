@@ -10562,6 +10562,11 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            # A datepick click is already a concrete reservation-slot selection.
+            # It must stay in Transaction/FULL so the preOrder preview can be
+            # built; product context carried from earlier turns must not trigger
+            # a Discovery prefix here.
+            and not _DATEPICK_SELECTION_RE.match(last_user_text)
             # P0b assumes the user intends to buy/order — Discovery resolves
             # goods_no first. Favorite-store queries ("내 단골매장 / 단골 가게 /
             # 자주 가는 매장 / 마이샵 / 단골점") are info-only Transaction calls

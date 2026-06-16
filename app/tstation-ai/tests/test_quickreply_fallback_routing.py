@@ -209,6 +209,15 @@ def test_context_boundary_keeps_preorder_confirmation_as_continuation() -> None:
     assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
 
 
+def test_context_boundary_keeps_datepick_selection_as_continuation() -> None:
+    text = "2026년 6월 17일 (수)\n17:00"
+    regex_slots = ConversationSlots.extract_from_user_text(text)
+
+    boundary = _classify_context_boundary(text, regex_slots)
+
+    assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
+
+
 def test_context_boundary_keeps_latest_quickreply_label_as_continuation() -> None:
     regex_slots = ConversationSlots.extract_from_user_text("구매하기")
     latest_quickreply = {
