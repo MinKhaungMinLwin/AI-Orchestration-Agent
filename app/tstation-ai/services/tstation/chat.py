@@ -3107,6 +3107,8 @@ def _normalize_booking_preview_quickreply(event_data: dict, called_tool_names: s
 
 _RESERVATION_CHANGE_POSSIBLE_COPY_RE = re.compile(
     r"예약\s*시간\s*변경이\s*가능한\s*상태로\s*보여요\.?"
+    r"|주문\s*내역\s*상세에서\s*예약\s*시간\s*변경\s*가능\s*여부[^\n.。]*[.。]?"
+    r"|예약\s*시간\s*변경\s*가능\s*여부[^\n.。]*[.。]?"
     r"|(?:정확한\s*)?변경\s*가능\s*여부는\s*[^\n.。]*확인[^\n.。]*필요해요\.?"
     r"|(?:오늘|내일|모레|\d{1,2}\s*시|\d{1,2}\s*:\s*\d{2}|[^\n.。]{0,12})로\s*변경\s*가능\s*여부는\s*"
     r"예약\s*확인\s*후\s*진행이\s*필요해요\.?",

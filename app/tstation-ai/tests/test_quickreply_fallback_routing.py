@@ -2560,6 +2560,28 @@ def test_existing_reservation_change_copy_does_not_imply_bot_can_change_time() -
     assert "변경 가능 여부는 예약 확인 후 진행이 필요해요" not in assistant
 
 
+def test_existing_reservation_change_copy_removes_order_detail_possibility_wording() -> None:
+    event_data = {
+        "assistantResponse": (
+            "확인된 온라인 예약 정보예요.\n\n"
+            "예약 유형: 온라인 예약\n"
+            "주문번호: O202604080019311\n"
+            "예약 매장: 티스테이션 고양시청점\n"
+            "예약 일시: 2026-04-18 15:00\n\n"
+            "예약 시간은 제가 직접 변경해 드릴 수는 없어요. "
+            "주문 내역 상세에서 예약 시간 변경 가능 여부를 확인하고 진행해 주세요."
+        ),
+        "quickReplies": [{"label": "주문 내역 상세 보기", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert _normalize_existing_reservation_change_quickreply(event_data)
+    assistant = event_data["assistantResponse"]
+    assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
+    assert "변경 가능 여부" not in assistant
+    assert "직접 처리하거나" in assistant
+
+
 def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
     event = _store_detail_quickreply_from_sources(
         [
