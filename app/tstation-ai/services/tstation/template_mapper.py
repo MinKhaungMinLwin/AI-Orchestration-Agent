@@ -3365,7 +3365,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "distance": distance_str,
                 "detailAddress": detail_addr,
                 "isAllMyT": is_all_my_t,
-                "todayInstall": stock_label == "매장재고",
+                "todayInstall": is_all_my_t and stock_label == "매장재고",
                 "tnaDelivery": is_tna_delivery or stock_label == "T바로배송",
                 "description": description,
             })
@@ -3621,7 +3621,7 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
             rating = _get_num(row, "rating_idx")
             is_all_my_t = bool(row.get("is_all_my_t", False))
             is_tna_delivery = bool(row.get("is_tna_delivery", False))
-            today_install = bool(cal_day_raw == today_yyyymmdd and slots)
+            today_install = bool(is_all_my_t and cal_day_raw == today_yyyymmdd and slots)
             description_lines: list[str] = []
             if address:
                 description_lines.append(f"📍 {address}")
