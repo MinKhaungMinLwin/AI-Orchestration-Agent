@@ -55,6 +55,7 @@ from services.tstation.chat import (
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
+    _is_order_quantity_prompt_continuation_text,
     _is_staggered_selected_tire_size_context,
     _listcar_allows_staggered_tire_prompt,
     _apply_vehicle_selection_slot_values,
@@ -3039,6 +3040,24 @@ def test_order_quantity_prompt_precedes_store_when_region_entered_without_quanti
     assert _should_prompt_order_quantity_before_store("강남", slots) is True
 
 
+def test_order_quantity_prompt_fires_when_product_is_selected_this_turn() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=None,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert (
+        _should_prompt_order_quantity_before_store(
+            "스콜피언 베르디 255/55R19",
+            slots,
+            goods_no_resolved_this_turn=True,
+        )
+        is True
+    )
+
+
 def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> None:
     slots = SimpleNamespace(
         goods_no="G000000309855",
@@ -3048,6 +3067,35 @@ def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> 
     )
 
     assert _should_prompt_order_quantity_before_store("2개", slots) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "내 차로 확인",
+        "아니 이거 말고 내 차 확인한다고",
+        "아니 내 차목록 보여달라고",
+        "내 쿠폰 보여줘",
+        "예약내역 확인",
+        "다른 상품 추천해줘",
+        "이 타이어 승차감은 어때?",
+        "한남점 질소충전 무료야?",
+    ],
+)
+def test_order_quantity_prompt_does_not_trap_topic_switches(text: str) -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=None,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _should_prompt_order_quantity_before_store(text, slots) is False
+
+
+@pytest.mark.parametrize("text", ["강남", "판교점", "근처 매장", "오늘 장착 가능한 매장", "구매하기"])
+def test_order_quantity_prompt_keeps_order_continuation_texts(text: str) -> None:
+    assert _is_order_quantity_prompt_continuation_text(text) is True
 
 
 def test_fresh_sized_product_order_clears_stale_comparison_product() -> None:

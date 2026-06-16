@@ -3774,18 +3774,58 @@ def _build_order_quantity_prompt_event(slots: Any) -> dict:
     }
 
 
-def _should_prompt_order_quantity_before_store(user_text: str | None, slots: Any) -> bool:
+def _should_prompt_order_quantity_before_store(
+    user_text: str | None,
+    slots: Any,
+    *,
+    goods_no_resolved_this_turn: bool = False,
+) -> bool:
     from schemas.tstation.slots import ConversationSlots
 
+    text = str(user_text or "").strip()
     if getattr(slots, "goods_no", None) is None:
         return False
     if getattr(slots, "ord_qty", None) is not None:
         return False
     if getattr(slots, "pending_intent", None) != "order" and getattr(slots, "goal_type", None) != "place_order":
         return False
-    if ConversationSlots.extract_from_user_text(str(user_text or "")).ord_qty is not None:
+    if ConversationSlots.extract_from_user_text(text).ord_qty is not None:
         return False
-    return True
+    if goods_no_resolved_this_turn:
+        return True
+    return _is_order_quantity_prompt_continuation_text(text)
+
+
+def _is_order_quantity_prompt_continuation_text(user_text: str | None) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+
+    if re.search(
+        r"내역|조회|취소|변경|내\s*차|내차|차량|쿠폰|정비|질소|얼라인먼트|무료|잘\s*봐|"
+        r"상세\s*정보|상세정보|정보|설명|어때|뭐야|다른\s*상품|추천|아니|처음|문의|고객센터",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+
+    if _QUANTITYLESS_CART_ORDER_CTA_RE.search(text):
+        return True
+
+    frame = build_transaction_intent_frame(text)
+    has_bare_location = bool(frame.entities.get("store_name") or frame.entities.get("region")) and len(text) <= 12
+    if has_bare_location:
+        return True
+
+    if re.search(
+        r"근처\s*매장|주변\s*매장|매장\s*찾|오늘\s*장착|당일\s*장착|장착\s*가능|"
+        r"재고|예약\s*가능|가능\s*시간|가능\s*일정|방문\s*예약|구매|주문|결제",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+
+    return False
 
 
 def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
@@ -9858,7 +9898,11 @@ class TStationChatServiceV2:
             if (
                 current_vehicle_selection_prompt_event.get() is None
                 and not fresh_product_transaction_request
-                and _should_prompt_order_quantity_before_store(last_user_text, merged_slots)
+                and _should_prompt_order_quantity_before_store(
+                    last_user_text,
+                    merged_slots,
+                    goods_no_resolved_this_turn=goods_no_resolved_this_turn,
+                )
             ):
                 logger.debug(
                     "[SLOTS] Prompting order quantity before store flow: goods_no=%r tire_size=%r "
