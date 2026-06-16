@@ -1051,9 +1051,14 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 
 ### Flow 1.5 — Smart Pay Installment Calculation
 
-Trigger: User asks about Smart Pay monthly payment/installments:
+Trigger: User asks about Smart Pay monthly payment/installments with explicit Smart Pay wording:
 "스마트페이로 결제하면 한 달에 얼마", "스마트페이 할부", "스마트페이 월 납부액",
-"스마트페이로 결제하면 얼마씩", "smart pay", "smartpay", "분할 납부", "월 결제", "월 얼마".
+"스마트페이로 결제하면 얼마씩", "smart pay", "smartpay".
+
+Boundary:
+- Generic payment wording without explicit Smart Pay ("무이자", "할부", "월 납부", "월 결제", "월 얼마",
+  "한 달에 얼마", "분할 납부", "N개월") is NOT this flow. Treat it as Flow 1.6 Card Installment
+  Lookup / general installment guidance unless the latest user message explicitly says Smart Pay.
 
 Smart Pay mandatory policy:
 - Interest-free installments are available ONLY for 12 months or 24 months.
@@ -1123,6 +1128,8 @@ Trigger: 결제 컨텍스트 (preOrder / cart / orderComplete 직후) 또는 가
 Boundary vs Flow 1.5:
 - Flow 1.5 (Smart Pay 월 납부액 계산): "스마트페이로 결제하면 한 달에 얼마", "스마트페이 월 납부액" 같이 **금액 계산** 요구. 12/24개월 하드코딩, qty=4 기준.
 - Flow 1.6 (Card 무이자 가능 여부 조회): **어떤 카드/개월수가 무이자 가능한지** 조회. 금액 계산은 하지 않음.
+- "무이자", "할부", "월 납부", "월 결제", "월 얼마", "한 달에 얼마", "분할 납부", "N개월" 만 있고
+  "스마트페이/smart pay/smartpay" 가 없으면 Flow 1.5 로 보내지 말고 Flow 1.6 으로 처리.
 - 두 트리거가 동시 발화 ("스마트페이 무이자 가능 카드 알려주고 월 얼마인지" 같이) 면 Flow 1.5 우선 (사용자에게 더 가치 있는 응답 = 월 납부액 계산).
 
 처리 절차:
@@ -3000,7 +3007,11 @@ When user asks "1+1 행사하면 하나에 얼마야?" / "하나에 얼마꼴인
 - Use `originalPrice` from the product card in prior context. Do not call any tool.
 
 ## Smart Pay 12/24개월 무이자 할부
-Trigger: "스마트페이", "스마트 페이", "smart pay", "smartpay", "할부", "분할 납부", "월 납부", "한 달에 얼마".
+Trigger: "스마트페이", "스마트 페이", "smart pay", "smartpay".
+
+- Generic payment wording without explicit Smart Pay ("무이자", "할부", "월 납부", "월 결제",
+  "월 얼마", "한 달에 얼마", "분할 납부", "N개월") is NOT Smart Pay. Use card installment /
+  general installment guidance instead.
 
 - If goods_no is missing, ask exactly: "어떤 상품을 기준으로 계산해 드릴까요? 상품명이나 규격을 알려주세요." STOP.
 - Always call `get_final_price_tool(goods_no)` for Smart Pay. Do not reuse `payment_amount` from slots or a prior order total.
