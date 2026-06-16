@@ -41,6 +41,7 @@ from services.tstation.chat import (
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _apply_prompt_context_boundary,
+    _clamp_datepick_selection_route,
     _build_bare_product_search_tool_input,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
@@ -104,6 +105,7 @@ from services.tstation.chat import (
     _classify_context_boundary,
     _CONTEXT_BOUNDARY_CONTINUATION,
     _CONTEXT_BOUNDARY_FRESH_TOPIC,
+    AgentPromptProfile,
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
@@ -216,6 +218,35 @@ def test_context_boundary_keeps_datepick_selection_as_continuation() -> None:
     boundary = _classify_context_boundary(text, regex_slots)
 
     assert boundary == _CONTEXT_BOUNDARY_CONTINUATION
+
+
+def test_datepick_selection_route_clamp_removes_discovery_prefix() -> None:
+    text = "2026년 6월 17일 (수)\n17:00"
+    domains = [
+        MultiAgentDomain.Domain.TRANSACTION,
+        MultiAgentDomain.Domain.DISCOVERY,
+        MultiAgentDomain.Domain.TRANSACTION,
+    ]
+    routing_result = MultiAgentDomain(
+        reason="cross_domain_policy_route",
+        domains=domains,
+        execution_plan=["transaction:store_schedule", "discovery:resolve_product"],
+        user_behavior="selecting reservation date and time",
+        flow="datepick selection",
+        agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+    )
+
+    routing_result, previous_domains = _clamp_datepick_selection_route(text, domains, routing_result)
+
+    assert previous_domains == [
+        MultiAgentDomain.Domain.TRANSACTION,
+        MultiAgentDomain.Domain.DISCOVERY,
+        MultiAgentDomain.Domain.TRANSACTION,
+    ]
+    assert domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing_result is not None
+    assert routing_result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing_result.agent_prompt_profile == AgentPromptProfile.FULL
 
 
 def test_context_boundary_keeps_latest_quickreply_label_as_continuation() -> None:

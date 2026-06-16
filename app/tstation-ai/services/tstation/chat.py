@@ -1317,6 +1317,7 @@ class StreamingMultiAgentCoordinator:
             if (
                 last_user_text
                 and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
+                and not _DATEPICK_SELECTION_RE.match(last_user_text)
                 and self.__class__._is_store_schedule_current_turn_query(last_user_text)
                 and result.agent_prompt_profile != AgentPromptProfile.TRANSACTION_STORE
             ):
@@ -7467,6 +7468,32 @@ def _classify_context_boundary(
     return _CONTEXT_BOUNDARY_AMBIGUOUS
 
 
+def _clamp_datepick_selection_route(
+    text: str,
+    domains: list[MultiAgentDomain.Domain],
+    routing_result: MultiAgentDomain | None,
+) -> tuple[MultiAgentDomain | None, list[MultiAgentDomain.Domain] | None]:
+    """Force FE datepick clicks to stay in Transaction/FULL preorder flow."""
+    if not text or not _DATEPICK_SELECTION_RE.match(text):
+        return routing_result, None
+
+    previous_domains = list(domains) if domains != [MultiAgentDomain.Domain.TRANSACTION] else None
+    domains[:] = [MultiAgentDomain.Domain.TRANSACTION]
+    if routing_result is None:
+        routing_result = MultiAgentDomain(
+            reason="datepick_selection_transaction_flow",
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:build_preorder_preview"],
+            user_behavior="selecting reservation date and time",
+            flow="datepick selection -> preorder preview",
+            agent_prompt_profile=AgentPromptProfile.FULL,
+        )
+    else:
+        routing_result.domains = [MultiAgentDomain.Domain.TRANSACTION]
+        routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+    return routing_result, previous_domains
+
+
 def _apply_prompt_context_boundary(slots: ConversationSlots, text: str) -> ConversationSlots:
     """Return a prompt-only slot view for a clear new-topic turn."""
     prompt_slots = slots.model_copy()
@@ -10879,6 +10906,24 @@ class TStationChatServiceV2:
                 )
         except Exception:
             logger.exception("[POLICY][cross-domain] Failed to normalize route")
+
+        routing_result, datepick_previous_domains = _clamp_datepick_selection_route(
+            last_user_text, domains, routing_result
+        )
+        if datepick_previous_domains is not None:
+            logger.info(
+                "[COORDINATOR] Datepick selection route clamp: %s -> [transaction]",
+                [domain.value for domain in datepick_previous_domains],
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="datepick_selection_route_clamp",
+                classifier_domains=[domain.value for domain in datepick_previous_domains],
+                corrected_domains=["transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={"reason": "datepick selection must continue transaction preOrder flow"},
+            )
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set
