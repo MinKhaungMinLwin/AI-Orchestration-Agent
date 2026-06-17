@@ -2221,6 +2221,52 @@ def test_store_service_gate_detects_review_detail_but_not_review_write() -> None
     assert review_write.needs_store_detail_cta is False
 
 
+def test_store_visual_detail_request_routes_to_store_detail_cta_intent() -> None:
+    visual = decide_store_service_gate(user_text="티스테이션 구리점 매장 전경 사진 보고 싶어")
+
+    assert visual.intent == "store_visual_detail"
+    assert visual.needs_store_detail_cta is True
+    assert _extract_plain_store_info_store_name("티스테이션 구리점 매장 전경 사진 보고 싶어") == "구리점"
+    assert _extract_plain_store_info_store_name("분당정자점 사진 있어?") == "분당정자점"
+
+
+def test_store_visual_detail_guidance_injects_detail_cta_before_generic_store_search() -> None:
+    event_data = {
+        "assistantResponse": "티스테이션 구리점 매장 전경은 매장 상세 화면에서 확인하실 수 있어요.",
+        "quickReplies": [
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "다른 매장 정보", "domain": "TRANSACTION"},
+        ],
+        "predictedDomains": ["TRANSACTION"],
+    }
+    tool_data_list = [
+        {
+            "tool": "get_store_detail_tool",
+            "data": {
+                "status": "success",
+                "data": {
+                    "shop_seq": "F203675962",
+                    "shop_nm": "티스테이션 구리점",
+                    "tel_no": "0315551234",
+                    "shop_biz_strt_time": "09",
+                    "shop_biz_end_time": "19",
+                },
+            },
+        }
+    ]
+
+    changed = _inject_store_detail_chip_for_contact_guidance(
+        event_data,
+        tool_data_list=tool_data_list,
+        messages=[{"role": "user", "content": "티스테이션 구리점 매장 전경 사진 보고 싶어"}],
+    )
+
+    assert changed is True
+    assert event_data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
+    assert event_data["quickReplies"][0]["url"].endswith("/store/locals/F203675962")
+    assert "매장 찾기" not in _labels(event_data["quickReplies"])
+
+
 def test_store_contact_guidance_injects_store_detail_cta_from_context_list_shape() -> None:
     event_data = {
         "assistantResponse": (

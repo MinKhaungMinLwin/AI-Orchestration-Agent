@@ -86,6 +86,7 @@ from services.tstation.policies.store_confirmation_policy import (
 from services.tstation.policies.store_service_gate import (
     decide_store_service_gate,
     is_store_detail_page_cta_text,
+    is_store_visual_detail_request,
     replace_store_review_unavailable_text,
 )
 from config.tracing import (
@@ -5115,7 +5116,7 @@ def _extract_store_holiday_store_name(user_text: str | None) -> str | None:
 
 _PLAIN_STORE_INFO_RE = re.compile(
     r"정보|상세|주소|전화|연락처|영업\s*시간|운영\s*시간|휴무|서비스|올마이T|올마이티|"
-    r"T\s*바로\s*배송|T바로배송|온라인\s*장착|수입차",
+    r"T\s*바로\s*배송|T바로배송|온라인\s*장착|수입차|전경|사진|외관|내부|모습|이미지",
     re.IGNORECASE,
 )
 _STORE_RESERVATION_ACTION_RE = re.compile(
@@ -5253,6 +5254,7 @@ def _inject_store_detail_chip_for_contact_guidance(
     )
     store_service_decision = decide_store_service_gate(user_text=last_user_text, assistant_text=assistant_text)
     user_requested_store_reviews = store_service_decision.intent == "store_review_detail"
+    user_requested_store_visuals = store_service_decision.intent == "store_visual_detail"
     if not store_service_decision.needs_store_detail_cta:
         return False
 
@@ -5270,6 +5272,10 @@ def _inject_store_detail_chip_for_contact_guidance(
         if replaced == assistant_text:
             replaced = f"{assistant_text}\n\n{review_detail_text}".strip()
         assistant_text = replaced
+        event_data["assistantResponse"] = assistant_text
+    if user_requested_store_visuals and "매장 상세 페이지" not in assistant_text:
+        visual_detail_text = "매장 전경이나 사진은 매장 상세 페이지에서 확인해 주세요."
+        assistant_text = f"{assistant_text}\n\n{visual_detail_text}".strip()
         event_data["assistantResponse"] = assistant_text
 
     detail_summary = _build_store_detail_summary_from_context(tool_data_list)
@@ -5289,6 +5295,11 @@ def _inject_store_detail_chip_for_contact_guidance(
             and str(chip.get("label") or "").strip() == detail_chip["label"]
         )
     ]
+    if user_requested_store_visuals:
+        filtered = [
+            chip for chip in filtered
+            if not (isinstance(chip, dict) and str(chip.get("label") or "").strip() == "매장 찾기")
+        ]
     event_data["quickReplies"] = [detail_chip, *filtered]
     predicted = event_data.get("predictedDomains")
     if isinstance(predicted, list):
@@ -11912,6 +11923,47 @@ class TStationChatServiceV2:
             )
             if not isinstance(detail_event, dict) or detail_event.get("template") != "quickReply":
                 return None
+            if is_store_visual_detail_request(user_query):
+                event_data = detail_event.get("data")
+                detail_data = _unwrap_tool_data(detail_result)
+                if isinstance(event_data, dict) and isinstance(detail_data, dict):
+                    store_seq = str(
+                        detail_data.get("shop_seq")
+                        or detail_data.get("shop_id")
+                        or store_row.get("shop_seq")
+                        or store_row.get("shop_id")
+                        or ""
+                    ).strip()
+                    if store_seq:
+                        response = str(event_data.get("assistantResponse") or "").strip()
+                        visual_guidance = "매장 전경이나 사진은 매장 상세 페이지에서 확인해 주세요."
+                        if visual_guidance not in response:
+                            event_data["assistantResponse"] = f"{response}\n\n{visual_guidance}".strip()
+                        detail_chip = {
+                            "label": "매장 상세 페이지로 이동",
+                            "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", store_seq),
+                            "domain": "TRANSACTION",
+                        }
+                        chips = event_data.get("quickReplies")
+                        if not isinstance(chips, list):
+                            chips = []
+                        event_data["quickReplies"] = [
+                            detail_chip,
+                            *[
+                                chip for chip in chips
+                                if not (
+                                    isinstance(chip, dict)
+                                    and str(chip.get("label") or "").strip()
+                                    in {"매장 상세 페이지로 이동", "매장 찾기"}
+                                )
+                            ],
+                        ]
+                        predicted = event_data.get("predictedDomains")
+                        if isinstance(predicted, list):
+                            event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", *predicted])
+                        else:
+                            event_data["predictedDomains"] = ["TRANSACTION"]
+                        detail_event["assistant_response_source"] = "code_store_visual_detail_cta"
             return emitted_events, detail_event
 
         async def _resolve_coupon_applicability_with_code(
