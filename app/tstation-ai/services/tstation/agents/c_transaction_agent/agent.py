@@ -1399,6 +1399,9 @@ A user message is a STORE LIST PICK when ALL three are true:
       • `^\\s*\\d+\\s*번` (e.g. "1번", "3번 매장")
       • exact / partial store name from the list shown (e.g. "판교점", "한남점", "티스테이션 판교점")
       • bare list index "1" / "2" / "3" / "4" / "5"
+      • "이 매장 선택" / "이 매장으로" / "이곳 선택" — FE store-card chip tap (isBookingFlow=true).
+        shop_id will already be in confirmed slots (resolved before agent runs). NEVER call
+        get_store_list_tool again — go directly to PATH A or PATH B routing with the injected shop_id.
   (c) the message contains NOTHING ELSE (no question, no new keyword like "영업시간 알려줘").
 
 When the message is a STORE LIST PICK, you MUST resolve to one path: either (A) datepick or (B) location single-store info. Use the gate below.

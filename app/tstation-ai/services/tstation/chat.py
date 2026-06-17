@@ -9158,6 +9158,14 @@ class TStationChatServiceV2:
 
         text = user_text.strip()
 
+        # FE store-card chip phrases (isBookingFlow=True taps) carry no ordinal
+        # or store-name token — only resolvable when exactly 1 store was shown.
+        _STORE_SELECT_CHIPS = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
+        if text in _STORE_SELECT_CHIPS and len(items) == 1:
+            shop_id = items[0].get("shop_id")
+            if shop_id:
+                return shop_id
+
         ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
         if ordinal_match:
             idx = int(ordinal_match.group(1)) - 1
@@ -9229,6 +9237,16 @@ class TStationChatServiceV2:
             return None
         if not stores or len(stores) != len(metadata):
             return None
+
+        # FE store-card chip phrases (isBookingFlow=True taps) carry no ordinal
+        # or store-name token — only resolvable when exactly 1 store was shown.
+        _STORE_SELECT_CHIPS = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
+        if text in _STORE_SELECT_CHIPS and len(stores) == 1:
+            meta = metadata[0]
+            if isinstance(meta, dict):
+                shop_id = meta.get("shopId")
+                if shop_id:
+                    return shop_id
 
         ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
         if ordinal_match:
