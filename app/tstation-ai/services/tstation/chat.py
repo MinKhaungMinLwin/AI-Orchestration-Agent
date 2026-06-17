@@ -12676,6 +12676,13 @@ class TStationChatServiceV2:
                     preferred_keyword,
                     target_tire_size,
                 )
+                if product_row is None:
+                    product_row = _pick_product_row_from_search_result(
+                        search_result,
+                        preferred_keyword,
+                        target_product_name,
+                        allow_first_row_fallback=True,
+                    )
                 goods_no = str((product_row or {}).get("goods_no") or "").strip()
                 if goods_no:
                     price_input = {"goods_no": goods_no}
