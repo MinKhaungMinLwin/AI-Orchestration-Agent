@@ -338,7 +338,8 @@ def test_pickup_service_guard_handles_application_question() -> None:
     assert event is not None
     assert event["template"] == "quickReply"
     assert "매장 기준 최대 30km" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "내 근처 매장 찾기", "1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "내 근처 매장 찾기", "타이어 추천"]
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
 
 
 def test_pickup_service_gate_classifies_required_intents() -> None:
@@ -411,7 +412,8 @@ def test_direct_tire_delivery_guard_blocks_home_delivery_self_install() -> None:
     assert event["template"] == "quickReply"
     assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in event["data"]["assistantResponse"]
     assert "선택하신 장착점" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["장착 매장 찾기", "타이어 추천", "1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["장착 매장 찾기", "타이어 추천", "구매하기"]
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
 
 
 def test_direct_tire_delivery_guard_blocks_casual_home_delivery_request() -> None:
@@ -4458,18 +4460,54 @@ def test_coupon_tool_overrides_leading_domain() -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  Non-LEADING domains → generic
+#  Domain/context fallback routing
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
     "source_domain",
-    [None, "", "transaction", "discovery", "support", "unknown"],
+    [None, "", "unknown"],
 )
-def test_non_leading_domain_returns_generic(source_domain: str | None) -> None:
+def test_unknown_domain_returns_non_escalation_generic(source_domain: str | None) -> None:
     chips, label = _choose_quickreply_fallback(set(), source_domain)
     assert chips == _FALLBACK_GENERIC
     assert label == "generic"
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_transaction_store_plain_text_returns_store_schedule_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "transaction",
+        "고객님, 선택하신 매장의 예약 가능 시간을 확인해 주세요.",
+    )
+
+    assert label == "transaction_store_schedule"
+    assert _labels(chips) == ["예약 가능 시간 보기", "다른 매장 찾기", "매장 선택 다시"]
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_support_info_plain_text_returns_next_action_chips_without_qna() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "support",
+        "앞뒤 타이어 사이즈가 다른 차량은 전륜용과 후륜용을 각각 선택해서 구매하시면 돼요.",
+    )
+
+    assert label == "support_info"
+    assert _labels(chips) == ["구매하기", "매장 찾기", "타이어 추천"]
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_support_true_dead_end_allows_qna_chip() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "support",
+        "시스템 조회가 일시적으로 어려워 1:1 문의로 확인해 주세요.",
+    )
+
+    assert label == "support_recovery"
+    assert _labels(chips) == ["1:1 문의하기", "처음으로"]
 
 
 def test_progress_constant_shape() -> None:

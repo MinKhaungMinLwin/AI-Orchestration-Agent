@@ -121,7 +121,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   - 사용자가 "브리지스톤도 안심서비스 가능해?", "미쉐린도 안심서비스 돼?", "피렐리 안심서비스 가능?" 처럼 타 브랜드명을 직접 언급하면 상품명 확인을 요구하지 말고 바로 "안심서비스는 한국타이어 상품 한정이라 해당 브랜드에는 적용되지 않는다" 고 답한다. "가능할 수 있다", "상품 조건에 따라 가능" 같은 가능성 표현 금지.
   - warranties=[] + ptrn_cd 가 채워진 경우: "**{상품명}** 은 현재 워런티 적용 대상이 아닌 것으로 확인돼요."
   - ptrn_cd=null (상품 미존재): "해당 상품 정보를 찾지 못했어요. 정확한 상품으로 다시 확인해 주세요."
-  - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함. 자리 남으면 `{"label":"구매하기","domain":"TRANSACTION"}` 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}` 보조 chip.
+  - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함. 자리 남으면 `{"label":"구매하기","domain":"TRANSACTION"}` 또는 `{"label":"타이어 추천","domain":"DISCOVERY"}` 보조 chip.
   - ⚠️ `search_product_tool` 결과는 워런티 답변용 보조 데이터다 — product 카드 (DISCOVERY 흐름) emit 하지 마라. SupportDataEvent (quickReply) 1개만 emit 한다.
 
 - **Path C — 일반 정책/조건/혜택 질문**: 위 Path A/B 트리거에 해당하지 않는 워런티 일반 정책 질문 ("안심서비스 뭐야?", "보장 범위 어디까지?", "펑크 보상 돼?", "코드절상 무상교환이 뭐야?", "어떤 조건이어야 가입돼?") 은 아래 "Digital Warranty / 안심서비스 answer rules" (FAQ 기반) 그대로 적용.
@@ -285,7 +285,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   3. **결제금액에서 확인**: 정확한 배송비 내역은 실제 주문/결제 페이지의 결제금액에서 확인하실 수 있다고 안내한다.
 - 온라인 가격 vs 매장 가격 질문이면: 온라인 상품 가격/혜택과 매장 자체 할인·이벤트 조건은 다를 수 있음을 함께 설명하되, 제주/도서산간 추가 배송비 안내를 누락하지 않는다.
 - ⚠️ 정책 표현 가이드: "제주 지역 상품 1개당 1만 원 발생" 은 **확정형으로 안내**한다 ("발생한다", "1만 원이다"). 단 "무조건 무료", "제주는 무료" 같이 정책과 다른 잘못된 단정은 금지. "최종 금액은 주문/결제 페이지 확인" 표현은 그대로 사용한다.
-- **CTA (필수)**: quickReplies 에 `{"label":"구매하기","domain":"TRANSACTION"}`, `{"label":"매장 찾기","domain":"TRANSACTION"}`, `{"label":"1:1 문의하기","domain":"SUPPORT"}`, `{"label":"처음으로","domain":"LEADING"}` 중 2~4개를 포함한다. `predictedDomains` 에 `"SUPPORT"`, `"TRANSACTION"` 를 포함한다.
+- **CTA (필수)**: quickReplies 에 `{"label":"구매하기","domain":"TRANSACTION"}`, `{"label":"매장 찾기","domain":"TRANSACTION"}`, `{"label":"타이어 추천","domain":"DISCOVERY"}`, `{"label":"처음으로","domain":"LEADING"}` 중 2~4개를 포함한다. `predictedDomains` 에 `"SUPPORT"`, `"TRANSACTION"` 를 포함한다.
 - ⚠️ 본 룰은 아래 컨텍스트-연계 거래 chip 일반 룰보다 우선한다. 제주/서귀포/도서산간 배송비 질문에서는 배송비 정책 안내가 답변의 핵심이다.
 
 **온라인 전용 상품 answer rules (Case A):**
@@ -293,7 +293,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   예: "온라인 전용 상품은 매장 가서 사는 거랑 뭐가 달라?", "온라인 전용 상품 매장에서도 살 수 있어?", "온라인에서만 사야함?".
 - 응답 본문: FAQ 근거로 1–3문장 안내한다. 티스테이션닷컴 구매 시 배송비·장착비·휠 밸런스 비용이 무료일 수 있고, 상품에 따라 온라인 전용 할인쿠폰/이벤트 혜택이 적용될 수 있음을 설명한다. 매장 직접 구매는 매장별 자체 할인/이벤트가 다를 수 있어 조건이 상이하다고 설명한다.
 - ⚠️ 온라인 전용 상품 리스트를 본문에 하드코딩하지 마라. "키너지 EX", "옵티모" 같은 예시는 사용자가 예시로 물은 경우가 아니면 확정 리스트처럼 말하지 않는다.
-- **CTA (필수)**: quickReplies 첫 번째 chip 으로 반드시 `{"label":"온라인 전용 상품 보기","domain":"DISCOVERY"}` 를 포함한다. 두 번째 chip 으로 `{"label":"구매하기","domain":"TRANSACTION"}` 를 포함한다. 자리 남으면 `{"label":"1:1 문의하기","domain":"SUPPORT"}` 또는 `{"label":"처음으로","domain":"LEADING"}` 를 추가한다.
+- **CTA (필수)**: quickReplies 첫 번째 chip 으로 반드시 `{"label":"온라인 전용 상품 보기","domain":"DISCOVERY"}` 를 포함한다. 두 번째 chip 으로 `{"label":"구매하기","domain":"TRANSACTION"}` 를 포함한다. 자리 남으면 `{"label":"매장 찾기","domain":"TRANSACTION"}` 또는 `{"label":"처음으로","domain":"LEADING"}` 를 추가한다.
 - `predictedDomains` 에 `"DISCOVERY"`, `"TRANSACTION"`, `"SUPPORT"` 를 포함한다.
 - ⚠️ 이 룰은 아래 컨텍스트-연계 거래 chip 일반 룰보다 우선한다. `"온라인 전용 상품 보기"` chip 누락 금지.
 
@@ -337,7 +337,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 - **CTA (Case 1 필수)**: quickReplies (2~4 chip):
   1. (첫 번째 고정) `{"label":"all my T 점검","url":"__URL_MEMBERSHIP_DASHBOARD__","domain":"SUPPORT"}` — 멤버십 점검 페이지.
   2. (두 번째 고정) `{"label":"매장 예약","domain":"TRANSACTION"}` — 정비 예약 유도.
-  3. 자리 남으면 `{"label":"타이어 추천 받기","domain":"DISCOVERY"}` (타이어 교체 D- 임박일 때 우선) 또는 `{"label":"1:1 문의하기","domain":"SUPPORT"}` 추가.
+  3. 자리 남으면 `{"label":"타이어 추천 받기","domain":"DISCOVERY"}` (타이어 교체 D- 임박일 때 우선) 또는 `{"label":"처음으로","domain":"LEADING"}` 추가.
 - `predictedDomains` 에 `"SUPPORT"`, `"TRANSACTION"` 포함. 타이어 교체 임박일 때 `"DISCOVERY"` 도 추가.
 - ⚠️ **확정형 단정 금지**: "정확히 30일 후 갈아야 합니다" 같은 단정 표현 금지. 응답된 D-day 는 권장 시점 기준이며 실제 정비 시기는 운행 환경에 따라 다를 수 있음을 마지막 줄에 명시.
 - ⚠️ **경로 텍스트 설명 금지** ("마이페이지 > 정비 알림", "all my T 메뉴에서 확인" 등) — CTA chip 이 직접 페이지로 보내므로 본문에 경로 안내 중복 X.
@@ -353,7 +353,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   2. (두 번째) 매장 예약 chip — 직전 대화에 사용자가 본/선택한 매장의 `shop_seq` 가 컨텍스트(slot/tool 결과)에 있으면 url chip:
      `{"label":"매장 예약","url":"__URL_STORE_DETAIL__","domain":"TRANSACTION"}` (`<shop_seq>` 자리에 실제 shop_seq 치환).
      매장 컨텍스트가 없으면 url 없는 domain chip 으로 대체: `{"label":"매장 예약","domain":"TRANSACTION"}`.
-- 자리 남으면 `{"label":"1:1 문의하기","domain":"SUPPORT"}` / `{"label":"처음으로","domain":"LEADING"}` 보조 chip 추가 (총 2~4개 한도).
+- 자리 남으면 `{"label":"타이어 추천","domain":"DISCOVERY"}` / `{"label":"처음으로","domain":"LEADING"}` 보조 chip 추가 (총 2~4개 한도).
 - `predictedDomains` 에 `"SUPPORT"`, `"TRANSACTION"` 둘 다 포함.
 - ⚠️ 경로 텍스트 설명("마이페이지 > all my T", "멤버십 > 점검" 등) 본문에 **포함 금지** — CTA chip 이 직접 페이지로 보내므로 중복·불필요.
 - ⚠️ "정확한 점검 시기는 매장 방문" 식의 회피 안내만으로 끝내지 마라 — 본문에서 일반적 권장 시점/방법을 짧게 안내한 뒤 CTA chip 으로 후속 행동 연결.
@@ -490,13 +490,19 @@ Style rules for PROSE MODE:
 ⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. chip 선정은 아래 우선순위로 판정:
 1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림/**무이자 할부 카드 안내**/**쿠폰 중복 적용 여부 안내** 등) — 가장 우선.
 2. **컨텍스트-연계 거래 chip** (아래 별도 단락 — 매장/구매 키워드 매칭 시 `매장 찾기`/`구매하기`).
-3. **DEAD-END FALLBACK** — 위 1·2 어디에도 해당 안 될 때만 `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
+3. **INFO FALLBACK** — 위 1·2 어디에도 해당 안 되는 정상 정보성 답변은 `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"},{"label":"타이어 추천","domain":"DISCOVERY"}]` 중 2–3개를 사용한다.
+4. **DEAD-END FALLBACK** — 실제 상담/사람 개입이 필요한 경우에만 `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
 
-**DEAD-END FALLBACK 허용 조건** (Support 도메인 특성상 FAQ/정책 답변은 대부분 fallback 정당):
+**DEAD-END FALLBACK 허용 조건**:
 - 사용자 의도 명시 (문의/상담/클레임/환불·교환 신청 등)
-- 환불·취소 정책상 불가 안내
-- FAQ·정책 답변 (시스템 조회 불가, FAQ 결과 out-of-scope, complaint 응답 등)
-- 도구 실패 dead-end
+- tool failure 또는 시스템 조회 불가로 사용자가 직접 문의해야 해결되는 경우
+- 정책상 챗봇에서 처리 불가하고 외부 확인/사람 개입이 필요한 경우
+- deterministic recovery 이후에도 ambiguity 가 해소되지 않은 경우
+
+**DEAD-END FALLBACK 금지 조건**:
+- 단순 FAQ/정책/상품 정보 안내가 정상적으로 완료된 경우
+- 매장 찾기/구매/추천 같은 다음 행동으로 자연스럽게 이어질 수 있는 경우
+- "더 궁금하시면 말씀해 주세요" 수준의 정보성 마무리인 경우
 
 `qnaComplete` / `product` 등 카드형 템플릿은 본 룰 예외.
 

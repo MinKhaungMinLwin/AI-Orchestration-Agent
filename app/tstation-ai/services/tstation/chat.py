@@ -2856,7 +2856,38 @@ def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> boo
 # (e.g., order list → order-history CTA, not the generic "1:1 문의" pair which
 # makes the flow look broken).
 _FALLBACK_GENERIC: list[dict] = [
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "매장 찾기", "domain": "TRANSACTION"},
+]
+
+_FALLBACK_TRANSACTION_STORE: list[dict] = [
+    {"label": "예약 가능 시간 보기", "domain": "TRANSACTION"},
+    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+    {"label": "매장 선택 다시", "domain": "TRANSACTION"},
+]
+
+_FALLBACK_TRANSACTION_ORDER: list[dict] = [
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "장바구니 보기", "url": CTAUrls.CART, "domain": "TRANSACTION"},
+    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+]
+
+_FALLBACK_SUPPORT_INFO: list[dict] = [
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "매장 찾기", "domain": "TRANSACTION"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+]
+
+_FALLBACK_SUPPORT_ESCALATION: list[dict] = [
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+_FALLBACK_DISCOVERY_PRODUCT: list[dict] = [
+    {"label": "다시 검색", "domain": "DISCOVERY"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
 ]
 
 _FALLBACK_ORDER_LIST: list[dict] = [
@@ -2964,6 +2995,23 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
 ]
 
 _GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_STORE_SCHEDULE_FALLBACK_RE = re.compile(
+    r"매장|지점|장착점|예약|일정|스케줄|가능\s*시간|방문|장착|혼잡|대기|영업\s*시간",
+    re.IGNORECASE,
+)
+_ORDER_PRICE_FALLBACK_RE = re.compile(
+    r"주문|구매|결제|가격|금액|장바구니|쿠폰|할인|재고|배송",
+    re.IGNORECASE,
+)
+_DISCOVERY_FALLBACK_RE = re.compile(
+    r"상품|타이어|사이즈|규격|추천|검색|찾지\s*못|없어요|없습니다",
+    re.IGNORECASE,
+)
+_SUPPORT_DEAD_END_FALLBACK_RE = re.compile(
+    r"상담|1:1|직접\s*문의|문의로\s*확인|확인\s*어려|조회.*어려|일시적으로\s*어려|"
+    r"실패|오류|불가|클레임|환불|교환|반품",
+    re.IGNORECASE,
+)
 _HOME_QUICK_REPLY_LABEL = "처음으로"
 _DISCOVERY_SIZE_VEHICLE_CHIPS: list[dict] = [
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
@@ -4426,7 +4474,9 @@ def _coerce_order_summary_quickreply_to_preorder(
 
 
 def _choose_quickreply_fallback(
-    called_tool_names: set[str], source_domain: str | None
+    called_tool_names: set[str],
+    source_domain: str | None,
+    assistant_text: str | None = None,
 ) -> tuple[list[dict], str]:
     """Pick a context-aware fallback chip set when the LLM emits empty quickReplies.
 
@@ -4434,14 +4484,41 @@ def _choose_quickreply_fallback(
 
     Routing priority:
       1. Tool-based dispatch (order/coupon) — turn ran a tool that needs a specific CTA.
-      2. LEADING domain → 진행형 chip ([상품 검색, 타이어 추천, 처음으로]). 인사/일반
+      2. Domain/context dispatch — store/schedule, order/price, support info, discovery.
+      3. LEADING domain → 진행형 chip ([상품 검색, 타이어 추천]). 인사/일반
          문의에서 "1:1 문의" 로 떨어지는 부자연스러운 fallback 을 방지.
-      3. Generic ([1:1 문의하기, 처음으로]) — 마지막 안전망.
+      4. Generic discovery/transaction chips — 마지막 안전망. 1:1 문의는 true dead-end 에서만 노출.
     """
     for tool_set, chips, label in _FALLBACK_DISPATCH:
         if called_tool_names & tool_set:
             return chips, label
-    if source_domain and source_domain.lower() == "leading":
+    domain = (source_domain or "").lower()
+    text = assistant_text or ""
+    if domain == "transaction":
+        if _STORE_SCHEDULE_FALLBACK_RE.search(text):
+            return _FALLBACK_TRANSACTION_STORE, "transaction_store_schedule"
+        if _ORDER_PRICE_FALLBACK_RE.search(text) or called_tool_names & {
+            "get_final_price_tool",
+            "get_store_inventory_tool",
+            "get_logistics_inventory_tool",
+            "quick_order_tool",
+            "save_to_cart_tool",
+        }:
+            return _FALLBACK_TRANSACTION_ORDER, "transaction_order_price"
+        return _FALLBACK_TRANSACTION_STORE, "transaction_context"
+    if domain == "support":
+        if _SUPPORT_DEAD_END_FALLBACK_RE.search(text):
+            return _FALLBACK_SUPPORT_ESCALATION, "support_recovery"
+        return _FALLBACK_SUPPORT_INFO, "support_info"
+    if domain == "discovery":
+        if _DISCOVERY_FALLBACK_RE.search(text) or called_tool_names & {
+            "search_product_tool",
+            "get_products_recommendations_tool",
+            "get_product_description_tool",
+        }:
+            return _FALLBACK_DISCOVERY_PRODUCT, "discovery_product"
+        return _FALLBACK_DISCOVERY_PRODUCT, "discovery_context"
+    if domain == "leading":
         return _FALLBACK_LEADING_PROGRESS, "leading_progress"
     return _FALLBACK_GENERIC, "generic"
 
@@ -5588,9 +5665,9 @@ def _pickup_service_guard_event(user_text: str) -> dict | None:
             "quickReplies": [
                 {"label": "픽업서비스 신청", "url": CTAUrls.SMART_PICKUP, "domain": "SUPPORT"},
                 {"label": "내 근처 매장 찾기", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
             ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
         },
     }
 
@@ -5623,7 +5700,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
             {"label": "타이어 추천", "domain": "DISCOVERY"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_direct_tire_delivery_guard"
         predicted_domains = ["SUPPORT", "TRANSACTION", "DISCOVERY"]
@@ -5640,7 +5717,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "타이어 추천", "domain": "DISCOVERY"},
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_shipping_fee_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
@@ -5653,7 +5730,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "온라인 상품 보기", "domain": "DISCOVERY"},
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_online_store_price_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
@@ -5666,7 +5743,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "상품 검색", "domain": "DISCOVERY"},
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_regional_price_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
@@ -14145,7 +14222,9 @@ class TStationChatServiceV2:
                     is_current_quickreply = event.get("template") == "quickReply"
                     if is_current_quickreply and chips_empty and not is_handoff:
                         fallback_chips, fallback_label = _choose_quickreply_fallback(
-                            called_tool_names, source_domain
+                            called_tool_names,
+                            source_domain,
+                            assistant_response,
                         )
                         logger.warning(
                             "[QUICKREPLY_FALLBACK] empty quickReplies (domain=%s tools=%s) → %s",
