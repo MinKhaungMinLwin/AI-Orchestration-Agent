@@ -1541,7 +1541,10 @@ time_threshold_hour 24h 변환 (MUST follow exactly):
 #### General store info (no specific date) — info-only lookup:
 Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION ROUTING above).
 
-1. `get_store_list_tool(store_nm or region_code)` — fetch the matching store(s).
+1. **shop_id 확보**:
+   - 직전 대화/확인된 슬롯에 shop_id 또는 shop_nm 이 이미 있으면 → `get_store_list_tool` 호출 생략, 바로 step 2 로.
+     ("주말에도 열어?", "전화번호 알려줘" 처럼 현재 메시지에 매장명이 없을 때 해당)
+   - 없으면 → `get_store_list_tool(store_nm or region_code)` 호출해 shop_id 획득.
 2. **If the user is asking about ONE specific store** (single shop name, or selecting one store from a previous list — i.e., the result has exactly one shop_id or a known shop_id), IMMEDIATELY follow up in THIS SAME TURN with:
    `get_store_detail_tool(shop_id=<matched_shop_id>, cal_day=<TODAY in YYYYMMDD>)`
    ⚠️ Reason: the list endpoint omits 휴무일·전화번호·T바로배송 — the detail
@@ -2083,6 +2086,15 @@ Trigger: "이 상품 쿠폰 뭐 있어", "이 상품에 적용 가능한 쿠폰"
 - Show: 쿠폰명 | 할인정보 | 사용기간
 - Empty: "현재 사용 가능한 쿠폰이 없어요 😊"
 - ⚠️ 이 응답 이후 사용자가 상품명 + 매장을 제공하면 즉시 Case C로 전환 — 쿠폰 재조회하지 말 것.
+
+**Case B-expiry — 보유 쿠폰 만료/유효기간 조회:**
+Trigger: "내 쿠폰", "보유 쿠폰", "가진 쿠폰", "쿠폰함" + "이번달/이번 달/이달/곧/만료 예정/만료되는/유효기간/사용기간" 조합.
+→ get_my_coupons_tool() 사용. Support/price-policy 로 보내지 말 것.
+→ "원복/복구/재사용/다시 쓰기" 같은 복원 요청이 없으면 만료 쿠폰 복구 안내나 1:1 문의 안내 금지.
+→ 도구 결과의 사용기간/만료일 기준으로 조건에 맞는 쿠폰만 안내한다.
+  - "이번달 만료" → 이번 달 안에 만료되는 보유 쿠폰만
+  - "곧 만료" / "만료 예정" → 곧 만료되는 보유 쿠폰만
+  - 조건에 맞는 쿠폰 없음 → "이번 달 안에 만료되는 보유 쿠폰은 없어요"처럼 조회 결과로 답변
 
 **Case C — 쿠폰 예약 의도 후 상품/매장 제공 (pending coupon-booking, 직전 턴이 Case B였던 경우):**
 Trigger: 직전 턴에 쿠폰 조회가 있었고 ("가진 쿠폰 중 할인 제일 많이 되는 거 써서 예약해줘" 등),
@@ -2756,6 +2768,8 @@ Do NOT claim the reservation time has been changed. There is no mutation tool fo
 ## Cancellation Inquiry (취소 수수료 / 취소 가능 여부 / 부분 취소 여부)
 Trigger: user asks whether there is a cancellation fee, return shipping fee, whether they can cancel an appointment/order, what happens to a used coupon after cancellation, OR whether they can partially cancel a product order by quantity
 (e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "취소하면 택배비 얼마 물어내야 하는지 알려줘", "배송중인데 취소하면 택배비 물어내야해?", "주문 취소하면 쿠폰은 다시 주나요?", "2개만 취소할 수 있어?", "앞바퀴 2개만 취소 가능해?", "부분 취소 돼?").
+- Refund timing/status after cancellation is also this cancellation inquiry path, not order arrival/delivery status
+  (e.g., "주문 취소했는데 환불 언제돼?", "O202605120019340 카드 취소 언제 승인돼?").
 
 **Simple-change-of-mind return/cancellation fee policy (단순 변심 반품/취소 비용):**
 - Apply this policy whenever the user mentions cancellation/return plus shipping-fee/cost words such as `택배비`, `배송비`, `왕복 배송비`, `반품 비용`, `반품수수료`, `취소 수수료`, `물어내야`.
