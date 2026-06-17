@@ -36,6 +36,7 @@ from services.tstation.chat import (
     _build_default_benefit_event,
     _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
+    _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
     _build_store_holiday_period_event,
@@ -79,6 +80,7 @@ from services.tstation.chat import (
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
     _is_owned_coupon_best_discount_query,
+    _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
@@ -307,6 +309,24 @@ def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
     assert "1:1 문의하기" in _labels(event["data"]["quickReplies"])
 
 
+def test_price_policy_guard_does_not_block_owned_coupon_expiry_lookup() -> None:
+    frame = build_price_intent_frame("보유 쿠폰 중에 이번달 만료인거 뭐 있어?")
+
+    assert frame.intent != "expired_coupon_or_event"
+    assert _price_policy_guard_event("보유 쿠폰 중에 이번달 만료인거 뭐 있어?") is None
+    assert _is_owned_coupon_expiry_lookup_query("보유 쿠폰 중에 이번달 만료인거 뭐 있어?")
+
+
+def test_price_policy_guard_keeps_expired_coupon_restore_and_event_reuse() -> None:
+    coupon_event = _price_policy_guard_event("만료된 쿠폰 원복해줘")
+    event_event = _price_policy_guard_event("끝난 이벤트 혜택 다시 쓸 수 있어?")
+
+    assert coupon_event is not None
+    assert event_event is not None
+    assert "원복 또는 재사용이 어렵" in coupon_event["data"]["assistantResponse"]
+    assert "원복 또는 재사용이 어렵" in event_event["data"]["assistantResponse"]
+
+
 def test_past_event_page_event_routes_ended_event_list_queries() -> None:
     for text in ("지난 이벤트 알려줘", "종료된 이벤트 알려줘", "끝난 행사 보여줘"):
         event = _past_event_page_event(text)
@@ -338,7 +358,8 @@ def test_pickup_service_guard_handles_application_question() -> None:
     assert event is not None
     assert event["template"] == "quickReply"
     assert "매장 기준 최대 30km" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "내 근처 매장 찾기", "1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "내 근처 매장 찾기", "타이어 추천"]
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
 
 
 def test_pickup_service_gate_classifies_required_intents() -> None:
@@ -411,7 +432,8 @@ def test_direct_tire_delivery_guard_blocks_home_delivery_self_install() -> None:
     assert event["template"] == "quickReply"
     assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in event["data"]["assistantResponse"]
     assert "선택하신 장착점" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["장착 매장 찾기", "타이어 추천", "1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["장착 매장 찾기", "타이어 추천", "구매하기"]
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
 
 
 def test_direct_tire_delivery_guard_blocks_casual_home_delivery_request() -> None:
@@ -988,7 +1010,10 @@ def test_order_arrival_followup_resolves_recent_order_not_store_schedule() -> No
     assert _is_order_arrival_status_query("최근 주문 배송 예정일 알려줘")
     assert _is_order_arrival_status_query("그거 매장에 언제 와?")
     assert _is_order_arrival_status_query("그 이후에 매장 가면 돼?")
+    assert _is_order_arrival_status_query("O202605120019340 주문 언제 매장 도착해?")
     assert not _is_order_arrival_status_query("여주점 예약 가능한 시간 보여줘")
+    assert not _is_order_arrival_status_query("O202605120019340 주문췻호건 환불 언제돼?")
+    assert not _is_order_arrival_status_query("O202605120019340 카드 취소 언제 승인돼?")
 
     resolved = _resolve_order_row_for_arrival_query("최근 주문 배송 예정일 알려줘", messages=messages)
 
@@ -1011,6 +1036,53 @@ def test_order_arrival_followup_resolves_by_product_name() -> None:
 
     assert resolved is not None
     assert resolved["ord_no"] == "O202605120019340"
+
+
+def test_order_arrival_direct_order_number_does_not_use_current_question_as_product_name() -> None:
+    messages = [
+        {"role": "user", "content": "O202605120019340 주문췻호건 환불 언제돼?"},
+        {
+            "role": "assistant",
+            "content": (
+                "주문번호\t주문상태\t상품명\t수량\t주문날짜\n"
+                "O202605180019345\t출하지시\t벤투스 S1 에보 Z AS\t4\t2026-05-18"
+            ),
+        },
+    ]
+
+    resolved = _resolve_order_row_for_arrival_query("O202605120019340 주문 언제 매장 도착해?", messages=messages)
+    event = _build_order_arrival_status_event(
+        {"status": "success", "data": {"query_no": "O202605120019340", "ord_prgs_stat_nm": "주문완료"}},
+        resolved,
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert "- 주문번호: O202605120019340" in response
+    assert "상품명:" not in response
+    assert "주문췻호건 환불 언제돼" not in response
+
+
+def test_order_arrival_history_parser_ignores_assistant_refund_sentence() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": "주문번호 O202605120019340 취소 건의 환불 일정이 궁금하시군요. 아래 버튼을 눌러 1:1 문의를 진행해 주세요 😊",
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |\n"
+                "|---|---|---|---|---|\n"
+                "| O202605180019345 | 출하지시 | 벤투스 S1 에보 Z AS | 4 | 2026-05-18 |"
+            ),
+        },
+    ]
+
+    resolved = _resolve_order_row_for_arrival_query("최근 주문 배송 예정일 알려줘", messages=messages)
+
+    assert resolved is not None
+    assert resolved["ord_no"] == "O202605180019345"
+    assert resolved["goods_nm"] == "벤투스 S1 에보 Z AS"
 
 
 def test_order_arrival_status_formats_delivery_date_without_time_and_no_direct_visit_claim() -> None:
@@ -1291,6 +1363,32 @@ def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
     assert _is_product_attribute_lookup_query(text) is True
     assert _should_apply_product_attribute_resolver(text, {"get_product_description_tool"}) is False
     assert _should_apply_product_attribute_resolver(text, set()) is True
+
+
+def test_product_warranty_question_does_not_apply_attribute_resolver() -> None:
+    text = "벤투스 S2 AS 워런티 돼?"
+
+    assert _is_product_attribute_lookup_query(text) is False
+    assert _should_apply_product_attribute_resolver(text, set()) is False
+    assert (
+        _build_product_attribute_event_from_search_results(
+            text,
+            [
+                (
+                    "벤투스 S2 AS",
+                    {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {"goods_nm": "벤투스 S2 AS", "car_type_nm": "승용차"},
+                            ],
+                        },
+                    },
+                ),
+            ],
+        )
+        is None
+    )
 
 
 def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
@@ -1877,6 +1975,60 @@ def test_specific_owned_coupon_lookup_summarizes_missing_coupon() -> None:
     assert summary is not None
     assert "현재 보유 쿠폰에서 ‘패밀리’ 관련 쿠폰은 확인되지 않아요" in summary
     assert "현재 보유 쿠폰 목록" in summary
+
+
+def test_owned_coupon_expiry_lookup_filters_this_month_coupons() -> None:
+    today = datetime.date.today()
+    next_month = (today.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    this_month_end = next_month - datetime.timedelta(days=1)
+    event = _build_owned_coupon_expiry_lookup_event(
+        "보유 쿠폰 중에 이번달 만료인거 뭐 있어?",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_nm": "이번달 만료 쿠폰",
+                        "rt_amt_val": 10,
+                        "use_end_dtime": this_month_end.isoformat(),
+                    },
+                    {
+                        "cpn_nm": "다음달 만료 쿠폰",
+                        "rt_amt_val": 10000,
+                        "use_end_dtime": next_month.isoformat(),
+                    },
+                ],
+            },
+        },
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert "이번달 만료 쿠폰" in response
+    assert "다음달 만료 쿠폰" not in response
+    assert "원복" not in response
+    assert "1:1 문의" not in response
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
+
+
+def test_owned_coupon_expiry_lookup_handles_no_matches() -> None:
+    next_month = (datetime.date.today().replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    event = _build_owned_coupon_expiry_lookup_event(
+        "내 쿠폰 중 곧 만료되는 거 보여줘",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_nm": "나중에 만료 쿠폰",
+                        "rt_amt_val": 10000,
+                        "use_end_dtime": (next_month + datetime.timedelta(days=45)).isoformat(),
+                    }
+                ],
+            },
+        },
+    )
+
+    assert "곧 만료되는 쿠폰은 없어요" in event["data"]["assistantResponse"]
 
 
 def test_owned_coupon_best_discount_summarizes_highest_owned_coupon() -> None:
@@ -2595,7 +2747,7 @@ def test_existing_reservation_change_copy_does_not_imply_bot_can_change_time() -
         "predictedDomains": ["TRANSACTION"],
     }
 
-    assert _normalize_existing_reservation_change_quickreply(event_data)
+    assert _normalize_existing_reservation_change_quickreply(event_data, last_user_text="정관점 예약시간 내일로 바꿔줘")
     assistant = event_data["assistantResponse"]
     assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
     assert "변경 가능 여부는 예약 확인 후 진행이 필요해요" not in assistant
@@ -2616,11 +2768,29 @@ def test_existing_reservation_change_copy_removes_order_detail_possibility_wordi
         "predictedDomains": ["TRANSACTION"],
     }
 
-    assert _normalize_existing_reservation_change_quickreply(event_data)
+    assert _normalize_existing_reservation_change_quickreply(event_data, last_user_text="예약 시간 변경해줘")
     assistant = event_data["assistantResponse"]
     assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
     assert "변경 가능 여부" not in assistant
     assert "직접 처리하거나" in assistant
+
+
+def test_existing_reservation_change_copy_skips_refund_cancel_order_context() -> None:
+    event_data = {
+        "assistantResponse": (
+            "취소된 주문의 환불은 결제수단과 카드사 승인 일정에 따라 처리돼요.\n\n"
+            "환불 진행 상태는 주문 내역 상세에서 확인해 주세요."
+        ),
+        "quickReplies": [{"label": "주문 내역 보기", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert not _normalize_existing_reservation_change_quickreply(
+        event_data,
+        last_user_text="O202605120019340 주문취소건 환불 언제돼?",
+        called_tool_names={"get_orders_of_user_tool"},
+    )
+    assert "예약 시간은 제가 직접 변경" not in event_data["assistantResponse"]
 
 
 def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
@@ -2883,6 +3053,16 @@ def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
     assert _support_fast_path("집으로 배송해줘") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_support_fast_path_routes_product_warranty_claims() -> None:
+    assert _support_fast_path("ventus air S 5만키로 탈 수 있다더니 벌써 다 닳은거같은데 무료교체해줘") == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _support_fast_path("벤투스 에어S 왜 이렇게 빨리 닳아? 보증 대상 아냐?") == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _support_fast_path("ventus air S 설명해줘") is None
 
 
 def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
@@ -4458,18 +4638,54 @@ def test_coupon_tool_overrides_leading_domain() -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  Non-LEADING domains → generic
+#  Domain/context fallback routing
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
     "source_domain",
-    [None, "", "transaction", "discovery", "support", "unknown"],
+    [None, "", "unknown"],
 )
-def test_non_leading_domain_returns_generic(source_domain: str | None) -> None:
+def test_unknown_domain_returns_non_escalation_generic(source_domain: str | None) -> None:
     chips, label = _choose_quickreply_fallback(set(), source_domain)
     assert chips == _FALLBACK_GENERIC
     assert label == "generic"
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_transaction_store_plain_text_returns_store_schedule_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "transaction",
+        "고객님, 선택하신 매장의 예약 가능 시간을 확인해 주세요.",
+    )
+
+    assert label == "transaction_store_schedule"
+    assert _labels(chips) == ["예약 가능 시간 보기", "다른 매장 찾기", "매장 선택 다시"]
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_support_info_plain_text_returns_next_action_chips_without_qna() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "support",
+        "앞뒤 타이어 사이즈가 다른 차량은 전륜용과 후륜용을 각각 선택해서 구매하시면 돼요.",
+    )
+
+    assert label == "support_info"
+    assert _labels(chips) == ["구매하기", "매장 찾기", "타이어 추천"]
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_support_true_dead_end_allows_qna_chip() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "support",
+        "시스템 조회가 일시적으로 어려워 1:1 문의로 확인해 주세요.",
+    )
+
+    assert label == "support_recovery"
+    assert _labels(chips) == ["1:1 문의하기", "처음으로"]
 
 
 def test_progress_constant_shape() -> None:

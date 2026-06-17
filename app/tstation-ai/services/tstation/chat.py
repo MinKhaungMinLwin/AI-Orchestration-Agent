@@ -62,6 +62,7 @@ from services.tstation.policies.transaction_intent_policy import build_transacti
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.cross_domain_policy import (
     agent_domain_values_for_initial_route,
+    is_warranty_claim_signal,
     plan_cross_domain_turn,
     should_defer_product_price_explanation_to_classifier,
 )
@@ -2436,6 +2437,7 @@ _GREETING_ONLY_RE = re.compile(
 
 _SUPPORT_FAST_RE = re.compile(
     r"환불|반품|보증|품질보증|워런티|warranty|"
+    r"무료\s*교체|무상\s*교환|무상\s*교체|보상\s*해\s*줘|보상해줘|하자\s*아니|클레임|책임\s*져|책임져|"
     r"AS\s*신청|A/S|사후\s*서비스|"
     r"상담원|상담사|사람\s*연결|직원\s*연결|상담\s*연결|1:1\s*문의|1대1\s*문의|"
     r"불만입니다|짜증나|화나|뭐\s*이런|제대로\s*해|엉망이|이딴",
@@ -2856,7 +2858,38 @@ def _is_speculative_safe(domains: "list[MultiAgentDomain.Domain] | None") -> boo
 # (e.g., order list → order-history CTA, not the generic "1:1 문의" pair which
 # makes the flow look broken).
 _FALLBACK_GENERIC: list[dict] = [
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "매장 찾기", "domain": "TRANSACTION"},
+]
+
+_FALLBACK_TRANSACTION_STORE: list[dict] = [
+    {"label": "예약 가능 시간 보기", "domain": "TRANSACTION"},
+    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+    {"label": "매장 선택 다시", "domain": "TRANSACTION"},
+]
+
+_FALLBACK_TRANSACTION_ORDER: list[dict] = [
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "장바구니 보기", "url": CTAUrls.CART, "domain": "TRANSACTION"},
+    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+]
+
+_FALLBACK_SUPPORT_INFO: list[dict] = [
+    {"label": "구매하기", "domain": "TRANSACTION"},
+    {"label": "매장 찾기", "domain": "TRANSACTION"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+]
+
+_FALLBACK_SUPPORT_ESCALATION: list[dict] = [
     {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    {"label": "처음으로", "domain": "LEADING"},
+]
+
+_FALLBACK_DISCOVERY_PRODUCT: list[dict] = [
+    {"label": "다시 검색", "domain": "DISCOVERY"},
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
 ]
 
 _FALLBACK_ORDER_LIST: list[dict] = [
@@ -2875,6 +2908,18 @@ _COUPON_BOX_CHIPS: list[dict] = [
 ]
 _ORDER_CANCEL_CTA_TEXT_RE = re.compile(
     r"취소|반품|배송중|출고|택배비|왕복\s*배송비|취소\s*가능\s*여부|최종\s*비용",
+    re.IGNORECASE,
+)
+_ORDER_CANCEL_REFUND_QUERY_RE = re.compile(
+    r"환불|환급|입금|취소\s*승인|취소\s*완료|취소\s*처리|카드\s*취소|결제\s*취소|결제수단|"
+    r"카드사|취소.{0,20}(?:언제|됐|되|처리|승인|환불)|(?:언제|얼마나).{0,20}환불|"
+    r"주문\s*취소|예약\s*취소|반품|교환",
+    re.IGNORECASE,
+)
+_DIRECT_RESERVATION_CHANGE_QUERY_RE = re.compile(
+    r"(?:예약|방문|일정|시간|예약\s*시간|방문\s*시간).{0,20}(?:변경|바꾸|바꿔|미루|당기)|"
+    r"(?:\d{1,2}\s*시|\d{1,2}\s*:\s*\d{2}|오늘|내일|모레).{0,12}(?:로|으로)?.{0,12}"
+    r"(?:변경|바꾸|바꿔|미루|당기)",
     re.IGNORECASE,
 )
 _PRICE_POLICY_GUARD_INTENTS = {
@@ -2905,8 +2950,13 @@ _ORDER_ARRIVAL_STATUS_RE = re.compile(
     r"|그\s*이후.{0,30}매장\s*가",
     re.IGNORECASE,
 )
+_ORDER_ARRIVAL_STATUS_KEYWORD_RE = re.compile(
+    r"매장\s*(?:도착|입고)|배송|도착|언제\s*(?:와|오)|매장\s*가면|입고",
+    re.IGNORECASE,
+)
 _ORDER_FIRST_REF_RE = re.compile(r"첫\s*번째|1\s*번|최근|그거|그\s*주문|해당\s*건|그\s*이후|이후에\s*매장", re.IGNORECASE)
 _ORDER_TEXT_LINE_RE = re.compile(r"\b(?P<ord_no>O[A-Za-z0-9]{8,})\b(?P<tail>[^\n]*)", re.IGNORECASE)
+_ORDER_ROW_STATUS_RE = re.compile(r"주문완료|출하지시|장착완료|배송중|배송완료|배송|결제완료|상품준비|주문접수")
 _COUPON_DIRECT_ID_RE = re.compile(r"\bC[A-Za-z0-9]{8,}\b")
 _COUPON_DISCOUNT_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _COUPON_MATCH_STOPWORDS = {
@@ -2964,6 +3014,23 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
 ]
 
 _GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_STORE_SCHEDULE_FALLBACK_RE = re.compile(
+    r"매장|지점|장착점|예약|일정|스케줄|가능\s*시간|방문|장착|혼잡|대기|영업\s*시간",
+    re.IGNORECASE,
+)
+_ORDER_PRICE_FALLBACK_RE = re.compile(
+    r"주문|구매|결제|가격|금액|장바구니|쿠폰|할인|재고|배송",
+    re.IGNORECASE,
+)
+_DISCOVERY_FALLBACK_RE = re.compile(
+    r"상품|타이어|사이즈|규격|추천|검색|찾지\s*못|없어요|없습니다",
+    re.IGNORECASE,
+)
+_SUPPORT_DEAD_END_FALLBACK_RE = re.compile(
+    r"상담|1:1|직접\s*문의|문의로\s*확인|확인\s*어려|조회.*어려|일시적으로\s*어려|"
+    r"실패|오류|불가|클레임|환불|교환|반품",
+    re.IGNORECASE,
+)
 _HOME_QUICK_REPLY_LABEL = "처음으로"
 _DISCOVERY_SIZE_VEHICLE_CHIPS: list[dict] = [
     {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
@@ -3149,7 +3216,20 @@ _RESERVATION_CHANGE_POSSIBLE_COPY_RE = re.compile(
 )
 
 
-def _normalize_existing_reservation_change_quickreply(event_data: dict[str, Any]) -> bool:
+def _normalize_existing_reservation_change_quickreply(
+    event_data: dict[str, Any],
+    *,
+    last_user_text: str | None = None,
+    called_tool_names: set[str] | None = None,
+) -> bool:
+    user_text = last_user_text or ""
+    if called_tool_names and "get_orders_of_user_tool" in called_tool_names:
+        return False
+    if user_text and _ORDER_CANCEL_REFUND_QUERY_RE.search(user_text):
+        return False
+    if user_text and not _DIRECT_RESERVATION_CHANGE_QUERY_RE.search(user_text):
+        return False
+
     assistant_text = str(event_data.get("assistantResponse") or "")
     if not assistant_text:
         return False
@@ -4426,7 +4506,9 @@ def _coerce_order_summary_quickreply_to_preorder(
 
 
 def _choose_quickreply_fallback(
-    called_tool_names: set[str], source_domain: str | None
+    called_tool_names: set[str],
+    source_domain: str | None,
+    assistant_text: str | None = None,
 ) -> tuple[list[dict], str]:
     """Pick a context-aware fallback chip set when the LLM emits empty quickReplies.
 
@@ -4434,14 +4516,41 @@ def _choose_quickreply_fallback(
 
     Routing priority:
       1. Tool-based dispatch (order/coupon) — turn ran a tool that needs a specific CTA.
-      2. LEADING domain → 진행형 chip ([상품 검색, 타이어 추천, 처음으로]). 인사/일반
+      2. Domain/context dispatch — store/schedule, order/price, support info, discovery.
+      3. LEADING domain → 진행형 chip ([상품 검색, 타이어 추천]). 인사/일반
          문의에서 "1:1 문의" 로 떨어지는 부자연스러운 fallback 을 방지.
-      3. Generic ([1:1 문의하기, 처음으로]) — 마지막 안전망.
+      4. Generic discovery/transaction chips — 마지막 안전망. 1:1 문의는 true dead-end 에서만 노출.
     """
     for tool_set, chips, label in _FALLBACK_DISPATCH:
         if called_tool_names & tool_set:
             return chips, label
-    if source_domain and source_domain.lower() == "leading":
+    domain = (source_domain or "").lower()
+    text = assistant_text or ""
+    if domain == "transaction":
+        if _STORE_SCHEDULE_FALLBACK_RE.search(text):
+            return _FALLBACK_TRANSACTION_STORE, "transaction_store_schedule"
+        if _ORDER_PRICE_FALLBACK_RE.search(text) or called_tool_names & {
+            "get_final_price_tool",
+            "get_store_inventory_tool",
+            "get_logistics_inventory_tool",
+            "quick_order_tool",
+            "save_to_cart_tool",
+        }:
+            return _FALLBACK_TRANSACTION_ORDER, "transaction_order_price"
+        return _FALLBACK_TRANSACTION_STORE, "transaction_context"
+    if domain == "support":
+        if _SUPPORT_DEAD_END_FALLBACK_RE.search(text):
+            return _FALLBACK_SUPPORT_ESCALATION, "support_recovery"
+        return _FALLBACK_SUPPORT_INFO, "support_info"
+    if domain == "discovery":
+        if _DISCOVERY_FALLBACK_RE.search(text) or called_tool_names & {
+            "search_product_tool",
+            "get_products_recommendations_tool",
+            "get_product_description_tool",
+        }:
+            return _FALLBACK_DISCOVERY_PRODUCT, "discovery_product"
+        return _FALLBACK_DISCOVERY_PRODUCT, "discovery_context"
+    if domain == "leading":
         return _FALLBACK_LEADING_PROGRESS, "leading_progress"
     return _FALLBACK_GENERIC, "generic"
 
@@ -4494,6 +4603,125 @@ def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
     if rows is None:
         rows = data.get("items")
     return [row for row in rows or [] if isinstance(row, dict)]
+
+
+_OWNED_COUPON_EXPIRY_LOOKUP_RE = re.compile(
+    r"(?=.*(?:쿠폰|할인권))(?=.*(?:내|나의|보유|가진|갖고|받은|쿠폰함))"
+    r"(?=.*(?:이번\s*달|이달|곧|만료\s*예정|만료(?:되는|인|된)?|유효\s*기간|사용\s*기간))",
+    re.IGNORECASE,
+)
+_COUPON_RESTORE_INTENT_RE = re.compile(
+    r"원복|복구|재사용|다시\s*(?:쓰|쓸|사용)|되살|살려|부활|연장|못\s*쓰.*(?:해줘|할\s*수)",
+    re.IGNORECASE,
+)
+
+
+def _is_owned_coupon_expiry_lookup_query(user_text: str) -> bool:
+    text = user_text or ""
+    if _COUPON_RESTORE_INTENT_RE.search(text):
+        return False
+    return bool(_OWNED_COUPON_EXPIRY_LOOKUP_RE.search(text))
+
+
+def _owned_coupon_expiry_scope(user_text: str) -> str:
+    text = user_text or ""
+    if re.search(r"이번\s*달|이달", text):
+        return "this_month"
+    if re.search(r"이미|지난|만료\s*된", text):
+        return "expired"
+    if re.search(r"곧|만료\s*예정", text):
+        return "soon"
+    return "expiring"
+
+
+def _coupon_end_date(row: dict) -> datetime.date | None:
+    raw = str(
+        row.get("use_end_dtime")
+        or row.get("use_end_date")
+        or row.get("end_dtime")
+        or row.get("end_date")
+        or row.get("valid_end_date")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    compact = re.search(r"(20\d{2})(\d{2})(\d{2})", raw)
+    if compact:
+        year, month, day = (int(part) for part in compact.groups())
+    else:
+        match = re.search(r"(20\d{2})\D+(\d{1,2})\D+(\d{1,2})", raw)
+        if not match:
+            return None
+        year, month, day = (int(part) for part in match.groups())
+    try:
+        return datetime.date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _coupon_expiry_matches_scope(end_date: datetime.date, scope: str, today: datetime.date) -> bool:
+    if scope == "this_month":
+        return end_date >= today and end_date.year == today.year and end_date.month == today.month
+    if scope == "soon":
+        return today <= end_date <= today + datetime.timedelta(days=30)
+    if scope == "expired":
+        return end_date < today
+    return end_date >= today
+
+
+def _format_coupon_discount_text(row: dict) -> str:
+    value = _coupon_numeric_value(row)
+    if value is None:
+        return ""
+    if _looks_like_percent_coupon(row):
+        return f"{value:g}% 할인"
+    return f"{int(value):,}원 할인"
+
+
+def _build_owned_coupon_expiry_lookup_event(user_text: str, tool_result: dict) -> dict:
+    rows = _coupon_rows_from_my_coupons(tool_result)
+    today = datetime.date.today()
+    scope = _owned_coupon_expiry_scope(user_text)
+    matched: list[tuple[datetime.date, dict]] = []
+    for row in rows:
+        end_date = _coupon_end_date(row)
+        if end_date and _coupon_expiry_matches_scope(end_date, scope, today):
+            matched.append((end_date, row))
+    matched.sort(key=lambda item: item[0])
+
+    scope_label = {
+        "this_month": "이번 달 안에 만료되는",
+        "soon": "곧 만료되는",
+        "expired": "이미 만료된",
+        "expiring": "만료 예정인",
+    }[scope]
+    if matched:
+        lines = [f"보유 쿠폰 중 {scope_label} 쿠폰은 {len(matched)}개예요."]
+        for end_date, row in matched[:10]:
+            name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "쿠폰").strip()
+            discount = _format_coupon_discount_text(row)
+            suffix = f" - {discount}" if discount else ""
+            lines.append(f"- {name}{suffix} / 만료일 {end_date.isoformat()}")
+        if len(matched) > 10:
+            lines.append(f"외 {len(matched) - 10}개는 쿠폰함에서 확인해 주세요.")
+        assistant_response = "\n".join(lines)
+    else:
+        assistant_response = f"현재 보유 쿠폰 중 {scope_label} 쿠폰은 없어요."
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_owned_coupon_expiry_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
 
 
 def _is_owned_coupon_best_discount_query(user_text: str) -> bool:
@@ -5095,9 +5323,14 @@ def _is_order_arrival_status_query(user_text: str | None) -> bool:
     text = user_text or ""
     if not text:
         return False
+    if _ORDER_CANCEL_REFUND_QUERY_RE.search(text):
+        return False
     if re.search(r"예약\s*가능|예약\s*시간|몇\s*시\s*예약|스케줄|시간표", text):
         return False
-    return bool(_ORDER_DIRECT_NO_RE.search(text) or _ORDER_ARRIVAL_STATUS_RE.search(text))
+    return bool(
+        _ORDER_ARRIVAL_STATUS_RE.search(text)
+        or (_ORDER_DIRECT_NO_RE.search(text) and _ORDER_ARRIVAL_STATUS_KEYWORD_RE.search(text))
+    )
 
 
 def _order_rows_from_orders_result(tool_result: dict) -> list[dict]:
@@ -5112,6 +5345,8 @@ def _order_rows_from_messages(messages: list[dict]) -> list[dict]:
     for msg in reversed(messages[-12:]):
         if not isinstance(msg, dict):
             continue
+        if str(msg.get("role") or "").lower() == "user":
+            continue
         content = str(msg.get("content") or "")
         if not content:
             continue
@@ -5120,10 +5355,16 @@ def _order_rows_from_messages(messages: list[dict]) -> list[dict]:
             if ord_no in seen:
                 continue
             tail = match.group("tail") or ""
-            parts = [part.strip() for part in re.split(r"\t+|\s{2,}", tail) if part.strip()]
-            goods_nm = parts[1] if len(parts) >= 2 and re.search(r"주문완료|출하지시|장착완료|배송", parts[0]) else None
-            if goods_nm is None and parts:
-                goods_nm = parts[0]
+            if "|" in tail:
+                parts = [part.strip() for part in tail.split("|") if part.strip()]
+            elif "\t" in tail or re.search(r"\s{2,}", tail):
+                parts = [part.strip() for part in re.split(r"\t+|\s{2,}", tail) if part.strip()]
+            else:
+                continue
+            status_idx = next((idx for idx, part in enumerate(parts) if _ORDER_ROW_STATUS_RE.search(part)), None)
+            if status_idx is None:
+                continue
+            goods_nm = parts[status_idx + 1] if len(parts) > status_idx + 1 else ""
             rows.append({"ord_no": ord_no, "goods_nm": goods_nm or ""})
             seen.add(ord_no)
     return rows
@@ -5588,9 +5829,9 @@ def _pickup_service_guard_event(user_text: str) -> dict | None:
             "quickReplies": [
                 {"label": "픽업서비스 신청", "url": CTAUrls.SMART_PICKUP, "domain": "SUPPORT"},
                 {"label": "내 근처 매장 찾기", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
             ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
         },
     }
 
@@ -5623,7 +5864,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
             {"label": "타이어 추천", "domain": "DISCOVERY"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_direct_tire_delivery_guard"
         predicted_domains = ["SUPPORT", "TRANSACTION", "DISCOVERY"]
@@ -5640,7 +5881,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "타이어 추천", "domain": "DISCOVERY"},
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_shipping_fee_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
@@ -5653,7 +5894,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "온라인 상품 보기", "domain": "DISCOVERY"},
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_online_store_price_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
@@ -5666,7 +5907,7 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         quick_replies = [
             {"label": "상품 검색", "domain": "DISCOVERY"},
             {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
         ]
         source = "code_regional_price_policy_guard"
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
@@ -6850,6 +7091,8 @@ def _build_product_attribute_event_from_search_results(
 ) -> dict | None:
     if _is_ev_suitability_turn(user_text):
         return None
+    if is_warranty_claim_signal(user_text):
+        return None
     frame = build_discovery_intent_frame(user_text)
     if frame.sub_intent != "product_attribute_lookup":
         return None
@@ -6905,6 +7148,8 @@ def _is_product_comparison_query(user_text: str) -> bool:
 
 def _is_product_attribute_lookup_query(user_text: str) -> bool:
     if _is_ev_suitability_turn(user_text):
+        return False
+    if is_warranty_claim_signal(user_text):
         return False
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
@@ -7409,6 +7654,9 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             delivery_decision.intent,
             delivery_decision.reason,
         )
+        return [MultiAgentDomain.Domain.SUPPORT]
+    if is_warranty_claim_signal(text):
+        logger.debug("[SUPPORT_FAST_PATH] warranty claim signal → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
     if _SUPPORT_FAST_RE.search(text):
         logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
@@ -11799,6 +12047,51 @@ class TStationChatServiceV2:
                 return emitted_events, mapped_event
             return emitted_events, _coupon_box_event("보유 쿠폰을 확인했어요. 쿠폰함에서 자세한 내용을 확인해 주세요.")
 
+        async def _resolve_owned_coupon_expiry_lookup_with_code(
+            my_coupons_result: dict | None = None,
+        ) -> tuple[list[dict], dict]:
+            emitted_events: list[dict] = []
+            from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
+
+            if my_coupons_result is None:
+                my_coupons_input = {"lang_cd": "ko"}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_my_coupons_tool",
+                    "display_name": "내 쿠폰 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_my_coupons = await asyncio.to_thread(_my_coupons_tool.invoke, my_coupons_input)
+                    my_coupons_result = _tool_result_dict(raw_my_coupons)
+                except Exception as exc:
+                    logger.exception("[COUPON_EXPIRY_LOOKUP] my coupons tool failed")
+                    my_coupons_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result("get_my_coupons_tool", my_coupons_input, my_coupons_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": my_coupons_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": my_coupons_input,
+                    "output": json.dumps(my_coupons_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_my_coupons_tool",
+                    "source_domain": "transaction",
+                })
+
+            return emitted_events, _build_owned_coupon_expiry_lookup_event(user_query, my_coupons_result)
+
         async def _resolve_owned_coupon_best_discount_with_code(
             my_coupons_result: dict | None = None,
         ) -> tuple[list[dict], dict]:
@@ -12186,6 +12479,8 @@ class TStationChatServiceV2:
             return emitted_events, _build_product_comparison_event(comparison_query, product_rows)
 
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
+            if is_warranty_claim_signal(user_query):
+                return None
             frame = build_discovery_intent_frame(user_query)
             if frame.sub_intent != "product_attribute_lookup":
                 return None
@@ -13118,7 +13413,9 @@ class TStationChatServiceV2:
 
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
-        if coupon_decision is not None and coupon_decision.is_actionable:
+        if _is_owned_coupon_expiry_lookup_query(user_query):
+            coupon_gate_resolution = await _resolve_owned_coupon_expiry_lookup_with_code()
+        elif coupon_decision is not None and coupon_decision.is_actionable:
             if coupon_decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP:
                 coupon_gate_resolution = await _resolve_owned_coupon_lookup_with_code()
             elif coupon_decision.intent == CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY:
@@ -13383,6 +13680,17 @@ class TStationChatServiceV2:
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
+                        tool_name == "get_my_coupons_tool"
+                        and not coupon_resolver_ran
+                        and _is_owned_coupon_expiry_lookup_query(user_query)
+                    ):
+                        coupon_resolver_ran = True
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_owned_coupon_expiry_lookup_with_code(parsed_for_verifier)
+                        )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    elif (
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
                         and (
@@ -13909,7 +14217,11 @@ class TStationChatServiceV2:
                     if (
                         intent_group == "existing_reservation_management"
                         and event.get("template") == "quickReply"
-                        and _normalize_existing_reservation_change_quickreply(event_data)
+                        and _normalize_existing_reservation_change_quickreply(
+                            event_data,
+                            last_user_text=user_query,
+                            called_tool_names={tool_name for tool_name, _ in structured_sources},
+                        )
                     ):
                         logger.info("[RESERVATION_CHANGE] normalized direct-change guidance")
                         assistant_response = str(event_data.get("assistantResponse") or "")
@@ -14145,7 +14457,9 @@ class TStationChatServiceV2:
                     is_current_quickreply = event.get("template") == "quickReply"
                     if is_current_quickreply and chips_empty and not is_handoff:
                         fallback_chips, fallback_label = _choose_quickreply_fallback(
-                            called_tool_names, source_domain
+                            called_tool_names,
+                            source_domain,
+                            assistant_response,
                         )
                         logger.warning(
                             "[QUICKREPLY_FALLBACK] empty quickReplies (domain=%s tools=%s) → %s",
