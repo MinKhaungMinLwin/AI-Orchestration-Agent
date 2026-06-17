@@ -173,6 +173,10 @@ def _is_explicit_vehicle_list_request(messages: list[dict]) -> bool:
     return bool(_VEHICLE_LIST_REQUEST_RE.search(_latest_user_text(messages)))
 
 
+def _should_skip_support_search_product_fast_path(agent_name: str, tool_name: str) -> bool:
+    return tool_name == "search_product_tool" and "support" in str(agent_name or "").lower()
+
+
 def _vehicle_owner_lookup_args_after_registered_mismatch(
     tool_name: str,
     tool_result: Any,
@@ -1234,6 +1238,12 @@ class BaseAgent(ABC):
                                     yield staggered_event
                                     return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
+                                if _should_skip_support_search_product_fast_path(self.name, message.name):
+                                    logger.info(
+                                        "[%s] Skip search_product_tool fast-path for support follow-up",
+                                        self.name,
+                                    )
+                                    continue
                                 if _should_defer_listcar_for_possessive_model_mismatch(
                                     message.name,
                                     tool_result,
