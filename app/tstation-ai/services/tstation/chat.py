@@ -2870,6 +2870,13 @@ _FALLBACK_TRANSACTION_STORE: list[dict] = [
     {"label": "매장 선택 다시", "domain": "TRANSACTION"},
 ]
 
+_FALLBACK_TRANSACTION_STORE_SEARCH: list[dict] = [
+    {"label": "강남", "domain": "TRANSACTION"},
+    {"label": "분당", "domain": "TRANSACTION"},
+    {"label": "해운대", "domain": "TRANSACTION"},
+    {"label": "주변 매장 찾기", "domain": "TRANSACTION"},
+]
+
 _FALLBACK_TRANSACTION_ORDER: list[dict] = [
     {"label": "구매하기", "domain": "TRANSACTION"},
     {"label": "장바구니 보기", "url": CTAUrls.CART, "domain": "TRANSACTION"},
@@ -3014,7 +3021,11 @@ _FALLBACK_DISPATCH: list[tuple[set[str], list[dict], str]] = [
     ({"get_my_coupons_tool", "get_available_coupons_tool"}, _FALLBACK_COUPON, "coupon"),
 ]
 
-_GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로"}
+_GENERIC_DEAD_END_LABELS = {"1:1 문의하기", "처음으로", "다시 시도", "상담사 연결"}
+_PURCHASE_STORE_SELECTION_TEXT_RE = re.compile(
+    r"(?=.*(?:구매|주문|장바구니|결제))(?=.*(?:장착\s*매장|매장을?\s*먼저\s*선택|어느\s*지역\s*매장))",
+    re.IGNORECASE,
+)
 _STORE_SCHEDULE_FALLBACK_RE = re.compile(
     r"매장|지점|장착점|예약|일정|스케줄|가능\s*시간|방문|장착|혼잡|대기|영업\s*시간",
     re.IGNORECASE,
@@ -4528,6 +4539,8 @@ def _choose_quickreply_fallback(
     domain = (source_domain or "").lower()
     text = assistant_text or ""
     if domain == "transaction":
+        if _PURCHASE_STORE_SELECTION_TEXT_RE.search(text):
+            return _FALLBACK_TRANSACTION_STORE_SEARCH, "transaction_purchase_store_search"
         if _STORE_SCHEDULE_FALLBACK_RE.search(text):
             return _FALLBACK_TRANSACTION_STORE, "transaction_store_schedule"
         if _ORDER_PRICE_FALLBACK_RE.search(text) or called_tool_names & {
@@ -7785,16 +7798,21 @@ def _discovery_recovery_chips_for_text(
     assistant_text: str | None,
     source_domain: str | None,
 ) -> tuple[list[dict], str] | None:
-    """Return progress chips when Discovery accidentally emits dead-end chips.
+    """Return progress chips when an agent accidentally emits dead-end chips.
 
     Generic support chips are only appropriate for explicit support/policy
-    dead-ends. Normal Discovery guidance should keep the user in the discovery
-    flow with chips that match the answer.
+    dead-ends. Normal guidance should keep the user in the current flow with
+    chips that match the answer.
     """
-    if not source_domain or source_domain.lower() != "discovery":
-        return None
+    domain = (source_domain or "").lower()
     text = assistant_text or ""
     if not text:
+        return None
+    if domain == MultiAgentDomain.Domain.TRANSACTION.value:
+        if _PURCHASE_STORE_SELECTION_TEXT_RE.search(text):
+            return list(_FALLBACK_TRANSACTION_STORE_SEARCH), "transaction_purchase_store_search"
+        return None
+    if domain != MultiAgentDomain.Domain.DISCOVERY.value:
         return None
     if _EXPLICIT_SUPPORT_TEXT_RE.search(text) or _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE.search(text):
         return None

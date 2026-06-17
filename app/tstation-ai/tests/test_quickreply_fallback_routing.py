@@ -28,6 +28,7 @@ from services.tstation.chat import (
     _FALLBACK_GENERIC,
     _FALLBACK_LEADING_PROGRESS,
     _FALLBACK_ORDER_LIST,
+    _FALLBACK_TRANSACTION_STORE_SEARCH,
     _ALL_MY_T_5_PERCENT_COUPON_RE,
     _ALL_MY_T_BENEFIT_PAGE_RE,
     _COUPON_ISSUE_INTENT_RE,
@@ -4825,6 +4826,36 @@ def test_transaction_store_plain_text_returns_store_schedule_chips() -> None:
     assert label == "transaction_store_schedule"
     assert _labels(chips) == ["예약 가능 시간 보기", "다른 매장 찾기", "매장 선택 다시"]
     assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_transaction_purchase_store_prompt_returns_region_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "transaction",
+        "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+    )
+
+    assert label == "transaction_purchase_store_search"
+    assert chips == _FALLBACK_TRANSACTION_STORE_SEARCH
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+
+
+def test_transaction_purchase_store_prompt_replaces_validation_dead_end_chips() -> None:
+    assert _looks_like_generic_dead_end_chips([
+        {"label": "다시 시도", "domain": "LEADING"},
+        {"label": "상담사 연결", "domain": "SUPPORT"},
+    ])
+
+    recovery = _discovery_recovery_chips_for_text(
+        "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+        "transaction",
+    )
+
+    assert recovery is not None
+    chips, label = recovery
+    assert label == "transaction_purchase_store_search"
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+    assert "상담사 연결" not in _labels(chips)
 
 
 def test_support_info_plain_text_returns_next_action_chips_without_qna() -> None:
