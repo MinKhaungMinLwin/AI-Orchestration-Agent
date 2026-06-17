@@ -1534,7 +1534,9 @@ class StreamingMultiAgentCoordinator:
                 tool_slots["shop_id"] = input_shop_id
 
         # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
-        # `payment_amount = (extra_fvr_sale_prc + wage_prc) * ord_qty` 로 계산.
+        # `payment_amount = (final_unit + wage_prc) * ord_qty` 로 계산한다.
+        # final_unit 은 사이트 결제 페이지와 같은 cheapest_final_prc 를 최우선으로
+        # 사용하고, 값이 없을 때만 extra_fvr_sale_prc → sale_prc 순으로 fallback 한다.
         # template_mapper 의 orderComplete payment_amount 계산식과 동일.
         # 산출된 슬롯은 다음 턴 LLM 컨텍스트(`[확인된 고객 정보]`)에 "결제금액"으로
         # 노출되어, 할부 계산 같은 후속 질문에서 LLM 이 단가·수량을 임의로 곱해
@@ -1542,7 +1544,14 @@ class StreamingMultiAgentCoordinator:
         if tool_name == "get_final_price_tool" and tool_succeeded:
             price_data = parsed_data.get("data", parsed_data)
             if isinstance(price_data, dict):
-                final_unit = price_data.get("extra_fvr_sale_prc") or price_data.get("sale_prc")
+                final_unit = next(
+                    (
+                        price_data.get(key)
+                        for key in ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc")
+                        if price_data.get(key) is not None
+                    ),
+                    None,
+                )
                 wage = price_data.get("wage_prc") or 0
                 qty = slots.ord_qty
                 if final_unit is not None and qty is not None and qty > 0:

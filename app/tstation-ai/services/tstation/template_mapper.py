@@ -4203,13 +4203,21 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                         break
 
     # Enrich paymentAmount from same-turn price tool.
-    # Definition mirrors transaction_agent.py 최종 금액: (FINAL + wage_prc) × qty.
+    # Definition mirrors get_final_price_tool docs: (FINAL + wage_prc) × qty,
+    # with FINAL resolved as cheapest_final_prc → extra_fvr_sale_prc → sale_prc.
     payment_amount: int | None = None
     for price_entry in _find_entries(tool_data_list, "get_final_price_tool"):
         praw = _unwrap(price_entry)
         if not isinstance(praw, dict):
             continue
-        final_unit = _get_num(praw, "extra_fvr_sale_prc", "final_unit_price", default=0)
+        final_unit = _get_num(
+            praw,
+            "cheapest_final_prc",
+            "extra_fvr_sale_prc",
+            "sale_prc",
+            "final_unit_price",
+            default=0,
+        )
         wage = _get_num(praw, "wage_prc", default=0)
         if final_unit:
             payment_amount = int((final_unit + wage) * ord_qty)

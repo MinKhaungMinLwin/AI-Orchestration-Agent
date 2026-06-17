@@ -4352,6 +4352,27 @@ def test_product_description_result_updates_tire_size_with_goods_no() -> None:
     assert slots.payment_amount is None
 
 
+def test_final_price_result_updates_payment_amount_with_cheapest_final_price_first() -> None:
+    slots = ConversationSlots(ord_qty=4)
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_final_price_tool",
+        {
+            "status": "success",
+            "data": {
+                "sale_prc": 120000,
+                "extra_fvr_sale_prc": 100000,
+                "cheapest_final_prc": 85000,
+                "wage_prc": 12000,
+            },
+        },
+    )
+
+    assert changed is True
+    assert slots.payment_amount == (85000 + 12000) * 4
+
+
 def test_preorder_template_payload_recovers_order_slots() -> None:
     slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
         "assistantResponse": "주문 내용을 확인해 주세요.",
