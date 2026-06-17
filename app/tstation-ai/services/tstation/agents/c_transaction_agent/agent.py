@@ -1541,7 +1541,10 @@ time_threshold_hour 24h 변환 (MUST follow exactly):
 #### General store info (no specific date) — info-only lookup:
 Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION ROUTING above).
 
-1. `get_store_list_tool(store_nm or region_code)` — fetch the matching store(s).
+1. **shop_id 확보**:
+   - 직전 대화/확인된 슬롯에 shop_id 또는 shop_nm 이 이미 있으면 → `get_store_list_tool` 호출 생략, 바로 step 2 로.
+     ("주말에도 열어?", "전화번호 알려줘" 처럼 현재 메시지에 매장명이 없을 때 해당)
+   - 없으면 → `get_store_list_tool(store_nm or region_code)` 호출해 shop_id 획득.
 2. **If the user is asking about ONE specific store** (single shop name, or selecting one store from a previous list — i.e., the result has exactly one shop_id or a known shop_id), IMMEDIATELY follow up in THIS SAME TURN with:
    `get_store_detail_tool(shop_id=<matched_shop_id>, cal_day=<TODAY in YYYYMMDD>)`
    ⚠️ Reason: the list endpoint omits 휴무일·전화번호·T바로배송 — the detail
