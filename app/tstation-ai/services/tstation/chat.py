@@ -4573,6 +4573,125 @@ def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
     return [row for row in rows or [] if isinstance(row, dict)]
 
 
+_OWNED_COUPON_EXPIRY_LOOKUP_RE = re.compile(
+    r"(?=.*(?:쿠폰|할인권))(?=.*(?:내|나의|보유|가진|갖고|받은|쿠폰함))"
+    r"(?=.*(?:이번\s*달|이달|곧|만료\s*예정|만료(?:되는|인|된)?|유효\s*기간|사용\s*기간))",
+    re.IGNORECASE,
+)
+_COUPON_RESTORE_INTENT_RE = re.compile(
+    r"원복|복구|재사용|다시\s*(?:쓰|쓸|사용)|되살|살려|부활|연장|못\s*쓰.*(?:해줘|할\s*수)",
+    re.IGNORECASE,
+)
+
+
+def _is_owned_coupon_expiry_lookup_query(user_text: str) -> bool:
+    text = user_text or ""
+    if _COUPON_RESTORE_INTENT_RE.search(text):
+        return False
+    return bool(_OWNED_COUPON_EXPIRY_LOOKUP_RE.search(text))
+
+
+def _owned_coupon_expiry_scope(user_text: str) -> str:
+    text = user_text or ""
+    if re.search(r"이번\s*달|이달", text):
+        return "this_month"
+    if re.search(r"이미|지난|만료\s*된", text):
+        return "expired"
+    if re.search(r"곧|만료\s*예정", text):
+        return "soon"
+    return "expiring"
+
+
+def _coupon_end_date(row: dict) -> datetime.date | None:
+    raw = str(
+        row.get("use_end_dtime")
+        or row.get("use_end_date")
+        or row.get("end_dtime")
+        or row.get("end_date")
+        or row.get("valid_end_date")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    compact = re.search(r"(20\d{2})(\d{2})(\d{2})", raw)
+    if compact:
+        year, month, day = (int(part) for part in compact.groups())
+    else:
+        match = re.search(r"(20\d{2})\D+(\d{1,2})\D+(\d{1,2})", raw)
+        if not match:
+            return None
+        year, month, day = (int(part) for part in match.groups())
+    try:
+        return datetime.date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _coupon_expiry_matches_scope(end_date: datetime.date, scope: str, today: datetime.date) -> bool:
+    if scope == "this_month":
+        return end_date >= today and end_date.year == today.year and end_date.month == today.month
+    if scope == "soon":
+        return today <= end_date <= today + datetime.timedelta(days=30)
+    if scope == "expired":
+        return end_date < today
+    return end_date >= today
+
+
+def _format_coupon_discount_text(row: dict) -> str:
+    value = _coupon_numeric_value(row)
+    if value is None:
+        return ""
+    if _looks_like_percent_coupon(row):
+        return f"{value:g}% 할인"
+    return f"{int(value):,}원 할인"
+
+
+def _build_owned_coupon_expiry_lookup_event(user_text: str, tool_result: dict) -> dict:
+    rows = _coupon_rows_from_my_coupons(tool_result)
+    today = datetime.date.today()
+    scope = _owned_coupon_expiry_scope(user_text)
+    matched: list[tuple[datetime.date, dict]] = []
+    for row in rows:
+        end_date = _coupon_end_date(row)
+        if end_date and _coupon_expiry_matches_scope(end_date, scope, today):
+            matched.append((end_date, row))
+    matched.sort(key=lambda item: item[0])
+
+    scope_label = {
+        "this_month": "이번 달 안에 만료되는",
+        "soon": "곧 만료되는",
+        "expired": "이미 만료된",
+        "expiring": "만료 예정인",
+    }[scope]
+    if matched:
+        lines = [f"보유 쿠폰 중 {scope_label} 쿠폰은 {len(matched)}개예요."]
+        for end_date, row in matched[:10]:
+            name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "쿠폰").strip()
+            discount = _format_coupon_discount_text(row)
+            suffix = f" - {discount}" if discount else ""
+            lines.append(f"- {name}{suffix} / 만료일 {end_date.isoformat()}")
+        if len(matched) > 10:
+            lines.append(f"외 {len(matched) - 10}개는 쿠폰함에서 확인해 주세요.")
+        assistant_response = "\n".join(lines)
+    else:
+        assistant_response = f"현재 보유 쿠폰 중 {scope_label} 쿠폰은 없어요."
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_owned_coupon_expiry_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 def _is_owned_coupon_best_discount_query(user_text: str) -> bool:
     if _COUPON_ISSUE_INTENT_RE.search(user_text or ""):
         return False
@@ -11876,6 +11995,51 @@ class TStationChatServiceV2:
                 return emitted_events, mapped_event
             return emitted_events, _coupon_box_event("보유 쿠폰을 확인했어요. 쿠폰함에서 자세한 내용을 확인해 주세요.")
 
+        async def _resolve_owned_coupon_expiry_lookup_with_code(
+            my_coupons_result: dict | None = None,
+        ) -> tuple[list[dict], dict]:
+            emitted_events: list[dict] = []
+            from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
+
+            if my_coupons_result is None:
+                my_coupons_input = {"lang_cd": "ko"}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_my_coupons_tool",
+                    "display_name": "내 쿠폰 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_my_coupons = await asyncio.to_thread(_my_coupons_tool.invoke, my_coupons_input)
+                    my_coupons_result = _tool_result_dict(raw_my_coupons)
+                except Exception as exc:
+                    logger.exception("[COUPON_EXPIRY_LOOKUP] my coupons tool failed")
+                    my_coupons_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result("get_my_coupons_tool", my_coupons_input, my_coupons_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": my_coupons_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": my_coupons_input,
+                    "output": json.dumps(my_coupons_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_my_coupons_tool",
+                    "source_domain": "transaction",
+                })
+
+            return emitted_events, _build_owned_coupon_expiry_lookup_event(user_query, my_coupons_result)
+
         async def _resolve_owned_coupon_best_discount_with_code(
             my_coupons_result: dict | None = None,
         ) -> tuple[list[dict], dict]:
@@ -13195,7 +13359,9 @@ class TStationChatServiceV2:
 
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
-        if coupon_decision is not None and coupon_decision.is_actionable:
+        if _is_owned_coupon_expiry_lookup_query(user_query):
+            coupon_gate_resolution = await _resolve_owned_coupon_expiry_lookup_with_code()
+        elif coupon_decision is not None and coupon_decision.is_actionable:
             if coupon_decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP:
                 coupon_gate_resolution = await _resolve_owned_coupon_lookup_with_code()
             elif coupon_decision.intent == CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY:
@@ -13460,6 +13626,17 @@ class TStationChatServiceV2:
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
+                        tool_name == "get_my_coupons_tool"
+                        and not coupon_resolver_ran
+                        and _is_owned_coupon_expiry_lookup_query(user_query)
+                    ):
+                        coupon_resolver_ran = True
+                        code_events, deterministic_coupon_event = (
+                            await _resolve_owned_coupon_expiry_lookup_with_code(parsed_for_verifier)
+                        )
+                        for code_event in code_events:
+                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                    elif (
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
                         and (

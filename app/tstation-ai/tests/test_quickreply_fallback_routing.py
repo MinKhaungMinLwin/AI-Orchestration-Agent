@@ -36,6 +36,7 @@ from services.tstation.chat import (
     _build_default_benefit_event,
     _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
+    _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
     _build_store_holiday_period_event,
@@ -79,6 +80,7 @@ from services.tstation.chat import (
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
     _is_owned_coupon_best_discount_query,
+    _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
@@ -305,6 +307,24 @@ def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
     assert event["template"] == "quickReply"
     assert "원복 또는 재사용이 어렵" in event["data"]["assistantResponse"]
     assert "1:1 문의하기" in _labels(event["data"]["quickReplies"])
+
+
+def test_price_policy_guard_does_not_block_owned_coupon_expiry_lookup() -> None:
+    frame = build_price_intent_frame("보유 쿠폰 중에 이번달 만료인거 뭐 있어?")
+
+    assert frame.intent != "expired_coupon_or_event"
+    assert _price_policy_guard_event("보유 쿠폰 중에 이번달 만료인거 뭐 있어?") is None
+    assert _is_owned_coupon_expiry_lookup_query("보유 쿠폰 중에 이번달 만료인거 뭐 있어?")
+
+
+def test_price_policy_guard_keeps_expired_coupon_restore_and_event_reuse() -> None:
+    coupon_event = _price_policy_guard_event("만료된 쿠폰 원복해줘")
+    event_event = _price_policy_guard_event("끝난 이벤트 혜택 다시 쓸 수 있어?")
+
+    assert coupon_event is not None
+    assert event_event is not None
+    assert "원복 또는 재사용이 어렵" in coupon_event["data"]["assistantResponse"]
+    assert "원복 또는 재사용이 어렵" in event_event["data"]["assistantResponse"]
 
 
 def test_past_event_page_event_routes_ended_event_list_queries() -> None:
@@ -1879,6 +1899,60 @@ def test_specific_owned_coupon_lookup_summarizes_missing_coupon() -> None:
     assert summary is not None
     assert "현재 보유 쿠폰에서 ‘패밀리’ 관련 쿠폰은 확인되지 않아요" in summary
     assert "현재 보유 쿠폰 목록" in summary
+
+
+def test_owned_coupon_expiry_lookup_filters_this_month_coupons() -> None:
+    today = datetime.date.today()
+    next_month = (today.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    this_month_end = next_month - datetime.timedelta(days=1)
+    event = _build_owned_coupon_expiry_lookup_event(
+        "보유 쿠폰 중에 이번달 만료인거 뭐 있어?",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_nm": "이번달 만료 쿠폰",
+                        "rt_amt_val": 10,
+                        "use_end_dtime": this_month_end.isoformat(),
+                    },
+                    {
+                        "cpn_nm": "다음달 만료 쿠폰",
+                        "rt_amt_val": 10000,
+                        "use_end_dtime": next_month.isoformat(),
+                    },
+                ],
+            },
+        },
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert "이번달 만료 쿠폰" in response
+    assert "다음달 만료 쿠폰" not in response
+    assert "원복" not in response
+    assert "1:1 문의" not in response
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
+
+
+def test_owned_coupon_expiry_lookup_handles_no_matches() -> None:
+    next_month = (datetime.date.today().replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    event = _build_owned_coupon_expiry_lookup_event(
+        "내 쿠폰 중 곧 만료되는 거 보여줘",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_nm": "나중에 만료 쿠폰",
+                        "rt_amt_val": 10000,
+                        "use_end_dtime": (next_month + datetime.timedelta(days=45)).isoformat(),
+                    }
+                ],
+            },
+        },
+    )
+
+    assert "곧 만료되는 쿠폰은 없어요" in event["data"]["assistantResponse"]
 
 
 def test_owned_coupon_best_discount_summarizes_highest_owned_coupon() -> None:

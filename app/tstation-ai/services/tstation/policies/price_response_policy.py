@@ -12,7 +12,11 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 _COUPON_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
 _ISSUE_RE = re.compile(r"발급|받아\s*줘|만들어\s*줘|주세요|링크\s*보내|다운로드", re.IGNORECASE)
 _EXTREME_DISCOUNT_RE = re.compile(r"(?:50|70|80|90|99)\s*%|반값|공짜|무료", re.IGNORECASE)
-_EXPIRED_RE = re.compile(r"만료|끝난|종료|지난|작년|원복|복구|다시\s*쓰", re.IGNORECASE)
+_EXPIRED_RE = re.compile(r"만료|끝난|종료|지난|작년", re.IGNORECASE)
+_RESTORE_RE = re.compile(
+    r"원복|복구|재사용|다시\s*(?:쓰|쓸|사용)|되살|살려|부활|연장|못\s*쓰.*(?:해줘|할\s*수)",
+    re.IGNORECASE,
+)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _STACKING_RE = re.compile(r"중복|같이|동시|함께|둘\s*다|더\s*쓸|추가\s*적용", re.IGNORECASE)
 _BIRTHDAY_COUPON_RE = re.compile(r"생일|birthday", re.IGNORECASE)
@@ -61,7 +65,11 @@ def build_price_intent_frame(
     if _NONEXISTENT_BENEFIT_RE.search(text) and (_ISSUE_RE.search(text) or _COUPON_RE.search(text)):
         intent = "nonexistent_benefit"
         sub_intent = "deny_unverified_benefit"
-    elif _EXPIRED_RE.search(text) and (_COUPON_RE.search(text) or _PROMOTION_RE.search(text)):
+    elif (
+        _EXPIRED_RE.search(text)
+        and _RESTORE_RE.search(text)
+        and (_COUPON_RE.search(text) or _PROMOTION_RE.search(text))
+    ):
         intent = "expired_coupon_or_event"
         sub_intent = "restore_not_supported"
     elif _COUPON_RE.search(text) and _ISSUE_RE.search(text) and _EXTREME_DISCOUNT_RE.search(text):
