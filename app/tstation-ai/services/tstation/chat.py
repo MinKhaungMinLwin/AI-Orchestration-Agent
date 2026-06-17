@@ -6597,9 +6597,19 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     goods_no = str(row.get("goods_no") or "").strip()
     name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
     tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
+    big_goods_name = str(row.get("big_goods_nm") or "").strip()
     slogan = _clean_product_sentence(row.get("slogan"))
+    remark = _clean_product_sentence(row.get("pc_prod_remark_desc"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
     pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
+    season = str(row.get("season_nm") or "").strip()
+    car_kind = str(row.get("car_knd_nm") or "").strip()
+    performance = str(row.get("goods_pfm_nm") or "").strip()
+    comfort = _to_float(row.get("t_comfort"))
+    silence = _to_float(row.get("t_silence"))
+    life_span = _to_float(row.get("t_life_span"))
+    wet = row.get("wet")
+    rr = row.get("rr")
 
     intro_subject = f"{name}는"
     if slogan:
@@ -6610,8 +6620,39 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
         intro = f"{intro_subject} 상세 정보가 확인되는 타이어예요."
 
     lines = [intro]
-    if tech:
-        lines.extend(["", tech[:180]])
+    identity_parts: list[str] = []
+    if tire_size:
+        identity_parts.append(tire_size)
+    if big_goods_name and big_goods_name != name:
+        identity_parts.append(big_goods_name)
+    if season:
+        identity_parts.append(season)
+    if car_kind:
+        identity_parts.append(car_kind)
+    if performance and performance not in identity_parts:
+        identity_parts.append(performance)
+    if pattern and pattern not in identity_parts:
+        identity_parts.append(pattern)
+    if identity_parts:
+        lines.extend(["", f"규격/분류는 {' · '.join(identity_parts[:5])} 기준으로 확인돼요."])
+
+    marketing_bits = [text for text in (remark, tech) if text]
+    if marketing_bits:
+        lines.extend(["", " ".join(marketing_bits)[:220]])
+
+    performance_bits: list[str] = []
+    if comfort and comfort > 0:
+        performance_bits.append(f"승차감 {comfort:g}/5")
+    if silence and silence > 0:
+        performance_bits.append(f"정숙성 {silence:g}/5")
+    if life_span and life_span > 0:
+        performance_bits.append(f"마일리지 {life_span:g}/5")
+    if wet not in (None, "", 0, "0"):
+        performance_bits.append(f"젖은노면 {wet}등급")
+    if rr not in (None, "", 0, "0"):
+        performance_bits.append(f"회전저항 {rr}등급")
+    if performance_bits:
+        lines.extend(["", f"주요 성능은 {', '.join(performance_bits)} 수준이에요."])
 
     sale_price = _format_krw(row.get("sale_prc"))
     final_price = _format_krw(row.get("cheapest_final_prc"))

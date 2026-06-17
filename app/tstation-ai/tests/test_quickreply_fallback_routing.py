@@ -1572,10 +1572,21 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
         "status": "success",
         "data": {
             "goods_nm": "벤투스 S2 AS",
+            "big_goods_nm": "벤투스",
             "goods_no": "G000000309783",
             "tire_size_1": "225/45R17",
             "slogan": "고속 주행에서 느끼는 Comfort Technology",
+            "pc_prod_remark_desc": "사계절 승용차용으로 정숙성과 승차감을 강화한 패턴입니다.",
             "pc_prod_tech_desc": "<ol><li>승차감 : 조용하고 안락한 승차감 제공</li></ol>",
+            "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+            "season_nm": "사계절",
+            "car_knd_nm": "승용차",
+            "goods_pfm_nm": "COMFORT",
+            "t_comfort": 4.5,
+            "t_silence": 4.3,
+            "t_life_span": 4.1,
+            "wet": "B",
+            "rr": "A",
             "sale_prc": 152500,
             "cheapest_final_prc": 118800,
             "cheapest_applied_coupons": [
@@ -1590,6 +1601,16 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     assert event["template"] == "quickReply"
     assistant_response = event["data"]["assistantResponse"]
     assert "벤투스 S2 AS" in assistant_response
+    assert "225/45R17" in assistant_response
+    assert "사계절" in assistant_response
+    assert "승용차" in assistant_response
+    assert "COMFORT" in assistant_response
+    assert "정숙성과 승차감을 강화한 패턴" in assistant_response
+    assert "승차감 4.5/5" in assistant_response
+    assert "정숙성 4.3/5" in assistant_response
+    assert "마일리지 4.1/5" in assistant_response
+    assert "젖은노면 B등급" in assistant_response
+    assert "회전저항 A등급" in assistant_response
     assert "최종 혜택가는 118,800원" in assistant_response
     assert "리뷰는 68건" in assistant_response
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "장바구니담기"]
