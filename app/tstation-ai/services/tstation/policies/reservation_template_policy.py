@@ -42,6 +42,12 @@ _SCHEDULE_REQUEST_RE = re.compile(
     r"스케줄(?:표)?|시간표",
     re.IGNORECASE,
 )
+_NEW_STORE_SCOPE_REQUEST_RE = re.compile(
+    r"(?:오늘|내일|모레).{0,30}(?:지역|근처|주변|매장|지점)|"
+    r"(?:지역|근처|주변).{0,20}(?:매장|지점)|"
+    r"(?:매장|지점).{0,20}(?:찾|검색|알려|보여)",
+    re.IGNORECASE,
+)
 
 
 def yyyymmdd_to_korean_date(s: str) -> str:
@@ -208,7 +214,7 @@ def build_datepick_from_preview_payload(
             "template": "datepick",
             "assistant_response_source": assistant_response_source,
             "data": {
-                "assistantResponse": assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+                "assistantResponse": assistant_text or "예약하려는 날짜와 시간을 선택해 주세요.",
                 "dates": dates,
                 "selectedDate": selected_idx,
                 "metadata": metadata,
@@ -263,8 +269,8 @@ def _order_preview_datepick_assistant_text(
         return assistant_text
     shop_name = _store_name_from_preview_payload(preview_payload)
     if shop_name:
-        return f"{shop_name} 예약 가능한 날짜와 시간을 선택해 주세요."
-    return "예약 가능한 날짜와 시간을 선택해 주세요."
+        return f"{shop_name}에서 예약하려는 날짜와 시간을 선택해 주세요."
+    return "예약하려는 날짜와 시간을 선택해 주세요."
 
 
 def build_datepick_from_schedule_payload(
@@ -321,7 +327,7 @@ def build_datepick_from_schedule_payload(
         "template": "datepick",
         "assistant_response_source": assistant_response_source,
         "data": {
-            "assistantResponse": assistant_text or "예약 가능한 날짜와 시간을 선택해 주세요.",
+            "assistantResponse": assistant_text or "예약하려는 날짜와 시간을 선택해 주세요.",
             "dates": dates,
             "selectedDate": selected_idx,
             "metadata": metadata,
@@ -397,7 +403,7 @@ def filter_datepick_to_requested_weekday(event: dict, user_text: str) -> dict | 
         _replace_datepick_dates(event_data, weekend_dates)
         has_default_response = (
             not event_data.get("assistantResponse")
-            or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요."
+            or event_data["assistantResponse"] == "예약하려는 날짜와 시간을 선택해 주세요."
         )
         if has_default_response:
             event_data["assistantResponse"] = "이번 주말 예약 가능한 시간을 선택해 주세요."
@@ -416,7 +422,7 @@ def filter_datepick_to_requested_weekday(event: dict, user_text: str) -> dict | 
         _replace_datepick_dates(event_data, [date_item])
         has_default_response = (
             not event_data.get("assistantResponse")
-            or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요."
+            or event_data["assistantResponse"] == "예약하려는 날짜와 시간을 선택해 주세요."
         )
         if has_default_response:
             event_data["assistantResponse"] = f"{label} 예약 가능한 시간을 선택해 주세요."
@@ -562,6 +568,8 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
     )
     if not is_schedule_followup:
         return None
+    if _NEW_STORE_SCOPE_REQUEST_RE.search(user_text or ""):
+        return None
 
     assistant_text = str(event_data.get("assistantResponse") or "")
     if isinstance(latest_datepick_data, dict):
@@ -571,7 +579,7 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
             if assistant_text:
                 datepick_data["assistantResponse"] = assistant_text
             else:
-                datepick_data.setdefault("assistantResponse", "예약 가능한 날짜와 시간을 선택해 주세요.")
+                datepick_data.setdefault("assistantResponse", "예약하려는 날짜와 시간을 선택해 주세요.")
             return {
                 "type": "data",
                 "template": "datepick",
@@ -624,7 +632,7 @@ def filter_datepick_to_requested_date(event: dict, user_text: str) -> dict | Non
         _replace_datepick_dates(event_data, [date_item])
         has_default_response = (
             not event_data.get("assistantResponse")
-            or event_data["assistantResponse"] == "예약 가능한 날짜와 시간을 선택해 주세요."
+            or event_data["assistantResponse"] == "예약하려는 날짜와 시간을 선택해 주세요."
         )
         if has_default_response:
             event_data["assistantResponse"] = f"{label} 예약 가능한 시간을 선택해 주세요."

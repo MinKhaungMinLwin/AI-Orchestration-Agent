@@ -28,6 +28,7 @@ from services.tstation.chat import (
     _FALLBACK_GENERIC,
     _FALLBACK_LEADING_PROGRESS,
     _FALLBACK_ORDER_LIST,
+    _FALLBACK_TRANSACTION_STORE_SEARCH,
     _ALL_MY_T_5_PERCENT_COUPON_RE,
     _ALL_MY_T_BENEFIT_PAGE_RE,
     _COUPON_ISSUE_INTENT_RE,
@@ -36,11 +37,15 @@ from services.tstation.chat import (
     _build_default_benefit_event,
     _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
+    _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
+    _build_product_coupon_price_amount_event,
+    _build_product_coupon_price_no_product_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
+    _build_size_only_product_search_tool_input,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
@@ -55,6 +60,7 @@ from services.tstation.chat import (
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
+    _is_order_quantity_prompt_continuation_text,
     _is_staggered_selected_tire_size_context,
     _listcar_allows_staggered_tire_prompt,
     _apply_vehicle_selection_slot_values,
@@ -69,6 +75,7 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_product_coupon_price_amount_query,
     _is_product_comparison_query,
     _tool_error_summary,
     _trace_final_error_state,
@@ -78,7 +85,9 @@ from services.tstation.chat import (
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
     _is_owned_coupon_best_discount_query,
+    _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
+    _split_product_size_quantity_from_text,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
@@ -94,6 +103,7 @@ from services.tstation.chat import (
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
     _is_ev_suitability_turn,
+    _extract_plain_store_info_store_name,
     _is_bare_product_name_search_query,
     _is_fresh_product_transaction_request,
     _unique_product_row_from_sized_search_result,
@@ -101,8 +111,10 @@ from services.tstation.chat import (
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
+    _normalize_existing_reservation_change_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
+    _store_detail_quickreply_from_sources,
     _normalize_vehicle_owner_lookup_text,
     _non_self_vehicle_plate_owner_lookup_plate,
     _non_self_vehicle_plate_owner_lookup_prompt_event,
@@ -111,6 +123,7 @@ from services.tstation.chat import (
     _past_event_page_event,
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
+    _recent_product_coupon_price_target,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
     _parse_requested_reservation_date,
@@ -129,11 +142,13 @@ from services.tstation.chat import (
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
+    _should_force_warranty_claim_support_route,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
 )
+from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
 from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
@@ -303,6 +318,24 @@ def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
     assert "1:1 문의하기" in _labels(event["data"]["quickReplies"])
 
 
+def test_price_policy_guard_does_not_block_owned_coupon_expiry_lookup() -> None:
+    frame = build_price_intent_frame("보유 쿠폰 중에 이번달 만료인거 뭐 있어?")
+
+    assert frame.intent != "expired_coupon_or_event"
+    assert _price_policy_guard_event("보유 쿠폰 중에 이번달 만료인거 뭐 있어?") is None
+    assert _is_owned_coupon_expiry_lookup_query("보유 쿠폰 중에 이번달 만료인거 뭐 있어?")
+
+
+def test_price_policy_guard_keeps_expired_coupon_restore_and_event_reuse() -> None:
+    coupon_event = _price_policy_guard_event("만료된 쿠폰 원복해줘")
+    event_event = _price_policy_guard_event("끝난 이벤트 혜택 다시 쓸 수 있어?")
+
+    assert coupon_event is not None
+    assert event_event is not None
+    assert "원복 또는 재사용이 어렵" in coupon_event["data"]["assistantResponse"]
+    assert "원복 또는 재사용이 어렵" in event_event["data"]["assistantResponse"]
+
+
 def test_past_event_page_event_routes_ended_event_list_queries() -> None:
     for text in ("지난 이벤트 알려줘", "종료된 이벤트 알려줘", "끝난 행사 보여줘"):
         event = _past_event_page_event(text)
@@ -334,7 +367,8 @@ def test_pickup_service_guard_handles_application_question() -> None:
     assert event is not None
     assert event["template"] == "quickReply"
     assert "매장 기준 최대 30km" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "내 근처 매장 찾기", "1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "내 근처 매장 찾기", "타이어 추천"]
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
 
 
 def test_pickup_service_gate_classifies_required_intents() -> None:
@@ -378,7 +412,21 @@ def test_pickup_service_guard_handles_driver_status_question() -> None:
     assert event is not None
     assert event["template"] == "quickReply"
     assert "실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "1:1 문의하기"]
+    assert "픽업서비스 내역" in event["data"]["assistantResponse"]
+    assert "픽업 매장" not in event["data"]["assistantResponse"]
+    assert "매장으로" not in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 내역"]
+    assert event["data"]["quickReplies"][0]["url"].endswith("/mypage/tstation/reservation/pickupList")
+
+
+def test_pickup_service_guard_distinguishes_application_from_status() -> None:
+    status_event = _pickup_service_guard_event("픽업딜리버리 신청했는데 기사님 어디쯤 오고계셔?")
+    howto_event = _pickup_service_guard_event("픽업서비스 어떻게 신청해?")
+
+    assert status_event is not None
+    assert howto_event is not None
+    assert _labels(status_event["data"]["quickReplies"]) == ["픽업서비스 내역"]
+    assert _labels(howto_event["data"]["quickReplies"])[0] == "픽업서비스 신청"
 
 
 def test_pickup_service_guard_does_not_hijack_generic_application_question() -> None:
@@ -393,7 +441,8 @@ def test_direct_tire_delivery_guard_blocks_home_delivery_self_install() -> None:
     assert event["template"] == "quickReply"
     assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in event["data"]["assistantResponse"]
     assert "선택하신 장착점" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["장착 매장 찾기", "타이어 추천", "1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["장착 매장 찾기", "타이어 추천", "구매하기"]
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
 
 
 def test_direct_tire_delivery_guard_blocks_casual_home_delivery_request() -> None:
@@ -785,6 +834,31 @@ def test_reservation_date_range_guard_blocks_past_yearless_date() -> None:
     assert "오늘 날짜 2026-06-05 이후로 다시 선택해 주세요." in event["data"]["assistantResponse"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "분당정자점 27년 2월 16일날 예약해줘",
+        "분당정자점 27.2.16 예약해줘",
+        "분당정자점 270216 예약해줘",
+    ],
+)
+def test_reservation_date_range_guard_parses_two_digit_future_year(text: str) -> None:
+    today = datetime.date(2026, 6, 17)
+
+    parsed = _parse_requested_reservation_date(text, today=today)
+    event = _reservation_date_range_guard_event(text, today=today)
+
+    assert parsed == datetime.date(2027, 2, 16)
+    assert event is not None
+    assert event["assistant_response_source"] == "code_reservation_date_range_guard"
+    assert "2027년 2월 16일 예약은 아직 오픈 전" in event["data"]["assistantResponse"]
+    assert "지난 날짜" not in event["data"]["assistantResponse"]
+
+
+def test_compact_six_digit_date_requires_reservation_context() -> None:
+    assert _parse_requested_reservation_date("270216", today=datetime.date(2026, 6, 17)) is None
+
+
 def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates() -> None:
     today = datetime.date(2026, 5, 25)
 
@@ -945,7 +1019,10 @@ def test_order_arrival_followup_resolves_recent_order_not_store_schedule() -> No
     assert _is_order_arrival_status_query("최근 주문 배송 예정일 알려줘")
     assert _is_order_arrival_status_query("그거 매장에 언제 와?")
     assert _is_order_arrival_status_query("그 이후에 매장 가면 돼?")
+    assert _is_order_arrival_status_query("O202605120019340 주문 언제 매장 도착해?")
     assert not _is_order_arrival_status_query("여주점 예약 가능한 시간 보여줘")
+    assert not _is_order_arrival_status_query("O202605120019340 주문췻호건 환불 언제돼?")
+    assert not _is_order_arrival_status_query("O202605120019340 카드 취소 언제 승인돼?")
 
     resolved = _resolve_order_row_for_arrival_query("최근 주문 배송 예정일 알려줘", messages=messages)
 
@@ -968,6 +1045,53 @@ def test_order_arrival_followup_resolves_by_product_name() -> None:
 
     assert resolved is not None
     assert resolved["ord_no"] == "O202605120019340"
+
+
+def test_order_arrival_direct_order_number_does_not_use_current_question_as_product_name() -> None:
+    messages = [
+        {"role": "user", "content": "O202605120019340 주문췻호건 환불 언제돼?"},
+        {
+            "role": "assistant",
+            "content": (
+                "주문번호\t주문상태\t상품명\t수량\t주문날짜\n"
+                "O202605180019345\t출하지시\t벤투스 S1 에보 Z AS\t4\t2026-05-18"
+            ),
+        },
+    ]
+
+    resolved = _resolve_order_row_for_arrival_query("O202605120019340 주문 언제 매장 도착해?", messages=messages)
+    event = _build_order_arrival_status_event(
+        {"status": "success", "data": {"query_no": "O202605120019340", "ord_prgs_stat_nm": "주문완료"}},
+        resolved,
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert "- 주문번호: O202605120019340" in response
+    assert "상품명:" not in response
+    assert "주문췻호건 환불 언제돼" not in response
+
+
+def test_order_arrival_history_parser_ignores_assistant_refund_sentence() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": "주문번호 O202605120019340 취소 건의 환불 일정이 궁금하시군요. 아래 버튼을 눌러 1:1 문의를 진행해 주세요 😊",
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |\n"
+                "|---|---|---|---|---|\n"
+                "| O202605180019345 | 출하지시 | 벤투스 S1 에보 Z AS | 4 | 2026-05-18 |"
+            ),
+        },
+    ]
+
+    resolved = _resolve_order_row_for_arrival_query("최근 주문 배송 예정일 알려줘", messages=messages)
+
+    assert resolved is not None
+    assert resolved["ord_no"] == "O202605180019345"
+    assert resolved["goods_nm"] == "벤투스 S1 에보 Z AS"
 
 
 def test_order_arrival_status_formats_delivery_date_without_time_and_no_direct_visit_claim() -> None:
@@ -1250,6 +1374,32 @@ def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
     assert _should_apply_product_attribute_resolver(text, set()) is True
 
 
+def test_product_warranty_question_does_not_apply_attribute_resolver() -> None:
+    text = "벤투스 S2 AS 워런티 돼?"
+
+    assert _is_product_attribute_lookup_query(text) is False
+    assert _should_apply_product_attribute_resolver(text, set()) is False
+    assert (
+        _build_product_attribute_event_from_search_results(
+            text,
+            [
+                (
+                    "벤투스 S2 AS",
+                    {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {"goods_nm": "벤투스 S2 AS", "car_type_nm": "승용차"},
+                            ],
+                        },
+                    },
+                ),
+            ],
+        )
+        is None
+    )
+
+
 def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
     assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 설명좀") is True
 
@@ -1347,6 +1497,28 @@ def test_sized_product_name_search_rejects_size_only_text() -> None:
     assert _build_bare_product_search_tool_input("2356018") is None
 
 
+def test_size_only_followup_search_reuses_recent_product_context() -> None:
+    assert _build_size_only_product_search_tool_input(
+        "2255517",
+        recent_context="ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?\n2255517",
+    ) == {
+        "keyword": "벤투스 에어S",
+        "limit": 10,
+        "size": "225/55R17",
+    }
+
+
+def test_size_only_followup_search_reuses_recent_search_tool_keyword() -> None:
+    assert _build_size_only_product_search_tool_input(
+        "2255517",
+        prev_tool_data=[{"tool": "search_product_tool", "input": {"keyword": "벤투스 에어S"}}],
+    ) == {
+        "keyword": "벤투스 에어S",
+        "limit": 10,
+        "size": "225/55R17",
+    }
+
+
 def test_sized_product_name_search_can_resolve_unique_ventus_evo_goods_no() -> None:
     row = _unique_product_row_from_sized_search_result(
         {
@@ -1400,10 +1572,21 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
         "status": "success",
         "data": {
             "goods_nm": "벤투스 S2 AS",
+            "big_goods_nm": "벤투스",
             "goods_no": "G000000309783",
             "tire_size_1": "225/45R17",
             "slogan": "고속 주행에서 느끼는 Comfort Technology",
+            "pc_prod_remark_desc": "사계절 승용차용으로 정숙성과 승차감을 강화한 패턴입니다.",
             "pc_prod_tech_desc": "<ol><li>승차감 : 조용하고 안락한 승차감 제공</li></ol>",
+            "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+            "season_nm": "사계절",
+            "car_knd_nm": "승용차",
+            "goods_pfm_nm": "COMFORT",
+            "t_comfort": 4.5,
+            "t_silence": 4.3,
+            "t_life_span": 4.1,
+            "wet": "B",
+            "rr": "A",
             "sale_prc": 152500,
             "cheapest_final_prc": 118800,
             "cheapest_applied_coupons": [
@@ -1418,6 +1601,16 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     assert event["template"] == "quickReply"
     assistant_response = event["data"]["assistantResponse"]
     assert "벤투스 S2 AS" in assistant_response
+    assert "225/45R17" in assistant_response
+    assert "사계절" in assistant_response
+    assert "승용차" in assistant_response
+    assert "COMFORT" in assistant_response
+    assert "정숙성과 승차감을 강화한 패턴" in assistant_response
+    assert "승차감 4.5/5" in assistant_response
+    assert "정숙성 4.3/5" in assistant_response
+    assert "마일리지 4.1/5" in assistant_response
+    assert "젖은노면 B등급" in assistant_response
+    assert "회전저항 A등급" in assistant_response
     assert "최종 혜택가는 118,800원" in assistant_response
     assert "리뷰는 68건" in assistant_response
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "장바구니담기"]
@@ -1738,6 +1931,86 @@ def test_product_coupon_eligibility_keeps_explicit_product_name() -> None:
     assert _coupon_target_product_name_for_query("아이온 에보 AS에 30% 할인 쿠폰 적용돼?") == "아이온"
 
 
+def test_product_coupon_query_splits_compact_size_and_quantity_from_product_name() -> None:
+    parsed = _split_product_size_quantity_from_text(
+        "ventus air S 2255517",
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?",
+    )
+
+    assert parsed == {
+        "product_name": "ventus air S",
+        "tire_size": "225/55R17",
+        "quantity": 4,
+    }
+
+
+def test_price_policy_frame_keeps_coupon_product_size_quantity_separate() -> None:
+    frame = build_price_intent_frame(
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
+    )
+
+    assert frame.entities["product_name"] == "Ventus air S"
+    assert frame.entities["tire_size"] == "225/55R17"
+    assert frame.entities["quantity"] == 4
+
+
+def test_product_coupon_price_amount_query_is_detected() -> None:
+    assert _is_product_coupon_price_amount_query(
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
+    )
+    assert not _is_product_coupon_price_amount_query("벤투스 에어S에 적용 가능한 쿠폰 뭐 있어?")
+
+
+def test_size_only_followup_recovers_coupon_price_target_from_recent_context() -> None:
+    target = _recent_product_coupon_price_target(
+        "2255517",
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?\n2255517",
+    )
+
+    assert target == {
+        "product_name": "Ventus air S",
+        "tire_size": "225/55R17",
+        "quantity": 4,
+    }
+
+
+def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
+    event = _build_product_coupon_price_amount_event(
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000317729",
+                "goods_nm": "벤투스 에어S",
+                "sale_prc": 200000,
+                "cheapest_final_prc": 150000,
+                "cheapest_total_discount": 50000,
+                "cheapest_applied_coupons": [{"cpn_nm": "한국타이어 30% 할인권"}],
+            },
+        },
+        product_name="벤투스 에어S",
+        tire_size="225/55R17",
+        quantity=4,
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "벤투스 에어S 225/55R17 4개 기준" in assistant
+    assert "정가 합계: 800,000원" in assistant
+    assert "쿠폰 적용 할인액: 200,000원" in assistant
+    assert "최종 혜택가: 600,000원" in assistant
+    assert "한국타이어 30% 할인권" in assistant
+
+
+def test_product_coupon_price_no_product_event_stops_without_price_cta() -> None:
+    event = _build_product_coupon_price_no_product_event("벤투스 에어S", "225/55R17")
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요" in assistant
+    assert "상품을 찾았어요" not in assistant
+    assert "가격 확인" not in labels
+
+
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:
     assert _is_product_coupon_eligibility_query("kinergy EX에 쓸 수 있는 쿠폰 뭐 있어?")
     assert _is_product_coupon_eligibility_query("키너지 EX 쿠폰 뭐 있어?")
@@ -1834,6 +2107,60 @@ def test_specific_owned_coupon_lookup_summarizes_missing_coupon() -> None:
     assert summary is not None
     assert "현재 보유 쿠폰에서 ‘패밀리’ 관련 쿠폰은 확인되지 않아요" in summary
     assert "현재 보유 쿠폰 목록" in summary
+
+
+def test_owned_coupon_expiry_lookup_filters_this_month_coupons() -> None:
+    today = datetime.date.today()
+    next_month = (today.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    this_month_end = next_month - datetime.timedelta(days=1)
+    event = _build_owned_coupon_expiry_lookup_event(
+        "보유 쿠폰 중에 이번달 만료인거 뭐 있어?",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_nm": "이번달 만료 쿠폰",
+                        "rt_amt_val": 10,
+                        "use_end_dtime": this_month_end.isoformat(),
+                    },
+                    {
+                        "cpn_nm": "다음달 만료 쿠폰",
+                        "rt_amt_val": 10000,
+                        "use_end_dtime": next_month.isoformat(),
+                    },
+                ],
+            },
+        },
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert "이번달 만료 쿠폰" in response
+    assert "다음달 만료 쿠폰" not in response
+    assert "원복" not in response
+    assert "1:1 문의" not in response
+    assert "1:1 문의하기" not in _labels(event["data"]["quickReplies"])
+
+
+def test_owned_coupon_expiry_lookup_handles_no_matches() -> None:
+    next_month = (datetime.date.today().replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+    event = _build_owned_coupon_expiry_lookup_event(
+        "내 쿠폰 중 곧 만료되는 거 보여줘",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_nm": "나중에 만료 쿠폰",
+                        "rt_amt_val": 10000,
+                        "use_end_dtime": (next_month + datetime.timedelta(days=45)).isoformat(),
+                    }
+                ],
+            },
+        },
+    )
+
+    assert "곧 만료되는 쿠폰은 없어요" in event["data"]["assistantResponse"]
 
 
 def test_owned_coupon_best_discount_summarizes_highest_owned_coupon() -> None:
@@ -2022,6 +2349,52 @@ def test_store_service_gate_detects_review_detail_but_not_review_write() -> None
     assert rating_summary.needs_store_detail_cta is False
     assert review_write.intent == "none"
     assert review_write.needs_store_detail_cta is False
+
+
+def test_store_visual_detail_request_routes_to_store_detail_cta_intent() -> None:
+    visual = decide_store_service_gate(user_text="티스테이션 구리점 매장 전경 사진 보고 싶어")
+
+    assert visual.intent == "store_visual_detail"
+    assert visual.needs_store_detail_cta is True
+    assert _extract_plain_store_info_store_name("티스테이션 구리점 매장 전경 사진 보고 싶어") == "구리점"
+    assert _extract_plain_store_info_store_name("분당정자점 사진 있어?") == "분당정자점"
+
+
+def test_store_visual_detail_guidance_injects_detail_cta_before_generic_store_search() -> None:
+    event_data = {
+        "assistantResponse": "티스테이션 구리점 매장 전경은 매장 상세 화면에서 확인하실 수 있어요.",
+        "quickReplies": [
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "다른 매장 정보", "domain": "TRANSACTION"},
+        ],
+        "predictedDomains": ["TRANSACTION"],
+    }
+    tool_data_list = [
+        {
+            "tool": "get_store_detail_tool",
+            "data": {
+                "status": "success",
+                "data": {
+                    "shop_seq": "F203675962",
+                    "shop_nm": "티스테이션 구리점",
+                    "tel_no": "0315551234",
+                    "shop_biz_strt_time": "09",
+                    "shop_biz_end_time": "19",
+                },
+            },
+        }
+    ]
+
+    changed = _inject_store_detail_chip_for_contact_guidance(
+        event_data,
+        tool_data_list=tool_data_list,
+        messages=[{"role": "user", "content": "티스테이션 구리점 매장 전경 사진 보고 싶어"}],
+    )
+
+    assert changed is True
+    assert event_data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
+    assert event_data["quickReplies"][0]["url"].endswith("/store/locals/F203675962")
+    assert "매장 찾기" not in _labels(event_data["quickReplies"])
 
 
 def test_store_contact_guidance_injects_store_detail_cta_from_context_list_shape() -> None:
@@ -2500,6 +2873,141 @@ def test_tool_context_formats_reservation_history_label() -> None:
     assert "2026-05-29 16:00" in context
 
 
+def test_existing_reservation_management_filters_stale_store_schedule_context() -> None:
+    selected = TStationChatServiceV2._select_tool_context_for_prompt(
+        [
+            {
+                "tool": "get_store_schedule_tool",
+                "data": {"shop_nm": "티스테이션 고양시청점", "slots": [{"cal_day": "20260617"}]},
+            },
+            {
+                "tool": "get_my_reservations_tool",
+                "data": [
+                    {
+                        "shop_nm": "티스테이션 정관점",
+                        "vst_rsv_dtime": "2026-06-16 17:00",
+                    }
+                ],
+            },
+        ],
+        SimpleNamespace(shop_name="티스테이션 정관점"),
+        intent_group="existing_reservation_management",
+    )
+
+    assert [item["tool"] for item in selected] == ["get_my_reservations_tool"]
+
+
+def test_existing_reservation_management_drops_schedule_templates() -> None:
+    assert TStationChatServiceV2._should_drop_template_for_intent_group(
+        {"type": "data", "template": "datepick"},
+        "existing_reservation_management",
+    )
+    assert TStationChatServiceV2._should_drop_template_for_intent_group(
+        {"type": "data", "template": "location"},
+        "existing_reservation_management",
+    )
+    assert not TStationChatServiceV2._should_drop_template_for_intent_group(
+        {"type": "data", "template": "quickReply"},
+        "existing_reservation_management",
+    )
+
+
+def test_existing_reservation_change_copy_does_not_imply_bot_can_change_time() -> None:
+    event_data = {
+        "assistantResponse": (
+            "정관점 방문예약을 확인했어요.\n\n"
+            "예약 유형: 단순 방문예약\n"
+            "예약 매장: 티스테이션 정관점\n"
+            "예약 일시: 2026-06-16 17:00\n\n"
+            "해당 예약은 주문번호가 없는 단순 방문예약이라, 내일로 변경 가능 여부는 예약 확인 후 진행이 필요해요."
+        ),
+        "quickReplies": [{"label": "다른 예약 확인", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert _normalize_existing_reservation_change_quickreply(event_data, last_user_text="정관점 예약시간 내일로 바꿔줘")
+    assistant = event_data["assistantResponse"]
+    assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
+    assert "변경 가능 여부는 예약 확인 후 진행이 필요해요" not in assistant
+
+
+def test_existing_reservation_change_copy_removes_order_detail_possibility_wording() -> None:
+    event_data = {
+        "assistantResponse": (
+            "확인된 온라인 예약 정보예요.\n\n"
+            "예약 유형: 온라인 예약\n"
+            "주문번호: O202604080019311\n"
+            "예약 매장: 티스테이션 고양시청점\n"
+            "예약 일시: 2026-04-18 15:00\n\n"
+            "예약 시간은 제가 직접 변경해 드릴 수는 없어요. "
+            "주문 내역 상세에서 예약 시간 변경 가능 여부를 확인하고 진행해 주세요."
+        ),
+        "quickReplies": [{"label": "주문 내역 상세 보기", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert _normalize_existing_reservation_change_quickreply(event_data, last_user_text="예약 시간 변경해줘")
+    assistant = event_data["assistantResponse"]
+    assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
+    assert "변경 가능 여부" not in assistant
+    assert "직접 처리하거나" in assistant
+
+
+def test_existing_reservation_change_copy_skips_refund_cancel_order_context() -> None:
+    event_data = {
+        "assistantResponse": (
+            "취소된 주문의 환불은 결제수단과 카드사 승인 일정에 따라 처리돼요.\n\n"
+            "환불 진행 상태는 주문 내역 상세에서 확인해 주세요."
+        ),
+        "quickReplies": [{"label": "주문 내역 보기", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert not _normalize_existing_reservation_change_quickreply(
+        event_data,
+        last_user_text="O202605120019340 주문취소건 환불 언제돼?",
+        called_tool_names={"get_orders_of_user_tool"},
+    )
+    assert "예약 시간은 제가 직접 변경" not in event_data["assistantResponse"]
+
+
+def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
+    event = _store_detail_quickreply_from_sources(
+        [
+            (
+                "get_store_detail_tool",
+                {
+                    "shop_nm": "티스테이션 고양시청점",
+                    "tel_no": "0319719333",
+                    "shop_biz_strt_time": "0900",
+                    "shop_biz_end_time": "1900",
+                    "shop_sat_strt_time": "0900",
+                    "shop_sat_end_time": "1700",
+                    "is_all_my_t": False,
+                    "is_installable": True,
+                    "is_tna_delivery": True,
+                    "is_imported_car": False,
+                    "svc_codes": ["04"],
+                },
+            )
+        ],
+        "고객님, 고양시청점 정보를 확인했어요.",
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "매장명: 티스테이션 고양시청점" in assistant
+    assert "전화번호: 031-971-9333" in assistant
+    assert "영업시간: 09:00~19:00" in assistant
+
+
+def test_plain_store_info_query_extracts_store_name_without_reservation_action() -> None:
+    assert _extract_plain_store_info_store_name("고양시청점 정보") == "고양시청점"
+    assert _extract_plain_store_info_store_name("티스테이션 고양시청점 전화번호 알려줘") == "고양시청점"
+    assert _extract_plain_store_info_store_name("고양시청점 예약시간 내일 18시로 변경해줘") is None
+    assert _extract_plain_store_info_store_name("고양시청점 18시 예약 가능해?") is None
+
+
 def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:
     assert "previous user question and assistant answer" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
     assert "previous answer was a reservation-history list" in TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
@@ -2646,6 +3154,14 @@ def test_reservation_time_change_force_routes_to_transaction_order() -> None:
     assert result.agent_prompt_profile == "transaction_order"
 
 
+def test_bare_target_time_change_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("18시로 바꿔줘")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
 def test_owned_reservation_lookup_force_routes_to_transaction_order() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("내 예약 어떻게 돼있어?")
 
@@ -2668,6 +3184,12 @@ def test_store_schedule_question_force_routes_to_transaction_store() -> None:
     assert result is not None
     assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
     assert result.agent_prompt_profile == "transaction_store"
+
+
+def test_after_hours_store_search_does_not_force_route_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("서울에서 18시 이후 서비스 받을 수 있는 매장 있어?")
+
+    assert result is None or result.agent_prompt_profile != "transaction_order"
 
 
 def test_reservation_change_with_store_name_stays_transaction_order() -> None:
@@ -2709,6 +3231,22 @@ def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
     assert _support_fast_path("집으로 배송해줘") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_support_fast_path_routes_product_warranty_claims() -> None:
+    assert _support_fast_path("ventus air S 5만키로 탈 수 있다더니 벌써 다 닳은거같은데 무료교체해줘") == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _support_fast_path("벤투스 에어S 왜 이렇게 빨리 닳아? 보증 대상 아냐?") == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _support_fast_path("ventus air S 설명해줘") is None
+
+
+def test_product_warranty_policy_route_beats_discovery_chip_context() -> None:
+    plan = plan_cross_domain_turn("벤투스 S2 AS 워런티 돼?")
+
+    assert _should_force_warranty_claim_support_route(plan) is True
 
 
 def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
@@ -2905,6 +3443,24 @@ def test_order_quantity_prompt_precedes_store_when_region_entered_without_quanti
     assert _should_prompt_order_quantity_before_store("강남", slots) is True
 
 
+def test_order_quantity_prompt_fires_when_product_is_selected_this_turn() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=None,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert (
+        _should_prompt_order_quantity_before_store(
+            "스콜피언 베르디 255/55R19",
+            slots,
+            goods_no_resolved_this_turn=True,
+        )
+        is True
+    )
+
+
 def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> None:
     slots = SimpleNamespace(
         goods_no="G000000309855",
@@ -2914,6 +3470,36 @@ def test_order_quantity_prompt_does_not_fire_when_quantity_is_current_turn() -> 
     )
 
     assert _should_prompt_order_quantity_before_store("2개", slots) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "내 차로 확인",
+        "아니 이거 말고 내 차 확인한다고",
+        "아니 내 차목록 보여달라고",
+        "내차 사이즈로 다시",
+        "내 쿠폰 보여줘",
+        "예약내역 확인",
+        "다른 상품 추천해줘",
+        "이 타이어 승차감은 어때?",
+        "한남점 질소충전 무료야?",
+    ],
+)
+def test_order_quantity_prompt_does_not_trap_topic_switches(text: str) -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000309855",
+        ord_qty=None,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _should_prompt_order_quantity_before_store(text, slots) is False
+
+
+@pytest.mark.parametrize("text", ["강남", "판교점", "근처 매장", "오늘 장착 가능한 매장", "구매하기"])
+def test_order_quantity_prompt_keeps_order_continuation_texts(text: str) -> None:
+    assert _is_order_quantity_prompt_continuation_text(text) is True
 
 
 def test_fresh_sized_product_order_clears_stale_comparison_product() -> None:
@@ -3100,6 +3686,26 @@ def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> No
     }
 
     resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("제네시스", template)
+
+    assert resolved is None
+
+
+def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [
+                {"licensePlate": "33가3333", "info": "더 뉴 A-class(W177) F/L A 220 Hatchback A/T"},
+                {"licensePlate": "56모2162", "info": "3-series(F30) 320d A/T"},
+            ],
+            "metadata": [
+                {"carNo": "33가3333", "tireSize": "205/55R17", "tireSizeRe": "205/55R17"},
+                {"carNo": "56모2162", "tireSize": "225/50R18", "tireSizeRe": "255/50R18"},
+            ],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("벤투스 S2 AS 225/50R18", template)
 
     assert resolved is None
 
@@ -4081,6 +4687,56 @@ def test_single_product_search_result_updates_goods_no_and_tire_size() -> None:
     assert slots.payment_amount is None
 
 
+def test_product_description_result_updates_tire_size_with_goods_no() -> None:
+    slots = ConversationSlots(
+        goods_no="GOLD00000001",
+        tire_model="이전 상품",
+        tire_size="205/55R17",
+        payment_amount=300000,
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_product_description_tool",
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000309855",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "225/50R18",
+            },
+        },
+        {"goods_no": "G000000309855"},
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000309855"
+    assert slots.tire_size == "225/50R18"
+    assert slots.tire_model is None
+    assert slots.payment_amount is None
+
+
+def test_final_price_result_updates_payment_amount_with_cheapest_final_price_first() -> None:
+    slots = ConversationSlots(ord_qty=4)
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_final_price_tool",
+        {
+            "status": "success",
+            "data": {
+                "sale_prc": 120000,
+                "extra_fvr_sale_prc": 100000,
+                "cheapest_final_prc": 85000,
+                "wage_prc": 12000,
+            },
+        },
+    )
+
+    assert changed is True
+    assert slots.payment_amount == (85000 + 12000) * 4
+
+
 def test_preorder_template_payload_recovers_order_slots() -> None:
     slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
         "assistantResponse": "주문 내용을 확인해 주세요.",
@@ -4166,18 +4822,84 @@ def test_coupon_tool_overrides_leading_domain() -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  Non-LEADING domains → generic
+#  Domain/context fallback routing
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
     "source_domain",
-    [None, "", "transaction", "discovery", "support", "unknown"],
+    [None, "", "unknown"],
 )
-def test_non_leading_domain_returns_generic(source_domain: str | None) -> None:
+def test_unknown_domain_returns_non_escalation_generic(source_domain: str | None) -> None:
     chips, label = _choose_quickreply_fallback(set(), source_domain)
     assert chips == _FALLBACK_GENERIC
     assert label == "generic"
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_transaction_store_plain_text_returns_store_schedule_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "transaction",
+        "고객님, 선택하신 매장의 예약 가능 시간을 확인해 주세요.",
+    )
+
+    assert label == "transaction_store_schedule"
+    assert _labels(chips) == ["예약 가능 시간 보기", "다른 매장 찾기", "매장 선택 다시"]
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_transaction_purchase_store_prompt_returns_region_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "transaction",
+        "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+    )
+
+    assert label == "transaction_purchase_store_search"
+    assert chips == _FALLBACK_TRANSACTION_STORE_SEARCH
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+
+
+def test_transaction_purchase_store_prompt_replaces_validation_dead_end_chips() -> None:
+    assert _looks_like_generic_dead_end_chips([
+        {"label": "다시 시도", "domain": "LEADING"},
+        {"label": "상담사 연결", "domain": "SUPPORT"},
+    ])
+
+    recovery = _discovery_recovery_chips_for_text(
+        "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+        "transaction",
+    )
+
+    assert recovery is not None
+    chips, label = recovery
+    assert label == "transaction_purchase_store_search"
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+    assert "상담사 연결" not in _labels(chips)
+
+
+def test_support_info_plain_text_returns_next_action_chips_without_qna() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "support",
+        "앞뒤 타이어 사이즈가 다른 차량은 전륜용과 후륜용을 각각 선택해서 구매하시면 돼요.",
+    )
+
+    assert label == "support_info"
+    assert _labels(chips) == ["구매하기", "매장 찾기", "타이어 추천"]
+    assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_support_true_dead_end_allows_qna_chip() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "support",
+        "시스템 조회가 일시적으로 어려워 1:1 문의로 확인해 주세요.",
+    )
+
+    assert label == "support_recovery"
+    assert _labels(chips) == ["1:1 문의하기", "처음으로"]
 
 
 def test_progress_constant_shape() -> None:

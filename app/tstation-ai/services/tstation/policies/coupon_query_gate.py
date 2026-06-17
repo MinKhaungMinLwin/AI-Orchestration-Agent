@@ -95,6 +95,8 @@ def decide_coupon_query_gate(
     - Product mentions such as "키너지 EX", "Kinergy EX", "다이나프로 HPX" are product/pattern names.
     - Coupon mentions such as "30%", "16% 할인", "패밀리 쿠폰", "생일 쿠폰" are coupon hints.
     - If the user asks what coupons they have, choose owned_coupon_lookup even if a product is mentioned.
+    - If the user asks which owned coupons expire this month/soon or asks owned coupon validity period,
+      choose owned_coupon_lookup, not policy_info.
     - If the user asks which owned coupon gives the biggest discount among all owned coupons (no specific product mentioned), choose best_discount.
     - If the user asks what coupons can be used for a product/pattern, or asks how to buy a specific product most cheaply using coupons, choose product_coupon_eligibility.
     - If a product/pattern name is mentioned alongside a coupon cheapest/biggest-discount request, choose product_coupon_eligibility, not best_discount.

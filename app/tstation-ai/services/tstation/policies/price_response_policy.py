@@ -12,13 +12,19 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 _COUPON_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
 _ISSUE_RE = re.compile(r"발급|받아\s*줘|만들어\s*줘|주세요|링크\s*보내|다운로드", re.IGNORECASE)
 _EXTREME_DISCOUNT_RE = re.compile(r"(?:50|70|80|90|99)\s*%|반값|공짜|무료", re.IGNORECASE)
-_EXPIRED_RE = re.compile(r"만료|끝난|종료|지난|작년|원복|복구|다시\s*쓰", re.IGNORECASE)
+_EXPIRED_RE = re.compile(r"만료|끝난|종료|지난|작년", re.IGNORECASE)
+_RESTORE_RE = re.compile(
+    r"원복|복구|재사용|다시\s*(?:쓰|쓸|사용)|되살|살려|부활|연장|못\s*쓰.*(?:해줘|할\s*수)",
+    re.IGNORECASE,
+)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _STACKING_RE = re.compile(r"중복|같이|동시|함께|둘\s*다|더\s*쓸|추가\s*적용", re.IGNORECASE)
 _BIRTHDAY_COUPON_RE = re.compile(r"생일|birthday", re.IGNORECASE)
 _FAMILY_COUPON_RE = re.compile(r"패밀리|family", re.IGNORECASE)
 _EMPLOYEE_COUPON_RE = re.compile(r"임직원|employee|직원", re.IGNORECASE)
 _PERCENT_COUPON_RE = re.compile(r"(\d{1,2})\s*%")
+_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _PRODUCT_RE = re.compile(
     r"키너지\s*EX|kinergy\s*EX|벤투스\s*(?:air\s*S|S2\s*AS)|ventus\s*(?:air\s*S|S2\s*AS)|"
     r"다이나프로\s*HPX|dynapro\s*HPX|아이온|iON",
@@ -57,11 +63,22 @@ def build_price_intent_frame(
     elif _EMPLOYEE_COUPON_RE.search(text):
         entities["coupon_keyword"] = "employee"
         entities["coupon_scope"] = "pattern"
+    size_match = _SIZE_COMPACT_RE.search(text)
+    if size_match:
+        entities["tire_size"] = f"{size_match.group(1)}/{size_match.group(2)}R{size_match.group(3)}"
+        entities["explicit_tire_size"] = entities["tire_size"]
+    quantity_match = _QUANTITY_RE.search(text)
+    if quantity_match:
+        entities["quantity"] = int(quantity_match.group(1))
 
     if _NONEXISTENT_BENEFIT_RE.search(text) and (_ISSUE_RE.search(text) or _COUPON_RE.search(text)):
         intent = "nonexistent_benefit"
         sub_intent = "deny_unverified_benefit"
-    elif _EXPIRED_RE.search(text) and (_COUPON_RE.search(text) or _PROMOTION_RE.search(text)):
+    elif (
+        _EXPIRED_RE.search(text)
+        and _RESTORE_RE.search(text)
+        and (_COUPON_RE.search(text) or _PROMOTION_RE.search(text))
+    ):
         intent = "expired_coupon_or_event"
         sub_intent = "restore_not_supported"
     elif _COUPON_RE.search(text) and _ISSUE_RE.search(text) and _EXTREME_DISCOUNT_RE.search(text):

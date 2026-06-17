@@ -118,7 +118,8 @@ _POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
 }
 _EXPLICIT_VEHICLE_LIST_REQUEST_RE = re.compile(
     r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
-    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여",
+    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여|"
+    r"내\s*차\s*(?:사이즈|규격|로\s*다시)|내차\s*(?:사이즈|규격|로\s*다시)",
     re.IGNORECASE,
 )
 _STORE_QUALITY_PREFERENCE_RE = re.compile(
@@ -291,6 +292,32 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "save_to_cart_tool": "orderComplete",
     "quick_order_tool": "orderComplete",
 }
+
+_DISCOVERY_POLICY_SOURCE_TOOLS = frozenset({
+    "search_product_tool",
+    "get_newest_products_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+})
+
+_DISCOVERY_POLICY_BLOCKING_TOOLS = frozenset({
+    "search_stores_tool",
+    "search_stores_complex_tool",
+    "get_store_list_tool",
+    "get_nearby_stores_tool",
+    "get_favorite_stores_tool",
+    "get_stores_with_time_filter_tool",
+    "get_store_detail_tool",
+    "transaction_store_preview_tool",
+    "get_store_inventory_tool",
+    "get_logistics_inventory_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "get_orders_of_user_tool",
+    "get_order_detail_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+})
 
 # Booking-flow signals: tools that imply the customer is mid-purchase, not just
 # browsing for store info. Used by `_map_location` to set `isBookingFlow`.
@@ -1168,6 +1195,64 @@ def _tire_summary_second_line(row: dict) -> str:
     return "주행 조건에 맞춰 검토할 수 있는 타이어입니다."
 
 
+def _tire_summary_usp_line(row: dict) -> str:
+    goods_pfm = _get_str(row, "goods_pfm_nm").upper()
+    grade = _get_str(row, "prc_grd_nm")
+    noise_label = _get_str(row, "label_pnwave_nm")
+
+    if noise_label and "소음" in noise_label:
+        if goods_pfm == "COMFORT":
+            return f"{noise_label} 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요."
+        return f"{noise_label} 라벨이 적용돼 소음 저감 성향을 기대할 수 있어요."
+
+    if goods_pfm == "COMFORT" and grade:
+        return f"{grade} 등급으로 편안한 주행감과 일상 주행 밸런스를 고려해 볼 수 있는 상품이에요."
+    if goods_pfm == "SPORT" and grade:
+        return f"{grade} 등급으로 응답성과 주행 안정감을 중요하게 볼 때 검토할 수 있는 상품이에요."
+    if goods_pfm == "RUNFLAT" and grade:
+        return f"{grade} 등급으로 주행 안정성과 비상 주행 특성을 함께 고려한 상품이에요."
+    if grade:
+        return f"{grade} 등급 상품이에요."
+    return ""
+
+
+def _tire_summary_performance_line(row: dict) -> str:
+    wet = _get_str(row, "wet")
+    rr = _get_str(row, "rr")
+
+    if wet and rr:
+        return f"젖은 노면과 회전저항 등급은 각각 {wet}등급, {rr}등급으로 확인돼요."
+    if wet:
+        return f"젖은 노면 등급은 {wet}등급으로 확인돼요."
+    if rr:
+        return f"회전저항 등급은 {rr}등급으로 확인돼요."
+    return ""
+
+
+def _tire_summary_detail_line(row: dict) -> str:
+    review_count = _get_num(row, "review_count", default=0.0)
+    rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
+
+    clauses: list[str] = []
+    usp_line = _tire_summary_usp_line(row)
+    performance_line = _tire_summary_performance_line(row)
+    if usp_line:
+        clauses.append(usp_line)
+    if performance_line:
+        clauses.append(performance_line)
+
+    if review_count > 0 and rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        clauses.append(f"리뷰는 {int(review_count)}건, 평균 평점은 {rating_text}점이에요.")
+    elif review_count > 0:
+        clauses.append(f"리뷰는 {int(review_count)}건 확인돼요.")
+    elif rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        clauses.append(f"평균 평점은 {rating_text}점이에요.")
+
+    return " ".join(clauses)
+
+
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
 _POPULAR_UNSIZED_REQUEST_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
@@ -1304,26 +1389,32 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
     elif stock_or_install_request:
         intro = "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
     else:
-        intro = "검색된 상품 기준으로 안내드릴게요."
+        intro = "차량 규격이 아직 확인되지 않아 타이어 기준으로 안내드릴게요."
     lines = [intro]
     for name, data in list(grouped.items())[:5]:
         row = data["row"] if isinstance(data.get("row"), dict) else {}
         sizes = data["sizes"] if isinstance(data.get("sizes"), list) else []
-        size_label = "입력 규격" if requested_size else "대표 규격"
-        size_text = f" {size_label}: {', '.join(str(size) for size in sizes[:3])}" if sizes else ""
-        lines.append(f"- {name}: {_tire_summary_first_line(row)}{size_text}")
+        detail_line = _tire_summary_detail_line(row)
+        lines.append(f"- {name}")
+        lines.append(f"  {_tire_summary_first_line(row)}")
         lines.append(f"  {_tire_summary_second_line(row)}")
+        if sizes:
+            if requested_size:
+                lines.append(f"  입력하신 규격으로는 {', '.join(str(size) for size in sizes[:3])}가 확인돼요.")
+            else:
+                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:3])}예요.")
+        if detail_line:
+            lines.append(f"  {detail_line}")
+        lines.append("")
     if requested_size:
         lines.extend([
-            "",
             "가격, 재고, 구매를 이어서 확인할 수 있어요.",
         ])
     else:
         lines.extend([
-            "",
-            "차량에 맞는 규격 확인을 위해 차량번호나 현재 타이어 사이즈를 알려주세요.",
+            "차량에 맞는 규격은 차량번호나 현재 타이어 사이즈를 알려주시면 이어서 확인해 드릴게요.",
         ])
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line)
 
 
 def _product_search_policy_requested_size(tool_data_list: list[dict]) -> str:
@@ -1933,6 +2024,11 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     decision = current_discovery_response_decision.get()
     if decision is None or decision.template != TemplateName.QUICK_REPLY:
         return None
+    called_tools = {str(entry.get("tool") or "") for entry in tool_data_list if isinstance(entry, dict)}
+    if called_tools & _DISCOVERY_POLICY_BLOCKING_TOOLS:
+        return None
+    if not called_tools & _DISCOVERY_POLICY_SOURCE_TOOLS:
+        return None
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
     if response_shape_key not in {
         "technology_explanation_then_unsized_recommendation_summary",
@@ -2074,17 +2170,23 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
         if is_neutral_product_description:
+            detail_line = _tire_summary_detail_line(row)
             lines.extend([
                 "",
                 f"{name}: {_tire_summary_first_line(row)}",
                 _tire_summary_second_line(row),
             ])
+            if detail_line:
+                lines.append(detail_line)
         else:
+            detail_line = _tire_summary_detail_line(row)
             lines.extend([
                 "",
                 f"- {name}: {_tire_summary_first_line(row)}",
                 f"  {_tire_summary_second_line(row)}",
             ])
+            if detail_line:
+                lines.append(f"  {detail_line}")
     if skip_size_missing_notice:
         lines = [line for line in lines if line]
     elif not is_popular_unsized_request:
@@ -2953,6 +3055,22 @@ def _has_store_candidates(tool_data_list: list[dict]) -> bool:
     return False
 
 
+def _is_plain_store_search_user_text() -> bool:
+    text = current_user_text.get() or ""
+    if not text:
+        return False
+    has_store_search = bool(re.search(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", text, re.IGNORECASE))
+    has_transaction_stock = bool(re.search(r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약|구매|주문", text, re.IGNORECASE))
+    has_product = bool(
+        re.search(
+            r"벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    return has_store_search and not has_transaction_stock and not has_product
+
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     transaction_decision = current_transaction_response_decision.get()
@@ -3111,7 +3229,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # "reservation" is included so 매장 방문 예약 (와이퍼/배터리/얼라인먼트 등 부가
     # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
     # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
-    has_booking_intent = current_pending_intent.get() in ("order", "stock", "reservation")
+    plain_store_search_user_text = _is_plain_store_search_user_text()
+    has_booking_intent = (
+        current_pending_intent.get() in ("order", "stock", "reservation") and not plain_store_search_user_text
+    )
     # 단골매장 조회는 사용자가 직접 발화로 요청한 명시적 컨텍스트 — booking signal/
     # intent 가 없어도 항상 카드 노출 (info-only guard 우회). 1건이라도 사용자가
     # 클릭으로 선택해야 다음 단계로 진행됨.
@@ -3146,9 +3267,12 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     require_ev_specialty, require_ev_charge = _requested_store_specialty_filters(preference_text)
 
     stock_filter_context = (
-        current_pending_intent.get() == "stock"
-        or current_goal_type.get() == "store_with_stock"
-        or bool(re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""))
+        not plain_store_search_user_text
+        and (
+            current_pending_intent.get() == "stock"
+            or current_goal_type.get() == "store_with_stock"
+            or bool(re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""))
+        )
     )
     items, metadata = [], []
     stock_filtered_preview = False
@@ -3365,7 +3489,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "distance": distance_str,
                 "detailAddress": detail_addr,
                 "isAllMyT": is_all_my_t,
-                "todayInstall": stock_label == "매장재고",
+                "todayInstall": is_all_my_t and stock_label == "매장재고",
                 "tnaDelivery": is_tna_delivery or stock_label == "T바로배송",
                 "description": description,
             })
@@ -3473,7 +3597,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
         has_booking_signal
-        or _is_goal_booking_followup()
+        or (_is_goal_booking_followup() and not plain_store_search_user_text)
         or has_booking_intent
         or current_return_visit_store_flow.get()
     )
@@ -3561,7 +3685,14 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         today_prefix = "오늘 " if re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "") else ""
         short = f"요청하신 조건으로 {today_prefix}장착 가능 여부가 확인된 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
         response_source = "code_mapper"
-    short = _maybe_prepend_unverifiable_store_guidance(short)
+    elif plain_store_search_user_text and items and re.search(r"오늘\s*장착|장착 가능 여부|재고", short or ""):
+        short = f"요청하신 지역의 매장 {len(items)}곳을 안내드립니다. 원하시는 매장을 선택해 주세요."
+        response_source = "code_mapper"
+    # Favorite-store lookup is an explicit new user request ("내 단골매장").
+    # Do not carry over stale special-store preferences such as a previous
+    # "리프트 있는 매장" query into this independent list response.
+    if not has_favorite_stores:
+        short = _maybe_prepend_unverifiable_store_guidance(short)
     return {
         "type": "data",
         "template": "location",
@@ -3617,7 +3748,7 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
             rating = _get_num(row, "rating_idx")
             is_all_my_t = bool(row.get("is_all_my_t", False))
             is_tna_delivery = bool(row.get("is_tna_delivery", False))
-            today_install = bool(cal_day_raw == today_yyyymmdd and slots)
+            today_install = bool(is_all_my_t and cal_day_raw == today_yyyymmdd and slots)
             description_lines: list[str] = []
             if address:
                 description_lines.append(f"📍 {address}")
@@ -4173,13 +4304,21 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
                         break
 
     # Enrich paymentAmount from same-turn price tool.
-    # Definition mirrors transaction_agent.py 최종 금액: (FINAL + wage_prc) × qty.
+    # Definition mirrors get_final_price_tool docs: (FINAL + wage_prc) × qty,
+    # with FINAL resolved as cheapest_final_prc → extra_fvr_sale_prc → sale_prc.
     payment_amount: int | None = None
     for price_entry in _find_entries(tool_data_list, "get_final_price_tool"):
         praw = _unwrap(price_entry)
         if not isinstance(praw, dict):
             continue
-        final_unit = _get_num(praw, "extra_fvr_sale_prc", "final_unit_price", default=0)
+        final_unit = _get_num(
+            praw,
+            "cheapest_final_prc",
+            "extra_fvr_sale_prc",
+            "sale_prc",
+            "final_unit_price",
+            default=0,
+        )
         wage = _get_num(praw, "wage_prc", default=0)
         if final_unit:
             payment_amount = int((final_unit + wage) * ord_qty)
@@ -4367,7 +4506,11 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
         "assistant_response_source": "code_mapper",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [],
+            "quickReplies": [
+                {"label": "다른 매장 정보", "domain": "TRANSACTION"},
+                {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
             "predictedDomains": ["TRANSACTION"],
         },
     }
@@ -4396,7 +4539,7 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
     "previewYoutube": "관련 영상 {n}개를 안내드립니다.",
     "qnaComplete": "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요.",
     "location": "고객님, 매장 {n}곳을 안내드립니다. 원하시는 매장을 선택해 주세요.",
-    "datepick": "예약 가능한 날짜와 시간을 선택해 주세요.",
+    "datepick": "예약하려는 날짜와 시간을 선택해 주세요.",
     "orderComplete": "처리되었습니다. 😊",
 }
 

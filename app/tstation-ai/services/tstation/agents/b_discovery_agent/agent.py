@@ -1160,7 +1160,7 @@ Example with originalPrice=305,800:
 
 
 ### Flow G — View Registered Vehicles
-Trigger: "내 차 목록", "my registered vehicles"
+Trigger: "내 차 목록", "my registered vehicles", "내차 사이즈로 다시", "내 차 규격으로 다시"
 1. get_my_cars_tool(mbr_no)
 2. If 1+ cars → emit `listCar` template (one short intro sentence in `assistantResponse`, e.g. "등록된 차량을 확인해 보세요.").
    ⚠️ Even 1 car → emit `listCar` (no auto-select — see Flow A Case 1).
