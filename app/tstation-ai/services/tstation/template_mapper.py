@@ -1195,14 +1195,51 @@ def _tire_summary_second_line(row: dict) -> str:
     return "주행 조건에 맞춰 검토할 수 있는 타이어입니다."
 
 
-def _tire_summary_detail_line(row: dict) -> str:
+def _tire_summary_usp_line(row: dict) -> str:
+    goods_pfm = _get_str(row, "goods_pfm_nm").upper()
     grade = _get_str(row, "prc_grd_nm")
+    noise_label = _get_str(row, "label_pnwave_nm")
+
+    if noise_label and "소음" in noise_label:
+        if goods_pfm == "COMFORT":
+            return f"{noise_label} 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요."
+        return f"{noise_label} 라벨이 적용돼 소음 저감 성향을 기대할 수 있어요."
+
+    if goods_pfm == "COMFORT" and grade:
+        return f"{grade} 등급으로 편안한 주행감과 일상 주행 밸런스를 고려해 볼 수 있는 상품이에요."
+    if goods_pfm == "SPORT" and grade:
+        return f"{grade} 등급으로 응답성과 주행 안정감을 중요하게 볼 때 검토할 수 있는 상품이에요."
+    if goods_pfm == "RUNFLAT" and grade:
+        return f"{grade} 등급으로 주행 안정성과 비상 주행 특성을 함께 고려한 상품이에요."
+    if grade:
+        return f"{grade} 등급 상품이에요."
+    return ""
+
+
+def _tire_summary_performance_line(row: dict) -> str:
+    wet = _get_str(row, "wet")
+    rr = _get_str(row, "rr")
+
+    if wet and rr:
+        return f"젖은 노면과 회전저항 등급은 각각 {wet}등급, {rr}등급으로 확인돼요."
+    if wet:
+        return f"젖은 노면 등급은 {wet}등급으로 확인돼요."
+    if rr:
+        return f"회전저항 등급은 {rr}등급으로 확인돼요."
+    return ""
+
+
+def _tire_summary_detail_line(row: dict) -> str:
     review_count = _get_num(row, "review_count", default=0.0)
     rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
 
     clauses: list[str] = []
-    if grade:
-        clauses.append(f"{grade} 등급 상품이에요.")
+    usp_line = _tire_summary_usp_line(row)
+    performance_line = _tire_summary_performance_line(row)
+    if usp_line:
+        clauses.append(usp_line)
+    if performance_line:
+        clauses.append(performance_line)
 
     if review_count > 0 and rating_avg > 0:
         rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
