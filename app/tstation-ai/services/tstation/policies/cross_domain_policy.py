@@ -40,6 +40,26 @@ _SUPPORT_RE = re.compile(
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_WARRANTY_CLAIM_WEAR_RE = re.compile(
+    r"다\s*닳|빨리\s*닳|벌써\s*닳|조기\s*마모|편마모|마모|수명|하자|문제|이상|불량|품질|"
+    r"광고(?:랑|와)?\s*다르|말(?:한|하던)\s*거(?:랑)?\s*다르",
+    re.IGNORECASE,
+)
+_WARRANTY_CLAIM_REMEDY_RE = re.compile(
+    r"무료\s*교체|무상\s*교환|무상\s*교체|보상(?:해|받|되|돼|가능)?|교체(?:해|받|되|돼)?|"
+    r"바꿔|바꾸|책임(?:져|지)|환불|클레임",
+    re.IGNORECASE,
+)
+_WARRANTY_CLAIM_REFERENCE_RE = re.compile(
+    r"보증|워런티|warranty|품질\s*보증|품질보증|안심\s*서비스|안심서비스|안심\s*플러스|"
+    r"\d+\s*만\s*(?:키로|km|킬로)|몇\s*만\s*(?:키로|km|킬로)",
+    re.IGNORECASE,
+)
+_WARRANTY_CLAIM_STRONG_RE = re.compile(
+    r"무료\s*교체|무상\s*교환|무상\s*교체|보상\s*해\s*줘|보상해줘|책임\s*져|책임져|"
+    r"하자\s*아니|클레임|품질\s*보증|품질보증",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +151,34 @@ def should_defer_product_price_explanation_to_classifier(user_text: str, plan: C
     )
 
 
+def is_warranty_claim_signal(user_text: str, *, known_slots: dict[str, Any] | None = None) -> bool:
+    """Return true for product warranty/claim complaints, not general product info.
+
+    The signal is intentionally conjunctive so ordinary description/recommendation
+    turns such as "마일리지 좋은 타이어 추천" stay in Discovery. A strong claim
+    phrase can stand on its own; otherwise require product context plus at least
+    two claim dimensions.
+    """
+    text = user_text or ""
+    slots = known_slots or {}
+    has_product_hint = bool(_PRODUCT_HINT_RE.search(text) or slots.get("product_name") or slots.get("goods_no"))
+    if not text:
+        return False
+    if has_product_hint and _WARRANTY_CLAIM_REFERENCE_RE.search(text):
+        return True
+    if has_product_hint and _WARRANTY_CLAIM_STRONG_RE.search(text):
+        return True
+
+    score = 0
+    if _WARRANTY_CLAIM_WEAR_RE.search(text):
+        score += 1
+    if _WARRANTY_CLAIM_REMEDY_RE.search(text):
+        score += 1
+    if _WARRANTY_CLAIM_REFERENCE_RE.search(text):
+        score += 1
+    return has_product_hint and score >= 2
+
+
 def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None = None) -> CrossDomainPlan:
     """Plan ordered domain subtasks for a multi-intent user turn."""
     text = user_text or ""
@@ -148,6 +196,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
     has_current_store = bool(_STORE_NAME_RE.search(text))
+    has_warranty_claim_signal = is_warranty_claim_signal(text, known_slots=slots)
 
     if needs_regional_price_policy:
         return CrossDomainPlan(
@@ -157,6 +206,19 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="price_policy_faq",
                     reason="지역/매장별 가격 동일 여부는 실제 가격 조회가 아닌 가격 정책 FAQ임",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if has_warranty_claim_signal:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.SUPPORT,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="warranty_claim",
+                    reason="상품명과 조기 마모/품질 불만/보상 요구가 결합된 워런티 클레임임",
                 ),
             ),
             response_strategy="single_domain_response",

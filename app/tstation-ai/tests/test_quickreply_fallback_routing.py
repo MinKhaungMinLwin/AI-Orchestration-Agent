@@ -3029,6 +3029,16 @@ def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
     assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
 
 
+def test_support_fast_path_routes_product_warranty_claims() -> None:
+    assert _support_fast_path("ventus air S 5만키로 탈 수 있다더니 벌써 다 닳은거같은데 무료교체해줘") == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _support_fast_path("벤투스 에어S 왜 이렇게 빨리 닳아? 보증 대상 아냐?") == [
+        MultiAgentDomain.Domain.SUPPORT
+    ]
+    assert _support_fast_path("ventus air S 설명해줘") is None
+
+
 def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
     assert _support_fast_path("신청 방법 알려줘") is None
 

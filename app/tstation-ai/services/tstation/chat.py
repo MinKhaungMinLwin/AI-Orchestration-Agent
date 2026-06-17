@@ -62,6 +62,7 @@ from services.tstation.policies.transaction_intent_policy import build_transacti
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.cross_domain_policy import (
     agent_domain_values_for_initial_route,
+    is_warranty_claim_signal,
     plan_cross_domain_turn,
     should_defer_product_price_explanation_to_classifier,
 )
@@ -2436,6 +2437,7 @@ _GREETING_ONLY_RE = re.compile(
 
 _SUPPORT_FAST_RE = re.compile(
     r"환불|반품|보증|품질보증|워런티|warranty|"
+    r"무료\s*교체|무상\s*교환|무상\s*교체|보상\s*해\s*줘|보상해줘|하자\s*아니|클레임|책임\s*져|책임져|"
     r"AS\s*신청|A/S|사후\s*서비스|"
     r"상담원|상담사|사람\s*연결|직원\s*연결|상담\s*연결|1:1\s*문의|1대1\s*문의|"
     r"불만입니다|짜증나|화나|뭐\s*이런|제대로\s*해|엉망이|이딴",
@@ -7648,6 +7650,9 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             delivery_decision.intent,
             delivery_decision.reason,
         )
+        return [MultiAgentDomain.Domain.SUPPORT]
+    if is_warranty_claim_signal(text):
+        logger.debug("[SUPPORT_FAST_PATH] warranty claim signal → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
     if _SUPPORT_FAST_RE.search(text):
         logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")
