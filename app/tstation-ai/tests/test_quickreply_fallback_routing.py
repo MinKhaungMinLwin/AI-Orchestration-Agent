@@ -39,6 +39,7 @@ from services.tstation.chat import (
     _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
+    _build_product_coupon_price_amount_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
@@ -72,6 +73,7 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_product_coupon_price_amount_query,
     _is_product_comparison_query,
     _tool_error_summary,
     _trace_final_error_state,
@@ -1926,6 +1928,40 @@ def test_price_policy_frame_keeps_coupon_product_size_quantity_separate() -> Non
     assert frame.entities["product_name"] == "Ventus air S"
     assert frame.entities["tire_size"] == "225/55R17"
     assert frame.entities["quantity"] == 4
+
+
+def test_product_coupon_price_amount_query_is_detected() -> None:
+    assert _is_product_coupon_price_amount_query(
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
+    )
+    assert not _is_product_coupon_price_amount_query("벤투스 에어S에 적용 가능한 쿠폰 뭐 있어?")
+
+
+def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
+    event = _build_product_coupon_price_amount_event(
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000317729",
+                "goods_nm": "벤투스 에어S",
+                "sale_prc": 200000,
+                "cheapest_final_prc": 150000,
+                "cheapest_total_discount": 50000,
+                "cheapest_applied_coupons": [{"cpn_nm": "한국타이어 30% 할인권"}],
+            },
+        },
+        product_name="벤투스 에어S",
+        tire_size="225/55R17",
+        quantity=4,
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "벤투스 에어S 225/55R17 4개 기준" in assistant
+    assert "정가 합계: 800,000원" in assistant
+    assert "쿠폰 적용 할인액: 200,000원" in assistant
+    assert "최종 혜택가: 600,000원" in assistant
+    assert "한국타이어 30% 할인권" in assistant
 
 
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:
