@@ -293,6 +293,32 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "quick_order_tool": "orderComplete",
 }
 
+_DISCOVERY_POLICY_SOURCE_TOOLS = frozenset({
+    "search_product_tool",
+    "get_newest_products_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+})
+
+_DISCOVERY_POLICY_BLOCKING_TOOLS = frozenset({
+    "search_stores_tool",
+    "search_stores_complex_tool",
+    "get_store_list_tool",
+    "get_nearby_stores_tool",
+    "get_favorite_stores_tool",
+    "get_stores_with_time_filter_tool",
+    "get_store_detail_tool",
+    "transaction_store_preview_tool",
+    "get_store_inventory_tool",
+    "get_logistics_inventory_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "get_orders_of_user_tool",
+    "get_order_detail_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+})
+
 # Booking-flow signals: tools that imply the customer is mid-purchase, not just
 # browsing for store info. Used by `_map_location` to set `isBookingFlow`.
 # Notably excludes `get_store_detail_tool` — Flow 5 General now calls it as a
@@ -1933,6 +1959,11 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     """Honor Discovery policy decisions that forbid card-first rendering."""
     decision = current_discovery_response_decision.get()
     if decision is None or decision.template != TemplateName.QUICK_REPLY:
+        return None
+    called_tools = {str(entry.get("tool") or "") for entry in tool_data_list if isinstance(entry, dict)}
+    if called_tools & _DISCOVERY_POLICY_BLOCKING_TOOLS:
+        return None
+    if not called_tools & _DISCOVERY_POLICY_SOURCE_TOOLS:
         return None
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
     if response_shape_key not in {
