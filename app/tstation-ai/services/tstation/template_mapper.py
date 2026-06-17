@@ -1395,15 +1395,16 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
         row = data["row"] if isinstance(data.get("row"), dict) else {}
         sizes = data["sizes"] if isinstance(data.get("sizes"), list) else []
         detail_line = _tire_summary_detail_line(row)
-        lines.append(f"{name}: {_tire_summary_first_line(row)}")
-        lines.append(_tire_summary_second_line(row))
+        lines.append(f"- {name}")
+        lines.append(f"  {_tire_summary_first_line(row)}")
+        lines.append(f"  {_tire_summary_second_line(row)}")
         if sizes:
             if requested_size:
-                lines.append(f"입력하신 규격으로는 {', '.join(str(size) for size in sizes[:3])}가 확인돼요.")
+                lines.append(f"  입력하신 규격으로는 {', '.join(str(size) for size in sizes[:3])}가 확인돼요.")
             else:
-                lines.append(f"대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:3])}예요.")
+                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:3])}예요.")
         if detail_line:
-            lines.append(detail_line)
+            lines.append(f"  {detail_line}")
         lines.append("")
     if requested_size:
         lines.extend([
