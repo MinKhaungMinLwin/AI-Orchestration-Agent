@@ -6914,6 +6914,20 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _final_price_from_row(row: dict) -> int | None:
+    """FINAL price for a product row: cheapest_final_prc → extra_fvr_sale_prc →
+    sale_prc fallback order — same priority rule as get_final_price_tool callers
+    (cheapest_final_prc matches the member's actual checkout price)."""
+    for key in ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"):
+        value = row.get(key)
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _to_int(value: Any) -> int | None:
     try:
         if value is None or value == "":
@@ -7179,6 +7193,20 @@ def _build_product_comparison_event(
             metric_label="빗길 성능",
         )
         assistant = summary or f"{left_name}와 {right_name}의 빗길 성능 차이는 추가 확인이 필요해요."
+    elif compare_metric == "price":
+        left_final = _final_price_from_row(left_row)
+        right_final = _final_price_from_row(right_row)
+        if left_final is not None and right_final is not None and left_final != right_final:
+            cheaper_name = left_name if left_final < right_final else right_name
+            diff = abs(left_final - right_final)
+            assistant = (
+                f"{left_name}는 최종 {left_final:,}원, {right_name}는 최종 {right_final:,}원으로 "
+                f"{cheaper_name}이 {diff:,}원 더 저렴해요."
+            )
+        elif left_final is not None and right_final is not None:
+            assistant = f"{left_name}와 {right_name}는 최종 가격이 동일해요. ({left_final:,}원)"
+        else:
+            assistant = f"{left_name}와 {right_name}의 가격 차이는 추가 확인이 필요해요."
     else:
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
