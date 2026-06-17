@@ -7664,6 +7664,14 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
     return None
 
 
+def _should_force_warranty_claim_support_route(policy_plan: Any) -> bool:
+    return (
+        getattr(getattr(policy_plan, "primary_domain", None), "value", None)
+        == MultiAgentDomain.Domain.SUPPORT.value
+        and any(getattr(task, "intent", None) == "warranty_claim" for task in getattr(policy_plan, "subtasks", ()))
+    )
+
+
 _VEHICLE_CATEGORY_CONTEXT_RE = re.compile(
     r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])|"
     r"SUV|세단|승용차|경차|소형차|중형차|대형차|화물차|트럭|밴|승합차|"
@@ -10404,6 +10412,24 @@ class TStationChatServiceV2:
             }
 
             if (
+                _should_force_warranty_claim_support_route(policy_plan)
+            ):
+                domains = [MultiAgentDomain.Domain.SUPPORT]
+                routing_result = MultiAgentDomain(
+                    reason="policy_warranty_claim_support_first",
+                    domains=domains,
+                    execution_plan=[f"{task.domain.value}:{task.intent}" for task in policy_plan.subtasks],
+                    user_behavior="product warranty or claim request must be handled by support",
+                    flow=policy_plan.response_strategy,
+                    agent_prompt_profile=AgentPromptProfile.FULL,
+                )
+                _classify_path = "policy_warranty_claim"
+                classify_future = None
+                logger.info(
+                    "[POLICY][route-fast-path] warranty claim/support override: plan=%s",
+                    policy_plan.to_dict(),
+                )
+            elif (
                 route_coupon_gate_decision is not None
                 and route_coupon_gate_decision.is_actionable
                 and route_coupon_gate_decision.intent in route_coupon_tool_intents

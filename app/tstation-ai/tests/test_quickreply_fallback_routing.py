@@ -135,11 +135,13 @@ from services.tstation.chat import (
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
+    _should_force_warranty_claim_support_route,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
 )
+from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
 from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
@@ -3063,6 +3065,12 @@ def test_support_fast_path_routes_product_warranty_claims() -> None:
         MultiAgentDomain.Domain.SUPPORT
     ]
     assert _support_fast_path("ventus air S 설명해줘") is None
+
+
+def test_product_warranty_policy_route_beats_discovery_chip_context() -> None:
+    plan = plan_cross_domain_turn("벤투스 S2 AS 워런티 돼?")
+
+    assert _should_force_warranty_claim_support_route(plan) is True
 
 
 def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
