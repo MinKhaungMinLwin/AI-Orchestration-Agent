@@ -789,6 +789,31 @@ def test_reservation_date_range_guard_blocks_past_yearless_date() -> None:
     assert "오늘 날짜 2026-06-05 이후로 다시 선택해 주세요." in event["data"]["assistantResponse"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "분당정자점 27년 2월 16일날 예약해줘",
+        "분당정자점 27.2.16 예약해줘",
+        "분당정자점 270216 예약해줘",
+    ],
+)
+def test_reservation_date_range_guard_parses_two_digit_future_year(text: str) -> None:
+    today = datetime.date(2026, 6, 17)
+
+    parsed = _parse_requested_reservation_date(text, today=today)
+    event = _reservation_date_range_guard_event(text, today=today)
+
+    assert parsed == datetime.date(2027, 2, 16)
+    assert event is not None
+    assert event["assistant_response_source"] == "code_reservation_date_range_guard"
+    assert "2027년 2월 16일 예약은 아직 오픈 전" in event["data"]["assistantResponse"]
+    assert "지난 날짜" not in event["data"]["assistantResponse"]
+
+
+def test_compact_six_digit_date_requires_reservation_context() -> None:
+    assert _parse_requested_reservation_date("270216", today=datetime.date(2026, 6, 17)) is None
+
+
 def test_reservation_date_range_guard_ignores_in_range_or_non_reservation_dates() -> None:
     today = datetime.date(2026, 5, 25)
 

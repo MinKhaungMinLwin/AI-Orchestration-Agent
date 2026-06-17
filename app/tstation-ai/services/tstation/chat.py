@@ -5282,12 +5282,16 @@ def _coupon_issue_event() -> dict:
 
 _RESERVATION_CONTEXT_RE = re.compile(r"예약|장착|방문|갈\s*건데|가려|갈래|시간\s*선택|예약\s*가능", re.IGNORECASE)
 _FUTURE_SLASH_MONTH_DAY_RE = re.compile(
-    r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2})\s*[./-]\s*)?"
-    r"(?P<month>1[0-2]|0?[1-9])\s*/\s*(?P<day>3[01]|[12]?\d)(?![\dA-Za-z/-])"
+    r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2}|\d{2})\s*[./-]\s*)?"
+    r"(?P<month>1[0-2]|0?[1-9])\s*[./-]\s*(?P<day>3[01]|[12]?\d)(?![\dA-Za-z/-])"
 )
 _FUTURE_MONTH_DAY_RE = re.compile(
-    r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2})\s*년\s*)?"
+    r"(?<![\dA-Za-z/-])(?:(?P<year>20\d{2}|\d{2})\s*년\s*)?"
     r"(?P<month>1[0-2]|0?[1-9])\s*월(?:\s*(?P<day>3[01]|[12]?\d)\s*일)?(?![\dA-Za-z/-])"
+)
+_FUTURE_COMPACT_DATE_RE = re.compile(
+    r"(?<!\d)(?:(?P<year4>20\d{2})(?P<month4>1[0-2]|0[1-9])(?P<day4>3[01]|[12]\d|0[1-9])|"
+    r"(?P<year2>\d{2})(?P<month2>1[0-2]|0[1-9])(?P<day2>3[01]|[12]\d|0[1-9]))(?!\d)"
 )
 _USER_DECLARED_TODAY_DATE_RE = re.compile(
     r"오늘\s*은\s*"
@@ -5416,12 +5420,27 @@ def _parse_requested_reservation_date(
     if relative_requested is not None:
         return relative_requested
     match = _FUTURE_SLASH_MONTH_DAY_RE.search(text) or _FUTURE_MONTH_DAY_RE.search(text)
-    if not match:
-        return None
-    month = int(match.group("month"))
-    day = int(match.group("day") or "1")
-    year_text = match.group("year")
-    year = int(year_text) if year_text else today.year
+    if match:
+        month = int(match.group("month"))
+        day = int(match.group("day") or "1")
+        year_text = match.group("year")
+        year = int(year_text) if year_text else today.year
+        if year_text and year < 100:
+            year += 2000
+    else:
+        compact_match = _FUTURE_COMPACT_DATE_RE.search(text) if _reservation_context_from_messages(text) else None
+        if not compact_match:
+            return None
+        if compact_match.group("year4"):
+            year = int(compact_match.group("year4"))
+            month = int(compact_match.group("month4"))
+            day = int(compact_match.group("day4"))
+            year_text = compact_match.group("year4")
+        else:
+            year = 2000 + int(compact_match.group("year2"))
+            month = int(compact_match.group("month2"))
+            day = int(compact_match.group("day2"))
+            year_text = compact_match.group("year2")
     try:
         requested = datetime.date(year, month, day)
     except ValueError:
