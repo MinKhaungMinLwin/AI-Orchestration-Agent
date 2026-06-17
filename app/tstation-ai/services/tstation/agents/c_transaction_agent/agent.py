@@ -2201,7 +2201,7 @@ For `voucher` / `location` / `datepick` / `preOrder` / `orderComplete`:
 
 Examples of correct `assistantResponse` for template tools:
 - location: "고객님, 가까운 매장을 안내드립니다. 원하시는 매장을 선택해 주세요."
-- datepick: "예약 가능한 날짜와 시간을 선택해 주세요."
+- datepick: "예약하려는 날짜와 시간을 선택해 주세요."
 - voucher: "사용 가능한 쿠폰을 확인해 주세요."
 - preOrder: "주문 내용을 확인해 주세요."
 - orderComplete (success): "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."

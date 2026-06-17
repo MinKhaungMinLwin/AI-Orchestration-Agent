@@ -293,6 +293,32 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
     "quick_order_tool": "orderComplete",
 }
 
+_DISCOVERY_POLICY_SOURCE_TOOLS = frozenset({
+    "search_product_tool",
+    "get_newest_products_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+})
+
+_DISCOVERY_POLICY_BLOCKING_TOOLS = frozenset({
+    "search_stores_tool",
+    "search_stores_complex_tool",
+    "get_store_list_tool",
+    "get_nearby_stores_tool",
+    "get_favorite_stores_tool",
+    "get_stores_with_time_filter_tool",
+    "get_store_detail_tool",
+    "transaction_store_preview_tool",
+    "get_store_inventory_tool",
+    "get_logistics_inventory_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "get_orders_of_user_tool",
+    "get_order_detail_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+})
+
 # Booking-flow signals: tools that imply the customer is mid-purchase, not just
 # browsing for store info. Used by `_map_location` to set `isBookingFlow`.
 # Notably excludes `get_store_detail_tool` — Flow 5 General now calls it as a
@@ -1169,6 +1195,64 @@ def _tire_summary_second_line(row: dict) -> str:
     return "주행 조건에 맞춰 검토할 수 있는 타이어입니다."
 
 
+def _tire_summary_usp_line(row: dict) -> str:
+    goods_pfm = _get_str(row, "goods_pfm_nm").upper()
+    grade = _get_str(row, "prc_grd_nm")
+    noise_label = _get_str(row, "label_pnwave_nm")
+
+    if noise_label and "소음" in noise_label:
+        if goods_pfm == "COMFORT":
+            return f"{noise_label} 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요."
+        return f"{noise_label} 라벨이 적용돼 소음 저감 성향을 기대할 수 있어요."
+
+    if goods_pfm == "COMFORT" and grade:
+        return f"{grade} 등급으로 편안한 주행감과 일상 주행 밸런스를 고려해 볼 수 있는 상품이에요."
+    if goods_pfm == "SPORT" and grade:
+        return f"{grade} 등급으로 응답성과 주행 안정감을 중요하게 볼 때 검토할 수 있는 상품이에요."
+    if goods_pfm == "RUNFLAT" and grade:
+        return f"{grade} 등급으로 주행 안정성과 비상 주행 특성을 함께 고려한 상품이에요."
+    if grade:
+        return f"{grade} 등급 상품이에요."
+    return ""
+
+
+def _tire_summary_performance_line(row: dict) -> str:
+    wet = _get_str(row, "wet")
+    rr = _get_str(row, "rr")
+
+    if wet and rr:
+        return f"젖은 노면과 회전저항 등급은 각각 {wet}등급, {rr}등급으로 확인돼요."
+    if wet:
+        return f"젖은 노면 등급은 {wet}등급으로 확인돼요."
+    if rr:
+        return f"회전저항 등급은 {rr}등급으로 확인돼요."
+    return ""
+
+
+def _tire_summary_detail_line(row: dict) -> str:
+    review_count = _get_num(row, "review_count", default=0.0)
+    rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
+
+    clauses: list[str] = []
+    usp_line = _tire_summary_usp_line(row)
+    performance_line = _tire_summary_performance_line(row)
+    if usp_line:
+        clauses.append(usp_line)
+    if performance_line:
+        clauses.append(performance_line)
+
+    if review_count > 0 and rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        clauses.append(f"리뷰는 {int(review_count)}건, 평균 평점은 {rating_text}점이에요.")
+    elif review_count > 0:
+        clauses.append(f"리뷰는 {int(review_count)}건 확인돼요.")
+    elif rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        clauses.append(f"평균 평점은 {rating_text}점이에요.")
+
+    return " ".join(clauses)
+
+
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
 _POPULAR_UNSIZED_REQUEST_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
@@ -1305,26 +1389,32 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
     elif stock_or_install_request:
         intro = "상품은 확인했어요. 장착 가능 여부 확인을 위해 먼저 규격을 확인할게요."
     else:
-        intro = "검색된 상품 기준으로 안내드릴게요."
+        intro = "차량 규격이 아직 확인되지 않아 타이어 기준으로 안내드릴게요."
     lines = [intro]
     for name, data in list(grouped.items())[:5]:
         row = data["row"] if isinstance(data.get("row"), dict) else {}
         sizes = data["sizes"] if isinstance(data.get("sizes"), list) else []
-        size_label = "입력 규격" if requested_size else "대표 규격"
-        size_text = f" {size_label}: {', '.join(str(size) for size in sizes[:3])}" if sizes else ""
-        lines.append(f"- {name}: {_tire_summary_first_line(row)}{size_text}")
+        detail_line = _tire_summary_detail_line(row)
+        lines.append(f"- {name}")
+        lines.append(f"  {_tire_summary_first_line(row)}")
         lines.append(f"  {_tire_summary_second_line(row)}")
+        if sizes:
+            if requested_size:
+                lines.append(f"  입력하신 규격으로는 {', '.join(str(size) for size in sizes[:3])}가 확인돼요.")
+            else:
+                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:3])}예요.")
+        if detail_line:
+            lines.append(f"  {detail_line}")
+        lines.append("")
     if requested_size:
         lines.extend([
-            "",
             "가격, 재고, 구매를 이어서 확인할 수 있어요.",
         ])
     else:
         lines.extend([
-            "",
-            "차량에 맞는 규격 확인을 위해 차량번호나 현재 타이어 사이즈를 알려주세요.",
+            "차량에 맞는 규격은 차량번호나 현재 타이어 사이즈를 알려주시면 이어서 확인해 드릴게요.",
         ])
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line)
 
 
 def _product_search_policy_requested_size(tool_data_list: list[dict]) -> str:
@@ -1934,6 +2024,11 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     decision = current_discovery_response_decision.get()
     if decision is None or decision.template != TemplateName.QUICK_REPLY:
         return None
+    called_tools = {str(entry.get("tool") or "") for entry in tool_data_list if isinstance(entry, dict)}
+    if called_tools & _DISCOVERY_POLICY_BLOCKING_TOOLS:
+        return None
+    if not called_tools & _DISCOVERY_POLICY_SOURCE_TOOLS:
+        return None
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
     if response_shape_key not in {
         "technology_explanation_then_unsized_recommendation_summary",
@@ -2075,17 +2170,23 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
         if is_neutral_product_description:
+            detail_line = _tire_summary_detail_line(row)
             lines.extend([
                 "",
                 f"{name}: {_tire_summary_first_line(row)}",
                 _tire_summary_second_line(row),
             ])
+            if detail_line:
+                lines.append(detail_line)
         else:
+            detail_line = _tire_summary_detail_line(row)
             lines.extend([
                 "",
                 f"- {name}: {_tire_summary_first_line(row)}",
                 f"  {_tire_summary_second_line(row)}",
             ])
+            if detail_line:
+                lines.append(f"  {detail_line}")
     if skip_size_missing_notice:
         lines = [line for line in lines if line]
     elif not is_popular_unsized_request:
@@ -4438,7 +4539,7 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
     "previewYoutube": "관련 영상 {n}개를 안내드립니다.",
     "qnaComplete": "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요.",
     "location": "고객님, 매장 {n}곳을 안내드립니다. 원하시는 매장을 선택해 주세요.",
-    "datepick": "예약 가능한 날짜와 시간을 선택해 주세요.",
+    "datepick": "예약하려는 날짜와 시간을 선택해 주세요.",
     "orderComplete": "처리되었습니다. 😊",
 }
 
