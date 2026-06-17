@@ -1010,7 +1010,10 @@ def test_order_arrival_followup_resolves_recent_order_not_store_schedule() -> No
     assert _is_order_arrival_status_query("최근 주문 배송 예정일 알려줘")
     assert _is_order_arrival_status_query("그거 매장에 언제 와?")
     assert _is_order_arrival_status_query("그 이후에 매장 가면 돼?")
+    assert _is_order_arrival_status_query("O202605120019340 주문 언제 매장 도착해?")
     assert not _is_order_arrival_status_query("여주점 예약 가능한 시간 보여줘")
+    assert not _is_order_arrival_status_query("O202605120019340 주문췻호건 환불 언제돼?")
+    assert not _is_order_arrival_status_query("O202605120019340 카드 취소 언제 승인돼?")
 
     resolved = _resolve_order_row_for_arrival_query("최근 주문 배송 예정일 알려줘", messages=messages)
 
@@ -1033,6 +1036,30 @@ def test_order_arrival_followup_resolves_by_product_name() -> None:
 
     assert resolved is not None
     assert resolved["ord_no"] == "O202605120019340"
+
+
+def test_order_arrival_direct_order_number_does_not_use_current_question_as_product_name() -> None:
+    messages = [
+        {"role": "user", "content": "O202605120019340 주문췻호건 환불 언제돼?"},
+        {
+            "role": "assistant",
+            "content": (
+                "주문번호\t주문상태\t상품명\t수량\t주문날짜\n"
+                "O202605180019345\t출하지시\t벤투스 S1 에보 Z AS\t4\t2026-05-18"
+            ),
+        },
+    ]
+
+    resolved = _resolve_order_row_for_arrival_query("O202605120019340 주문 언제 매장 도착해?", messages=messages)
+    event = _build_order_arrival_status_event(
+        {"status": "success", "data": {"query_no": "O202605120019340", "ord_prgs_stat_nm": "주문완료"}},
+        resolved,
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert "- 주문번호: O202605120019340" in response
+    assert "상품명:" not in response
+    assert "주문췻호건 환불 언제돼" not in response
 
 
 def test_order_arrival_status_formats_delivery_date_without_time_and_no_direct_visit_claim() -> None:
@@ -2671,7 +2698,7 @@ def test_existing_reservation_change_copy_does_not_imply_bot_can_change_time() -
         "predictedDomains": ["TRANSACTION"],
     }
 
-    assert _normalize_existing_reservation_change_quickreply(event_data)
+    assert _normalize_existing_reservation_change_quickreply(event_data, last_user_text="정관점 예약시간 내일로 바꿔줘")
     assistant = event_data["assistantResponse"]
     assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
     assert "변경 가능 여부는 예약 확인 후 진행이 필요해요" not in assistant
@@ -2692,11 +2719,29 @@ def test_existing_reservation_change_copy_removes_order_detail_possibility_wordi
         "predictedDomains": ["TRANSACTION"],
     }
 
-    assert _normalize_existing_reservation_change_quickreply(event_data)
+    assert _normalize_existing_reservation_change_quickreply(event_data, last_user_text="예약 시간 변경해줘")
     assistant = event_data["assistantResponse"]
     assert "예약 시간은 제가 직접 변경해 드릴 수는 없어요" in assistant
     assert "변경 가능 여부" not in assistant
     assert "직접 처리하거나" in assistant
+
+
+def test_existing_reservation_change_copy_skips_refund_cancel_order_context() -> None:
+    event_data = {
+        "assistantResponse": (
+            "취소된 주문의 환불은 결제수단과 카드사 승인 일정에 따라 처리돼요.\n\n"
+            "환불 진행 상태는 주문 내역 상세에서 확인해 주세요."
+        ),
+        "quickReplies": [{"label": "주문 내역 보기", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert not _normalize_existing_reservation_change_quickreply(
+        event_data,
+        last_user_text="O202605120019340 주문취소건 환불 언제돼?",
+        called_tool_names={"get_orders_of_user_tool"},
+    )
+    assert "예약 시간은 제가 직접 변경" not in event_data["assistantResponse"]
 
 
 def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:

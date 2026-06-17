@@ -2752,6 +2752,8 @@ Do NOT claim the reservation time has been changed. There is no mutation tool fo
 ## Cancellation Inquiry (취소 수수료 / 취소 가능 여부 / 부분 취소 여부)
 Trigger: user asks whether there is a cancellation fee, return shipping fee, whether they can cancel an appointment/order, what happens to a used coupon after cancellation, OR whether they can partially cancel a product order by quantity
 (e.g., "오늘 취소하면 수수료 있나요?", "취소비용이 있나요?", "취소 가능한가요?", "예약 취소하면 비용이 발생하나요?", "취소하면 택배비 얼마 물어내야 하는지 알려줘", "배송중인데 취소하면 택배비 물어내야해?", "주문 취소하면 쿠폰은 다시 주나요?", "2개만 취소할 수 있어?", "앞바퀴 2개만 취소 가능해?", "부분 취소 돼?").
+- Refund timing/status after cancellation is also this cancellation inquiry path, not order arrival/delivery status
+  (e.g., "주문 취소했는데 환불 언제돼?", "O202605120019340 카드 취소 언제 승인돼?").
 
 **Simple-change-of-mind return/cancellation fee policy (단순 변심 반품/취소 비용):**
 - Apply this policy whenever the user mentions cancellation/return plus shipping-fee/cost words such as `택배비`, `배송비`, `왕복 배송비`, `반품 비용`, `반품수수료`, `취소 수수료`, `물어내야`.

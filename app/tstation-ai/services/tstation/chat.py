@@ -2908,6 +2908,18 @@ _ORDER_CANCEL_CTA_TEXT_RE = re.compile(
     r"취소|반품|배송중|출고|택배비|왕복\s*배송비|취소\s*가능\s*여부|최종\s*비용",
     re.IGNORECASE,
 )
+_ORDER_CANCEL_REFUND_QUERY_RE = re.compile(
+    r"환불|환급|입금|취소\s*승인|취소\s*완료|취소\s*처리|카드\s*취소|결제\s*취소|결제수단|"
+    r"카드사|취소.{0,20}(?:언제|됐|되|처리|승인|환불)|(?:언제|얼마나).{0,20}환불|"
+    r"주문\s*취소|예약\s*취소|반품|교환",
+    re.IGNORECASE,
+)
+_DIRECT_RESERVATION_CHANGE_QUERY_RE = re.compile(
+    r"(?:예약|방문|일정|시간|예약\s*시간|방문\s*시간).{0,20}(?:변경|바꾸|바꿔|미루|당기)|"
+    r"(?:\d{1,2}\s*시|\d{1,2}\s*:\s*\d{2}|오늘|내일|모레).{0,12}(?:로|으로)?.{0,12}"
+    r"(?:변경|바꾸|바꿔|미루|당기)",
+    re.IGNORECASE,
+)
 _PRICE_POLICY_GUARD_INTENTS = {
     "coupon_issue_request",
     "expired_coupon_or_event",
@@ -2934,6 +2946,10 @@ _ORDER_ARRIVAL_STATUS_RE = re.compile(
     r"|(?:매장\s*(?:도착|입고)|배송\s*예정|도착\s*(?:예정|상태|일)|언제\s*(?:와|오|도착)|"
     r"이후에\s*매장|매장\s*가면).{0,60}(?:주문|상품|타이어|그거|그\s*주문|해당\s*건|첫\s*번째|1\s*번|최근|배송|도착)"
     r"|그\s*이후.{0,30}매장\s*가",
+    re.IGNORECASE,
+)
+_ORDER_ARRIVAL_STATUS_KEYWORD_RE = re.compile(
+    r"매장\s*(?:도착|입고)|배송|도착|언제\s*(?:와|오)|매장\s*가면|입고",
     re.IGNORECASE,
 )
 _ORDER_FIRST_REF_RE = re.compile(r"첫\s*번째|1\s*번|최근|그거|그\s*주문|해당\s*건|그\s*이후|이후에\s*매장", re.IGNORECASE)
@@ -3197,7 +3213,20 @@ _RESERVATION_CHANGE_POSSIBLE_COPY_RE = re.compile(
 )
 
 
-def _normalize_existing_reservation_change_quickreply(event_data: dict[str, Any]) -> bool:
+def _normalize_existing_reservation_change_quickreply(
+    event_data: dict[str, Any],
+    *,
+    last_user_text: str | None = None,
+    called_tool_names: set[str] | None = None,
+) -> bool:
+    user_text = last_user_text or ""
+    if called_tool_names and "get_orders_of_user_tool" in called_tool_names:
+        return False
+    if user_text and _ORDER_CANCEL_REFUND_QUERY_RE.search(user_text):
+        return False
+    if user_text and not _DIRECT_RESERVATION_CHANGE_QUERY_RE.search(user_text):
+        return False
+
     assistant_text = str(event_data.get("assistantResponse") or "")
     if not assistant_text:
         return False
@@ -5291,9 +5320,14 @@ def _is_order_arrival_status_query(user_text: str | None) -> bool:
     text = user_text or ""
     if not text:
         return False
+    if _ORDER_CANCEL_REFUND_QUERY_RE.search(text):
+        return False
     if re.search(r"예약\s*가능|예약\s*시간|몇\s*시\s*예약|스케줄|시간표", text):
         return False
-    return bool(_ORDER_DIRECT_NO_RE.search(text) or _ORDER_ARRIVAL_STATUS_RE.search(text))
+    return bool(
+        _ORDER_ARRIVAL_STATUS_RE.search(text)
+        or (_ORDER_DIRECT_NO_RE.search(text) and _ORDER_ARRIVAL_STATUS_KEYWORD_RE.search(text))
+    )
 
 
 def _order_rows_from_orders_result(tool_result: dict) -> list[dict]:
@@ -5307,6 +5341,8 @@ def _order_rows_from_messages(messages: list[dict]) -> list[dict]:
     seen: set[str] = set()
     for msg in reversed(messages[-12:]):
         if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "").lower() == "user":
             continue
         content = str(msg.get("content") or "")
         if not content:
@@ -14163,7 +14199,11 @@ class TStationChatServiceV2:
                     if (
                         intent_group == "existing_reservation_management"
                         and event.get("template") == "quickReply"
-                        and _normalize_existing_reservation_change_quickreply(event_data)
+                        and _normalize_existing_reservation_change_quickreply(
+                            event_data,
+                            last_user_text=user_query,
+                            called_tool_names={tool_name for tool_name, _ in structured_sources},
+                        )
                     ):
                         logger.info("[RESERVATION_CHANGE] normalized direct-change guidance")
                         assistant_response = str(event_data.get("assistantResponse") or "")
