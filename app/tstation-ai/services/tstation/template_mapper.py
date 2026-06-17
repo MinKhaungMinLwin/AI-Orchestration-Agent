@@ -1196,17 +1196,12 @@ def _tire_summary_second_line(row: dict) -> str:
 
 
 def _tire_summary_detail_line(row: dict) -> str:
-    pattern = _get_str(row, "ptrn_d_nm")
     grade = _get_str(row, "prc_grd_nm")
     review_count = _get_num(row, "review_count", default=0.0)
     rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
 
     clauses: list[str] = []
-    if pattern and grade:
-        clauses.append(f"{pattern} 패턴의 {grade} 등급 상품이에요.")
-    elif pattern:
-        clauses.append(f"{pattern} 패턴이 적용된 상품이에요.")
-    elif grade:
+    if grade:
         clauses.append(f"{grade} 등급 상품이에요.")
 
     if review_count > 0 and rating_avg > 0:
