@@ -4469,7 +4469,7 @@ _TEMPLATE_DEFAULTS: dict[str, str] = {
     "previewYoutube": "관련 영상 {n}개를 안내드립니다.",
     "qnaComplete": "1:1 문의가 접수되었습니다. 아래 버튼을 눌러 확인해 주세요.",
     "location": "고객님, 매장 {n}곳을 안내드립니다. 원하시는 매장을 선택해 주세요.",
-    "datepick": "예약 가능한 날짜와 시간을 선택해 주세요.",
+    "datepick": "예약하려는 날짜와 시간을 선택해 주세요.",
     "orderComplete": "처리되었습니다. 😊",
 }
 
