@@ -5535,12 +5535,10 @@ def _pickup_service_guard_event(user_text: str) -> dict | None:
             "data": {
                 "assistantResponse": (
                     "픽업기사의 실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요. "
-                    "스마트픽업은 매장에서 직접 운영하는 서비스라 아래 '픽업서비스 신청'에서 진행 상황을 확인하시거나 "
-                    "픽업 매장으로 직접 문의해 주세요."
+                    "신청하신 픽업/딜리버리 진행 현황은 아래 '픽업서비스 내역'에서 확인해 주세요."
                 ),
                 "quickReplies": [
-                    {"label": "픽업서비스 신청", "url": CTAUrls.SMART_PICKUP, "domain": "SUPPORT"},
-                    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                    {"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"},
                 ],
                 "predictedDomains": ["SUPPORT"],
             },

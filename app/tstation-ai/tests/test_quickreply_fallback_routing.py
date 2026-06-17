@@ -382,7 +382,21 @@ def test_pickup_service_guard_handles_driver_status_question() -> None:
     assert event is not None
     assert event["template"] == "quickReply"
     assert "실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요" in event["data"]["assistantResponse"]
-    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 신청", "1:1 문의하기"]
+    assert "픽업서비스 내역" in event["data"]["assistantResponse"]
+    assert "픽업 매장" not in event["data"]["assistantResponse"]
+    assert "매장으로" not in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["픽업서비스 내역"]
+    assert event["data"]["quickReplies"][0]["url"].endswith("/mypage/tstation/reservation/pickupList")
+
+
+def test_pickup_service_guard_distinguishes_application_from_status() -> None:
+    status_event = _pickup_service_guard_event("픽업딜리버리 신청했는데 기사님 어디쯤 오고계셔?")
+    howto_event = _pickup_service_guard_event("픽업서비스 어떻게 신청해?")
+
+    assert status_event is not None
+    assert howto_event is not None
+    assert _labels(status_event["data"]["quickReplies"]) == ["픽업서비스 내역"]
+    assert _labels(howto_event["data"]["quickReplies"])[0] == "픽업서비스 신청"
 
 
 def test_pickup_service_guard_does_not_hijack_generic_application_question() -> None:
