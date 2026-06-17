@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from services.tstation.agents.base_agent import (
     BaseAgent,
     _AssistantResponseStreamer,
+    _build_product_warranty_quickreply_event,
     _is_explicit_vehicle_list_request,
     _normalize_qty_quick_replies,
     _owner_lookup_vehicle_recommendation_args,
@@ -31,6 +32,48 @@ def test_support_agent_skips_search_product_fast_path() -> None:
     assert _should_skip_support_search_product_fast_path("Support Agent", "search_product_tool") is True
     assert _should_skip_support_search_product_fast_path("Discovery Agent", "search_product_tool") is False
     assert _should_skip_support_search_product_fast_path("Support Agent", "get_product_warranties_tool") is False
+
+
+def test_product_warranty_tool_result_builds_support_quickreply() -> None:
+    event = _build_product_warranty_quickreply_event(
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000309780",
+                "ptrn_cd": "H462",
+                "warranties": [
+                    {"wrt_tp_cd": "10", "wrt_nm": "품질보증", "is_plus": False},
+                    {"wrt_tp_cd": "20", "wrt_nm": "안심서비스", "is_plus": False},
+                    {"wrt_tp_cd": "40", "wrt_nm": "코드절상 무상교환", "is_plus": False},
+                ],
+            },
+        },
+        [
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {"goods_no": "G000000309780", "goods_nm": "벤투스 S2 AS"},
+                        ],
+                    },
+                },
+                "args": {"keyword": "벤투스 S2 AS"},
+            },
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    data = event["data"]
+    assert "벤투스 S2 AS에 적용 가능한 워런티" in data["assistantResponse"]
+    assert "- 품질보증" in data["assistantResponse"]
+    assert "- 안심서비스" in data["assistantResponse"]
+    assert "- 코드절상 무상교환" in data["assistantResponse"]
+    assert "사이즈가 아직 확인되지 않아" not in data["assistantResponse"]
+    assert [chip["label"] for chip in data["quickReplies"]][:1] == ["나의 워런티 확인"]
+    assert data["predictedDomains"] == ["SUPPORT"]
 
 
 def test_fast_path_allows_transaction_preview_terminal_templates():

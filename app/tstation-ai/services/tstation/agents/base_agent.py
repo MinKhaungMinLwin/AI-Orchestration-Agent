@@ -12,6 +12,7 @@ from langchain.agents import create_agent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from config.tracing import trace_span as _trace_span, truncate_for_trace as _truncate
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.schedule_tool_gate import (
     build_blocked_schedule_event,
@@ -175,6 +176,72 @@ def _is_explicit_vehicle_list_request(messages: list[dict]) -> bool:
 
 def _should_skip_support_search_product_fast_path(agent_name: str, tool_name: str) -> bool:
     return tool_name == "search_product_tool" and "support" in str(agent_name or "").lower()
+
+
+def _product_name_for_warranty_result(accumulated_tool_data: list[dict], goods_no: str | None) -> str:
+    if not goods_no:
+        return "해당 상품"
+    for entry in reversed(accumulated_tool_data):
+        if entry.get("tool") != "search_product_tool":
+            continue
+        for row in _extract_tool_rows(entry.get("data")):
+            if str(row.get("goods_no") or "").strip() == goods_no:
+                name = str(row.get("goods_nm") or "").strip()
+                if name:
+                    return name
+    return "해당 상품"
+
+
+def _build_product_warranty_quickreply_event(
+    tool_result: Any,
+    accumulated_tool_data: list[dict],
+) -> dict | None:
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return None
+    data = tool_result.get("data")
+    if not isinstance(data, dict):
+        return None
+    goods_no = str(data.get("goods_no") or "").strip() or None
+    ptrn_cd = str(data.get("ptrn_cd") or "").strip()
+    warranties = data.get("warranties")
+    if warranties is None:
+        return None
+    product_name = _product_name_for_warranty_result(accumulated_tool_data, goods_no)
+    lines: list[str] = []
+    if isinstance(warranties, list) and warranties:
+        names: list[str] = []
+        for warranty in warranties:
+            if not isinstance(warranty, dict):
+                continue
+            name = str(warranty.get("wrt_nm") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        if names:
+            lines.append(f"{product_name}에 적용 가능한 워런티는 다음과 같아요.")
+            lines.append("")
+            lines.extend(f"- {name}" for name in names)
+            lines.append("")
+            lines.append("보유 여부와 가입 상태는 아래 '나의 워런티 확인'에서 확인해 주세요.")
+        else:
+            return None
+    elif ptrn_cd:
+        lines.append(f"{product_name}은 현재 워런티 적용 대상이 아닌 것으로 확인돼요.")
+        lines.append("정확한 보유 여부는 아래 '나의 워런티 확인'에서 확인해 주세요.")
+    else:
+        lines.append("해당 상품 정보를 찾지 못했어요. 정확한 상품명으로 다시 확인해 주세요.")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT"],
+        },
+    }
 
 
 def _vehicle_owner_lookup_args_after_registered_mismatch(
@@ -1053,6 +1120,20 @@ class BaseAgent(ABC):
                                 "node": node,
                                 "tool": message.name,
                             }
+                            if "support" in self.name.lower() and message.name == "get_product_warranties_tool":
+                                warranty_event = _build_product_warranty_quickreply_event(
+                                    tool_result,
+                                    accumulated_tool_data,
+                                )
+                                if warranty_event is not None:
+                                    logger.info("[%s] Product warranty resolved via deterministic quickReply", self.name)
+                                    for event in self._code_template_events(
+                                        warranty_event,
+                                        response_streamer,
+                                        answering_emitted,
+                                    ):
+                                        yield event
+                                    return
                             owner_lookup_args = _vehicle_owner_lookup_args_after_registered_mismatch(
                                 message.name,
                                 tool_result,
