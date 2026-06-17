@@ -1196,42 +1196,29 @@ def _tire_summary_second_line(row: dict) -> str:
 
 
 def _tire_summary_detail_line(row: dict) -> str:
-    details: list[str] = []
-
     pattern = _get_str(row, "ptrn_d_nm")
-    if pattern:
-        details.append(pattern)
-
     grade = _get_str(row, "prc_grd_nm")
-    if grade:
-        details.append(f"상품 등급 {grade}")
+    review_count = _get_num(row, "review_count", default=0.0)
+    rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
 
-    rr = _get_str(row, "rr")
-    if rr:
-        details.append(f"회전저항/RR {rr}등급")
+    clauses: list[str] = []
+    if pattern and grade:
+        clauses.append(f"{pattern} 패턴의 {grade} 등급 상품이에요.")
+    elif pattern:
+        clauses.append(f"{pattern} 패턴이 적용된 상품이에요.")
+    elif grade:
+        clauses.append(f"{grade} 등급 상품이에요.")
 
-    wet = _get_str(row, "wet")
-    if wet:
-        details.append(f"젖은노면 {wet}등급")
+    if review_count > 0 and rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        clauses.append(f"리뷰는 {int(review_count)}건, 평균 평점은 {rating_text}점이에요.")
+    elif review_count > 0:
+        clauses.append(f"리뷰는 {int(review_count)}건 확인돼요.")
+    elif rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        clauses.append(f"평균 평점은 {rating_text}점이에요.")
 
-    release = _get_str(row, "t_rls_yearmon")
-    if release:
-        details.append(f"출시 {release}")
-
-    origin = _get_str(row, "orpl_nm")
-    if origin:
-        details.append(f"원산지 {origin}")
-
-    review_count = _get_str(row, "review_count")
-    rating_avg = _get_str(row, "rating_avg", "rate")
-    if review_count and rating_avg:
-        details.append(f"리뷰 {review_count}건 · 평점 {rating_avg}")
-    elif review_count:
-        details.append(f"리뷰 {review_count}건")
-    elif rating_avg:
-        details.append(f"평점 {rating_avg}")
-
-    return " / ".join(details[:6])
+    return " ".join(clauses)
 
 
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
