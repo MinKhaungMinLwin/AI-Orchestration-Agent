@@ -11,6 +11,7 @@ StoreServiceIntent = Literal[
     "store_special_service",
     "store_review_detail",
     "store_rating_summary",
+    "store_visual_detail",
     "none",
 ]
 
@@ -40,6 +41,12 @@ STORE_REVIEW_DETAIL_USER_RE = re.compile(
 )
 STORE_REVIEW_WRITE_RE = re.compile(r"(?:리뷰|후기).{0,12}(?:작성|쓰기|써|남기|등록|수정|삭제)", re.IGNORECASE)
 STORE_RATING_SUMMARY_RE = re.compile(r"(?:매장\s*)?(?:평점|별점|평가)(?:는|가)?\s*(?:어때|어떠|얼마|몇|높|좋|괜찮)", re.IGNORECASE)
+STORE_VISUAL_DETAIL_USER_RE = re.compile(
+    r"(?:매장\s*)?(?:전경|사진|외관|내부\s*사진|내부|모습|이미지|매장\s*사진)"
+    r".{0,20}(?:보고|보여|볼\s*수|있어|확인|궁금|줘|싶)|"
+    r"(?:보고|보여|확인).{0,20}(?:매장\s*)?(?:전경|사진|외관|내부\s*사진|내부|모습|이미지)",
+    re.IGNORECASE,
+)
 STORE_REVIEW_UNAVAILABLE_TEXT_RE = re.compile(
     r"(?:리뷰|후기)\s*(?:상세\s*)?(?:내용은?\s*)?(?:현재\s*)?(?:조회\s*가능한\s*)?정보에\s*포함되어\s*있지\s*않아요\.?",
     re.IGNORECASE,
@@ -96,6 +103,10 @@ def is_store_review_detail_request(text: str) -> bool:
     return bool(STORE_REVIEW_DETAIL_USER_RE.search(value))
 
 
+def is_store_visual_detail_request(text: str) -> bool:
+    return bool(STORE_VISUAL_DETAIL_USER_RE.search(text or ""))
+
+
 def replace_store_review_unavailable_text(text: str, replacement: str) -> str:
     return STORE_REVIEW_UNAVAILABLE_TEXT_RE.sub(replacement, text or "").strip()
 
@@ -117,6 +128,13 @@ def decide_store_service_gate(*, user_text: str = "", assistant_text: str = "") 
             needs_store_detail_cta=True,
             needs_unverifiable_guidance=False,
             reason="User asks to inspect store review details.",
+        )
+    if is_store_visual_detail_request(text):
+        return StoreServiceGateDecision(
+            intent="store_visual_detail",
+            needs_store_detail_cta=True,
+            needs_unverifiable_guidance=False,
+            reason="User asks to inspect store photos or visual details.",
         )
     if STORE_RATING_SUMMARY_RE.search(text):
         return StoreServiceGateDecision(

@@ -28,6 +28,7 @@ from services.tstation.chat import (
     _FALLBACK_GENERIC,
     _FALLBACK_LEADING_PROGRESS,
     _FALLBACK_ORDER_LIST,
+    _FALLBACK_TRANSACTION_STORE_SEARCH,
     _ALL_MY_T_5_PERCENT_COUPON_RE,
     _ALL_MY_T_BENEFIT_PAGE_RE,
     _COUPON_ISSUE_INTENT_RE,
@@ -39,9 +40,12 @@ from services.tstation.chat import (
     _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
+    _build_product_coupon_price_amount_event,
+    _build_product_coupon_price_no_product_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
+    _build_size_only_product_search_tool_input,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
@@ -71,6 +75,7 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_product_coupon_price_amount_query,
     _is_product_comparison_query,
     _tool_error_summary,
     _trace_final_error_state,
@@ -82,6 +87,7 @@ from services.tstation.chat import (
     _is_owned_coupon_best_discount_query,
     _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
+    _split_product_size_quantity_from_text,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
@@ -117,6 +123,7 @@ from services.tstation.chat import (
     _past_event_page_event,
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
+    _recent_product_coupon_price_target,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
     _parse_requested_reservation_date,
@@ -135,11 +142,13 @@ from services.tstation.chat import (
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
+    _should_force_warranty_claim_support_route,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
 )
+from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
 from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
@@ -1488,6 +1497,28 @@ def test_sized_product_name_search_rejects_size_only_text() -> None:
     assert _build_bare_product_search_tool_input("2356018") is None
 
 
+def test_size_only_followup_search_reuses_recent_product_context() -> None:
+    assert _build_size_only_product_search_tool_input(
+        "2255517",
+        recent_context="ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?\n2255517",
+    ) == {
+        "keyword": "벤투스 에어S",
+        "limit": 10,
+        "size": "225/55R17",
+    }
+
+
+def test_size_only_followup_search_reuses_recent_search_tool_keyword() -> None:
+    assert _build_size_only_product_search_tool_input(
+        "2255517",
+        prev_tool_data=[{"tool": "search_product_tool", "input": {"keyword": "벤투스 에어S"}}],
+    ) == {
+        "keyword": "벤투스 에어S",
+        "limit": 10,
+        "size": "225/55R17",
+    }
+
+
 def test_sized_product_name_search_can_resolve_unique_ventus_evo_goods_no() -> None:
     row = _unique_product_row_from_sized_search_result(
         {
@@ -1541,10 +1572,21 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
         "status": "success",
         "data": {
             "goods_nm": "벤투스 S2 AS",
+            "big_goods_nm": "벤투스",
             "goods_no": "G000000309783",
             "tire_size_1": "225/45R17",
             "slogan": "고속 주행에서 느끼는 Comfort Technology",
+            "pc_prod_remark_desc": "사계절 승용차용으로 정숙성과 승차감을 강화한 패턴입니다.",
             "pc_prod_tech_desc": "<ol><li>승차감 : 조용하고 안락한 승차감 제공</li></ol>",
+            "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+            "season_nm": "사계절",
+            "car_knd_nm": "승용차",
+            "goods_pfm_nm": "COMFORT",
+            "t_comfort": 4.5,
+            "t_silence": 4.3,
+            "t_life_span": 4.1,
+            "wet": "B",
+            "rr": "A",
             "sale_prc": 152500,
             "cheapest_final_prc": 118800,
             "cheapest_applied_coupons": [
@@ -1559,6 +1601,16 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     assert event["template"] == "quickReply"
     assistant_response = event["data"]["assistantResponse"]
     assert "벤투스 S2 AS" in assistant_response
+    assert "225/45R17" in assistant_response
+    assert "사계절" in assistant_response
+    assert "승용차" in assistant_response
+    assert "COMFORT" in assistant_response
+    assert "정숙성과 승차감을 강화한 패턴" in assistant_response
+    assert "승차감 4.5/5" in assistant_response
+    assert "정숙성 4.3/5" in assistant_response
+    assert "마일리지 4.1/5" in assistant_response
+    assert "젖은노면 B등급" in assistant_response
+    assert "회전저항 A등급" in assistant_response
     assert "최종 혜택가는 118,800원" in assistant_response
     assert "리뷰는 68건" in assistant_response
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "장바구니담기"]
@@ -1877,6 +1929,86 @@ def test_strong_coupon_applicability_query_does_not_hijack_coupon_issue_requests
 
 def test_product_coupon_eligibility_keeps_explicit_product_name() -> None:
     assert _coupon_target_product_name_for_query("아이온 에보 AS에 30% 할인 쿠폰 적용돼?") == "아이온"
+
+
+def test_product_coupon_query_splits_compact_size_and_quantity_from_product_name() -> None:
+    parsed = _split_product_size_quantity_from_text(
+        "ventus air S 2255517",
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?",
+    )
+
+    assert parsed == {
+        "product_name": "ventus air S",
+        "tire_size": "225/55R17",
+        "quantity": 4,
+    }
+
+
+def test_price_policy_frame_keeps_coupon_product_size_quantity_separate() -> None:
+    frame = build_price_intent_frame(
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
+    )
+
+    assert frame.entities["product_name"] == "Ventus air S"
+    assert frame.entities["tire_size"] == "225/55R17"
+    assert frame.entities["quantity"] == 4
+
+
+def test_product_coupon_price_amount_query_is_detected() -> None:
+    assert _is_product_coupon_price_amount_query(
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
+    )
+    assert not _is_product_coupon_price_amount_query("벤투스 에어S에 적용 가능한 쿠폰 뭐 있어?")
+
+
+def test_size_only_followup_recovers_coupon_price_target_from_recent_context() -> None:
+    target = _recent_product_coupon_price_target(
+        "2255517",
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?\n2255517",
+    )
+
+    assert target == {
+        "product_name": "Ventus air S",
+        "tire_size": "225/55R17",
+        "quantity": 4,
+    }
+
+
+def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
+    event = _build_product_coupon_price_amount_event(
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000317729",
+                "goods_nm": "벤투스 에어S",
+                "sale_prc": 200000,
+                "cheapest_final_prc": 150000,
+                "cheapest_total_discount": 50000,
+                "cheapest_applied_coupons": [{"cpn_nm": "한국타이어 30% 할인권"}],
+            },
+        },
+        product_name="벤투스 에어S",
+        tire_size="225/55R17",
+        quantity=4,
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "벤투스 에어S 225/55R17 4개 기준" in assistant
+    assert "정가 합계: 800,000원" in assistant
+    assert "쿠폰 적용 할인액: 200,000원" in assistant
+    assert "최종 혜택가: 600,000원" in assistant
+    assert "한국타이어 30% 할인권" in assistant
+
+
+def test_product_coupon_price_no_product_event_stops_without_price_cta() -> None:
+    event = _build_product_coupon_price_no_product_event("벤투스 에어S", "225/55R17")
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요" in assistant
+    assert "상품을 찾았어요" not in assistant
+    assert "가격 확인" not in labels
 
 
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:
@@ -2217,6 +2349,52 @@ def test_store_service_gate_detects_review_detail_but_not_review_write() -> None
     assert rating_summary.needs_store_detail_cta is False
     assert review_write.intent == "none"
     assert review_write.needs_store_detail_cta is False
+
+
+def test_store_visual_detail_request_routes_to_store_detail_cta_intent() -> None:
+    visual = decide_store_service_gate(user_text="티스테이션 구리점 매장 전경 사진 보고 싶어")
+
+    assert visual.intent == "store_visual_detail"
+    assert visual.needs_store_detail_cta is True
+    assert _extract_plain_store_info_store_name("티스테이션 구리점 매장 전경 사진 보고 싶어") == "구리점"
+    assert _extract_plain_store_info_store_name("분당정자점 사진 있어?") == "분당정자점"
+
+
+def test_store_visual_detail_guidance_injects_detail_cta_before_generic_store_search() -> None:
+    event_data = {
+        "assistantResponse": "티스테이션 구리점 매장 전경은 매장 상세 화면에서 확인하실 수 있어요.",
+        "quickReplies": [
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "다른 매장 정보", "domain": "TRANSACTION"},
+        ],
+        "predictedDomains": ["TRANSACTION"],
+    }
+    tool_data_list = [
+        {
+            "tool": "get_store_detail_tool",
+            "data": {
+                "status": "success",
+                "data": {
+                    "shop_seq": "F203675962",
+                    "shop_nm": "티스테이션 구리점",
+                    "tel_no": "0315551234",
+                    "shop_biz_strt_time": "09",
+                    "shop_biz_end_time": "19",
+                },
+            },
+        }
+    ]
+
+    changed = _inject_store_detail_chip_for_contact_guidance(
+        event_data,
+        tool_data_list=tool_data_list,
+        messages=[{"role": "user", "content": "티스테이션 구리점 매장 전경 사진 보고 싶어"}],
+    )
+
+    assert changed is True
+    assert event_data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
+    assert event_data["quickReplies"][0]["url"].endswith("/store/locals/F203675962")
+    assert "매장 찾기" not in _labels(event_data["quickReplies"])
 
 
 def test_store_contact_guidance_injects_store_detail_cta_from_context_list_shape() -> None:
@@ -3063,6 +3241,12 @@ def test_support_fast_path_routes_product_warranty_claims() -> None:
         MultiAgentDomain.Domain.SUPPORT
     ]
     assert _support_fast_path("ventus air S 설명해줘") is None
+
+
+def test_product_warranty_policy_route_beats_discovery_chip_context() -> None:
+    plan = plan_cross_domain_turn("벤투스 S2 AS 워런티 돼?")
+
+    assert _should_force_warranty_claim_support_route(plan) is True
 
 
 def test_support_fast_path_does_not_hijack_generic_application_question() -> None:
@@ -4663,6 +4847,36 @@ def test_transaction_store_plain_text_returns_store_schedule_chips() -> None:
     assert label == "transaction_store_schedule"
     assert _labels(chips) == ["예약 가능 시간 보기", "다른 매장 찾기", "매장 선택 다시"]
     assert "1:1 문의하기" not in _labels(chips)
+
+
+def test_transaction_purchase_store_prompt_returns_region_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "transaction",
+        "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+    )
+
+    assert label == "transaction_purchase_store_search"
+    assert chips == _FALLBACK_TRANSACTION_STORE_SEARCH
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+
+
+def test_transaction_purchase_store_prompt_replaces_validation_dead_end_chips() -> None:
+    assert _looks_like_generic_dead_end_chips([
+        {"label": "다시 시도", "domain": "LEADING"},
+        {"label": "상담사 연결", "domain": "SUPPORT"},
+    ])
+
+    recovery = _discovery_recovery_chips_for_text(
+        "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+        "transaction",
+    )
+
+    assert recovery is not None
+    chips, label = recovery
+    assert label == "transaction_purchase_store_search"
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+    assert "상담사 연결" not in _labels(chips)
 
 
 def test_support_info_plain_text_returns_next_action_chips_without_qna() -> None:
