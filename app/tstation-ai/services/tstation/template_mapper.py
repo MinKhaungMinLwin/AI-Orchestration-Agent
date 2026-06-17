@@ -1195,6 +1195,45 @@ def _tire_summary_second_line(row: dict) -> str:
     return "주행 조건에 맞춰 검토할 수 있는 타이어입니다."
 
 
+def _tire_summary_detail_line(row: dict) -> str:
+    details: list[str] = []
+
+    pattern = _get_str(row, "ptrn_d_nm")
+    if pattern:
+        details.append(pattern)
+
+    grade = _get_str(row, "prc_grd_nm")
+    if grade:
+        details.append(f"상품 등급 {grade}")
+
+    rr = _get_str(row, "rr")
+    if rr:
+        details.append(f"회전저항/RR {rr}등급")
+
+    wet = _get_str(row, "wet")
+    if wet:
+        details.append(f"젖은노면 {wet}등급")
+
+    release = _get_str(row, "t_rls_yearmon")
+    if release:
+        details.append(f"출시 {release}")
+
+    origin = _get_str(row, "orpl_nm")
+    if origin:
+        details.append(f"원산지 {origin}")
+
+    review_count = _get_str(row, "review_count")
+    rating_avg = _get_str(row, "rating_avg", "rate")
+    if review_count and rating_avg:
+        details.append(f"리뷰 {review_count}건 · 평점 {rating_avg}")
+    elif review_count:
+        details.append(f"리뷰 {review_count}건")
+    elif rating_avg:
+        details.append(f"평점 {rating_avg}")
+
+    return " / ".join(details[:6])
+
+
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
 _POPULAR_UNSIZED_REQUEST_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
@@ -2106,17 +2145,23 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     for name, row in list(rows_by_name.items())[:5]:
         if is_neutral_product_description:
+            detail_line = _tire_summary_detail_line(row)
             lines.extend([
                 "",
                 f"{name}: {_tire_summary_first_line(row)}",
                 _tire_summary_second_line(row),
             ])
+            if detail_line:
+                lines.append(detail_line)
         else:
+            detail_line = _tire_summary_detail_line(row)
             lines.extend([
                 "",
                 f"- {name}: {_tire_summary_first_line(row)}",
                 f"  {_tire_summary_second_line(row)}",
             ])
+            if detail_line:
+                lines.append(f"  {detail_line}")
     if skip_size_missing_notice:
         lines = [line for line in lines if line]
     elif not is_popular_unsized_request:
