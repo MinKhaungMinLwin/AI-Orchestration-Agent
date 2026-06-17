@@ -2954,6 +2954,22 @@ def _has_store_candidates(tool_data_list: list[dict]) -> bool:
     return False
 
 
+def _is_plain_store_search_user_text() -> bool:
+    text = current_user_text.get() or ""
+    if not text:
+        return False
+    has_store_search = bool(re.search(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", text, re.IGNORECASE))
+    has_transaction_stock = bool(re.search(r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약|구매|주문", text, re.IGNORECASE))
+    has_product = bool(
+        re.search(
+            r"벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    return has_store_search and not has_transaction_stock and not has_product
+
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     transaction_decision = current_transaction_response_decision.get()
@@ -3112,7 +3128,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # "reservation" is included so 매장 방문 예약 (와이퍼/배터리/얼라인먼트 등 부가
     # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
     # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
-    has_booking_intent = current_pending_intent.get() in ("order", "stock", "reservation")
+    plain_store_search_user_text = _is_plain_store_search_user_text()
+    has_booking_intent = (
+        current_pending_intent.get() in ("order", "stock", "reservation") and not plain_store_search_user_text
+    )
     # 단골매장 조회는 사용자가 직접 발화로 요청한 명시적 컨텍스트 — booking signal/
     # intent 가 없어도 항상 카드 노출 (info-only guard 우회). 1건이라도 사용자가
     # 클릭으로 선택해야 다음 단계로 진행됨.
@@ -3147,9 +3166,12 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     require_ev_specialty, require_ev_charge = _requested_store_specialty_filters(preference_text)
 
     stock_filter_context = (
-        current_pending_intent.get() == "stock"
-        or current_goal_type.get() == "store_with_stock"
-        or bool(re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""))
+        not plain_store_search_user_text
+        and (
+            current_pending_intent.get() == "stock"
+            or current_goal_type.get() == "store_with_stock"
+            or bool(re.search(r"재고\s*(있는|가\s*확인된)\s*매장|재고있는\s*매장", assistant_text or ""))
+        )
     )
     items, metadata = [], []
     stock_filtered_preview = False
@@ -3474,7 +3496,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # card surfaces the rich description without spuriously advancing.
     is_booking_flow = (
         has_booking_signal
-        or _is_goal_booking_followup()
+        or (_is_goal_booking_followup() and not plain_store_search_user_text)
         or has_booking_intent
         or current_return_visit_store_flow.get()
     )
@@ -3561,6 +3583,9 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     elif has_booking_intent and items:
         today_prefix = "오늘 " if re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "") else ""
         short = f"요청하신 조건으로 {today_prefix}장착 가능 여부가 확인된 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
+        response_source = "code_mapper"
+    elif plain_store_search_user_text and items and re.search(r"오늘\s*장착|장착 가능 여부|재고", short or ""):
+        short = f"요청하신 지역의 매장 {len(items)}곳을 안내드립니다. 원하시는 매장을 선택해 주세요."
         response_source = "code_mapper"
     # Favorite-store lookup is an explicit new user request ("내 단골매장").
     # Do not carry over stale special-store preferences such as a previous

@@ -18,7 +18,9 @@ _PRODUCT_HINT_RE = re.compile(
     r"벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2",
     re.IGNORECASE,
 )
-_STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|장착\s*가능|예약|매장|근처|주변", re.IGNORECASE)
+_STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약", re.IGNORECASE)
+_STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", re.IGNORECASE)
+_STORE_NAME_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
 _REGIONAL_PRICE_POLICY_RE = re.compile(
     r"(?=.*(?:가격|판매가|최종가))"
@@ -32,7 +34,10 @@ _PATTERN_COUPON_RE = re.compile(
     rf"(?:쿠폰|할인권).{{0,20}}(?:{_PATTERN_COUPON_KEYWORD})",
     re.IGNORECASE,
 )
-_SUPPORT_RE = re.compile(r"만료|원복|상담원|고객센터|1:1|문의|불만|클레임", re.IGNORECASE)
+_SUPPORT_RE = re.compile(
+    r"만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
+    re.IGNORECASE,
+)
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
 
@@ -132,14 +137,17 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     slots = known_slots or {}
     subtasks: list[DomainSubtask] = []
 
-    has_product_hint = bool(_PRODUCT_HINT_RE.search(text) or slots.get("product_name") or slots.get("goods_no"))
+    has_current_product_hint = bool(_PRODUCT_HINT_RE.search(text))
+    has_product_hint = bool(has_current_product_hint or slots.get("product_name") or slots.get("goods_no"))
     tire_size = slots.get("tire_size") or _normalize_tire_size(text)
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text))
+    needs_store_search = bool(_STORE_SEARCH_RE.search(text))
     needs_price = bool(_PRICE_OR_COUPON_RE.search(text))
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
+    has_current_store = bool(_STORE_NAME_RE.search(text))
 
     if needs_regional_price_policy:
         return CrossDomainPlan(
@@ -154,7 +162,9 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="single_domain_response",
         )
 
-    if needs_support and not has_product_hint:
+    current_turn_is_plain_store_search = needs_store_search and not needs_stock_or_booking and not needs_price
+
+    if needs_support and not has_current_product_hint and not needs_stock_or_booking:
         return CrossDomainPlan(
             primary_domain=PolicyDomain.SUPPORT,
             subtasks=(
@@ -162,6 +172,20 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="policy_notice_or_escalation",
                     reason="정책 안내 또는 1:1 문의 연결이 필요함",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if current_turn_is_plain_store_search and not has_current_product_hint:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="store_search",
+                    reason="현재 발화는 상품 재고/예약이 아닌 일반 매장 검색임",
+                    required_slots=() if (slots.get("region") or slots.get("store_name") or slots.get("shop_id")) else ("location",),
                 ),
             ),
             response_strategy="single_domain_response",
@@ -206,7 +230,13 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             required_slots.append("tire_size")
         if has_product_hint and not (slots.get("quantity") or slots.get("ord_qty")):
             required_slots.append("quantity")
-        if needs_stock_or_booking and not (slots.get("region") or slots.get("shop_id") or slots.get("lat")):
+        if needs_stock_or_booking and not (
+            has_current_store
+            or slots.get("region")
+            or slots.get("store_name")
+            or slots.get("shop_id")
+            or slots.get("lat")
+        ):
             required_slots.append("location")
         subtasks.append(
             DomainSubtask(

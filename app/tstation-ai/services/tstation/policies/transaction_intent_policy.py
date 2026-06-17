@@ -141,14 +141,27 @@ def build_transaction_intent_frame(
     text = last_user_text or ""
     slots = dict(known_slots or {})
     explicit_tire_size = normalize_tire_size(text)
+    current_store_name = _extract_store_name(text)
+    current_region = _extract_region(text)
+    current_product_name = _extract_product_name(text)
+    current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
+    current_store_search = bool(_STORE_SEARCH_RE.search(text))
+    current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
+    current_price = bool(_PRICE_OR_COUPON_RE.search(text))
+    current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text))
+    plain_store_search = current_store_search and not current_stock and not current_price and not current_reservation
+
     tire_size = explicit_tire_size or slots.get("tire_size")
     quantity = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
     result_limit = extract_result_limit(text) or slots.get("limit")
     requested_cal_day = extract_requested_cal_day(text)
-    goods_no = slots.get("goods_no")
-    product_name = slots.get("product_name") or slots.get("pattern_name") or _extract_product_name(text)
-    store_name = slots.get("store_name") or _extract_store_name(text)
-    region = slots.get("region") or slots.get("place") or _extract_region(text)
+    goods_no = None if plain_store_search and not current_has_product else slots.get("goods_no")
+    product_name = (
+        current_product_name
+        or (None if plain_store_search else slots.get("product_name") or slots.get("pattern_name"))
+    )
+    store_name = current_store_name or (None if plain_store_search else slots.get("store_name"))
+    region = current_region or slots.get("region") or slots.get("place")
 
     has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text))
     has_location = bool(region or store_name or slots.get("shop_id") or slots.get("lat") or slots.get("lng"))
@@ -205,14 +218,20 @@ def build_transaction_intent_frame(
 
     known = {
         **slots,
-        **({"tire_size": tire_size} if tire_size else {}),
-        **({"quantity": quantity} if quantity else {}),
-        **({"product_name": product_name} if product_name else {}),
-        **({"store_name": store_name} if store_name else {}),
         **({"region": region} if region else {}),
         **({"limit": result_limit} if result_limit else {}),
         **({"requested_cal_day": requested_cal_day} if requested_cal_day else {}),
     }
+    if plain_store_search and not current_has_product:
+        for key in ("goods_no", "product_name", "pattern_name", "tire_size", "quantity", "ord_qty", "store_name"):
+            known.pop(key, None)
+    else:
+        known.update({
+            **({"tire_size": tire_size} if tire_size else {}),
+            **({"quantity": quantity} if quantity else {}),
+            **({"product_name": product_name} if product_name else {}),
+            **({"store_name": store_name} if store_name else {}),
+        })
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:
         known["store_exact_match"] = False
 

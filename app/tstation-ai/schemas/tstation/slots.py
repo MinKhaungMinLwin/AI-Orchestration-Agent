@@ -140,6 +140,7 @@ class ConversationSlots(BaseModel):
         (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d{2})[\s/]?(\d{2})(?!\d)"), "{0}/{1}R{2}"),
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
+    _SHOP_NAME_PATTERN: ClassVar[re.Pattern] = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
     # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
     # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
     _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
@@ -517,6 +518,10 @@ class ConversationSlots(BaseModel):
         if qty_match:
             slots.ord_qty = int(qty_match.group(1))
 
+        shop_name_match = cls._SHOP_NAME_PATTERN.search(user_text)
+        if shop_name_match:
+            slots.shop_name = shop_name_match.group(1)
+
         # Intent: first matching pattern wins. Only set if a transactional keyword
         # is found — a pure recommendation turn leaves pending_intent untouched
         # so that prior-turn intents are preserved (see merge() logic).
@@ -590,10 +595,13 @@ class ConversationSlots(BaseModel):
         # occasional missed match.
         text_stripped = user_text.strip()
         should_extract_region = (
-            len(text_stripped) <= 8
-            or cls.has_store_finder_intent(user_text)
-            or slots.pending_intent == "stock"
-            or slots.pending_intent == "reservation"
+            slots.shop_name is None
+            and (
+                len(text_stripped) <= 8
+                or cls.has_store_finder_intent(user_text)
+                or slots.pending_intent == "stock"
+                or slots.pending_intent == "reservation"
+            )
         )
         if should_extract_region:
             region_match = cls._REGION_PATTERN.search(user_text)

@@ -1478,11 +1478,24 @@ class StreamingMultiAgentCoordinator:
         fulfilled_intent = StreamingMultiAgentCoordinator._TOOL_TO_FULFILL.get(tool_name)
         tool_succeeded = isinstance(parsed_data, dict) and parsed_data.get("status") == "success"
         if fulfilled_intent and tool_succeeded and slots.pending_intent == fulfilled_intent:
-            slots.pending_intent = None
-            changed = True
-            logger.debug(
-                f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
+            named_store_stock_pending = (
+                fulfilled_intent == "stock"
+                and tool_name == "get_logistics_inventory_tool"
+                and (getattr(slots, "shop_id", None) or getattr(slots, "shop_name", None))
             )
+            if named_store_stock_pending:
+                logger.debug(
+                    "[SLOTS] Keeping pending_intent='stock' after logistics inventory because a named store "
+                    "stock check is still pending: shop_id=%r shop_name=%r",
+                    getattr(slots, "shop_id", None),
+                    getattr(slots, "shop_name", None),
+                )
+            else:
+                slots.pending_intent = None
+                changed = True
+                logger.debug(
+                    f"[SLOTS] Cleared pending_intent={fulfilled_intent!r} after {tool_name} completed successfully"
+                )
 
         if tool_name == "search_car_model_tool" and (slots.tire_size is not None or slots.goods_no is not None):
             slots.tire_size = None
@@ -7619,6 +7632,15 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
     return ConversationSlots.has_product_keyword(text) or _has_sized_product_name_hint(text)
 
 
+def _is_plain_store_search_turn(text: str, regex_slots: ConversationSlots) -> bool:
+    """True for explicit general store searches that should not inherit stock/order state."""
+    if not text or regex_slots.pending_intent is not None:
+        return False
+    if not ConversationSlots.has_store_finder_intent(text):
+        return False
+    return not ConversationSlots.has_product_keyword(text)
+
+
 def _clear_stale_product_identity_for_fresh_transaction(
     slots: ConversationSlots,
     text: str,
@@ -9513,6 +9535,28 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
+            if _is_plain_store_search_turn(last_user_text, regex_slots):
+                cleared_values = {
+                    "pending_intent": merged_slots.pending_intent,
+                    "goods_no": merged_slots.goods_no,
+                    "tire_size": merged_slots.tire_size,
+                    "ord_qty": merged_slots.ord_qty,
+                    "shop_id": merged_slots.shop_id,
+                    "shop_name": merged_slots.shop_name,
+                }
+                merged_slots.pending_intent = None
+                merged_slots.goal_type = "store_finder"
+                merged_slots.goods_no = None
+                merged_slots.tire_size = None
+                merged_slots.ord_qty = None
+                merged_slots.payment_amount = None
+                merged_slots.shop_id = None
+                merged_slots.shop_name = None
+                logger.debug(
+                    "[SLOTS] Plain store-search turn; cleared stale stock/order context: %s",
+                    {k: v for k, v in cleared_values.items() if v not in (None, "")},
+                )
+
             # Carry multi-variant recommendation requests across slot-fill turns.
             # Example:
             #   U1: "미쉐린, 콘티넨탈, 브리지스톤 1개씩 BMW 3시리즈 추천"
@@ -10068,6 +10112,7 @@ class TStationChatServiceV2:
                 "tire_size": merged_slots.tire_size,
                 "region": merged_slots.region,
                 "shop_id": merged_slots.shop_id,
+                "store_name": merged_slots.shop_name,
             }
             policy_plan = plan_cross_domain_turn(last_user_text, known_slots=policy_known_slots)
             policy_domains = _agent_domains_from_cross_domain_values(
@@ -10639,6 +10684,7 @@ class TStationChatServiceV2:
                 "tire_size": merged_slots.tire_size,
                 "region": merged_slots.region,
                 "shop_id": merged_slots.shop_id,
+                "store_name": merged_slots.shop_name,
             }
             cross_domain_plan = plan_cross_domain_turn(last_user_text, known_slots=known_slots)
             planned_domains = _agent_domains_from_cross_domain_values(
