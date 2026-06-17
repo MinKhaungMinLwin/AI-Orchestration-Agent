@@ -1365,6 +1365,32 @@ def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
     assert _should_apply_product_attribute_resolver(text, set()) is True
 
 
+def test_product_warranty_question_does_not_apply_attribute_resolver() -> None:
+    text = "벤투스 S2 AS 워런티 돼?"
+
+    assert _is_product_attribute_lookup_query(text) is False
+    assert _should_apply_product_attribute_resolver(text, set()) is False
+    assert (
+        _build_product_attribute_event_from_search_results(
+            text,
+            [
+                (
+                    "벤투스 S2 AS",
+                    {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {"goods_nm": "벤투스 S2 AS", "car_type_nm": "승용차"},
+                            ],
+                        },
+                    },
+                ),
+            ],
+        )
+        is None
+    )
+
+
 def test_product_attribute_query_suppresses_inherited_recommendation_context_without_explicit_size() -> None:
     assert _should_suppress_inherited_recommendation_context_for_product_attribute("키너지 EX 설명좀") is True
 
