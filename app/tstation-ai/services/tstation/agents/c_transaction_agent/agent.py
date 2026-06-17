@@ -1506,6 +1506,14 @@ NOT a store-hours lookup.
 Only use `get_store_detail_tool(cal_day=YYYYMMDD)` when the user asks if the store is open/closed
 or asks about hours/holiday for a specific date without requesting reservation/visit slots.
 
+⚠️ TOP GATE 0 EXCLUSION — 영업시간/마감시간 조회는 이 gate 에서 제외:
+"몇시까지야", "몇 시에 닫아", "영업시간", "언제까지 열어", "마감 시간", "주말에도 열어?"
+(예약·방문 키워드 없음) 는 영업시간 정보 조회 → TOP GATE 0 경로 아님.
+→ Flow 5 General 로 라우팅: get_store_list_tool + get_store_detail_tool(TODAY) 호출.
+→ 답변에 `shop_biz_end_time` (평일 마감) / `shop_sat_end_time` (토요일 마감) 사용.
+→ get_store_schedule_tool / datepick template 절대 사용 금지.
+⚠️ available_slots (예약 슬롯) 와 혼동 금지 — 슬롯은 예약 접수 가능 시간이며 영업 마감시간이 아님.
+
 ⚠️ TOP GATE 1 — Sunday/Holiday open-store filter (TC-050):
 If user asks which stores are open on a SPECIFIC day of the week or holiday
 (patterns: "이번 주 일요일에 문 여는", "X요일에 영업하는", "공휴일에 영업하는", "X일에 문 여는",
@@ -1552,9 +1560,14 @@ Trigger ONLY when no booking/order/stock context is present (see STORE SELECTION
      detail responses, say "확인되지 않습니다" rather than asserting absence.
    - Field → answer mapping (compose only the lines relevant to the asked
      attribute(s); do NOT dump every field):
-       • 운영시간 → `shop_biz_strt_wday`~`shop_biz_end_wday` 평일
-         `shop_biz_strt_time`~`shop_biz_end_time`, 토요일
-         `shop_sat_strt_time`~`shop_sat_end_time`
+       • 운영시간 / 마감시간 ("몇시까지야", "영업 종료 시간", "언제까지 열어") →
+         평일: `shop_biz_strt_wday`~`shop_biz_end_wday` `shop_biz_strt_time`~`shop_biz_end_time`
+         토요일: `shop_sat_strt_time`~`shop_sat_end_time` (없으면 토요일 휴무)
+         주말 운영 여부 ("주말에도 열어?", "토요일/일요일 영업하나요"):
+           - `shop_biz_end_wday` 가 "토요일" 이면 → 토요일 영업 (sat 시간), 일요일 휴무
+           - `shop_biz_end_wday` 가 "일요일" 이면 → 일요일도 영업 (평일 시간과 동일)
+           - `shop_sat_strt_time` / `shop_sat_end_time` 가 없으면 → 토요일 휴무
+         ⚠️ 마감시간 답변 시 available_slots (예약 슬롯) 값 사용 금지 — 슬롯과 마감시간은 다름
        • 휴무일 → `holiday`
        • 주소 → `road_addr_base`+`road_addr_dtl` (없으면 `addr_base`+`addr_dtl`)
        • 전화 → `tel_no`
