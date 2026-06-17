@@ -1054,6 +1054,23 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 1. Extract goods_no from context (if unavailable → route to Discovery)
 2. get_final_price_tool(goods_no)
 3. Show pricing table: Base Price | Discount | Labor Cost | **Final Price**
+
+   ⚠️ FIELD MAPPING (CRITICAL — same rule as STEP 5.5 PRICE RESOLUTION):
+   Let SP = sale_prc, EXTRA = extra_fvr_sale_prc, CHEAP = cheapest_final_prc.
+     FINAL  = CHEAP if CHEAP not null/0 else EXTRA   // fallback to SP only if both null/0
+     DSC    = SP - FINAL                              // clamp to 0 if negative
+   • Base Price  → `sale_prc`
+   • Discount    → DSC (computed, never read a "discount" field directly)
+   • Labor Cost  → `wage_prc`
+   • **Final Price** → FINAL. `cheapest_final_prc` is the member's actual best price
+     (matches checkout paymentAmount) — ALWAYS prefer it over `extra_fvr_sale_prc` when present.
+     NEVER substitute `extra_fvr_sale_prc` or `sale_prc` for Final Price while `cheapest_final_prc`
+     is a non-null/non-zero value.
+   • If the user explicitly asks "최종가" / "최종 가격" / "최저가": answer MUST lead with FINAL
+     (= cheapest_final_prc when available), not EXTRA or SP.
+   • Worked example: `{"sale_prc": 686400, "extra_fvr_sale_prc": 528200, "cheapest_final_prc": 652100}`
+     → FINAL=652100 (CHEAP, not EXTRA 528200), DSC=34300.
+
 4. Ask: check stock or order?
 
 
