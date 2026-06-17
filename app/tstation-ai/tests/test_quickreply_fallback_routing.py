@@ -40,6 +40,7 @@ from services.tstation.chat import (
     _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
     _build_product_coupon_price_amount_event,
+    _build_product_coupon_price_no_product_event,
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
@@ -1976,6 +1977,16 @@ def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> Non
     assert "쿠폰 적용 할인액: 200,000원" in assistant
     assert "최종 혜택가: 600,000원" in assistant
     assert "한국타이어 30% 할인권" in assistant
+
+
+def test_product_coupon_price_no_product_event_stops_without_price_cta() -> None:
+    event = _build_product_coupon_price_no_product_event("벤투스 에어S", "225/55R17")
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요" in assistant
+    assert "상품을 찾았어요" not in assistant
+    assert "가격 확인" not in labels
 
 
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:

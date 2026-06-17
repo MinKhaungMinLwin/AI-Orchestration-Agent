@@ -6388,6 +6388,29 @@ def _build_product_coupon_price_amount_event(
     }
 
 
+def _build_product_coupon_price_no_product_event(product_name: str, tire_size: str) -> dict:
+    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
+    size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_coupon_price_no_product",
+        "data": {
+            "assistantResponse": (
+                f"{size_label}에 맞는 {product_label} 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
+                "다른 사이즈로 다시 확인하거나, 사이즈 없이 해당 상품 전체를 확인해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
+                {"label": "사이즈 없이 검색", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _coupon_target_product_name_for_query(user_text: str) -> str | None:
     frame = build_price_intent_frame(user_text)
     if frame.intent != "product_coupon_eligibility":
@@ -12622,23 +12645,13 @@ class TStationChatServiceV2:
                         preferred_keyword,
                         target_product_name,
                         allow_first_row_fallback=True,
-                    )
+                )
                 goods_no = str((product_row or {}).get("goods_no") or "").strip()
                 if not goods_no:
-                    from services.tstation.template_mapper import try_build_template
-
-                    mapped_event = try_build_template(
-                        [{"tool": "search_product_tool", "args": search_input, "data": search_result}],
-                        (
-                            f"{preferred_keyword} {target_tire_size} 기준 상품을 찾았어요. "
-                            "상품을 선택해 주시면 쿠폰 적용 금액을 이어서 확인할게요."
-                        ),
+                    return emitted_events, _build_product_coupon_price_no_product_event(
+                        preferred_keyword,
+                        target_tire_size,
                     )
-                    if mapped_event is not None:
-                        mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
-                        mapped_event["assistant_response_source"] = "code_product_coupon_price_product_selection"
-                        return emitted_events, mapped_event
-                    return None
 
                 price_input = {"goods_no": goods_no}
                 emitted_events.append({
