@@ -76,6 +76,7 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("fuel_efficiency", re.compile(r"연비|회전\s*저항|rr\b", re.IGNORECASE)),
     ("wet", re.compile(r"빗길|젖은\s*노면|젖은노면|wet|제동\s*등급", re.IGNORECASE)),
     ("price_grade", re.compile(r"상품\s*등급|가격\s*등급|프리미엄|스탠다드|이코노미", re.IGNORECASE)),
+    ("price", re.compile(r"가격\s*비교|가격\s*차이|더\s*싸|더\s*비싸|가격은\s*얼마|얼마나\s*저렴", re.IGNORECASE)),
     ("release", re.compile(r"출시|출시일|출시년도|등록일", re.IGNORECASE)),
     ("origin", re.compile(r"원산지|생산국|제조국|어느\s*나라", re.IGNORECASE)),
     ("load", re.compile(r"하중|하중지수|무게", re.IGNORECASE)),
