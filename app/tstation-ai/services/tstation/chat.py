@@ -7445,6 +7445,24 @@ def _build_size_only_product_search_tool_input(
     return {"keyword": keyword, "limit": 10, "size": tire_size}
 
 
+def _recent_product_coupon_price_target(user_text: str, recent_context: str) -> dict[str, Any] | None:
+    current_size = normalize_tire_size(user_text)
+    if not current_size:
+        return None
+    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
+        if line == str(user_text or "").strip():
+            continue
+        if not _is_product_coupon_price_amount_query(line):
+            continue
+        product_name = _coupon_target_product_name_for_query(line)
+        parsed = _split_product_size_quantity_from_text(product_name, line)
+        if not parsed.get("product_name") or not parsed.get("quantity"):
+            continue
+        parsed["tire_size"] = current_size
+        return parsed
+    return None
+
+
 def _should_suppress_inherited_recommendation_context_for_product_attribute(user_text: str) -> bool:
     if _is_ev_suitability_turn(user_text):
         return False
@@ -12540,6 +12558,12 @@ class TStationChatServiceV2:
         ) -> tuple[list[dict], dict] | None:
             target_product_name = target_product_name or _coupon_target_product_name_for_query(user_query)
             normalized_target = _split_product_size_quantity_from_text(target_product_name, user_query)
+            if (
+                not normalized_target.get("product_name")
+                and normalize_tire_size(user_query)
+                and _recent_product_coupon_price_target(user_query, recent_user_context_text)
+            ):
+                normalized_target = _recent_product_coupon_price_target(user_query, recent_user_context_text) or normalized_target
             target_product_name = str(normalized_target.get("product_name") or "").strip()
             if not target_product_name:
                 return None
@@ -12547,6 +12571,115 @@ class TStationChatServiceV2:
             target_quantity = normalized_target.get("quantity")
 
             emitted_events: list[dict] = []
+            if (
+                target_tire_size
+                and target_quantity
+                and _is_product_coupon_price_amount_query(user_query)
+            ):
+                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+                from services.tstation.agents.c_transaction_agent.tools import get_final_price_tool as _final_price_tool
+
+                preferred_keyword = _preferred_product_search_keyword(target_product_name)
+                search_input = {"keyword": preferred_keyword, "size": target_tire_size, "limit": 10}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_search = await asyncio.to_thread(_search_product_tool.invoke, search_input)
+                    search_result = _tool_result_dict(raw_search)
+                except Exception as exc:
+                    logger.exception("[PRODUCT_COUPON_PRICE] search_product_tool failed for %s", preferred_keyword)
+                    search_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("search_product_tool", search_input, search_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Compatibility AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": search_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": search_input,
+                    "output": json.dumps(search_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "search_product_tool",
+                    "source_domain": "discovery",
+                })
+
+                product_row = _unique_product_row_from_sized_search_result(
+                    search_result,
+                    preferred_keyword,
+                    target_tire_size,
+                )
+                if product_row is None:
+                    product_row = _pick_product_row_from_search_result(
+                        search_result,
+                        preferred_keyword,
+                        target_product_name,
+                        allow_first_row_fallback=True,
+                    )
+                goods_no = str((product_row or {}).get("goods_no") or "").strip()
+                if not goods_no:
+                    from services.tstation.template_mapper import try_build_template
+
+                    mapped_event = try_build_template(
+                        [{"tool": "search_product_tool", "args": search_input, "data": search_result}],
+                        (
+                            f"{preferred_keyword} {target_tire_size} 기준 상품을 찾았어요. "
+                            "상품을 선택해 주시면 쿠폰 적용 금액을 이어서 확인할게요."
+                        ),
+                    )
+                    if mapped_event is not None:
+                        mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                        mapped_event["assistant_response_source"] = "code_product_coupon_price_product_selection"
+                        return emitted_events, mapped_event
+                    return None
+
+                price_input = {"goods_no": goods_no}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_final_price_tool",
+                    "display_name": "최종 혜택가 확인 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_price = await asyncio.to_thread(_final_price_tool.invoke, price_input)
+                    price_result = _tool_result_dict(raw_price)
+                except Exception as exc:
+                    logger.exception("[PRODUCT_COUPON_PRICE] get_final_price_tool failed for %s", goods_no)
+                    price_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("get_final_price_tool", price_input, price_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": price_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": price_input,
+                    "output": json.dumps(price_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_final_price_tool",
+                    "source_domain": "transaction",
+                })
+                price_event = _build_product_coupon_price_amount_event(
+                    price_result,
+                    product_name=str((product_row or {}).get("goods_nm") or target_product_name),
+                    tire_size=target_tire_size,
+                    quantity=int(target_quantity),
+                )
+                if price_event is not None:
+                    return emitted_events, price_event
+                return None
+
             from services.tstation.agents.c_transaction_agent.tools import (
                 get_coupon_applicable_products_tool as _coupon_applicable_tool,
                 get_my_coupons_tool as _my_coupons_tool,
@@ -12632,97 +12765,6 @@ class TStationChatServiceV2:
                 "tool": followup_tool_name,
                 "source_domain": "transaction",
             })
-            if (
-                target_tire_size
-                and target_quantity
-                and _is_product_coupon_price_amount_query(user_query)
-            ):
-                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
-                from services.tstation.agents.c_transaction_agent.tools import get_final_price_tool as _final_price_tool
-
-                preferred_keyword = _preferred_product_search_keyword(target_product_name)
-                search_input = {"keyword": preferred_keyword, "size": target_tire_size, "limit": 10}
-                emitted_events.append({
-                    "type": "status",
-                    "status": "tool_start",
-                    "tool": "search_product_tool",
-                    "display_name": "상품 검색 중...",
-                    "source_domain": "discovery",
-                })
-                try:
-                    raw_search = await asyncio.to_thread(_search_product_tool.invoke, search_input)
-                    search_result = _tool_result_dict(raw_search)
-                except Exception as exc:
-                    logger.exception("[PRODUCT_COUPON_PRICE] search_product_tool failed for %s", preferred_keyword)
-                    search_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
-                _record_code_tool_result("search_product_tool", search_input, search_result)
-                emitted_events.append({
-                    "type": "agent_flow",
-                    "agent": "[Product Compatibility AF]",
-                    "agent_class": "Discovery Agent",
-                    "status": search_result.get("status", "success"),
-                    "source_domain": "discovery",
-                })
-                emitted_events.append({
-                    "type": "tool",
-                    "input": search_input,
-                    "output": json.dumps(search_result, ensure_ascii=False),
-                    "node": "tools",
-                    "tool": "search_product_tool",
-                    "source_domain": "discovery",
-                })
-                product_row = _unique_product_row_from_sized_search_result(
-                    search_result,
-                    preferred_keyword,
-                    target_tire_size,
-                )
-                if product_row is None:
-                    product_row = _pick_product_row_from_search_result(
-                        search_result,
-                        preferred_keyword,
-                        target_product_name,
-                        allow_first_row_fallback=True,
-                    )
-                goods_no = str((product_row or {}).get("goods_no") or "").strip()
-                if goods_no:
-                    price_input = {"goods_no": goods_no}
-                    emitted_events.append({
-                        "type": "status",
-                        "status": "tool_start",
-                        "tool": "get_final_price_tool",
-                        "display_name": "최종 혜택가 확인 중...",
-                        "source_domain": "transaction",
-                    })
-                    try:
-                        raw_price = await asyncio.to_thread(_final_price_tool.invoke, price_input)
-                        price_result = _tool_result_dict(raw_price)
-                    except Exception as exc:
-                        logger.exception("[PRODUCT_COUPON_PRICE] get_final_price_tool failed for %s", goods_no)
-                        price_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
-                    _record_code_tool_result("get_final_price_tool", price_input, price_result)
-                    emitted_events.append({
-                        "type": "agent_flow",
-                        "agent": "[Price AF]",
-                        "agent_class": "Transaction Agent",
-                        "status": price_result.get("status", "success"),
-                        "source_domain": "transaction",
-                    })
-                    emitted_events.append({
-                        "type": "tool",
-                        "input": price_input,
-                        "output": json.dumps(price_result, ensure_ascii=False),
-                        "node": "tools",
-                        "tool": "get_final_price_tool",
-                        "source_domain": "transaction",
-                    })
-                    price_event = _build_product_coupon_price_amount_event(
-                        price_result,
-                        product_name=str((product_row or {}).get("goods_nm") or target_product_name),
-                        tire_size=target_tire_size,
-                        quantity=int(target_quantity),
-                    )
-                    if price_event is not None:
-                        return emitted_events, price_event
             return emitted_events, _build_product_coupon_eligibility_event(
                 followup_result,
                 coupon_rows,
@@ -13780,6 +13822,8 @@ class TStationChatServiceV2:
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
         if _is_owned_coupon_expiry_lookup_query(user_query):
             coupon_gate_resolution = await _resolve_owned_coupon_expiry_lookup_with_code()
+        elif _recent_product_coupon_price_target(user_query, recent_user_context_text):
+            coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code()
         elif coupon_decision is not None and coupon_decision.is_actionable:
             if coupon_decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP:
                 coupon_gate_resolution = await _resolve_owned_coupon_lookup_with_code()

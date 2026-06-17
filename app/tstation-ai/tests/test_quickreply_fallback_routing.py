@@ -121,6 +121,7 @@ from services.tstation.chat import (
     _past_event_page_event,
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
+    _recent_product_coupon_price_target,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
     _parse_requested_reservation_date,
@@ -1935,6 +1936,19 @@ def test_product_coupon_price_amount_query_is_detected() -> None:
         "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
     )
     assert not _is_product_coupon_price_amount_query("벤투스 에어S에 적용 가능한 쿠폰 뭐 있어?")
+
+
+def test_size_only_followup_recovers_coupon_price_target_from_recent_context() -> None:
+    target = _recent_product_coupon_price_target(
+        "2255517",
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?\n2255517",
+    )
+
+    assert target == {
+        "product_name": "Ventus air S",
+        "tire_size": "225/55R17",
+        "quantity": 4,
+    }
 
 
 def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
