@@ -42,6 +42,7 @@ from services.tstation.chat import (
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
+    _build_size_only_product_search_tool_input,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
@@ -82,6 +83,7 @@ from services.tstation.chat import (
     _is_owned_coupon_best_discount_query,
     _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
+    _split_product_size_quantity_from_text,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
@@ -1490,6 +1492,28 @@ def test_sized_product_name_search_rejects_size_only_text() -> None:
     assert _build_bare_product_search_tool_input("2356018") is None
 
 
+def test_size_only_followup_search_reuses_recent_product_context() -> None:
+    assert _build_size_only_product_search_tool_input(
+        "2255517",
+        recent_context="ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?\n2255517",
+    ) == {
+        "keyword": "벤투스 에어S",
+        "limit": 10,
+        "size": "225/55R17",
+    }
+
+
+def test_size_only_followup_search_reuses_recent_search_tool_keyword() -> None:
+    assert _build_size_only_product_search_tool_input(
+        "2255517",
+        prev_tool_data=[{"tool": "search_product_tool", "input": {"keyword": "벤투스 에어S"}}],
+    ) == {
+        "keyword": "벤투스 에어S",
+        "limit": 10,
+        "size": "225/55R17",
+    }
+
+
 def test_sized_product_name_search_can_resolve_unique_ventus_evo_goods_no() -> None:
     row = _unique_product_row_from_sized_search_result(
         {
@@ -1879,6 +1903,29 @@ def test_strong_coupon_applicability_query_does_not_hijack_coupon_issue_requests
 
 def test_product_coupon_eligibility_keeps_explicit_product_name() -> None:
     assert _coupon_target_product_name_for_query("아이온 에보 AS에 30% 할인 쿠폰 적용돼?") == "아이온"
+
+
+def test_product_coupon_query_splits_compact_size_and_quantity_from_product_name() -> None:
+    parsed = _split_product_size_quantity_from_text(
+        "ventus air S 2255517",
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?",
+    )
+
+    assert parsed == {
+        "product_name": "ventus air S",
+        "tire_size": "225/55R17",
+        "quantity": 4,
+    }
+
+
+def test_price_policy_frame_keeps_coupon_product_size_quantity_separate() -> None:
+    frame = build_price_intent_frame(
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
+    )
+
+    assert frame.entities["product_name"] == "Ventus air S"
+    assert frame.entities["tire_size"] == "225/55R17"
+    assert frame.entities["quantity"] == 4
 
 
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:

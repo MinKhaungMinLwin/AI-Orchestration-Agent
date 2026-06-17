@@ -6307,7 +6307,8 @@ def _coupon_target_product_name_for_query(user_text: str) -> str | None:
     if frame.intent != "product_coupon_eligibility":
         return None
     product_name = str(frame.entities.get("product_name") or "").strip()
-    return product_name or None
+    normalized = _split_product_size_quantity_from_text(product_name, user_text)
+    return str(normalized.get("product_name") or "").strip() or None
 
 
 def _is_strong_coupon_applicability_query(user_text: str) -> bool:
@@ -7180,6 +7181,7 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
 )
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
 _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
+_PRODUCT_QUERY_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
 _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE = re.compile(
     r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
@@ -7203,6 +7205,30 @@ def _fallback_sized_product_keyword(user_text: str) -> str:
     if all(tok.isdigit() for tok in meaningful_tokens):
         return ""
     return keyword
+
+
+def _split_product_size_quantity_from_text(product_name: str | None, user_text: str | None = None) -> dict[str, Any]:
+    """Split model, compact tire size and quantity when an upstream gate merged them."""
+    product_text = str(product_name or "").strip()
+    full_text = " ".join(part for part in (product_text, str(user_text or "").strip()) if part)
+    tire_size = normalize_tire_size(full_text)
+    quantity_match = _PRODUCT_QUERY_QUANTITY_RE.search(full_text)
+
+    cleaned = product_text
+    if cleaned:
+        cleaned = _SIZED_PRODUCT_SEARCH_SIZE_RE.sub(" ", cleaned)
+        cleaned = _PRODUCT_QUERY_QUANTITY_RE.sub(" ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,./")
+    if not cleaned and user_text:
+        fallback = _fallback_sized_product_keyword(str(user_text))
+        cleaned = _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.sub(" ", fallback)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,./")
+
+    return {
+        "product_name": cleaned or product_text,
+        "tire_size": tire_size,
+        "quantity": int(quantity_match.group(1)) if quantity_match else None,
+    }
 
 
 def _has_sized_product_name_hint(user_text: str) -> bool:
@@ -7262,6 +7288,75 @@ def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
     if frame.entities.get("brand_cd"):
         tool_input["brand_cd"] = frame.entities["brand_cd"]
     return tool_input
+
+
+def _recent_product_keyword_for_size_only_search(
+    user_text: str,
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    slots: Any | None = None,
+) -> str | None:
+    if not normalize_tire_size(user_text):
+        return None
+    if _fallback_sized_product_keyword(user_text):
+        return None
+
+    for entry in reversed(prev_tool_data or []):
+        if entry.get("tool") != "search_product_tool":
+            continue
+        tool_input = entry.get("input") if isinstance(entry.get("input"), dict) else entry.get("args")
+        if isinstance(tool_input, dict):
+            keyword = str(tool_input.get("keyword") or "").strip()
+            if keyword:
+                return _preferred_product_search_keyword(keyword)
+        data = _unwrap_tool_data(entry.get("data"))
+        rows = data.get("items") if isinstance(data, dict) else None
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+                if row_name:
+                    return _preferred_product_search_keyword(row_name)
+
+    slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
+    if slot_model:
+        return _preferred_product_search_keyword(slot_model)
+
+    current_size = normalize_tire_size(user_text)
+    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
+        if normalize_tire_size(line) == current_size and not _fallback_sized_product_keyword(line):
+            continue
+        frame = build_discovery_intent_frame(line)
+        product_names = tuple(frame.entities.get("product_names") or ())
+        if product_names:
+            return _preferred_product_search_keyword(str(product_names[0]))
+        coupon_product = _coupon_target_product_name_for_query(line)
+        if coupon_product:
+            return _preferred_product_search_keyword(coupon_product)
+    return None
+
+
+def _build_size_only_product_search_tool_input(
+    user_text: str,
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    slots: Any | None = None,
+) -> dict | None:
+    tire_size = normalize_tire_size(user_text)
+    if not tire_size:
+        return None
+    keyword = _recent_product_keyword_for_size_only_search(
+        user_text,
+        prev_tool_data=prev_tool_data,
+        recent_context=recent_context,
+        slots=slots,
+    )
+    if not keyword:
+        return None
+    return {"keyword": keyword, "limit": 10, "size": tire_size}
 
 
 def _should_suppress_inherited_recommendation_context_for_product_attribute(user_text: str) -> bool:
@@ -12358,6 +12453,8 @@ class TStationChatServiceV2:
             target_product_name: str | None = None,
         ) -> tuple[list[dict], dict] | None:
             target_product_name = target_product_name or _coupon_target_product_name_for_query(user_query)
+            normalized_target = _split_product_size_quantity_from_text(target_product_name, user_query)
+            target_product_name = str(normalized_target.get("product_name") or "").strip()
             if not target_product_name:
                 return None
 
@@ -12800,10 +12897,20 @@ class TStationChatServiceV2:
             return emitted_events, comparison_event
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
-            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+            size_only_tool_input = _build_size_only_product_search_tool_input(
+                user_query,
+                prev_tool_data=prev_tool_data or [],
+                recent_context=recent_user_context_text,
+                slots=initial_slots,
+            )
+            if domains != [MultiAgentDomain.Domain.DISCOVERY] and not (
+                size_only_tool_input
+                and domains
+                and MultiAgentDomain.Domain.DISCOVERY in domains
+            ):
                 return None
             confirmed_tire_size = getattr(initial_slots, "tire_size", None) if initial_slots is not None else None
-            if TStationChatServiceV2._resolve_goods_no_from_selection(
+            if size_only_tool_input is None and TStationChatServiceV2._resolve_goods_no_from_selection(
                 user_query,
                 prev_tool_data or [],
                 current_tire_size=confirmed_tire_size,
@@ -12812,10 +12919,11 @@ class TStationChatServiceV2:
             if not (
                 _is_bare_product_name_search_query(user_query)
                 or _is_sized_product_name_search_query(user_query)
+                or size_only_tool_input is not None
             ):
                 return None
 
-            tool_input = _build_bare_product_search_tool_input(user_query)
+            tool_input = _build_bare_product_search_tool_input(user_query) or size_only_tool_input
             if tool_input is None:
                 return None
 

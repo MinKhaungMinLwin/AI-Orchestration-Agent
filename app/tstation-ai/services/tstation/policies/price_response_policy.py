@@ -23,6 +23,8 @@ _BIRTHDAY_COUPON_RE = re.compile(r"생일|birthday", re.IGNORECASE)
 _FAMILY_COUPON_RE = re.compile(r"패밀리|family", re.IGNORECASE)
 _EMPLOYEE_COUPON_RE = re.compile(r"임직원|employee|직원", re.IGNORECASE)
 _PERCENT_COUPON_RE = re.compile(r"(\d{1,2})\s*%")
+_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _PRODUCT_RE = re.compile(
     r"키너지\s*EX|kinergy\s*EX|벤투스\s*(?:air\s*S|S2\s*AS)|ventus\s*(?:air\s*S|S2\s*AS)|"
     r"다이나프로\s*HPX|dynapro\s*HPX|아이온|iON",
@@ -61,6 +63,13 @@ def build_price_intent_frame(
     elif _EMPLOYEE_COUPON_RE.search(text):
         entities["coupon_keyword"] = "employee"
         entities["coupon_scope"] = "pattern"
+    size_match = _SIZE_COMPACT_RE.search(text)
+    if size_match:
+        entities["tire_size"] = f"{size_match.group(1)}/{size_match.group(2)}R{size_match.group(3)}"
+        entities["explicit_tire_size"] = entities["tire_size"]
+    quantity_match = _QUANTITY_RE.search(text)
+    if quantity_match:
+        entities["quantity"] = int(quantity_match.group(1))
 
     if _NONEXISTENT_BENEFIT_RE.search(text) and (_ISSUE_RE.search(text) or _COUPON_RE.search(text)):
         intent = "nonexistent_benefit"
