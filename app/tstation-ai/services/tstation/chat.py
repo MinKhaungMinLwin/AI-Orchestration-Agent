@@ -2954,6 +2954,7 @@ _ORDER_ARRIVAL_STATUS_KEYWORD_RE = re.compile(
 )
 _ORDER_FIRST_REF_RE = re.compile(r"첫\s*번째|1\s*번|최근|그거|그\s*주문|해당\s*건|그\s*이후|이후에\s*매장", re.IGNORECASE)
 _ORDER_TEXT_LINE_RE = re.compile(r"\b(?P<ord_no>O[A-Za-z0-9]{8,})\b(?P<tail>[^\n]*)", re.IGNORECASE)
+_ORDER_ROW_STATUS_RE = re.compile(r"주문완료|출하지시|장착완료|배송중|배송완료|배송|결제완료|상품준비|주문접수")
 _COUPON_DIRECT_ID_RE = re.compile(r"\bC[A-Za-z0-9]{8,}\b")
 _COUPON_DISCOUNT_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _COUPON_MATCH_STOPWORDS = {
@@ -5352,10 +5353,16 @@ def _order_rows_from_messages(messages: list[dict]) -> list[dict]:
             if ord_no in seen:
                 continue
             tail = match.group("tail") or ""
-            parts = [part.strip() for part in re.split(r"\t+|\s{2,}", tail) if part.strip()]
-            goods_nm = parts[1] if len(parts) >= 2 and re.search(r"주문완료|출하지시|장착완료|배송", parts[0]) else None
-            if goods_nm is None and parts:
-                goods_nm = parts[0]
+            if "|" in tail:
+                parts = [part.strip() for part in tail.split("|") if part.strip()]
+            elif "\t" in tail or re.search(r"\s{2,}", tail):
+                parts = [part.strip() for part in re.split(r"\t+|\s{2,}", tail) if part.strip()]
+            else:
+                continue
+            status_idx = next((idx for idx, part in enumerate(parts) if _ORDER_ROW_STATUS_RE.search(part)), None)
+            if status_idx is None:
+                continue
+            goods_nm = parts[status_idx + 1] if len(parts) > status_idx + 1 else ""
             rows.append({"ord_no": ord_no, "goods_nm": goods_nm or ""})
             seen.add(ord_no)
     return rows

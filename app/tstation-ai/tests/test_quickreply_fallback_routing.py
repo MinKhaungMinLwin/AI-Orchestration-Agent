@@ -1062,6 +1062,29 @@ def test_order_arrival_direct_order_number_does_not_use_current_question_as_prod
     assert "주문췻호건 환불 언제돼" not in response
 
 
+def test_order_arrival_history_parser_ignores_assistant_refund_sentence() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "content": "주문번호 O202605120019340 취소 건의 환불 일정이 궁금하시군요. 아래 버튼을 눌러 1:1 문의를 진행해 주세요 😊",
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |\n"
+                "|---|---|---|---|---|\n"
+                "| O202605180019345 | 출하지시 | 벤투스 S1 에보 Z AS | 4 | 2026-05-18 |"
+            ),
+        },
+    ]
+
+    resolved = _resolve_order_row_for_arrival_query("최근 주문 배송 예정일 알려줘", messages=messages)
+
+    assert resolved is not None
+    assert resolved["ord_no"] == "O202605180019345"
+    assert resolved["goods_nm"] == "벤투스 S1 에보 Z AS"
+
+
 def test_order_arrival_status_formats_delivery_date_without_time_and_no_direct_visit_claim() -> None:
     event = _build_order_arrival_status_event(
         {
