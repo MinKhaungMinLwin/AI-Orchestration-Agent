@@ -49,6 +49,7 @@ from services.tstation.policies.discovery_intent_policy import (
     build_discovery_intent_frame,
     is_default_benefit_request,
     is_default_tire_shopping_request,
+    is_best_seller_request,
     is_external_price_comparison_request,
     normalize_tire_size,
     plan_discovery_tools,
@@ -4269,15 +4270,6 @@ def _is_oe_replacement_context(context_text: str | None, current_text: str | Non
     return _is_oe_replacement_equivalent_query(context_text) and not _is_owned_vehicle_selection_cta(current_text)
 
 
-_BEST_SELLER_AGGREGATE_TIRE_RE = re.compile(
-    r"베스트\s*셀러|"
-    r"(?=.*(?:타이어|상품))"
-    r"(?=.*(?:베스트|많이\s*(?:구매한|산|팔린)|"
-    r"(?:젤|제일|가장)\s*많이\s*(?:구매한|산|팔린)|잘\s*팔리|잘\s*나가))",
-    re.IGNORECASE,
-)
-
-
 def _should_force_best_seller_code_route(user_text: str | None, domains: list[MultiAgentDomain.Domain]) -> bool:
     """Use deterministic best-seller tool routing even if 구매한 biases domain classification.
 
@@ -4292,7 +4284,7 @@ def _should_force_best_seller_code_route(user_text: str | None, domains: list[Mu
         return False
     if domains == [MultiAgentDomain.Domain.DISCOVERY]:
         return True
-    return bool(_BEST_SELLER_AGGREGATE_TIRE_RE.search(text))
+    return is_best_seller_request(text, include_demographic_preference=False)
 
 
 def _is_oe_replacement_followup_query(user_text: str | None) -> bool:

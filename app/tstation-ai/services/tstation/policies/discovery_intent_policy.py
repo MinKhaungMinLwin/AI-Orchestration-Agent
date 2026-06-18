@@ -54,7 +54,17 @@ _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNO
 _COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
 _BEST_SELLER_RE = re.compile(
-    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|젤\s*많이\s*(?:구매한|산)|잘\s*나가",
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔린)|잘\s*나가|"
+    r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)",
+    re.IGNORECASE,
+)
+_BEST_SELLER_AGGREGATE_RE = re.compile(
+    r"베스트\s*셀러|"
+    r"(?=.*(?:타이어|상품))"
+    r"(?=.*(?:베스트|인기|잘\s*팔리|많이\s*(?:사는|구매한|산|팔린)|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔린)|잘\s*나가|"
+    r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)))",
     re.IGNORECASE,
 )
 _DEMOGRAPHIC_ATTRIBUTE_RE = re.compile(
@@ -246,6 +256,20 @@ def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
     return ()
 
 
+def is_best_seller_request(text: str, *, include_demographic_preference: bool = True) -> bool:
+    """Return true for aggregate popularity/sales-ranking requests.
+
+    Keep this helper as the single policy source for best-seller routing so the
+    deterministic runtime path and Discovery intent policy do not drift.
+    """
+    text = text or ""
+    if _BEST_SELLER_RE.search(text) and _BEST_SELLER_AGGREGATE_RE.search(text):
+        return True
+    if not include_demographic_preference:
+        return False
+    return bool(_DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text))
+
+
 def best_seller_period_from_text(text: str) -> str | None:
     """Map best-seller wording to BE period values.
 
@@ -254,10 +278,7 @@ def best_seller_period_from_text(text: str) -> str | None:
     ranking window the BE supports unless the user names a narrower period.
     """
     text = text or ""
-    is_demographic_preference = bool(
-        _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text)
-    )
-    if not _BEST_SELLER_RE.search(text) and not is_demographic_preference:
+    if not is_best_seller_request(text):
         return None
     if _BEST_SELLER_DAY_RE.search(text):
         return "day"

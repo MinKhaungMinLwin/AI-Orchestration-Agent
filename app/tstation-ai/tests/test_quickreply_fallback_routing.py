@@ -185,7 +185,12 @@ from services.tstation.template_mapper import (
     current_user_text,
     try_build_template,
 )
-from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
+from services.tstation.policies.discovery_intent_policy import (
+    best_seller_period_from_text,
+    build_discovery_intent_frame,
+    is_best_seller_request,
+    plan_discovery_tools,
+)
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.price_response_policy import build_price_intent_frame, decide_price_response
 from services.tstation.source_filter import filter_for_context
@@ -3766,7 +3771,17 @@ def test_monthly_best_seller_request_forces_code_route_even_if_transaction_biase
         "이번달 사람들이 젤 많이 구매한 타이어",
         "이번 달 제일 많이 산 타이어",
         "이번달 베스트셀러",
+        "이달 최다 판매 타이어 뭐야",
+        "월간 판매 순위 타이어 알려줘",
     ):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert is_best_seller_request(text)
+        assert best_seller_period_from_text(text) == "month"
+        assert frame.sub_intent == "best_seller_search"
+        assert plan.allowed_tools == ("get_best_selling_products_tool",)
+        assert plan.tool_args_patch == {"period": "month", "limit": 5}
         assert _should_force_best_seller_code_route(
             text,
             [MultiAgentDomain.Domain.TRANSACTION],
