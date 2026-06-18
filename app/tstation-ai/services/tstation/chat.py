@@ -2998,7 +2998,12 @@ _PRICE_POLICY_GUARD_INTENTS = {
 }
 _COUPON_APPLICABILITY_INTENT_RE = re.compile(
     r"쿠폰|할인권|적용\s*가능|적용가능|대상\s*상품|사용\s*가능|사용가능|"
-    r"어디\s*(?:에)?\s*(?:쓸|사용)|쓸\s*수\s*있",
+    r"어디\s*(?:에)?\s*(?:쓸|사용)|쓸\s*수\s*있|먹어|먹히|어떻게\s*써|딜",
+    re.IGNORECASE,
+)
+_SPECIFIC_COUPON_USAGE_QUERY_RE = re.compile(
+    r"(?=.*(?:쿠폰|할인권|딜|deal))"
+    r"(?=.*(?:적용\s*가능|적용가능|사용\s*가능|사용가능|쓸\s*수|쓸수|어떻게\s*써|먹어|먹히|어디\s*(?:에)?\s*(?:써|쓸|사용)))",
     re.IGNORECASE,
 )
 _COUPON_UNMATCHED_TEXT_RE = re.compile(
@@ -3038,6 +3043,12 @@ _COUPON_MATCH_STOPWORDS = {
     "가능",
     "상품",
     "대상",
+    "어떻게",
+    "써",
+    "쓸수",
+    "쓸수있어",
+    "먹어",
+    "먹히",
     "사용",
     "있는",
     "쓸수있는",
@@ -5033,6 +5044,232 @@ def _find_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> dict |
     if re.search(r"쿠폰|할인권|혜택", user_text or "", re.IGNORECASE) and best_score >= 10.0:
         return best_row
     return None
+
+
+def _coupon_match_candidates_from_owned_coupons(user_text: str, tool_result: dict) -> list[tuple[dict, float]]:
+    rows = _coupon_rows_from_my_coupons(tool_result)
+    if not rows:
+        return []
+
+    direct_ids = {item.upper() for item in _COUPON_DIRECT_ID_RE.findall(user_text)}
+    if direct_ids:
+        return [
+            (row, 200.0)
+            for row in rows
+            if str(row.get("cpn_no") or "").upper() in direct_ids
+        ]
+
+    query_norm = _normalize_coupon_match_text(user_text)
+    terms = _coupon_query_terms(user_text)
+    meaningful_query = "".join(terms)
+    discount_match = _COUPON_DISCOUNT_RATE_RE.search(user_text)
+    requested_rate = float(discount_match.group(1)) if discount_match else None
+
+    scored: list[tuple[dict, float]] = []
+    for row in rows:
+        coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
+        name_norm = _normalize_coupon_match_text(coupon_name)
+        if not name_norm:
+            continue
+
+        score = 0.0
+        if name_norm and name_norm in query_norm:
+            score += 100.0
+        if meaningful_query and meaningful_query in name_norm:
+            score += 80.0
+
+        matched_terms = [term for term in terms if term in name_norm]
+        score += len(matched_terms) * 10.0
+        if terms and len(matched_terms) == len(terms):
+            score += 20.0
+
+        if requested_rate is not None:
+            try:
+                coupon_rate = float(row.get("rt_amt_val"))
+            except (TypeError, ValueError):
+                coupon_rate = None
+            if coupon_rate is not None and abs(coupon_rate - requested_rate) < 0.001:
+                score += 25.0
+
+        if score >= 10.0:
+            scored.append((row, score))
+
+    return sorted(scored, key=lambda item: item[1], reverse=True)
+
+
+def _find_single_confident_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> tuple[dict | None, list[dict]]:
+    candidates = _coupon_match_candidates_from_owned_coupons(user_text, tool_result)
+    if not candidates:
+        return None, []
+
+    terms = _coupon_query_terms(user_text)
+    if terms:
+        term_complete_matches: list[dict] = []
+        for row, _score in candidates:
+            coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
+            name_norm = _normalize_coupon_match_text(coupon_name)
+            if name_norm and all(term in name_norm for term in terms):
+                term_complete_matches.append(row)
+        if len(term_complete_matches) > 1:
+            return None, term_complete_matches[:3]
+
+    top_name_norm = _normalize_coupon_match_text(_coupon_name(candidates[0][0], ""))
+    prefix_like_matches = [
+        row
+        for row, score in candidates
+        if score >= 10.0
+        and top_name_norm
+        and (
+            top_name_norm in _normalize_coupon_match_text(_coupon_name(row, ""))
+            or _normalize_coupon_match_text(_coupon_name(row, "")) in top_name_norm
+        )
+    ]
+    if len(prefix_like_matches) > 1:
+        return None, prefix_like_matches[:3]
+
+    top_score = candidates[0][1]
+    high_confidence = [row for row, score in candidates if score >= max(20.0, top_score - 5.0)]
+    if len(high_confidence) == 1 and top_score >= 20.0:
+        return high_confidence[0], []
+    return None, high_confidence[:3]
+
+
+def _coupon_name(row: dict, fallback: str = "해당 쿠폰") -> str:
+    return str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or fallback).strip() or fallback
+
+
+def _coupon_channel_type(row: dict) -> str:
+    return str(row.get("coupon_channel_type") or "").strip().lower()
+
+
+def _coupon_store_names_from_applicable_result(tool_result: dict | None, *, limit: int = 3) -> list[str]:
+    data = _unwrap_tool_data(tool_result or {})
+    if not isinstance(data, dict):
+        return []
+    names: list[str] = []
+    for group in data.get("stores") or []:
+        if not isinstance(group, dict):
+            continue
+        items = group.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("shop_nm") or item.get("shop_name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+            if len(names) >= limit:
+                return names
+    return names
+
+
+def _build_coupon_match_failure_event(user_text: str, candidate_rows: list[dict] | None = None) -> dict:
+    candidate_rows = candidate_rows or []
+    if candidate_rows:
+        names = [_coupon_name(row) for row in candidate_rows[:3]]
+        assistant_response = (
+            "보유 쿠폰에서 비슷한 쿠폰명이 여러 개 확인돼요. 정확한 쿠폰을 선택해 주세요.\n"
+            + "\n".join(f"- {name}" for name in names)
+        )
+        quick_replies = [{"label": name[:18], "domain": "TRANSACTION"} for name in names[:3]]
+        quick_replies.append({"label": "내 쿠폰 조회", "domain": "TRANSACTION"})
+    else:
+        hint = _specific_owned_coupon_lookup_hint(user_text)
+        target = f"‘{hint}’ " if hint else ""
+        assistant_response = f"보유 쿠폰에서 {target}정확한 쿠폰명을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+        quick_replies = [dict(chip) for chip in _COUPON_BOX_CHIPS]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_coupon_match_guard",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _build_coupon_channel_policy_event(
+    coupon_row: dict,
+    *,
+    applicable_result: dict | None = None,
+    target_product_name: str | None = None,
+) -> dict | None:
+    channel_type = _coupon_channel_type(coupon_row)
+    if channel_type not in {"online", "onoff", "store_only", "offline", "partner_only"}:
+        return None
+
+    coupon_name = _coupon_name(coupon_row)
+    lines: list[str] = []
+    quick_replies: list[dict]
+    predicted_domains = ["TRANSACTION"]
+
+    if channel_type == "online":
+        lines.append(f"‘{coupon_name}’은 온라인에서 사용 가능한 쿠폰이에요.")
+        if target_product_name:
+            lines.append("상품/브랜드/패턴 제한은 이어서 적용 대상 기준으로 확인할게요.")
+        quick_replies = [
+            {"label": "상품 가격 확인", "domain": "TRANSACTION"},
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+        ]
+    elif channel_type == "onoff":
+        lines.append(f"‘{coupon_name}’은 온라인/오프라인 모두 사용 가능한 쿠폰이에요.")
+        lines.append("다만 상품, 브랜드, 패턴 제한은 쿠폰 적용 조건을 별도로 확인해야 해요.")
+        quick_replies = [
+            {"label": "상품 가격 확인", "domain": "TRANSACTION"},
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+        ]
+    elif channel_type == "store_only":
+        lines.append(f"‘{coupon_name}’은 매장 전용 쿠폰입니다.")
+        lines.append("지정 매장에서 사용할 수 있고, 온라인 상품 가격에는 반영되지 않습니다.")
+        store_names = _coupon_store_names_from_applicable_result(applicable_result)
+        if store_names:
+            lines.append(f"적용 가능 매장 예시는 {', '.join(store_names)}입니다.")
+        quick_replies = [
+            {"label": "적용 매장 보기", "domain": "TRANSACTION"},
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+        ]
+    elif channel_type == "offline":
+        lines.append(f"‘{coupon_name}’은 오프라인 전용 쿠폰이에요.")
+        lines.append("온라인 상품 가격에는 반영되지 않습니다. 매장 사용 조건은 쿠폰함 또는 매장에서 확인해 주세요.")
+        quick_replies = [
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+        ]
+    else:
+        lines.append(f"‘{coupon_name}’은 제휴 조건이 필요한 쿠폰이에요.")
+        lines.append("일반 회원은 사용이 제한될 수 있어 제휴 조건을 먼저 확인해야 합니다.")
+        quick_replies = [
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+        predicted_domains = ["TRANSACTION", "SUPPORT"]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_coupon_channel_policy",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": quick_replies,
+            "predictedDomains": predicted_domains,
+        },
+    }
+
+
+def _is_specific_coupon_usage_query(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    if not text or _COUPON_ISSUE_INTENT_RE.search(text):
+        return False
+    if _is_product_coupon_price_amount_query(text):
+        return False
+    return bool(_SPECIFIC_COUPON_USAGE_QUERY_RE.search(text))
 
 
 def _resolve_store_detail_cta_from_context(
@@ -11536,6 +11773,35 @@ class TStationChatServiceV2:
             domains[:] = [MultiAgentDomain.Domain.TRANSACTION]
             routing_result.domains = [MultiAgentDomain.Domain.TRANSACTION]
 
+        if (
+            last_user_text
+            and _is_specific_coupon_usage_query(last_user_text)
+            and not _COUPON_ISSUE_INTENT_RE.search(last_user_text)
+        ):
+            previous_domains = list(domains)
+            domains[:] = [MultiAgentDomain.Domain.TRANSACTION]
+            if routing_result is None:
+                routing_result = MultiAgentDomain(
+                    reason="specific_coupon_usage_priority",
+                    domains=domains,
+                    execution_plan=["transaction:coupon_usage"],
+                    user_behavior="asking whether or where a named coupon can be used",
+                    flow="coupon_usage_policy",
+                    agent_prompt_profile=AgentPromptProfile.TRANSACTION_COUPON,
+                )
+            else:
+                routing_result.domains = domains
+                routing_result.execution_plan = ["transaction:coupon_usage"]
+                routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_COUPON
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[COUPON_USAGE] route priority override: %s -> [transaction] text=%r session_id=%s",
+                [domain.value for domain in previous_domains],
+                last_user_text[:80],
+                request.session_id,
+            )
+
         # Policy-engine route normalization: convert the cross-domain task plan
         # into the coordinator's actual agent route. This is intentionally placed
         # after the older P0 gates so existing hotfixes win first; the policy
@@ -11585,6 +11851,11 @@ class TStationChatServiceV2:
                 and not (
                     last_user_text
                     and _COUPON_ISSUE_INTENT_RE.search(last_user_text)
+                    and MultiAgentDomain.Domain.TRANSACTION in domains
+                )
+                and not (
+                    last_user_text
+                    and _is_specific_coupon_usage_query(last_user_text)
                     and MultiAgentDomain.Domain.TRANSACTION in domains
                 )
             )
@@ -12585,17 +12856,25 @@ class TStationChatServiceV2:
                     "source_domain": "transaction",
                 })
 
-            matched_coupon = _find_coupon_from_owned_coupons(user_query, my_coupons_result)
+            matched_coupon, ambiguous_coupons = _find_single_confident_coupon_from_owned_coupons(
+                user_query,
+                my_coupons_result,
+            )
             if matched_coupon is None:
-                return emitted_events, _coupon_box_event(
-                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
-                )
+                return emitted_events, _build_coupon_match_failure_event(user_query, ambiguous_coupons)
 
             matched_cpn_no = str(matched_coupon.get("cpn_no") or "").strip()
             if not matched_cpn_no:
-                return emitted_events, _coupon_box_event(
-                    "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
+                return emitted_events, _build_coupon_match_failure_event(user_query)
+
+            matched_channel_type = _coupon_channel_type(matched_coupon)
+            if matched_channel_type in {"offline", "partner_only"}:
+                channel_event = _build_coupon_channel_policy_event(
+                    matched_coupon,
+                    target_product_name=_coupon_target_product_name_for_query(user_query),
                 )
+                if channel_event is not None:
+                    return emitted_events, channel_event
 
             followup_tool_name = "get_coupon_applicable_products_tool"
             followup_input = {"cpn_no": [matched_cpn_no], "deal_no": None}
@@ -12636,6 +12915,17 @@ class TStationChatServiceV2:
                 "tool": followup_tool_name,
                 "source_domain": "transaction",
             })
+            if matched_channel_type == "store_only" or _is_specific_coupon_usage_query(user_query):
+                channel_event = _build_coupon_channel_policy_event(
+                    matched_coupon,
+                    applicable_result=followup_result,
+                    target_product_name=_coupon_target_product_name_for_query(user_query),
+                )
+                if channel_event is not None and (
+                    matched_channel_type in {"store_only", "offline", "partner_only"}
+                    or not _coupon_target_product_name_for_query(user_query)
+                ):
+                    return emitted_events, channel_event
             return emitted_events, _build_coupon_applicability_event(
                 followup_result,
                 matched_coupon,
@@ -12942,6 +13232,62 @@ class TStationChatServiceV2:
             target_quantity = normalized_target.get("quantity")
 
             emitted_events: list[dict] = []
+            specific_coupon_row: dict | None = None
+            specific_coupon_hint = _specific_owned_coupon_lookup_hint(user_query)
+            if specific_coupon_hint or _COUPON_DIRECT_ID_RE.search(user_query) or re.search(r"딜|deal", user_query, re.IGNORECASE):
+                from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
+
+                if my_coupons_result is None:
+                    my_coupons_input = {"lang_cd": "ko"}
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "get_my_coupons_tool",
+                        "display_name": "내 쿠폰 조회 중...",
+                        "source_domain": "transaction",
+                    })
+                    try:
+                        raw_my_coupons = await asyncio.to_thread(_my_coupons_tool.invoke, my_coupons_input)
+                        my_coupons_result = _tool_result_dict(raw_my_coupons)
+                    except Exception as exc:
+                        logger.exception("[PRODUCT_COUPON_RESOLVER] my coupons tool failed")
+                        my_coupons_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": str(exc),
+                            "data": {},
+                        }
+                    _record_code_tool_result("get_my_coupons_tool", my_coupons_input, my_coupons_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Price AF]",
+                        "agent_class": "Transaction Agent",
+                        "status": my_coupons_result.get("status", "success"),
+                        "source_domain": "transaction",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": my_coupons_input,
+                        "output": json.dumps(my_coupons_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "get_my_coupons_tool",
+                        "source_domain": "transaction",
+                    })
+
+                specific_coupon_row, ambiguous_coupons = _find_single_confident_coupon_from_owned_coupons(
+                    user_query,
+                    my_coupons_result,
+                )
+                if specific_coupon_row is None:
+                    return emitted_events, _build_coupon_match_failure_event(user_query, ambiguous_coupons)
+                if _coupon_channel_type(specific_coupon_row) in {"store_only", "offline", "partner_only"}:
+                    channel_event = _build_coupon_channel_policy_event(
+                        specific_coupon_row,
+                        target_product_name=target_product_name,
+                    )
+                    if channel_event is not None:
+                        return emitted_events, channel_event
+
             if (
                 target_tire_size
                 and target_quantity
@@ -13083,7 +13429,7 @@ class TStationChatServiceV2:
                     "source_domain": "transaction",
                 })
 
-            coupon_rows = _coupon_rows_from_my_coupons(my_coupons_result)
+            coupon_rows = [specific_coupon_row] if specific_coupon_row else _coupon_rows_from_my_coupons(my_coupons_result)
             cpn_nos = [str(row.get("cpn_no") or "").strip() for row in coupon_rows if str(row.get("cpn_no") or "").strip()]
             if not cpn_nos:
                 return emitted_events, _coupon_box_event(

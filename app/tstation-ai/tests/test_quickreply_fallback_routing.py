@@ -35,6 +35,7 @@ from services.tstation.chat import (
     _COUPON_ISSUE_INTENT_RE,
     _all_my_t_benefit_page_event,
     _build_coupon_applicability_event,
+    _build_coupon_channel_policy_event,
     _build_default_benefit_event,
     _build_maintenance_dday_event,
     _build_owned_coupon_best_discount_event,
@@ -80,6 +81,7 @@ from services.tstation.chat import (
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
     _is_product_coupon_price_amount_query,
+    _is_specific_coupon_usage_query,
     _is_product_comparison_query,
     _tool_error_summary,
     _trace_final_error_state,
@@ -100,6 +102,7 @@ from services.tstation.chat import (
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
     _discovery_recovery_chips_for_text,
     _find_coupon_from_owned_coupons,
+    _find_single_confident_coupon_from_owned_coupons,
     _is_order_arrival_status_query,
     _is_specific_owned_coupon_lookup_query,
     _infer_followup_recommendation_context,
@@ -2068,6 +2071,86 @@ def test_employee_coupon_matching_ignores_product_terms() -> None:
 
     assert result is not None
     assert result["cpn_no"] == "C002"
+
+
+def test_specific_coupon_usage_query_detects_coupon_and_deal_usage_without_price() -> None:
+    assert _is_specific_coupon_usage_query("우동딜 테스트는 어떻게 써?")
+    assert _is_specific_coupon_usage_query("이 쿠폰 쓸 수 있어?")
+    assert _is_specific_coupon_usage_query("이 상품에 우동딜 테스트 쿠폰 먹어?")
+    assert not _is_specific_coupon_usage_query("벤투스 S2 AS 2254517 할인가 얼마야")
+    assert not _is_specific_coupon_usage_query("벤투스 S2 AS 2254517 쿠폰 적용하면 얼마야")
+
+
+def test_specific_coupon_matching_requires_single_confident_candidate() -> None:
+    matched, ambiguous = _find_single_confident_coupon_from_owned_coupons(
+        "우동딜 테스트는 어떻게 써?",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {"cpn_no": "C001", "cpn_nm": "우동딜 테스트", "rt_amt_val": 10},
+                    {"cpn_no": "C002", "cpn_nm": "우동딜 테스트 2차", "rt_amt_val": 10},
+                ],
+            },
+        },
+    )
+
+    assert matched is None
+    assert [row["cpn_no"] for row in ambiguous] == ["C001", "C002"]
+
+
+def test_coupon_channel_policy_store_only_blocks_online_price_cta() -> None:
+    event = _build_coupon_channel_policy_event(
+        {
+            "cpn_no": "C001",
+            "cpn_nm": "우동딜 테스트",
+            "coupon_channel_type": "store_only",
+            "has_store_mapping": True,
+        },
+        applicable_result={
+            "status": "success",
+            "data": {
+                "stores": [
+                    {"cpn_no": "C001", "items": [{"shop_nm": "모란점"}, {"shop_nm": "강남점"}]},
+                ],
+            },
+        },
+    )
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "매장 전용 쿠폰" in response
+    assert "온라인 상품 가격에는 반영되지 않습니다" in response
+    assert "모란점, 강남점" in response
+    assert labels == ["적용 매장 보기", "내 쿠폰 조회", "매장 찾기"]
+    assert "상품 가격 확인" not in labels
+
+
+def test_coupon_channel_policy_online_allows_price_followup() -> None:
+    event = _build_coupon_channel_policy_event(
+        {"cpn_no": "C001", "cpn_nm": "온라인 쿠폰", "coupon_channel_type": "online"},
+    )
+
+    assert event is not None
+    assert "온라인에서 사용 가능한 쿠폰" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["상품 가격 확인", "내 쿠폰 조회"]
+
+
+def test_coupon_channel_policy_offline_and_partner_do_not_offer_price_cta() -> None:
+    offline_event = _build_coupon_channel_policy_event(
+        {"cpn_no": "C001", "cpn_nm": "오프라인 쿠폰", "coupon_channel_type": "offline"},
+    )
+    partner_event = _build_coupon_channel_policy_event(
+        {"cpn_no": "C002", "cpn_nm": "제휴 쿠폰", "coupon_channel_type": "partner_only"},
+    )
+
+    assert offline_event is not None
+    assert partner_event is not None
+    assert "온라인 상품 가격에는 반영되지 않습니다" in offline_event["data"]["assistantResponse"]
+    assert "상품 가격 확인" not in _labels(offline_event["data"]["quickReplies"])
+    assert "제휴 조건" in partner_event["data"]["assistantResponse"]
+    assert "상품 가격 확인" not in _labels(partner_event["data"]["quickReplies"])
 
 
 def test_tc005_coupon_applicability_answers_pattern_without_size_listing() -> None:
