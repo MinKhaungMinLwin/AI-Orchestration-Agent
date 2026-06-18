@@ -4888,6 +4888,11 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     svc_labels = _svc_code_label_list(raw.get("svc_codes"))
     if svc_labels:
         lines.append(f"• 제공 서비스: {' | '.join(svc_labels)}")
+    if _is_store_operation_uncertain_query():
+        lines.extend([
+            "",
+            "일요일/공휴일 운영 여부는 매장 사정에 따라 달라질 수 있어 매장에 직접 확인해 주세요.",
+        ])
 
     return {
         "type": "data",
@@ -4952,7 +4957,12 @@ _STORE_BOOKING_FOLLOWUP_SIGNAL_RE = re.compile(
     re.IGNORECASE,
 )
 _STORE_OPERATION_INFO_SIGNAL_RE = re.compile(
-    r"영업|운영|휴무|휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    r"영업|운영|휴무|휴일|공휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    re.IGNORECASE,
+)
+_STORE_OPERATION_UNCERTAIN_QUERY_RE = re.compile(
+    r"휴무|휴일|공휴일|일요일|이번\s*주\s*일요일|문\s*열|문\s*닫|열어|닫아|쉬어|"
+    r"영업\s*(?:해|하니|하냐|하나요|하나|여부|중)",
     re.IGNORECASE,
 )
 _STORE_DATE_REFERENCE_RE = re.compile(
@@ -5017,6 +5027,19 @@ def _should_treat_store_detail_slots_as_datepick() -> bool:
         _STORE_DATE_REFERENCE_RE.search(user_text)
         and _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(user_text)
     )
+
+
+def _is_store_operation_uncertain_query() -> bool:
+    user_text = current_user_text.get() or ""
+    if not user_text or not _STORE_OPERATION_UNCERTAIN_QUERY_RE.search(user_text):
+        return False
+    if _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(user_text) and not re.search(
+        r"휴무|휴일|공휴일|문\s*열|문\s*닫|열어|닫아|쉬어|영업\s*(?:해|하니|하냐|하나요|하나|여부|중)",
+        user_text,
+        re.IGNORECASE,
+    ):
+        return False
+    return True
 
 
 def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:
