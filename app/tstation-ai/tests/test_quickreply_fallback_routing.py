@@ -5111,6 +5111,54 @@ def test_recommendation_response_uses_current_turn_count_not_previous_over_cap_c
     assert "추천은 최대 10개" not in response
 
 
+def test_product_store_purchase_without_size_maps_to_size_selection_product_card() -> None:
+    token = current_user_text.set("판교점에서 dynapro hpx 2개 구매하고싶어")
+    try:
+        event = try_build_template(
+            [{
+                "tool": "search_product_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000309001",
+                                "goods_nm": "다이나프로 HPX",
+                                "tire_size_1": "235/55R19",
+                                "brand_nm": "HANKOOK",
+                                "sale_prc": 200000,
+                                "extra_fvr_sale_prc": 180000,
+                            },
+                            {
+                                "goods_no": "G000000309002",
+                                "goods_nm": "다이나프로 HPX",
+                                "tire_size_1": "245/45R19",
+                                "brand_nm": "HANKOOK",
+                                "sale_prc": 210000,
+                                "extra_fvr_sale_prc": 190000,
+                            },
+                        ],
+                    },
+                },
+                "args": {"keyword": "Dynapro HPX", "brand_cd": "HK"},
+            }],
+            "상품을 찾았어요.",
+        )
+    finally:
+        current_user_text.reset(token)
+
+    assert event is not None
+    assert event["template"] == "product"
+    data = event["data"]
+    assert data["assistantResponse"] == "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
+    assert data["isBookingFlow"] is True
+    assert len(data["products"]) == 2
+    assert data["metadata"][0]["pendingIntent"] == "order"
+    assert data["metadata"][0]["requestedFlow"] == "purchase_or_install"
+    assert data["metadata"][0]["ordQty"] == 2
+    assert data["metadata"][0]["shopName"] == "판교점"
+
+
 def test_followup_size_input_preserves_prior_multi_brand_user_request_as_variants() -> None:
     messages = [
         {"role": "user", "content": "미쉐린, 콘티넨탈, 브리지스톤 상품 1개씩 BMW 3시리즈에 맞는 타이어 추천해줘"},

@@ -18,9 +18,18 @@ _PRODUCT_HINT_RE = re.compile(
     r"벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2",
     re.IGNORECASE,
 )
-_STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약", re.IGNORECASE)
+_STOCK_OR_BOOKING_RE = re.compile(
+    r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약|오늘\s*서비스|오늘서비스|당일\s*서비스",
+    re.IGNORECASE,
+)
+_PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", re.IGNORECASE)
 _STORE_NAME_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
+_REGION_HINT_RE = re.compile(
+    r"서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
+    r"청량리|인천|하남|청주|제주|서귀포",
+    re.IGNORECASE,
+)
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
 _REGIONAL_PRICE_POLICY_RE = re.compile(
     r"(?=.*(?:가격|판매가|최종가))"
@@ -188,14 +197,14 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     has_current_product_hint = bool(_PRODUCT_HINT_RE.search(text))
     has_product_hint = bool(has_current_product_hint or slots.get("product_name") or slots.get("goods_no"))
     tire_size = slots.get("tire_size") or _normalize_tire_size(text)
-    needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text))
     needs_store_search = bool(_STORE_SEARCH_RE.search(text))
     needs_price = bool(_PRICE_OR_COUPON_RE.search(text))
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
-    has_current_store = bool(_STORE_NAME_RE.search(text))
+    has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
+    needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
     has_warranty_claim_signal = is_warranty_claim_signal(text, known_slots=slots)
 
     if needs_regional_price_policy:

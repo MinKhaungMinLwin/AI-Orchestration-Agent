@@ -200,6 +200,12 @@ _GENERIC_PRODUCT_RESPONSE_RE = re.compile(
     r"(추천\s*상품\s*\d*개?.*선택해\s*주세요|추천\s*상품을\s*확인했어요|상품을\s*(?:검색했습니다|찾았어요))",
     re.IGNORECASE,
 )
+_PRODUCT_TRANSACTION_MISSING_SIZE_RE = re.compile(
+    r"(?=.*(?:구매|주문|결제|살래|살게|사고\s*싶|사려고|예약|장착|재고|오늘\s*서비스|오늘서비스|당일\s*서비스))"
+    r"(?=.*(?:점|매장|서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
+    r"청량리|인천|하남|청주|제주|서귀포))",
+    re.IGNORECASE,
+)
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)
 _DEMOGRAPHIC_AGE_GENDER_RE = re.compile(
     r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
@@ -232,8 +238,35 @@ def _is_goal_booking_followup() -> bool:
     return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
 
 
+def _is_product_transaction_missing_size_turn() -> bool:
+    text = _current_turn_user_text()
+    if not text or re.search(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", text, re.IGNORECASE):
+        return False
+    return bool(_PRODUCT_TRANSACTION_MISSING_SIZE_RE.search(text))
+
+
+def _product_transaction_pending_context() -> dict[str, object]:
+    text = _current_turn_user_text()
+    context: dict[str, object] = {
+        "pendingIntent": "order",
+        "requestedFlow": "purchase_or_install",
+    }
+    qty_match = re.search(r"(\d{1,2})\s*(?:개|본|짝)", text)
+    if qty_match:
+        try:
+            context["ordQty"] = int(qty_match.group(1))
+        except ValueError:
+            pass
+    store_match = re.search(r"([가-힣A-Za-z0-9]+(?:점|매장))", text)
+    if store_match:
+        context["shopName"] = store_match.group(1)
+    return context
+
+
 def _single_product_transaction_handoff_event(items: list[dict], metadata: list[dict]) -> dict | None:
-    if len(items) != 1 or len(metadata) != 1 or not _is_goal_booking_followup():
+    if len(items) != 1 or len(metadata) != 1 or not (
+        _is_goal_booking_followup() or _is_product_transaction_missing_size_turn()
+    ):
         return None
     goal_type = current_goal_type.get()
     pending_intent = current_pending_intent.get()
@@ -241,6 +274,8 @@ def _single_product_transaction_handoff_event(items: list[dict], metadata: list[
         action_text = "가격 확인을 이어갈게요."
     elif goal_type == "store_with_stock" or pending_intent == "stock":
         action_text = "장착 가능 매장 확인을 이어갈게요."
+    elif _is_product_transaction_missing_size_turn():
+        action_text = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요."
     else:
         action_text = "오늘서비스 구매 진행을 이어갈게요."
     title = str(items[0].get("title") or items[0].get("titleProductName") or "상품").strip()
@@ -2262,6 +2297,8 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         "price_inquiry",
     ):
         return None
+    if _is_product_transaction_missing_size_turn():
+        return None
 
     rows_by_name: dict[str, dict] = {}
     found_product_tool = False
@@ -2440,7 +2477,14 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
     short, response_source = _summarize_with_source(assistant_text, "product", len(items))
-    if _find_entries(tool_data_list, "get_best_selling_products_tool"):
+    if _is_product_transaction_missing_size_turn():
+        short = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
+        response_source = "code_product_transaction_missing_size"
+        pending_context = _product_transaction_pending_context()
+        for meta in metadata:
+            if isinstance(meta, dict):
+                meta.update(pending_context)
+    elif _find_entries(tool_data_list, "get_best_selling_products_tool"):
         short = _product_result_context_message(tool_data_list, len(items))
         response_source = "code_mapper"
     elif response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
@@ -2463,7 +2507,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         "data": {
             "products": items,
             "metadata": metadata,
-            "isBookingFlow": _is_goal_booking_followup(),
+            "isBookingFlow": _is_goal_booking_followup() or _is_product_transaction_missing_size_turn(),
             "assistantResponse": short,
         },
         "assistant_response_source": response_source,

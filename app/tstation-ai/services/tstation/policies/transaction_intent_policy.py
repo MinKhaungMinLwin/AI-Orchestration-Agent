@@ -14,8 +14,9 @@ _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.I
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
 _TODAY_RE = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
 _RELATIVE_RESERVATION_DATE_RE = re.compile(r"내일|모레", re.IGNORECASE)
-_STOCK_RE = re.compile(r"재고|오늘\s*서비스|오늘서비스|T\s*바로\s*배송|T바로배송", re.IGNORECASE)
+_STOCK_RE = re.compile(r"재고|오늘\s*서비스|오늘서비스|당일\s*서비스|T\s*바로\s*배송|T바로배송", re.IGNORECASE)
 _RESERVATION_RE = re.compile(r"예약|장착|방문|갈게|가고\s*싶|작업", re.IGNORECASE)
+_PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
 _STORE_SCHEDULE_RE = re.compile(
     r"예약\s*가능|작업\s*가능|장착\s*가능|가능한\s*(?:시간|일정|매장)|가능\s*시간|가능\s*일정|스케줄|몇\s*시|시간",
     re.IGNORECASE,
@@ -148,7 +149,8 @@ def build_transaction_intent_frame(
     current_store_search = bool(_STORE_SEARCH_RE.search(text))
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
-    current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text))
+    current_purchase = bool(_PURCHASE_RE.search(text))
+    current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
     plain_store_search = current_store_search and not current_stock and not current_price and not current_reservation
 
     tire_size = explicit_tire_size or slots.get("tire_size")
@@ -196,7 +198,7 @@ def build_transaction_intent_frame(
     elif (_STOCK_RE.search(text) or today_requested) and has_product:
         intent = "stock_store_search"
         sub_intent = "today_install" if today_requested else "stock"
-    elif _RESERVATION_RE.search(text) and has_product:
+    elif (_RESERVATION_RE.search(text) or current_purchase) and has_product:
         intent = "quick_order_reservation"
         sub_intent = "reservation"
     elif _STORE_SCHEDULE_RE.search(text) or _RESERVATION_RE.search(text):
@@ -249,6 +251,25 @@ def build_transaction_intent_frame(
 
 def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
     """Return the preferred Transaction tool family for the intent frame."""
+    if (
+        frame.intent in {"stock_store_search", "quick_order_reservation"}
+        and "tire_size" in frame.missing_slots
+        and not frame.known_slots.get("goods_no")
+    ):
+        return ToolPlan(
+            allowed_tools=(),
+            preferred_tool=None,
+            tool_args_patch={},
+            forbidden_tools=(
+                "get_store_list_tool",
+                "get_store_detail_tool",
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+            ),
+            required_slots=frame.missing_slots,
+            metadata={"response_intent": frame.intent, "guard": "require_product_size_before_transaction"},
+        )
     if frame.intent == "stock_store_search":
         args = _slot_args(frame, "goods_no", "tire_size", "quantity", "region", "store_name", "requested_cal_day")
         if frame.entities.get("today_requested"):
