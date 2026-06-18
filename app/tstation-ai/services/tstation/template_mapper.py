@@ -1935,6 +1935,15 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if not isinstance(args, dict):
             continue
+        requested_limit = _recommendation_requested_limit(entry, raw)
+        effective_limit = _recommendation_effective_limit(entry, raw, requested_limit)
+        prefix = _recommendation_limit_notice(
+            requested_limit=requested_limit,
+            effective_limit=effective_limit,
+            item_count=item_count,
+        )
+        if prefix:
+            return f"{prefix} 원하시는 상품을 선택해 주세요."
         tire_size = _get_str(args, "tire_size")
         season = _get_str(args, "season_nm")
         rcmd_type = _get_str(args, "rcmd_type")
@@ -1951,6 +1960,50 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
             return f"조건에 맞는 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
 
     return _TEMPLATE_DEFAULTS.get("product", "").format(n=item_count)
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _recommendation_requested_limit(entry: dict, raw: dict | list) -> int | None:
+    if isinstance(raw, dict):
+        requested = _positive_int_or_none(raw.get("requested_limit"))
+        if requested is not None:
+            return requested
+    return _positive_int_or_none(_tool_args(entry).get("requested_limit") or _tool_args(entry).get("limit"))
+
+
+def _recommendation_effective_limit(entry: dict, raw: dict | list, requested_limit: int | None) -> int | None:
+    if isinstance(raw, dict):
+        effective = _positive_int_or_none(raw.get("effective_limit"))
+        if effective is not None:
+            return effective
+    requested = requested_limit or _positive_int_or_none(_tool_args(entry).get("limit"))
+    if requested is None:
+        return None
+    return min(requested, 10)
+
+
+def _recommendation_limit_notice(
+    *,
+    requested_limit: int | None,
+    effective_limit: int | None,
+    item_count: int,
+) -> str:
+    if requested_limit is None or effective_limit is None:
+        return ""
+    if requested_limit > effective_limit:
+        if item_count >= effective_limit:
+            return f"추천은 최대 {effective_limit}개까지만 가능해요. 조건에 맞는 상품 {item_count}개를 보여드릴게요."
+        return f"추천은 최대 {effective_limit}개까지만 가능해요. 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
+    if item_count < requested_limit:
+        return f"요청하신 {requested_limit}개 중 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
+    return ""
 
 
 def _technology_unsized_policy_response(tool_data_list: list[dict]) -> str:

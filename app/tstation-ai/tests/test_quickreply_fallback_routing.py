@@ -4972,27 +4972,43 @@ def test_sized_all_weather_recommendation_uses_all_weather_tool_filter() -> None
     assert plan.tool_args_patch["season_nm"] == "올웨더"
 
 
-def _recommendation_template_entry(*, season_nm: str) -> dict:
+def _recommendation_template_entry(
+    *,
+    season_nm: str,
+    limit: int | None = None,
+    requested_limit: int | None = None,
+    effective_limit: int | None = None,
+    item_count: int = 1,
+) -> dict:
+    args = {
+        "rcmd_type": "all_weather",
+        "season_nm": season_nm,
+        "tire_size": "235/55R19",
+    }
+    if limit is not None:
+        args["limit"] = limit
+    data = {
+        "items": [
+            {
+                "goods_no": f"G{i}",
+                "goods_nm": f"벤투스 에어S {i}",
+                "tire_size_1": "235/55R19",
+                "season_nm": season_nm,
+            }
+            for i in range(1, item_count + 1)
+        ]
+    }
+    if requested_limit is not None:
+        data["requested_limit"] = requested_limit
+    if effective_limit is not None:
+        data["effective_limit"] = effective_limit
     return {
         "tool": "get_products_recommendations_tool",
-        "args": {
-            "rcmd_type": "all_weather",
-            "season_nm": season_nm,
-            "tire_size": "235/55R19",
-        },
+        "args": args,
         "data": {
             "status": "success",
             "http_status": 200,
-            "data": {
-                "items": [
-                    {
-                        "goods_no": "G1",
-                        "goods_nm": "벤투스 에어S",
-                        "tire_size_1": "235/55R19",
-                        "season_nm": season_nm,
-                    }
-                ]
-            },
+            "data": data,
         },
     }
 
@@ -5013,6 +5029,42 @@ def test_recommendation_response_uses_all_weather_label_when_requested() -> None
     response = event["data"]["assistantResponse"]
     assert "235/55R19 올웨더 조건" in response
     assert "사계절 조건" not in response
+
+
+def test_recommendation_response_mentions_cap_when_requested_over_ten_and_ten_returned() -> None:
+    event = try_build_template(
+        [_recommendation_template_entry(season_nm="사계절", requested_limit=15, effective_limit=10, item_count=10)],
+        "추천 상품을 확인했어요.",
+    )
+
+    assert event is not None
+    assert event["data"]["assistantResponse"] == (
+        "추천은 최대 10개까지만 가능해요. 조건에 맞는 상품 10개를 보여드릴게요. 원하시는 상품을 선택해 주세요."
+    )
+
+
+def test_recommendation_response_mentions_cap_and_shortfall_when_requested_over_ten() -> None:
+    event = try_build_template(
+        [_recommendation_template_entry(season_nm="사계절", requested_limit=15, effective_limit=10, item_count=7)],
+        "추천 상품을 확인했어요.",
+    )
+
+    assert event is not None
+    assert event["data"]["assistantResponse"] == (
+        "추천은 최대 10개까지만 가능해요. 조건에 맞는 상품은 현재 7개만 확인돼요. 원하시는 상품을 선택해 주세요."
+    )
+
+
+def test_recommendation_response_mentions_shortfall_for_requested_limit_under_cap() -> None:
+    event = try_build_template(
+        [_recommendation_template_entry(season_nm="사계절", limit=5, requested_limit=5, effective_limit=5, item_count=3)],
+        "추천 상품을 확인했어요.",
+    )
+
+    assert event is not None
+    assert event["data"]["assistantResponse"] == (
+        "요청하신 5개 중 조건에 맞는 상품은 현재 3개만 확인돼요. 원하시는 상품을 선택해 주세요."
+    )
 
 
 def test_followup_size_input_preserves_prior_multi_brand_user_request_as_variants() -> None:
@@ -5214,6 +5266,32 @@ def test_recommendation_tool_autofills_confirmed_tire_size(monkeypatch: pytest.M
 
     assert result["status"] == "success"
     assert captured["tire_size"] == "215/45R17"
+
+
+def test_recommendation_tool_clamps_requested_limit_to_ten(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    class _Response:
+        status_code = 200
+        parsed = {"rcmd_type": "tstation", "total": 0, "items": []}
+
+    def _fake_recommendations(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
+
+    result = discovery_tools.get_products_recommendations_tool.func(
+        rcmd_type="tstation",
+        limit=15,
+        brand_cd="HK",
+    )
+
+    assert result["status"] == "success"
+    assert captured["limit"] == 10
+    assert result["data"]["requested_limit"] == 15
+    assert result["data"]["effective_limit"] == 10
+    assert result["data"]["limit_capped"] is True
 
 
 def test_recommendation_tool_does_not_autofill_tire_size_for_price_range(monkeypatch: pytest.MonkeyPatch) -> None:

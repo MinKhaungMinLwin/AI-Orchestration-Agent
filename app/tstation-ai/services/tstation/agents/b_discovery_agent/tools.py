@@ -60,6 +60,8 @@ current_discovery_recommendation_tool_patch: contextvars.ContextVar[dict[str, An
     "current_discovery_recommendation_tool_patch", default={}
 )
 
+_RECOMMENDATION_LIMIT_CAP = 10
+
 def _apply_recommendation_policy_patch(
     *,
     patch: dict[str, Any],
@@ -940,7 +942,9 @@ def get_products_recommendations_tool(
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 3, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 3, maximum is 10.
+            If the user requests more than 10, call with limit=10 and explain that
+            recommendations are available up to 10 items.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -1127,16 +1131,19 @@ def get_products_recommendations_tool(
                 tire_size,
             )
 
+    requested_limit = limit
+    effective_limit = min(max(int(limit or 3), 1), _RECOMMENDATION_LIMIT_CAP)
+    limit_capped = requested_limit > effective_limit
+
     # Price filtering is now SQL-side on BE — no client-side post-filter.
-    # newest_desc is a client-side sort BE doesn't support → still fetch >limit then re-sort.
     has_price_filter = bool(min_price or max_price)
     has_newest_sort = sort_by == "newest_desc"
-    fetch_limit = max(limit, 100) if has_newest_sort else limit
+    fetch_limit = effective_limit
     requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
     requested_season_nm = season_nm
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, vehicle_type=%s, min_price=%s, max_price=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price,
+        rcmd_type, effective_limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price,
     )
 
     def _fetch_recommendation_once(
@@ -1189,7 +1196,10 @@ def get_products_recommendations_tool(
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
             if has_newest_sort:
-                data["items"] = data["items"][:limit]
+                data["items"] = data["items"][:effective_limit]
+            data["requested_limit"] = requested_limit
+            data["effective_limit"] = effective_limit
+            data["limit_capped"] = limit_capped
         return _success_response(response.status_code, data)
 
     try:
