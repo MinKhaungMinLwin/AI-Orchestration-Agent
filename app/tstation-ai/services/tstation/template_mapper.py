@@ -516,14 +516,22 @@ def _inventory_shop_ids(raw_inventory: object, key: str) -> set[str]:
     return ids
 
 
-def _preview_location_assistant_response(tier: str, region: str, item_count: int) -> str | None:
+def _preview_location_assistant_response(
+    tier: str,
+    region: str,
+    item_count: int,
+    *,
+    requested_cal_day: str | None = None,
+) -> str | None:
     """Build preview-specific location copy from resolved inventory/schedule tier."""
     tier_normalized = (tier or "").strip().lower()
     if not tier_normalized:
         return None
     count_text = f"{item_count}곳"
     region_prefix = f"{region}에서 " if region else ""
-    today_requested = bool(re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or ""))
+    today_requested = bool(requested_cal_day) or bool(
+        re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "")
+    )
     if tier_normalized == "logistics_only":
         if today_requested:
             return (
@@ -3782,6 +3790,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     guarded_preview_is_order = False
     preview_schedule_tier = ""
     preview_schedule_region = ""
+    preview_requested_cal_day = ""
     for entry in _find_entries(tool_data_list, "transaction_store_preview_tool"):
         raw = _unwrap(entry)
         schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
@@ -3794,6 +3803,11 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         ):
             preview_schedule_tier = _get_str(schedule, "tier").lower()
             preview_schedule_region = _get_str(args, "region_code") if isinstance(args, dict) else ""
+            preview_requested_cal_day = (
+                (_get_str(args, "requested_cal_day") if isinstance(args, dict) else "")
+                or _get_str(raw, "requested_cal_day")
+                or _get_str(schedule, "requested_cal_day")
+            )
         if not isinstance(raw, dict) or not raw.get("instruction_to_agent"):
             continue
         schedule_empty = (
@@ -3850,6 +3864,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             preview_schedule_tier,
             preview_schedule_region,
             len(items),
+            requested_cal_day=preview_requested_cal_day,
         )
         if preview_short:
             short = preview_short
