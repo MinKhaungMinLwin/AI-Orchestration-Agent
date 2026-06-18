@@ -162,6 +162,7 @@ from services.tstation.chat import (
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
     _should_force_warranty_claim_support_route,
+    _should_force_best_seller_code_route,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
@@ -3758,6 +3759,25 @@ def test_vehicle_owner_lookup_with_separator_and_lookup_suffix_force_routes_to_d
     assert result is not None
     assert result.domains == [MultiAgentDomain.Domain.DISCOVERY]
     assert result.agent_prompt_profile == "discovery_recommendation"
+
+
+def test_monthly_best_seller_request_forces_code_route_even_if_transaction_biased() -> None:
+    for text in (
+        "이번달 사람들이 젤 많이 구매한 타이어",
+        "이번 달 제일 많이 산 타이어",
+        "이번달 베스트셀러",
+    ):
+        assert _should_force_best_seller_code_route(
+            text,
+            [MultiAgentDomain.Domain.TRANSACTION],
+        )
+
+
+def test_non_aggregate_purchase_request_does_not_force_best_seller_code_route() -> None:
+    assert not _should_force_best_seller_code_route(
+        "이번달 내가 구매한 타이어 주문 확인해줘",
+        [MultiAgentDomain.Domain.TRANSACTION],
+    )
 
 
 def test_reservation_time_change_force_routes_to_transaction_order() -> None:

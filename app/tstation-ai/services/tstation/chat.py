@@ -4269,6 +4269,32 @@ def _is_oe_replacement_context(context_text: str | None, current_text: str | Non
     return _is_oe_replacement_equivalent_query(context_text) and not _is_owned_vehicle_selection_cta(current_text)
 
 
+_BEST_SELLER_AGGREGATE_TIRE_RE = re.compile(
+    r"베스트\s*셀러|"
+    r"(?=.*(?:타이어|상품))"
+    r"(?=.*(?:베스트|많이\s*(?:구매한|산|팔린)|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:구매한|산|팔린)|잘\s*팔리|잘\s*나가))",
+    re.IGNORECASE,
+)
+
+
+def _should_force_best_seller_code_route(user_text: str | None, domains: list[MultiAgentDomain.Domain]) -> bool:
+    """Use deterministic best-seller tool routing even if 구매한 biases domain classification.
+
+    Aggregate sales questions such as "이번 달 제일 많이 산 타이어" are Discovery
+    best-seller lookups, not the user's own purchase/order flow.
+    """
+    text = user_text or ""
+    if not best_seller_period_from_text(text):
+        return False
+    frame = build_discovery_intent_frame(text)
+    if frame.sub_intent != "best_seller_search":
+        return False
+    if domains == [MultiAgentDomain.Domain.DISCOVERY]:
+        return True
+    return bool(_BEST_SELLER_AGGREGATE_TIRE_RE.search(text))
+
+
 def _is_oe_replacement_followup_query(user_text: str | None) -> bool:
     return bool(_OE_REPLACEMENT_FOLLOWUP_RE.search(user_text or ""))
 
@@ -12977,7 +13003,7 @@ class TStationChatServiceV2:
             )
 
         async def _resolve_best_selling_products_with_code() -> tuple[list[dict], dict] | None:
-            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+            if not _should_force_best_seller_code_route(user_query, domains):
                 return None
             period = best_seller_period_from_text(user_query)
             if not period:
