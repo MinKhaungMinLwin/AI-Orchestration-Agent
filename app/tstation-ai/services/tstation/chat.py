@@ -8321,6 +8321,33 @@ def _is_plain_store_search_turn(text: str, regex_slots: ConversationSlots) -> bo
     return not ConversationSlots.has_product_keyword(text)
 
 
+def _normalize_store_name_for_slot_compare(store_name: str | None) -> str:
+    """Normalize store names enough to compare current-turn anchors with carried slots."""
+    normalized = re.sub(r"\s+", "", str(store_name or "").strip()).lower()
+    normalized = re.sub(r"^(?:티스테이션|t'?station)", "", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _is_new_store_name_anchor_for_current_turn(
+    current_store_name: str | None,
+    existing_shop_name: str | None,
+    existing_shop_id: str | None,
+) -> bool:
+    """True when current turn names a store that should invalidate carried shop_id.
+
+    A shop_id is safe to keep only when the carried shop_name matches the current
+    store anchor. If the prior slot has only shop_id, there is no proof it is the
+    same store, so the store must be resolved again before stock/order tools run.
+    """
+    current = _normalize_store_name_for_slot_compare(current_store_name)
+    if not current:
+        return False
+    existing_name = _normalize_store_name_for_slot_compare(existing_shop_name)
+    if existing_name and current == existing_name:
+        return False
+    return bool(existing_shop_name or existing_shop_id)
+
+
 def _clear_stale_product_identity_for_fresh_transaction(
     slots: ConversationSlots,
     text: str,
@@ -10246,6 +10273,24 @@ class TStationChatServiceV2:
                     )
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
+            current_turn_store_name = regex_slots.shop_name
+            current_turn_has_store_anchor = bool(current_turn_store_name or regex_slots.region)
+            if _is_new_store_name_anchor_for_current_turn(
+                current_turn_store_name,
+                existing_slots.shop_name,
+                existing_slots.shop_id,
+            ):
+                logger.info(
+                    "[SLOTS] Current turn supplied store=%r; clearing stale carried store identity "
+                    "shop_id=%r shop_name=%r before transaction tools",
+                    current_turn_store_name,
+                    existing_slots.shop_id,
+                    existing_slots.shop_name,
+                )
+                merged_slots.shop_id = None
+                merged_slots.shop_name = current_turn_store_name
+                merged_slots.payment_amount = None
+
             # Region-only follow-ups ("성남은?", "서울은?") are candidate searches,
             # not a store selection. Even if the region string matches an existing
             # slot, the current turn should not let a stale shop_id complete the
@@ -10676,6 +10721,7 @@ class TStationChatServiceV2:
                 and prev_tool_data
                 and regex_slots.pending_intent in ("order", "stock")
                 and not re.search(r"다른\s*매장|근처\s*매장|주변\s*매장|매장\s*찾|지역", last_user_text or "")
+                and not current_turn_has_store_anchor
             ):
                 resolved_shop_id = TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data)
                 if resolved_shop_id:

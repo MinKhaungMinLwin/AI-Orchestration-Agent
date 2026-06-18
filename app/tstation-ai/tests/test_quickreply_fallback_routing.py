@@ -108,8 +108,10 @@ from services.tstation.chat import (
     _extract_plain_store_info_store_name,
     _is_bare_product_name_search_query,
     _is_fresh_product_transaction_request,
+    _is_new_store_name_anchor_for_current_turn,
     _unique_product_row_from_sized_search_result,
     _clear_stale_product_identity_for_fresh_transaction,
+    _normalize_store_name_for_slot_compare,
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
@@ -1528,6 +1530,47 @@ def test_store_date_availability_context_not_preserved_for_generic_store_confirm
     ]
 
     assert _should_preserve_store_date_availability_context("네, 맞아요", messages) is False
+
+
+def test_current_turn_new_store_name_invalidates_carried_shop_id_without_prior_name() -> None:
+    assert _is_new_store_name_anchor_for_current_turn(
+        current_store_name="모란점",
+        existing_shop_name=None,
+        existing_shop_id="F00409",
+    ) is True
+
+
+def test_current_turn_new_store_name_invalidates_mismatched_carried_store() -> None:
+    assert _is_new_store_name_anchor_for_current_turn(
+        current_store_name="모란점",
+        existing_shop_name="신성주점",
+        existing_shop_id="F00409",
+    ) is True
+
+
+def test_current_turn_same_store_name_can_keep_carried_shop_id() -> None:
+    assert _is_new_store_name_anchor_for_current_turn(
+        current_store_name="한남점",
+        existing_shop_name="티스테이션 한남점",
+        existing_shop_id="F07782",
+    ) is False
+    assert _normalize_store_name_for_slot_compare("티스테이션 한남점") == "한남점"
+
+
+def test_recent_single_store_context_not_reused_when_current_turn_names_store() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_stores_tool",
+            "input": {"store_nm": "신성주점"},
+            "data": {"stores": [{"shop_id": "F00409", "shop_nm": "신성주점"}]},
+        }
+    ]
+    regex_slots = ConversationSlots.extract_from_user_text("벤투스 S2 AS 2254517 4개 모란점 재고 확인해줘")
+
+    assert regex_slots.pending_intent == "stock"
+    assert regex_slots.shop_name == "모란점"
+    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
+    assert _is_new_store_name_anchor_for_current_turn(regex_slots.shop_name, None, "F00409") is True
 
 
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
