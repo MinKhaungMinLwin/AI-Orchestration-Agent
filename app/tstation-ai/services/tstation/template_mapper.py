@@ -4844,6 +4844,7 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     shop_nm = _get_str(raw, "shop_nm")
     if not shop_nm:
         return None
+    shop_id = _get_str(raw, "shop_seq", "shop_id", "shopId", "shopSeq")
 
     tel_no = _format_phone(_get_str(raw, "tel_no"))
     holiday = _get_str(raw, "holiday")
@@ -4894,17 +4895,27 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
             "일요일/공휴일 운영 여부는 매장 사정에 따라 달라질 수 있어 매장에 직접 확인해 주세요.",
         ])
 
+    quick_replies = [
+        {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    ]
+    if shop_id:
+        quick_replies.insert(
+            0,
+            {
+                "label": "매장 상세 페이지로 이동",
+                "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", shop_id),
+                "domain": "TRANSACTION",
+            },
+        )
+
     return {
         "type": "data",
         "template": "quickReply",
         "assistant_response_source": "code_mapper",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "다른 매장 정보", "domain": "TRANSACTION"},
-                {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            ],
+            "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION"],
         },
     }
