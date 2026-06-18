@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # "reservation" covers 매장 방문 예약 (타이어 장착 외에 와이퍼/배터리/얼라인먼트/경정비 등
 # 부가 서비스 예약 포함). Distinguished from "order" — "예약" 단독 발화는 서비스 방문이지
 # 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
-PendingIntent = Literal["price", "stock", "order", "reservation"]
+PendingIntent = Literal["price", "stock", "order", "reservation", "quantity_benefit_comparison"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -59,6 +59,9 @@ class ConversationSlots(BaseModel):
     # (region/address) is satisfied. Cleared automatically when goal_type flips.
     user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
+    pending_product_name: Optional[str] = None  # product name waiting for a missing slot follow-up
+    pending_quantity_options: Optional[list[int]] = None  # quantity comparison options, e.g. [2, 4]
+    pending_required_slot: Optional[str] = None  # missing slot requested in the previous assistant turn
     goal_type: Optional[GoalType] = None  # e.g. "store_with_stock" — high-level destination, sticky across turns.
     recommendation_variants: Optional[list[dict[str, Any]]] = None
     recommendation_limit_per_variant: Optional[int] = None

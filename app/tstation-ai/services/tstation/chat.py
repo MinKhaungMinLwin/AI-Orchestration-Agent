@@ -77,6 +77,7 @@ from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
 )
+from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 from services.tstation.policies.store_confirmation_policy import (
     is_store_confirmation_reply,
@@ -7385,11 +7386,138 @@ def _build_quantity_benefit_missing_event(frame: Any) -> dict:
             ],
             "predictedDomains": ["DISCOVERY"],
             "metadata": {
+                "pendingIntent": "quantity_benefit_comparison",
                 "quantityOptions": list(quantities),
                 "productName": product_names[0] if product_names else None,
+                "missingSlot": "tire_size",
             },
         },
     }
+
+
+def _build_quantity_benefit_not_found_event(product_name: str, tire_size: str) -> dict:
+    assistant = (
+        f"{product_name} {tire_size} 규격 상품을 찾지 못했어요.\n\n"
+        "다른 규격이나 정확한 상품명을 알려주시면 2개/4개 기준 혜택가를 다시 비교해 드릴게요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_quantity_benefit_product_not_found",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "다른 규격 입력", "domain": "DISCOVERY"},
+                {"label": "다른 상품 비교", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "productName": product_name,
+                "tireSize": tire_size,
+            },
+        },
+    }
+
+
+def _quantity_benefit_pending_values_from_template(template_data: dict | None) -> dict[str, Any]:
+    if not isinstance(template_data, dict):
+        return {}
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    metadata = data.get("metadata") if isinstance(data, dict) else None
+    if not isinstance(metadata, dict):
+        return {}
+    if metadata.get("pendingIntent") != "quantity_benefit_comparison":
+        return {}
+    product_name = str(metadata.get("productName") or "").strip()
+    quantity_options = metadata.get("quantityOptions")
+    if not isinstance(quantity_options, list):
+        return {}
+    quantities: list[int] = []
+    for value in quantity_options:
+        try:
+            quantity = int(value)
+        except (TypeError, ValueError):
+            continue
+        if quantity > 0 and quantity not in quantities:
+            quantities.append(quantity)
+    if not product_name or len(quantities) < 2:
+        return {}
+    return {
+        "product_name": product_name,
+        "quantity_options": quantities[:2],
+        "required_slot": str(metadata.get("missingSlot") or "tire_size"),
+    }
+
+
+def _quantity_benefit_pending_values_from_slots(slots: Any | None) -> dict[str, Any]:
+    if getattr(slots, "pending_intent", None) != "quantity_benefit_comparison":
+        return {}
+    product_name = str(getattr(slots, "pending_product_name", None) or "").strip()
+    quantity_options = getattr(slots, "pending_quantity_options", None)
+    if not isinstance(quantity_options, list):
+        return {}
+    quantities: list[int] = []
+    for value in quantity_options:
+        try:
+            quantity = int(value)
+        except (TypeError, ValueError):
+            continue
+        if quantity > 0 and quantity not in quantities:
+            quantities.append(quantity)
+    if not product_name or len(quantities) < 2:
+        return {}
+    return {
+        "product_name": product_name,
+        "quantity_options": quantities[:2],
+        "required_slot": str(getattr(slots, "pending_required_slot", None) or "tire_size"),
+    }
+
+
+def _quantity_benefit_continuation_frame_from_pending(
+    user_text: str,
+    *,
+    slots: Any | None = None,
+    latest_quickreply_tmpl: dict | None = None,
+    current_goods_no: str | None = None,
+) -> IntentFrame | None:
+    current_size = normalize_tire_size(user_text)
+    goods_no = str(current_goods_no or getattr(slots, "goods_no", None) or "").strip()
+    if not current_size and not goods_no:
+        return None
+    pending = (
+        _quantity_benefit_pending_values_from_slots(slots)
+        or _quantity_benefit_pending_values_from_template(latest_quickreply_tmpl)
+    )
+    if not pending:
+        return None
+
+    product_name = pending["product_name"]
+    quantities = tuple(sorted(int(quantity) for quantity in pending["quantity_options"][:2]))
+    known_slots: dict[str, Any] = {}
+    if current_size:
+        known_slots["tire_size"] = current_size
+    if goods_no:
+        known_slots["goods_no"] = goods_no
+    synthetic_text = f"{product_name} {' '.join(f'{quantity}개' for quantity in quantities)} 할인 비교"
+    synthetic_frame = build_discovery_intent_frame(synthetic_text, known_slots=known_slots)
+    entities = dict(synthetic_frame.entities)
+    entities["product_names"] = tuple(entities.get("product_names") or (product_name,))
+    entities["quantity_options"] = quantities
+    entities["compare_metric"] = "discount"
+    if current_size:
+        entities["tire_size"] = current_size
+        entities["explicit_tire_size"] = current_size
+    return IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="product_comparison",
+        sub_intent="quantity_benefit_comparison",
+        entities=entities,
+        known_slots=known_slots,
+        missing_slots=(),
+        confidence=0.9,
+    )
 
 
 def _build_quantity_benefit_comparison_event(price_results: dict[int, dict]) -> dict | None:
@@ -12476,6 +12604,7 @@ class TStationChatServiceV2:
                     parent_span_id=_parent_span_id,
                     request_started_at=_t0,
                     latest_datepick_tmpl=latest_datepick_tmpl,
+                    latest_quickreply_tmpl=latest_quickreply_tmpl,
                     prev_tool_data=prev_tool_data,
                     intent_group=intent_group,
                 ),
@@ -12509,6 +12638,7 @@ class TStationChatServiceV2:
                 parent_span_id=_parent_span_id,
                 request_started_at=_t0,
                 latest_datepick_tmpl=latest_datepick_tmpl,
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
                 prev_tool_data=prev_tool_data,
                 intent_group=intent_group,
             ):
@@ -12632,6 +12762,7 @@ class TStationChatServiceV2:
         initial_slots: Any | None = None,
         request_started_at: float | None = None,
         latest_datepick_tmpl: dict | None = None,
+        latest_quickreply_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
         intent_group: str | None = None,
     ):
@@ -14058,6 +14189,42 @@ class TStationChatServiceV2:
                 return None
             return emitted_events, event
 
+        async def _save_quantity_benefit_pending_slots(frame: Any) -> None:
+            if not session_id:
+                return
+            product_names = tuple(frame.entities.get("product_names") or ())
+            quantities = [int(quantity) for quantity in tuple(frame.entities.get("quantity_options") or (2, 4))[:2]]
+            if not product_names or len(quantities) < 2:
+                return
+            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+            base_slots.pending_intent = "quantity_benefit_comparison"
+            base_slots.pending_product_name = str(product_names[0])
+            base_slots.pending_quantity_options = quantities
+            base_slots.pending_required_slot = "tire_size" if not frame.entities.get("tire_size") else "goods_no"
+            try:
+                from services.tstation.chat_history_service import get_chat_history_service
+
+                history_svc = get_chat_history_service()
+                await history_svc.save_slots_async(session_id, base_slots, user_id=user_id)
+            except Exception as exc:
+                logger.warning("[QTY_BENEFIT] failed to save pending slots: %s", exc)
+
+        async def _clear_quantity_benefit_pending_slots() -> None:
+            if not session_id or getattr(initial_slots, "pending_intent", None) != "quantity_benefit_comparison":
+                return
+            cleared_slots = initial_slots.model_copy()
+            cleared_slots.pending_intent = None
+            cleared_slots.pending_product_name = None
+            cleared_slots.pending_quantity_options = None
+            cleared_slots.pending_required_slot = None
+            try:
+                from services.tstation.chat_history_service import get_chat_history_service
+
+                history_svc = get_chat_history_service()
+                await history_svc.save_slots_async(session_id, cleared_slots, user_id=user_id)
+            except Exception as exc:
+                logger.warning("[QTY_BENEFIT] failed to clear pending slots: %s", exc)
+
         def _quantity_benefit_frame_with_recent_context() -> Any | None:
             known_slots: dict[str, Any] = {}
             if initial_slots is not None:
@@ -14075,6 +14242,14 @@ class TStationChatServiceV2:
                 prev_tool_data or [],
                 current_tire_size=known_slots.get("tire_size") or current_size,
             )
+            pending_frame = _quantity_benefit_continuation_frame_from_pending(
+                user_query,
+                slots=initial_slots,
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
+                current_goods_no=current_goods_no,
+            )
+            if pending_frame is not None:
+                return pending_frame
             if not (current_size or current_goods_no):
                 return None
 
@@ -14131,6 +14306,7 @@ class TStationChatServiceV2:
             product_names = tuple(frame.entities.get("product_names") or ())
             if not goods_no:
                 if not confirmed_tire_size or not product_names:
+                    await _save_quantity_benefit_pending_slots(frame)
                     return emitted_events, _build_quantity_benefit_missing_event(frame)
 
                 from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
@@ -14186,11 +14362,16 @@ class TStationChatServiceV2:
                         ),
                     )
                     if mapped_event is None:
-                        return emitted_events, _build_quantity_benefit_missing_event(frame)
+                        await _clear_quantity_benefit_pending_slots()
+                        return emitted_events, _build_quantity_benefit_not_found_event(
+                            preferred_keyword,
+                            str(confirmed_tire_size),
+                        )
                     mapped_goods_no = _goods_no_from_template_event(mapped_event)
                     if mapped_goods_no:
                         goods_no = mapped_goods_no
                     else:
+                        await _clear_quantity_benefit_pending_slots()
                         mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
                         mapped_event["assistant_response_source"] = "code_quantity_benefit_product_selection"
                         return emitted_events, mapped_event
@@ -14235,7 +14416,9 @@ class TStationChatServiceV2:
 
             comparison_event = _build_quantity_benefit_comparison_event(price_results)
             if comparison_event is None:
+                await _clear_quantity_benefit_pending_slots()
                 return emitted_events, _build_quantity_benefit_missing_event(frame)
+            await _clear_quantity_benefit_pending_slots()
             return emitted_events, comparison_event
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:

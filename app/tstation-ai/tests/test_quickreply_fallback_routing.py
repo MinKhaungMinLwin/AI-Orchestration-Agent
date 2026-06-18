@@ -44,9 +44,11 @@ from services.tstation.chat import (
     _build_product_coupon_eligibility_event,
     _build_product_coupon_price_amount_event,
     _build_product_coupon_price_no_product_event,
+    _build_quantity_benefit_missing_event,
     _build_store_holiday_period_event,
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
+    _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
@@ -5801,3 +5803,58 @@ def test_trace_final_error_state_marks_validation_fallback_user_visible() -> Non
     assert final_status == "error"
     assert error_class == "template_validation_error"
     assert user_visible_error is True
+
+
+def test_quantity_benefit_missing_event_stores_continuation_metadata() -> None:
+    frame = build_discovery_intent_frame("옵티모 상품 2개살까 4개살까 고민 중인데 4개 사면 더 할인해줘?")
+
+    event = _build_quantity_benefit_missing_event(frame)
+
+    assert event["assistant_response_source"] == "code_quantity_benefit_missing_slots"
+    assert event["data"]["metadata"] == {
+        "pendingIntent": "quantity_benefit_comparison",
+        "quantityOptions": [2, 4],
+        "productName": "Optimo",
+        "missingSlot": "tire_size",
+    }
+
+
+def test_quantity_benefit_pending_slots_continue_with_product_and_size() -> None:
+    slots = ConversationSlots(
+        pending_intent="quantity_benefit_comparison",
+        pending_product_name="옵티모",
+        pending_quantity_options=[2, 4],
+        pending_required_slot="tire_size",
+    )
+
+    frame = _quantity_benefit_continuation_frame_from_pending("옵티모 2454519", slots=slots)
+
+    assert frame is not None
+    assert frame.sub_intent == "quantity_benefit_comparison"
+    assert frame.entities["product_names"] == ("Optimo",)
+    assert frame.entities["tire_size"] == "245/45R19"
+    assert frame.entities["quantity_options"] == (2, 4)
+    assert frame.missing_slots == ()
+
+
+def test_quantity_benefit_quickreply_metadata_continues_after_history_summary() -> None:
+    previous_event = _build_quantity_benefit_missing_event(
+        build_discovery_intent_frame("옵티모 상품 2개살까 4개살까 고민 중인데 4개 사면 더 할인해줘?")
+    )
+
+    frame = _quantity_benefit_continuation_frame_from_pending(
+        "2454519",
+        slots=ConversationSlots(),
+        latest_quickreply_tmpl=previous_event,
+    )
+
+    assert frame is not None
+    assert frame.entities["product_names"] == ("Optimo",)
+    assert frame.entities["tire_size"] == "245/45R19"
+    assert frame.entities["quantity_options"] == (2, 4)
+
+
+def test_plain_product_size_search_does_not_trigger_quantity_benefit_without_pending_state() -> None:
+    frame = _quantity_benefit_continuation_frame_from_pending("옵티모 2454519", slots=ConversationSlots())
+
+    assert frame is None
