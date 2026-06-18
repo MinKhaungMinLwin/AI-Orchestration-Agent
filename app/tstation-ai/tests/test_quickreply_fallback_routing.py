@@ -55,6 +55,7 @@ from services.tstation.chat import (
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _build_product_size_list_event_from_search_results,
     _comparison_query_with_recent_context,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
@@ -92,6 +93,7 @@ from services.tstation.chat import (
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
     _is_size_only_store_availability_continuation,
+    _is_product_size_list_intent,
     _is_owned_coupon_best_discount_query,
     _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
@@ -4276,6 +4278,64 @@ def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> N
         )
         == "G000000310120"
     )
+
+
+def test_product_size_list_intent_builds_quickreply_from_previous_search_after_no_result() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "input": {"keyword": "벤투스 에어S", "limit": 10},
+            "data": [
+                {
+                    "goods_no": "G1",
+                    "goods_nm": "벤투스 에어S",
+                    "tire_size_1": "245/45R18",
+                    "sale_prc": 253000,
+                    "image_url": "https://example.test/tire.png",
+                },
+                {
+                    "goods_no": "G2",
+                    "goods_nm": "벤투스 에어S",
+                    "tire_size_1": "245/50R18",
+                    "sale_prc": 260000,
+                    "image_url": "https://example.test/tire2.png",
+                },
+                {
+                    "goods_no": "G3",
+                    "goods_nm": "벤투스 에어S",
+                    "tire_size_1": "245/40R18",
+                },
+            ],
+        },
+        {
+            "tool": "search_product_tool",
+            "input": {"keyword": "벤투스 에어S", "limit": 10, "size": "235/55R19"},
+            "data": [],
+        },
+    ]
+
+    event = _build_product_size_list_event_from_search_results(
+        "다른 사이즈 보기",
+        [],
+        prev_tool_data=prev_tool_data,
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    data = event["data"]
+    assert "245/45R18" in data["assistantResponse"]
+    assert "245/50R18" in data["assistantResponse"]
+    assert "products" not in data
+    assert "imageUrl" not in data
+    assert "price" not in data
+    assert "goodsId" not in data["metadata"]
+    assert data["metadata"]["sizes"] == ["245/45R18", "245/50R18", "245/40R18"]
+
+
+def test_product_size_list_intent_does_not_capture_product_search_or_size_selection() -> None:
+    assert _is_product_size_list_intent("다른 규격 있어?") is True
+    assert _is_product_size_list_intent("벤투스 에어S 보여줘") is False
+    assert _is_product_size_list_intent("2454518") is False
 
 
 def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:

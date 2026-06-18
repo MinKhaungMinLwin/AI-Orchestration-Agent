@@ -8014,6 +8014,179 @@ def _build_size_only_product_search_tool_input(
     return {"keyword": keyword, "limit": 10, "size": tire_size}
 
 
+_PRODUCT_SIZE_LIST_INTENT_RE = re.compile(
+    r"(?:다른|가능한|어떤)\s*(?:사이즈|규격)"
+    r"|(?:사이즈|규격)\s*(?:목록|리스트|보기|보여|알려|있어|있나요|뭐)",
+    re.IGNORECASE,
+)
+
+
+def _is_product_size_list_intent(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    return bool(_PRODUCT_SIZE_LIST_INTENT_RE.search(text))
+
+
+def _search_product_rows_from_payload(payload: Any) -> list[dict]:
+    candidates: list[Any] = [payload]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        candidates.append(data)
+        if isinstance(data, dict):
+            nested = data.get("data")
+            candidates.append(nested)
+
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [row for row in candidate if isinstance(row, dict) and not row.get("_truncated")]
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("items", "products", "data"):
+            value = candidate.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict) and not row.get("_truncated")]
+            if isinstance(value, dict) and isinstance(value.get("items"), list):
+                return [row for row in value["items"] if isinstance(row, dict) and not row.get("_truncated")]
+    return []
+
+
+def _compact_product_match_text(value: object) -> str:
+    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", str(value or "")).lower()
+
+
+def _product_size_list_keyword_from_context(
+    user_text: str,
+    search_results: list[tuple[str, dict]] | None = None,
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    slots: Any | None = None,
+) -> str | None:
+    frame = build_discovery_intent_frame(user_text)
+    product_names = tuple(frame.entities.get("product_names") or ())
+    if product_names:
+        return _preferred_product_search_keyword(str(product_names[0]))
+
+    slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
+    if slot_model:
+        return _preferred_product_search_keyword(slot_model)
+
+    for keyword, _result in reversed(search_results or []):
+        keyword = str(keyword or "").strip()
+        if keyword:
+            return _preferred_product_search_keyword(keyword)
+
+    for entry in reversed(prev_tool_data or []):
+        if entry.get("tool") != "search_product_tool":
+            continue
+        tool_input = entry.get("input") if isinstance(entry.get("input"), dict) else entry.get("args")
+        if isinstance(tool_input, dict):
+            keyword = str(tool_input.get("keyword") or "").strip()
+            if keyword:
+                return _preferred_product_search_keyword(keyword)
+
+    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
+        frame = build_discovery_intent_frame(line)
+        product_names = tuple(frame.entities.get("product_names") or ())
+        if product_names:
+            return _preferred_product_search_keyword(str(product_names[0]))
+    return None
+
+
+def _product_size_list_row_matches_keyword(row: dict, keyword: str | None) -> bool:
+    if not keyword:
+        return True
+    row_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "")
+    if not row_name:
+        return True
+    compact_keyword = _compact_product_match_text(keyword)
+    compact_row_name = _compact_product_match_text(row_name)
+    if compact_keyword and (compact_keyword in compact_row_name or compact_row_name in compact_keyword):
+        return True
+    tokens = [token.lower() for token in re.findall(r"[A-Za-z가-힣0-9]+", keyword) if len(token) >= 2]
+    return bool(tokens) and any(token in row_name.lower() for token in tokens)
+
+
+def _build_product_size_list_event_from_search_results(
+    user_text: str,
+    search_results: list[tuple[str, dict]] | None = None,
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    slots: Any | None = None,
+) -> dict | None:
+    if not _is_product_size_list_intent(user_text):
+        return None
+
+    keyword = _product_size_list_keyword_from_context(
+        user_text,
+        search_results,
+        prev_tool_data=prev_tool_data,
+        recent_context=recent_context,
+        slots=slots,
+    )
+    rows: list[dict] = []
+    for _keyword, result in reversed(search_results or []):
+        rows.extend(_search_product_rows_from_payload(result))
+    for entry in reversed(prev_tool_data or []):
+        if entry.get("tool") != "search_product_tool":
+            continue
+        rows.extend(_search_product_rows_from_payload(entry.get("data")))
+
+    if keyword:
+        matched_rows = [row for row in rows if _product_size_list_row_matches_keyword(row, keyword)]
+        if matched_rows:
+            rows = matched_rows
+
+    sizes: list[str] = []
+    seen_sizes: set[str] = set()
+    first_product_name = ""
+    for row in rows:
+        if not first_product_name:
+            first_product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+        tire_size = normalize_tire_size(
+            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
+        )
+        if not tire_size:
+            tire_size = normalize_tire_size(str(row.get("tire_size_2") or ""))
+        if not tire_size:
+            continue
+        compact_size = re.sub(r"[^0-9]", "", tire_size)
+        if compact_size in seen_sizes:
+            continue
+        seen_sizes.add(compact_size)
+        sizes.append(tire_size)
+
+    if not sizes:
+        return None
+
+    product_label = keyword or first_product_name or "해당 상품"
+    visible_sizes = sizes[:8]
+    suffix = " 등" if len(sizes) > len(visible_sizes) else ""
+    assistant_response = (
+        f"{product_label}에서 확인되는 규격은 {', '.join(visible_sizes)}{suffix}이에요.\n"
+        "원하시는 규격을 선택하거나 사이즈를 직접 입력해 주세요."
+    )
+    quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in sizes[:6]]
+    quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_size_list",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "productName": product_label,
+                "sizes": sizes,
+            },
+        },
+    }
+
+
 def _is_size_only_store_availability_continuation(
     user_text: str,
     *,
@@ -14978,6 +15151,25 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
+        product_size_list_event = _build_product_size_list_event_from_search_results(
+            user_query,
+            [],
+            prev_tool_data=prev_tool_data or [],
+            recent_context=recent_user_context_text,
+            slots=initial_slots,
+        )
+        if product_size_list_event is not None:
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(product_size_list_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((product_size_list_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         bare_product_search_resolution = await _resolve_bare_product_search_with_code()
         if bare_product_search_resolution is not None:
             code_events, product_event = bare_product_search_resolution
@@ -15320,6 +15512,24 @@ class TStationChatServiceV2:
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_vehicle_owner_lookup_prompt"
                         event_data = event.get("data", {})
+                if event.get("template") == "product" and _is_product_size_list_intent(user_query):
+                    deterministic_size_list_event = _build_product_size_list_event_from_search_results(
+                        user_query,
+                        search_product_tool_results,
+                        prev_tool_data=prev_tool_data or [],
+                        recent_context=recent_user_context_text,
+                        slots=pending_slots or initial_slots,
+                    )
+                    if deterministic_size_list_event is not None:
+                        logger.info("[PRODUCT_SIZE_LIST] replacing product card with size list quickReply")
+                        event = deterministic_size_list_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_product_size_list"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
                 coerced_event = None
                 if intent_group != "existing_reservation_management":
                     coerced_event = coerce_reservation_quickreply_to_datepick(
