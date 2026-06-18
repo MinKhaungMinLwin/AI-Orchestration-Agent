@@ -2774,7 +2774,13 @@ def _build_service_reservation_redirect_payload(
         })
     chips.extend([
         {"label": "다른 시간 선택", "domain": "TRANSACTION"},
-        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+        {
+            "label": "다른 지역 입력",
+            "domain": "TRANSACTION",
+            "actionId": "enter_region",
+            "intentKey": "reservation",
+            "metadata": {"intentKey": "reservation"},
+        },
     ])
 
     return {"text": text, "chips": chips, "shop_seq": shop_seq, "store_name": store_name}
@@ -2956,7 +2962,13 @@ _FALLBACK_GENERIC: list[dict] = [
 
 _FALLBACK_TRANSACTION_STORE: list[dict] = [
     {"label": "예약 가능 시간 보기", "domain": "TRANSACTION"},
-    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+    {
+        "label": "다른 지역 입력",
+        "domain": "TRANSACTION",
+        "actionId": "enter_region",
+        "intentKey": "reservation",
+        "metadata": {"intentKey": "reservation"},
+    },
     {"label": "매장 선택 다시", "domain": "TRANSACTION"},
 ]
 
@@ -5900,8 +5912,20 @@ def _build_store_holiday_period_event(
             "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", store_seq),
             "domain": "TRANSACTION",
         },
-        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
-        {"label": "다른 매장 보기", "domain": "TRANSACTION"},
+        {
+            "label": "다른 날짜 입력",
+            "domain": "TRANSACTION",
+            "actionId": "enter_date",
+            "intentKey": "reservation",
+            "metadata": {"intentKey": "reservation"},
+        },
+        {
+            "label": "다른 지역 입력",
+            "domain": "TRANSACTION",
+            "actionId": "enter_region",
+            "intentKey": "reservation",
+            "metadata": {"intentKey": "reservation"},
+        },
     ]
     if not store_seq:
         quick_replies = quick_replies[1:]

@@ -6016,7 +6016,8 @@ def test_transaction_store_plain_text_returns_store_schedule_chips() -> None:
     )
 
     assert label == "transaction_store_schedule"
-    assert _labels(chips) == ["예약 가능 시간 보기", "다른 매장 찾기", "매장 선택 다시"]
+    assert _labels(chips) == ["예약 가능 시간 보기", "다른 지역 입력", "매장 선택 다시"]
+    assert chips[1]["actionId"] == "enter_region"
     assert "1:1 문의하기" not in _labels(chips)
 
 

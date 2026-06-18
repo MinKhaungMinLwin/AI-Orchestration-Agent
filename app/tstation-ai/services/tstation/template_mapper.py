@@ -891,10 +891,24 @@ def _map_store_validation_quickreply(tool_data_list: list[dict], assistant_text:
             if len(stored_candidates) == 1:
                 quick_replies = [
                     {"label": "네, 맞아요", "domain": "TRANSACTION"},
-                    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key="store_search",
+                        metadata={"intentKey": "store_search"},
+                    ),
                 ]
             elif chips:
-                quick_replies = chips + [{"label": "다른 매장 찾기", "domain": "TRANSACTION"}]
+                quick_replies = chips + [
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key="store_search",
+                        metadata={"intentKey": "store_search"},
+                    )
+                ]
 
         region_candidates = raw.get("region_candidates")
         if not quick_replies and isinstance(region_candidates, list) and region_candidates:
@@ -908,14 +922,28 @@ def _map_store_validation_quickreply(tool_data_list: list[dict], assistant_text:
                 labels.append({"label": f"{region_text} 지역 검색", "domain": "TRANSACTION"})
             if stored_regions:
                 confirmation_meta["regionCandidates"] = stored_regions
-                quick_replies = labels + [{"label": "다른 매장 찾기", "domain": "TRANSACTION"}]
+                quick_replies = labels + [
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key="store_search",
+                        metadata={"intentKey": "store_search"},
+                    )
+                ]
 
         suggested_region = _get_str(raw, "suggested_region")
         if not quick_replies and suggested_region:
             confirmation_meta["suggestedRegion"] = suggested_region
             quick_replies = [
                 {"label": f"네, {suggested_region} 지역으로 검색", "domain": "TRANSACTION"},
-                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                _cta_chip(
+                    "다른 지역 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_region",
+                    intent_key="store_search",
+                    metadata={"intentKey": "store_search"},
+                ),
             ]
 
         if not quick_replies:
