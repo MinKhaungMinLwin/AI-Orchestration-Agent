@@ -3078,6 +3078,28 @@ _COUPON_MATCH_STOPWORDS = {
     "적용받고",
     "싶어",
 }
+_COUPON_MATCH_TOKEN_SUFFIXES = (
+    "에서는",
+    "에서",
+    "으로",
+    "에게",
+    "까지",
+    "부터",
+    "하고",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "도",
+    "만",
+    "로",
+    "에",
+    "랑",
+    "와",
+    "과",
+)
 
 # LEADING 도메인의 fallback 은 진행형(발견 → 구매) chip 으로 시작해야 자연스럽다.
 # "1:1 문의하기" 같은 escalation chip 은 사용자가 인사·일반 문의를 한 직후엔 부적절.
@@ -4655,6 +4677,13 @@ def _normalize_coupon_match_text(value: object) -> str:
     return re.sub(r"[^0-9a-zA-Z가-힣]+", "", str(value or "")).lower()
 
 
+def _strip_coupon_match_token_suffix(token: str) -> str:
+    for suffix in _COUPON_MATCH_TOKEN_SUFFIXES:
+        if token.endswith(suffix) and len(token) - len(suffix) >= 2:
+            return token[: -len(suffix)]
+    return token
+
+
 def _coupon_product_match_keys(value: object) -> set[str]:
     normalized = _normalize_coupon_match_text(value)
     if not normalized:
@@ -4677,6 +4706,7 @@ def _coupon_query_terms(user_text: str) -> list[str]:
     terms: list[str] = []
     for raw in re.findall(r"[0-9a-zA-Z가-힣]+", user_text):
         normalized = _normalize_coupon_match_text(raw)
+        normalized = _strip_coupon_match_token_suffix(normalized)
         if len(normalized) < 2 or normalized in _COUPON_MATCH_STOPWORDS:
             continue
         terms.append(normalized)
@@ -5138,8 +5168,31 @@ def _coupon_name(row: dict, fallback: str = "해당 쿠폰") -> str:
     return str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or fallback).strip() or fallback
 
 
+def _coupon_mapping_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "t", "y", "yes", "o"}
+
+
 def _coupon_channel_type(row: dict) -> str:
-    return str(row.get("coupon_channel_type") or "").strip().lower()
+    channel_type = str(row.get("coupon_channel_type") or "").strip().lower()
+    if channel_type:
+        return channel_type
+
+    if _coupon_mapping_flag(row.get("has_partner_mapping")):
+        return "partner_only"
+
+    cpn_onoff_cd = str(row.get("cpn_onoff_cd") or "").strip()
+    if cpn_onoff_cd == "10":
+        return "online"
+    if cpn_onoff_cd == "20":
+        return "onoff"
+    if cpn_onoff_cd == "30":
+        if _coupon_mapping_flag(row.get("has_store_mapping")):
+            return "store_only"
+        return "offline"
+    return ""
 
 
 def _coupon_store_names_from_applicable_result(tool_result: dict | None, *, limit: int = 3) -> list[str]:
@@ -5229,6 +5282,8 @@ def _build_coupon_channel_policy_event(
         store_names = _coupon_store_names_from_applicable_result(applicable_result)
         if store_names:
             lines.append(f"적용 가능 매장 예시는 {', '.join(store_names)}입니다.")
+        else:
+            lines.append("적용 가능 매장 예시는 쿠폰 적용 매장 조회에서 확인해 주세요.")
         quick_replies = [
             {"label": "적용 매장 보기", "domain": "TRANSACTION"},
             {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},

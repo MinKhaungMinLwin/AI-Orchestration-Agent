@@ -100,6 +100,7 @@ from services.tstation.chat import (
     _choose_quickreply_fallback,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
+    _coupon_channel_type,
     _discovery_recovery_chips_for_text,
     _find_coupon_from_owned_coupons,
     _find_single_confident_coupon_from_owned_coupons,
@@ -2099,12 +2100,38 @@ def test_specific_coupon_matching_requires_single_confident_candidate() -> None:
     assert [row["cpn_no"] for row in ambiguous] == ["C001", "C002"]
 
 
+def test_specific_coupon_matching_strips_particle_for_single_partial_match() -> None:
+    matched, ambiguous = _find_single_confident_coupon_from_owned_coupons(
+        "우동딜 테스트는 어떻게 써?",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {"cpn_no": "C001", "cpn_nm": "서울 우동딜 테스트", "rt_amt_val": 10},
+                ],
+            },
+        },
+    )
+
+    assert matched is not None
+    assert matched["cpn_no"] == "C001"
+    assert ambiguous == []
+
+
+def test_coupon_channel_type_recovers_from_backend_codes() -> None:
+    assert _coupon_channel_type({"cpn_onoff_cd": "10", "has_store_mapping": True}) == "online"
+    assert _coupon_channel_type({"cpn_onoff_cd": "20"}) == "onoff"
+    assert _coupon_channel_type({"cpn_onoff_cd": "30", "has_store_mapping": True}) == "store_only"
+    assert _coupon_channel_type({"cpn_onoff_cd": "30", "has_store_mapping": False}) == "offline"
+    assert _coupon_channel_type({"cpn_onoff_cd": "10", "has_partner_mapping": True}) == "partner_only"
+
+
 def test_coupon_channel_policy_store_only_blocks_online_price_cta() -> None:
     event = _build_coupon_channel_policy_event(
         {
             "cpn_no": "C001",
             "cpn_nm": "우동딜 테스트",
-            "coupon_channel_type": "store_only",
+            "cpn_onoff_cd": "30",
             "has_store_mapping": True,
         },
         applicable_result={
@@ -2123,6 +2150,27 @@ def test_coupon_channel_policy_store_only_blocks_online_price_cta() -> None:
     assert "매장 전용 쿠폰" in response
     assert "온라인 상품 가격에는 반영되지 않습니다" in response
     assert "모란점, 강남점" in response
+    assert labels == ["적용 매장 보기", "내 쿠폰 조회", "매장 찾기"]
+    assert "상품 가격 확인" not in labels
+
+
+def test_coupon_channel_policy_store_only_keeps_usage_template_without_store_result() -> None:
+    event = _build_coupon_channel_policy_event(
+        {
+            "cpn_no": "C001",
+            "cpn_nm": "서울 우동딜 테스트",
+            "cpn_onoff_cd": "30",
+            "has_store_mapping": True,
+        },
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_coupon_channel_policy"
+    response = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "매장 전용 쿠폰" in response
+    assert "온라인 상품 가격에는 반영되지 않습니다" in response
+    assert "적용 가능 매장 예시" in response
     assert labels == ["적용 매장 보기", "내 쿠폰 조회", "매장 찾기"]
     assert "상품 가격 확인" not in labels
 
