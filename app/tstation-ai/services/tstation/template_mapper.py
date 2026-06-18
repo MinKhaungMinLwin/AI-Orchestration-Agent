@@ -697,6 +697,25 @@ def _preview_has_no_fulfillment(raw: dict) -> bool:
     return logistics_qty <= 0 and not today_ids and not tna_ids and schedule_empty
 
 
+def _preview_has_no_requested_day_fulfillment(raw: dict) -> bool:
+    """True when a date-specific preview found no store on the requested day.
+
+    `tnaShopArray` can still contain future delivery candidates, but if
+    `requested_cal_day` is present and the filtered schedule is `none`, the
+    current answer must be "not available for that day", not a generic
+    reservation-store list.
+    """
+    requested_cal_day = _get_str(raw, "requested_cal_day")
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    requested_cal_day = requested_cal_day or _get_str(schedule, "requested_cal_day")
+    if not requested_cal_day:
+        return False
+    schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+    return _get_str(schedule, "tier").lower() == "none" or (
+        isinstance(schedule_stores, list) and not schedule_stores
+    )
+
+
 def _unsafe_no_fulfillment_copy(text: str) -> bool:
     return bool(re.search(r"목록|선택|예약\s*가능|주문\s*가능|장착\s*가능|확인했어요", text or ""))
 
@@ -711,9 +730,9 @@ def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant
         if not args.get("goods_no"):
             continue
         stores = raw.get("stores")
-        if not isinstance(stores, list) or not stores:
-            continue
-        if not _preview_has_no_fulfillment(raw):
+        if not _preview_has_no_requested_day_fulfillment(raw) and (
+            not isinstance(stores, list) or not stores or not _preview_has_no_fulfillment(raw)
+        ):
             continue
 
         region = _get_str(args, "region_code") or _get_str(args, "store_nm")
