@@ -2510,6 +2510,7 @@ def test_product_card_mapper_uses_display_final_price_priority() -> None:
     assert product["price"] == 85000
     assert product["originalPrice"] == 120000
     assert product["discountAmount"] == 35000
+    assert product["discountRate"] == 29.2
 
 
 def test_compare_discount_mapper_uses_final_unit_price_without_cheapest_final_price() -> None:

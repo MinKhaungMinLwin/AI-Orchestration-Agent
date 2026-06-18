@@ -2280,10 +2280,14 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
             price = price_map.get(goods_no) or _display_final_unit_price(row)
             original_price = int(_get_num(row, "sale_prc", default=0)) or None
-            discount_rate = float(_get_num(row, "extra_fvr_sale_per", default=0.0)) or None
             discount_amount = (
                 original_price - price
                 if original_price and price and original_price > price
+                else None
+            )
+            discount_rate = (
+                round(discount_amount / original_price * 100, 1)
+                if original_price and discount_amount
                 else None
             )
             # Tag chips:
