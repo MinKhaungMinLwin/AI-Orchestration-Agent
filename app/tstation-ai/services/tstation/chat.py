@@ -1677,11 +1677,62 @@ class StreamingMultiAgentCoordinator:
         if active_routing_result is None:
             active_routing_result = self._resolve_routing_for_agent_profile(classify_future, domains)
 
+        last_user_text_for_policy = ""
+        for msg in reversed(original_messages):
+            if msg.get("role") != "user":
+                continue
+            extracted = StreamingMultiAgentCoordinator._extract_current_user_input(str(msg.get("content") or ""))
+            if extracted:
+                last_user_text_for_policy = extracted
+                break
+
         for agent_index, domain in enumerate(domains):
             agent = self._select_agent(domain, active_routing_result)
             if not agent:
                 logger.warning(f"[COORDINATOR] No agent found for domain: {domain}")
                 continue
+
+            effective_slot_context = slot_context
+            effective_slot_context_with_intent = slot_context_with_intent
+            if domain == MultiAgentDomain.Domain.TRANSACTION and pending_slots is not None:
+                if pending_slots.has_any():
+                    effective_slot_context = pending_slots.to_prompt_context(include_pending_intent=False)
+                    effective_slot_context_with_intent = pending_slots.to_prompt_context(include_pending_intent=True)
+                try:
+                    from services.tstation.agents.c_transaction_agent.tools import (
+                        current_transaction_store_preview_tool_patch,
+                    )
+                    from services.tstation.template_mapper import current_transaction_response_decision
+
+                    transaction_known_slots = {
+                        "tire_size": getattr(pending_slots, "tire_size", None),
+                        "goods_no": getattr(pending_slots, "goods_no", None),
+                        "product_name": getattr(pending_slots, "tire_model", None),
+                        "quantity": getattr(pending_slots, "ord_qty", None),
+                        "ord_qty": getattr(pending_slots, "ord_qty", None),
+                        "shop_id": getattr(pending_slots, "shop_id", None),
+                        "store_name": getattr(pending_slots, "shop_name", None),
+                        "region": getattr(pending_slots, "region", None),
+                    }
+                    transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
+                        domains=domains,
+                        last_user_text=last_user_text_for_policy,
+                        known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
+                    )
+                    current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
+                    current_transaction_response_decision.set(transaction_response_decision)
+                    logger.debug(
+                        "[POLICY][transaction] refreshed before Transaction agent: goods_no=%r store=%r required=%s",
+                        getattr(pending_slots, "goods_no", None),
+                        getattr(pending_slots, "shop_name", None),
+                        (
+                            transaction_response_decision.required_slots
+                            if transaction_response_decision is not None
+                            else None
+                        ),
+                    )
+                except Exception:
+                    logger.exception("[POLICY][transaction] Failed to refresh chained Transaction context")
 
             # Build enriched messages with context from previous agents
             # Order: slot_context | messages (with user_context inside) | current_user_msg LAST | accumulated_context LAST
@@ -1695,10 +1746,10 @@ class StreamingMultiAgentCoordinator:
             # routing (e.g., Discovery would emit "바로 가격 조회로 이어갑니다"
             # on a recommendation pick instead of calling
             # `get_product_description_tool`).
-            if domain == MultiAgentDomain.Domain.TRANSACTION and slot_context_with_intent:
-                domain_slot_context = slot_context_with_intent
+            if domain == MultiAgentDomain.Domain.TRANSACTION and effective_slot_context_with_intent:
+                domain_slot_context = effective_slot_context_with_intent
             else:
-                domain_slot_context = slot_context
+                domain_slot_context = effective_slot_context
 
             if domain_slot_context:
                 enriched_messages.append(

@@ -44,6 +44,7 @@ from services.tstation.chat import (
     _build_product_coupon_price_amount_event,
     _build_product_coupon_price_no_product_event,
     _build_store_holiday_period_event,
+    _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
@@ -1607,6 +1608,23 @@ def test_search_product_tool_slot_data_preserves_goods_no_for_chained_transactio
     assert slots.goods_no == "G000000309783"
     assert slots.tire_size == "225/45R17"
     assert slots.pending_intent == "stock"
+
+
+def test_chained_transaction_policy_refresh_removes_product_required_after_discovery_goods_no() -> None:
+    _tool_patch, decision = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="벤투스 S2 AS 2254517 4개 모란점 재고 확인해줘",
+        known_slots={
+            "tire_size": "225/45R17",
+            "goods_no": "G000000309783",
+            "quantity": 4,
+            "ord_qty": 4,
+            "store_name": "모란점",
+        },
+    )
+
+    assert decision is not None
+    assert "product" not in decision.required_slots
 
 
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
