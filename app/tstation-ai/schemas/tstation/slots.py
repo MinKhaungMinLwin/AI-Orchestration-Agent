@@ -1,3 +1,4 @@
+import datetime
 import logging
 import re
 from typing import Any, ClassVar, Literal, Mapping, Optional
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 # 부가 서비스 예약 포함). Distinguished from "order" — "예약" 단독 발화는 서비스 방문이지
 # 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
 PendingIntent = Literal["price", "stock", "order", "reservation", "quantity_benefit_comparison"]
+AvailabilityIntent = Literal["today_install"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -48,6 +50,8 @@ class ConversationSlots(BaseModel):
     mbr_car_reg_seq: Optional[str] = None  # member car registration sequence
     pending_vehicle_lookup_car_no: Optional[str] = None  # unmatched plate awaiting owner name
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
+    availability_intent: Optional[AvailabilityIntent] = None  # e.g. "today_install"
+    requested_cal_day: Optional[str] = None  # YYYYMMDD requested install/reservation date
     # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
     # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면
     # LLM 이 컨텍스트만으로 단가·수량 곱셈을 추측해 hallucination 하지 않고
@@ -147,6 +151,16 @@ class ConversationSlots(BaseModel):
     # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
     # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
     _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
+    _TODAY_INSTALL_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"오늘\s*(?:바로\s*)?장착|오늘\s*서비스|오늘서비스|당일\s*(?:장착|서비스)|"
+        r"오늘\s*가능|바로\s*장착|지금\s*장착|당장\s*장착",
+        re.IGNORECASE,
+    )
+    _TODAY_DATE_PATTERN: ClassVar[re.Pattern] = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
+    _RELATIVE_DATE_PATTERN: ClassVar[re.Pattern] = re.compile(r"내일|모레", re.IGNORECASE)
+    _EXPLICIT_MD_DATE_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일"
+    )
 
     # Intent patterns. Order = priority: first match wins when a single user turn
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
@@ -376,6 +390,34 @@ class ConversationSlots(BaseModel):
         re.IGNORECASE,
     )
 
+    @staticmethod
+    def _kst_today() -> datetime.date:
+        return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+
+    @classmethod
+    def _extract_requested_cal_day(cls, user_text: str, *, today: datetime.date | None = None) -> str | None:
+        base = today or cls._kst_today()
+        text = user_text or ""
+        if cls._TODAY_DATE_PATTERN.search(text):
+            return base.strftime("%Y%m%d")
+        relative = cls._RELATIVE_DATE_PATTERN.search(text)
+        if relative:
+            offset = 1 if relative.group(0) == "내일" else 2
+            return (base + datetime.timedelta(days=offset)).strftime("%Y%m%d")
+        explicit = cls._EXPLICIT_MD_DATE_PATTERN.search(text)
+        if explicit:
+            year = int(explicit.group(1) or base.year)
+            month = int(explicit.group(2))
+            day = int(explicit.group(3))
+            try:
+                requested = datetime.date(year, month, day)
+            except ValueError:
+                return None
+            if explicit.group(1) is None and requested < base:
+                requested = datetime.date(year + 1, month, day)
+            return requested.strftime("%Y%m%d")
+        return None
+
     def merge(self, new_slots: "ConversationSlots") -> "ConversationSlots":
         """Merge new slots into existing slots with dependency reset logic.
 
@@ -536,6 +578,18 @@ class ConversationSlots(BaseModel):
                 slots.pending_intent = intent_value
                 break
 
+        requested_cal_day = cls._extract_requested_cal_day(user_text)
+        text_stripped = user_text.strip()
+        if cls._TODAY_INSTALL_PATTERN.search(user_text):
+            slots.availability_intent = "today_install"
+            slots.requested_cal_day = requested_cal_day or cls._kst_today().strftime("%Y%m%d")
+        elif requested_cal_day and (
+            slots.pending_intent in {"stock", "order", "reservation"}
+            or cls.has_store_finder_intent(user_text)
+            or len(text_stripped) <= 12
+        ):
+            slots.requested_cal_day = requested_cal_day
+
         # Goal type — derived from the same signals as pending_intent plus an
         # explicit recommend check. Recommend takes priority so a fresh
         # "추천해줘" turn flips a stale transactional goal back to discovery.
@@ -596,7 +650,6 @@ class ConversationSlots(BaseModel):
         # missing, we skip extraction even if the regex would match — stale
         # region slots persisting from non-store turns are noisier than the
         # occasional missed match.
-        text_stripped = user_text.strip()
         should_extract_region = (
             slots.shop_name is None
             and (
@@ -748,6 +801,8 @@ class ConversationSlots(BaseModel):
             "car_lnc_cd": "차량코드",
             "mbr_car_reg_seq": "차량등록시퀀스",
             "region": "지역",
+            "availability_intent": "장착 가능 조건",
+            "requested_cal_day": "요청 장착일",
             "payment_amount": "결제금액",
         }
 

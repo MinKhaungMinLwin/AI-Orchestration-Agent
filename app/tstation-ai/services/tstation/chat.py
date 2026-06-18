@@ -1538,6 +1538,15 @@ class StreamingMultiAgentCoordinator:
             if input_shop_id:
                 tool_slots["shop_id"] = input_shop_id
 
+        if tool_name == "transaction_store_preview_tool" and tool_input:
+            input_requested_cal_day = tool_input.get("requested_cal_day")
+            if input_requested_cal_day:
+                tool_slots["requested_cal_day"] = str(input_requested_cal_day)
+                tool_slots["availability_intent"] = "today_install"
+            input_region = tool_input.get("region_code") or tool_input.get("region")
+            if input_region:
+                tool_slots["region"] = input_region
+
         # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
         # `payment_amount = (final_unit + wage_prc) * ord_qty` 로 계산한다.
         # final_unit 은 사이트 결제 페이지와 같은 cheapest_final_prc 를 최우선으로
@@ -1718,6 +1727,8 @@ class StreamingMultiAgentCoordinator:
                         "shop_id": getattr(pending_slots, "shop_id", None),
                         "store_name": getattr(pending_slots, "shop_name", None),
                         "region": getattr(pending_slots, "region", None),
+                        "availability_intent": getattr(pending_slots, "availability_intent", None),
+                        "requested_cal_day": getattr(pending_slots, "requested_cal_day", None),
                     }
                     transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
                         domains=domains,
@@ -12659,6 +12670,8 @@ class TStationChatServiceV2:
             "shop_id": merged_slots.shop_id,
             "store_name": merged_slots.shop_name,
             "region": merged_slots.region,
+            "availability_intent": merged_slots.availability_intent,
+            "requested_cal_day": merged_slots.requested_cal_day,
         }
         transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
             domains=domains,
