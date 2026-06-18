@@ -3320,9 +3320,120 @@ _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
 
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 _BOOKING_PREVIEW_CHIPS = [
-    {"label": "예약하기", "domain": "TRANSACTION"},
-    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+    {
+        "label": "다른 지역 입력",
+        "domain": "TRANSACTION",
+        "actionId": "enter_region",
+        "intentKey": "today_install",
+        "metadata": {"intentKey": "today_install"},
+    },
+    {
+        "label": "다른 날짜 입력",
+        "domain": "TRANSACTION",
+        "actionId": "enter_date",
+        "intentKey": "today_install",
+        "metadata": {"intentKey": "today_install"},
+    },
 ]
+
+
+def _chip_value(chip_context: dict[str, Any] | None, *keys: str) -> str:
+    if not isinstance(chip_context, dict):
+        return ""
+    for key in keys:
+        value = chip_context.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _quickreply_cta_clarification_event(user_text: str, chip_context: dict[str, Any] | None) -> dict | None:
+    action_id = _chip_value(chip_context, "actionId", "action_id")
+    text = (user_text or "").strip()
+    if action_id == "enter_region" or re.fullmatch(r"(?:다른\s*)?(?:지역|장소)\s*(?:입력|찾기|검색)", text):
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_cta_action_guard",
+            "data": {
+                "assistantResponse": "확인할 지역명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요.",
+                "quickReplies": [
+                    {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+                    {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+                    {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
+    if action_id == "enter_date" or re.fullmatch(r"(?:다른\s*)?(?:날짜|일정)\s*(?:입력|확인|찾기|검색)", text):
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_cta_action_guard",
+            "data": {
+                "assistantResponse": "확인할 날짜를 입력해 주세요. 예: 오늘, 내일, 6월 20일",
+                "quickReplies": [
+                    {"label": "오늘", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": "today_install"},
+                    {"label": "내일", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": "today_install"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
+    return None
+
+
+def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
+    if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
+        return False
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+    changed = False
+    normalized: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for chip in chips:
+        if not isinstance(chip, dict):
+            continue
+        label = str(chip.get("label") or "").strip()
+        if not label:
+            continue
+        action_id = str(chip.get("actionId") or chip.get("action_id") or "").strip()
+        has_url = bool(chip.get("url"))
+        if label in {"다른 매장 찾기", "다른 지역 찾기"} and not action_id and not has_url:
+            chip = {
+                "label": "다른 지역 입력",
+                "domain": "TRANSACTION",
+                "actionId": "enter_region",
+                "intentKey": "today_install",
+                "metadata": {"intentKey": "today_install"},
+            }
+            label = "다른 지역 입력"
+            changed = True
+        elif label == "예약하기" and not action_id and not has_url:
+            changed = True
+            continue
+        if label in seen_labels:
+            changed = True
+            continue
+        seen_labels.add(label)
+        normalized.append(chip)
+    if normalized != chips:
+        event_data["quickReplies"] = normalized
+        changed = True
+    if changed and normalized:
+        event_data["predictedDomains"] = _dedupe_domain_values([
+            *(event_data.get("predictedDomains") or []),
+            *[
+                str(chip.get("domain") or "")
+                for chip in normalized
+                if isinstance(chip, dict) and chip.get("domain")
+            ],
+        ])
+    return changed
+
+
 def _normalize_booking_preview_quickreply(event_data: dict, called_tool_names: set[str]) -> bool:
     """Add booking-oriented CTAs after a stock/booking preview quickReply.
 
@@ -3338,13 +3449,11 @@ def _normalize_booking_preview_quickreply(event_data: dict, called_tool_names: s
     if not re.search(r"예약|장착", assistant_text):
         return False
     chips = event_data.get("quickReplies")
-    if isinstance(chips, list) and any(
-        isinstance(chip, dict) and "예약" in str(chip.get("label") or "")
-        for chip in chips
-    ):
+    if isinstance(chips, list) and chips:
         return False
     event_data["quickReplies"] = [dict(chip) for chip in _BOOKING_PREVIEW_CHIPS]
     event_data["predictedDomains"] = ["TRANSACTION"]
+    event_data.setdefault("metadata", {"ctaContext": {"intentKey": "today_install"}})
     return True
 
 
@@ -10819,6 +10928,29 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
+        cta_clarification_event = _quickreply_cta_clarification_event(
+            last_user_msg,
+            request.chip_context,
+        )
+        if cta_clarification_event is not None:
+            logger.info(
+                "[CHAT_V2] CTA action fast-path: text=%s action=%s",
+                last_user_msg[:80],
+                _chip_value(request.chip_context, "actionId", "action_id"),
+            )
+            guard_text = str((cta_clarification_event.get("data") or {}).get("assistantResponse") or "")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(cta_clarification_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=guard_text)
+
         # Pre-classifier intercept: "<지역> 제일 저렴한 매장" 류 광역 가격
         # 비교 질문은 단일 매장으로 안내할 수 없으므로 분류기/agent 호출 없이
         # 즉시 canned quickReply 응답으로 종료. Transaction agent prompt
@@ -16537,6 +16669,16 @@ class TStationChatServiceV2:
                         logger.info(
                             "[QUICKREPLY_FILTER] booking preview chips normalized"
                         )
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[TRANSACTION AGENT]",
+                        }]
+                    if _sanitize_transaction_cta_contracts(event_data, source_domain=source_domain):
+                        logger.info("[QUICKREPLY_FILTER] sanitized transaction CTA contracts")
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
                         draft_for_qc = assistant_response

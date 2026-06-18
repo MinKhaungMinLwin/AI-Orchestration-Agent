@@ -163,11 +163,14 @@ from services.tstation.chat import (
     _should_replace_discovery_dead_end_chips,
     _should_force_warranty_claim_support_route,
     _should_force_best_seller_code_route,
+    _quickreply_cta_clarification_event,
+    _sanitize_transaction_cta_contracts,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
 )
+from schemas.tstation.chat_message import ChatMessageRequest
 from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
 from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
 from services.tstation.policies.delivery_policy_gate import (
@@ -197,6 +200,59 @@ from services.tstation.source_filter import filter_for_context
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
+
+
+def test_chip_context_preserves_action_contract_fields() -> None:
+    request = ChatMessageRequest(
+        content="다른 지역 입력",
+        session_id="s1",
+        chip_context={
+            "domain": "TRANSACTION",
+            "actionId": "enter_region",
+            "intentKey": "today_install",
+            "metadata": {"goodsNo": "G000000317729", "ordQty": 4},
+        },
+    )
+
+    dumped = request.chip_context.model_dump()
+
+    assert dumped["actionId"] == "enter_region"
+    assert dumped["intentKey"] == "today_install"
+    assert dumped["metadata"]["goodsNo"] == "G000000317729"
+
+
+def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
+    event = _quickreply_cta_clarification_event(
+        "다른 지역 입력",
+        {"domain": "TRANSACTION", "actionId": "enter_region", "intentKey": "today_install"},
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "지역명" in event["data"]["assistantResponse"]
+    assert [chip["actionId"] for chip in event["data"]["quickReplies"]] == [
+        "change_region",
+        "change_region",
+        "change_region",
+    ]
+
+
+def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_region() -> None:
+    event_data = {
+        "assistantResponse": "오늘 장착 가능한 일정이 확인되지 않았어요.",
+        "quickReplies": [
+            {"label": "예약하기", "domain": "TRANSACTION"},
+            {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "다른 상품 보기", "domain": "DISCOVERY"},
+        ],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    changed = _sanitize_transaction_cta_contracts(event_data, source_domain="transaction")
+
+    assert changed is True
+    assert _labels(event_data["quickReplies"]) == ["다른 지역 입력", "다른 상품 보기"]
+    assert event_data["quickReplies"][0]["actionId"] == "enter_region"
 
 
 def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:
