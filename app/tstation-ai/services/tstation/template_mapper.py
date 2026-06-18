@@ -1971,11 +1971,55 @@ def _positive_int_or_none(value: Any) -> int | None:
 
 
 def _recommendation_requested_limit(entry: dict, raw: dict | list) -> int | None:
+    user_requested = _recommendation_requested_limit_from_user_text(current_user_text.get() or "")
     if isinstance(raw, dict):
         requested = _positive_int_or_none(raw.get("requested_limit"))
+        if user_requested is not None and requested is not None and user_requested > requested:
+            return user_requested
         if requested is not None:
             return requested
-    return _positive_int_or_none(_tool_args(entry).get("requested_limit") or _tool_args(entry).get("limit"))
+    requested = _positive_int_or_none(_tool_args(entry).get("requested_limit") or _tool_args(entry).get("limit"))
+    if user_requested is not None and requested is not None and user_requested > requested:
+        return user_requested
+    return user_requested or requested
+
+
+_KOREAN_COUNT_WORDS: dict[str, int] = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+    "열한": 11,
+    "열두": 12,
+    "열세": 13,
+    "열네": 14,
+    "열다섯": 15,
+    "스무": 20,
+    "스물": 20,
+}
+
+
+def _recommendation_requested_limit_from_user_text(text: str) -> int | None:
+    if not text:
+        return None
+    match = re.search(r"(?<!\d)(\d{1,2})\s*(?:개|가지|종)(?:\s*(?:추천|보여|알려|찾아|만))?", text)
+    if match:
+        return _positive_int_or_none(match.group(1))
+    word_pattern = "|".join(sorted(map(re.escape, _KOREAN_COUNT_WORDS), key=len, reverse=True))
+    match = re.search(rf"({word_pattern})\s*(?:개|가지|종)(?:\s*(?:추천|보여|알려|찾아|만))?", text)
+    if match:
+        return _KOREAN_COUNT_WORDS.get(match.group(1))
+    return None
 
 
 def _recommendation_effective_limit(entry: dict, raw: dict | list, requested_limit: int | None) -> int | None:
