@@ -2078,8 +2078,11 @@ def test_specific_coupon_usage_query_detects_coupon_and_deal_usage_without_price
     assert _is_specific_coupon_usage_query("우동딜 테스트는 어떻게 써?")
     assert _is_specific_coupon_usage_query("이 쿠폰 쓸 수 있어?")
     assert _is_specific_coupon_usage_query("이 상품에 우동딜 테스트 쿠폰 먹어?")
+    assert _is_specific_coupon_usage_query("월디페 참여고객_한국타이어 30% 할인은 매장에서 사용 가능?")
     assert not _is_specific_coupon_usage_query("벤투스 S2 AS 2254517 할인가 얼마야")
     assert not _is_specific_coupon_usage_query("벤투스 S2 AS 2254517 쿠폰 적용하면 얼마야")
+    assert not _is_specific_coupon_usage_query("드라이브 행사 고객 한정_한국타이어 30% 할인권 적용 가능 상품 뭐야")
+    assert not _is_specific_coupon_usage_query("한국타이어 18% 상품 할인쿠폰 적용 가능 제품 뭐야")
 
 
 def test_specific_coupon_matching_requires_single_confident_candidate() -> None:

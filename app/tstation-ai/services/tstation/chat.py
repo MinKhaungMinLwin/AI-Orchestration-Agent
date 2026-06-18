@@ -3002,8 +3002,17 @@ _COUPON_APPLICABILITY_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _SPECIFIC_COUPON_USAGE_QUERY_RE = re.compile(
-    r"(?=.*(?:쿠폰|할인권|딜|deal))"
+    r"(?=.*(?:쿠폰|할인권|할인|딜|deal))"
     r"(?=.*(?:적용\s*가능|적용가능|사용\s*가능|사용가능|쓸\s*수|쓸수|어떻게\s*써|먹어|먹히|어디\s*(?:에)?\s*(?:써|쓸|사용)))",
+    re.IGNORECASE,
+)
+_COUPON_PRODUCT_APPLICABILITY_QUERY_RE = re.compile(
+    r"(?:적용\s*가능|적용가능|대상|쓸\s*수\s*있는|사용\s*가능).{0,12}(?:상품|제품|타이어|패턴)"
+    r"|(?:상품|제품|타이어|패턴).{0,12}(?:적용\s*가능|적용가능|대상|쓸\s*수\s*있는|사용\s*가능)",
+    re.IGNORECASE,
+)
+_COUPON_CHANNEL_USAGE_ANCHOR_RE = re.compile(
+    r"매장|온라인|오프라인|어디\s*(?:서|에)?|어떻게\s*써|쓸\s*수|쓸수|사용\s*가능|사용가능|먹어|먹히",
     re.IGNORECASE,
 )
 _COUPON_UNMATCHED_TEXT_RE = re.compile(
@@ -5323,6 +5332,10 @@ def _is_specific_coupon_usage_query(user_text: str | None) -> bool:
     if not text or _COUPON_ISSUE_INTENT_RE.search(text):
         return False
     if _is_product_coupon_price_amount_query(text):
+        return False
+    if _COUPON_PRODUCT_APPLICABILITY_QUERY_RE.search(text) and not re.search(r"매장|온라인|오프라인", text):
+        return False
+    if not _COUPON_CHANNEL_USAGE_ANCHOR_RE.search(text):
         return False
     return bool(_SPECIFIC_COUPON_USAGE_QUERY_RE.search(text))
 
@@ -12923,7 +12936,8 @@ class TStationChatServiceV2:
                 return emitted_events, _build_coupon_match_failure_event(user_query)
 
             matched_channel_type = _coupon_channel_type(matched_coupon)
-            if matched_channel_type in {"offline", "partner_only"}:
+            is_channel_usage_query = _is_specific_coupon_usage_query(user_query)
+            if matched_channel_type in {"offline", "partner_only"} and is_channel_usage_query:
                 channel_event = _build_coupon_channel_policy_event(
                     matched_coupon,
                     target_product_name=_coupon_target_product_name_for_query(user_query),
@@ -12970,7 +12984,7 @@ class TStationChatServiceV2:
                 "tool": followup_tool_name,
                 "source_domain": "transaction",
             })
-            if matched_channel_type == "store_only" or _is_specific_coupon_usage_query(user_query):
+            if is_channel_usage_query:
                 channel_event = _build_coupon_channel_policy_event(
                     matched_coupon,
                     applicable_result=followup_result,
@@ -13335,7 +13349,10 @@ class TStationChatServiceV2:
                 )
                 if specific_coupon_row is None:
                     return emitted_events, _build_coupon_match_failure_event(user_query, ambiguous_coupons)
-                if _coupon_channel_type(specific_coupon_row) in {"store_only", "offline", "partner_only"}:
+                if (
+                    _is_specific_coupon_usage_query(user_query)
+                    and _coupon_channel_type(specific_coupon_row) in {"store_only", "offline", "partner_only"}
+                ):
                     channel_event = _build_coupon_channel_policy_event(
                         specific_coupon_row,
                         target_product_name=target_product_name,
