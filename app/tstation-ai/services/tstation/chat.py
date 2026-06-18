@@ -1723,6 +1723,7 @@ class StreamingMultiAgentCoordinator:
                         domains=domains,
                         last_user_text=last_user_text_for_policy,
                         known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
+                        messages=original_messages,
                     )
                     current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
                     current_transaction_response_decision.set(transaction_response_decision)
@@ -9126,6 +9127,7 @@ def _build_transaction_policy_context(
     domains: list[MultiAgentDomain.Domain],
     last_user_text: str,
     known_slots: dict[str, Any],
+    messages: list[dict] | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Transaction response policy context.
 
@@ -9136,6 +9138,11 @@ def _build_transaction_policy_context(
     if MultiAgentDomain.Domain.TRANSACTION not in domains or not last_user_text:
         return {}, None
     try:
+        known_slots = _enrich_today_install_policy_slots(
+            last_user_text=last_user_text,
+            known_slots=known_slots,
+            messages=messages,
+        )
         price_frame = build_price_intent_frame(last_user_text, known_slots=known_slots)
         if (
             price_frame.intent != "price_coupon_summary"
@@ -9174,6 +9181,69 @@ def _build_transaction_policy_context(
     except Exception:
         logger.exception("[POLICY][transaction] Failed to build transaction policy context")
         return {}, None
+
+
+_TODAY_INSTALL_CONTEXT_RE = re.compile(
+    r"오늘\s*(?:바로\s*)?장착|오늘\s*서비스|오늘서비스|당일\s*장착|당일\s*서비스|오늘\s*가능",
+    re.IGNORECASE,
+)
+_TODAY_INSTALL_STORE_FOLLOWUP_RE = re.compile(
+    r"다른\s*(?:매장|지점|곳)|다시\s*(?:확인|찾|검색)|새로\s*(?:확인|찾|검색)",
+    re.IGNORECASE,
+)
+_TODAY_INSTALL_REGION_ONLY_RE = re.compile(
+    r"^(?:서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
+    r"청량리|인천|하남|청주|제주|서귀포)(?:에는?|은|는|로|으로)?\??$"
+)
+
+
+def _recent_conversation_text_for_policy(messages: list[dict] | None, *, limit: int = 8) -> str:
+    parts: list[str] = []
+    for message in (messages or [])[-limit:]:
+        content = str(message.get("content") or "")
+        if "USER CONTEXT INFORMATION" in content:
+            continue
+        if message.get("role") == "user":
+            content = StreamingMultiAgentCoordinator._extract_current_user_input(content) or content
+        template_data = message.get("template_data")
+        if isinstance(template_data, dict):
+            content = f"{content}\n{json.dumps(template_data, ensure_ascii=False)}"
+        if content.strip():
+            parts.append(content.strip())
+    return "\n".join(parts)
+
+
+def _enrich_today_install_policy_slots(
+    *,
+    last_user_text: str,
+    known_slots: dict[str, Any],
+    messages: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Recover today-install date state for terse store/region follow-ups.
+
+    Redis slots currently do not always persist `requested_cal_day`. When a
+    user continues a confirmed goods+quantity today-install flow with `서울` or
+    `다른 매장 찾기`, seed the date before Transaction policy planning so the
+    preview tool cannot fall back to general reservation candidates.
+    """
+    slots = dict(known_slots or {})
+    if slots.get("requested_cal_day"):
+        return slots
+    if not (slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty"))):
+        return slots
+    text = (last_user_text or "").strip()
+    if not (
+        _TODAY_INSTALL_STORE_FOLLOWUP_RE.search(text)
+        or _TODAY_INSTALL_REGION_ONLY_RE.search(text)
+        or _TODAY_INSTALL_CONTEXT_RE.search(text)
+    ):
+        return slots
+    context_text = _recent_conversation_text_for_policy(messages)
+    if not (_TODAY_INSTALL_CONTEXT_RE.search(text) or _TODAY_INSTALL_CONTEXT_RE.search(context_text)):
+        return slots
+    slots["requested_cal_day"] = _requested_reservation_cal_day_or_today(text)
+    slots["availability_intent"] = "today_install"
+    return slots
 
 
 def _is_ev_suitability_turn(
@@ -12594,6 +12664,7 @@ class TStationChatServiceV2:
             domains=domains,
             last_user_text=last_user_text,
             known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
+            messages=request.messages,
         )
         current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
         current_transaction_response_decision.set(transaction_response_decision)
