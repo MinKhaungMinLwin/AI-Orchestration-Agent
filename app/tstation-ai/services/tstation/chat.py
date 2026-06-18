@@ -3347,10 +3347,21 @@ def _chip_value(chip_context: dict[str, Any] | None, *keys: str) -> str:
     return ""
 
 
-def _quickreply_cta_clarification_event(user_text: str, chip_context: dict[str, Any] | None) -> dict | None:
+def _quickreply_cta_clarification_event(
+    user_text: str,
+    chip_context: dict[str, Any] | None,
+    *,
+    cta_context: dict[str, Any] | None = None,
+    allow_label_only: bool = True,
+) -> dict | None:
     action_id = _chip_value(chip_context, "actionId", "action_id")
     text = (user_text or "").strip()
-    if action_id == "enter_region" or re.fullmatch(r"(?:다른\s*)?(?:지역|장소)\s*(?:입력|찾기|검색)", text):
+    metadata = dict(cta_context or {})
+    intent_key = str(metadata.get("intentKey") or _chip_value(chip_context, "intentKey", "intent_key") or "today_install")
+    metadata.setdefault("intentKey", intent_key)
+    if action_id == "enter_region" or (
+        allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:지역|장소)\s*(?:입력|찾기|검색)", text)
+    ):
         return {
             "type": "data",
             "template": "quickReply",
@@ -3359,14 +3370,17 @@ def _quickreply_cta_clarification_event(user_text: str, chip_context: dict[str, 
             "data": {
                 "assistantResponse": "확인할 지역명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요.",
                 "quickReplies": [
-                    {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
-                    {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
-                    {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+                    {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
+                    {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
+                    {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
                 ],
                 "predictedDomains": ["TRANSACTION"],
+                "metadata": {"ctaContext": metadata},
             },
         }
-    if action_id == "enter_date" or re.fullmatch(r"(?:다른\s*)?(?:날짜|일정)\s*(?:입력|확인|찾기|검색)", text):
+    if action_id == "enter_date" or (
+        allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:날짜|일정)\s*(?:입력|확인|찾기|검색)", text)
+    ):
         return {
             "type": "data",
             "template": "quickReply",
@@ -3375,13 +3389,82 @@ def _quickreply_cta_clarification_event(user_text: str, chip_context: dict[str, 
             "data": {
                 "assistantResponse": "확인할 날짜를 입력해 주세요. 예: 오늘, 내일, 6월 20일",
                 "quickReplies": [
-                    {"label": "오늘", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": "today_install"},
-                    {"label": "내일", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": "today_install"},
+                    {"label": "오늘", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": intent_key},
+                    {"label": "내일", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": intent_key},
                 ],
                 "predictedDomains": ["TRANSACTION"],
+                "metadata": {"ctaContext": metadata},
             },
         }
     return None
+
+
+def _quickreply_cta_context_from_template(template_data: dict | None) -> dict[str, Any]:
+    if not isinstance(template_data, dict):
+        return {}
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    metadata = data.get("metadata") if isinstance(data, dict) else None
+    if not isinstance(metadata, dict):
+        return {}
+    cta_context = metadata.get("ctaContext")
+    return dict(cta_context) if isinstance(cta_context, dict) else {}
+
+
+def _quickreply_cta_context_from_chip(chip_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(chip_context, dict):
+        return {}
+    metadata = chip_context.get("metadata")
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _merged_quickreply_cta_context(
+    chip_context: dict[str, Any] | None,
+    latest_quickreply_tmpl: dict | None,
+) -> dict[str, Any]:
+    context = _quickreply_cta_context_from_template(latest_quickreply_tmpl)
+    context.update(_quickreply_cta_context_from_chip(chip_context))
+    intent_key = _chip_value(chip_context, "intentKey", "intent_key")
+    if intent_key:
+        context.setdefault("intentKey", intent_key)
+    return context
+
+
+def _apply_cta_context_to_slots(slots: Any, cta_context: dict[str, Any], *, source: str = "quickreply_cta") -> Any:
+    if not cta_context:
+        return slots
+    values: dict[str, Any] = {}
+    mapping = {
+        "goodsNo": "goods_no",
+        "goods_no": "goods_no",
+        "tireSize": "tire_size",
+        "tire_size": "tire_size",
+        "ordQty": "ord_qty",
+        "ord_qty": "ord_qty",
+        "regionCode": "region",
+        "region_code": "region",
+        "storeName": "shop_name",
+        "store_nm": "shop_name",
+        "shopName": "shop_name",
+        "requestedCalDay": "requested_cal_day",
+        "requested_cal_day": "requested_cal_day",
+        "intentKey": "availability_intent",
+    }
+    for src, dst in mapping.items():
+        value = cta_context.get(src)
+        if value not in (None, "", []):
+            values[dst] = value
+    if values.get("availability_intent") == "today_install":
+        values["pending_intent"] = getattr(slots, "pending_intent", None) or "stock"
+        values["goal_type"] = getattr(slots, "goal_type", None) or "store_with_stock"
+    if not values:
+        return slots
+    try:
+        return slots.apply_runtime_values(values, source=source, fill_only=True)
+    except Exception:
+        for key, value in values.items():
+            if getattr(slots, key, None) in (None, ""):
+                setattr(slots, key, value)
+        return slots
 
 
 def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
@@ -10928,10 +11011,15 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
 
-        cta_clarification_event = _quickreply_cta_clarification_event(
-            last_user_msg,
-            request.chip_context,
-        )
+        early_cta_context = _quickreply_cta_context_from_chip(request.chip_context)
+        cta_clarification_event = None
+        if early_cta_context:
+            cta_clarification_event = _quickreply_cta_clarification_event(
+                last_user_msg,
+                request.chip_context,
+                cta_context=early_cta_context,
+                allow_label_only=False,
+            )
         if cta_clarification_event is not None:
             logger.info(
                 "[CHAT_V2] CTA action fast-path: text=%s action=%s",
@@ -11467,6 +11555,61 @@ class TStationChatServiceV2:
                 logger.debug(
                     "[SLOTS] Plain store-search turn; cleared stale stock/order context: %s",
                     {k: v for k, v in cleared_values.items() if v not in (None, "")},
+                )
+
+            chip_action_id = _chip_value(request.chip_context, "actionId", "action_id")
+            cta_context = _merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
+            if chip_action_id in {"enter_region", "enter_date"} or (
+                not chip_action_id
+                and re.fullmatch(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)", last_user_text)
+            ):
+                cta_clarification_event = _quickreply_cta_clarification_event(
+                    last_user_text,
+                    request.chip_context,
+                    cta_context=cta_context,
+                    allow_label_only=True,
+                )
+                if cta_clarification_event is not None:
+                    logger.info(
+                        "[CHAT_V2] CTA action post-context fast-path: text=%s action=%s context_keys=%s",
+                        last_user_text[:80],
+                        chip_action_id,
+                        sorted(cta_context.keys()),
+                    )
+                    guard_text = str((cta_clarification_event.get("data") or {}).get("assistantResponse") or "")
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(cta_clarification_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=guard_text)
+            elif chip_action_id in {"change_region", "change_date"}:
+                before_cta_slots = merged_slots.model_dump()
+                merged_slots = _apply_cta_context_to_slots(merged_slots, cta_context)
+                if chip_action_id == "change_region":
+                    if regex_slots.region:
+                        merged_slots.region = regex_slots.region
+                    elif last_user_text.strip():
+                        merged_slots.region = re.sub(r"(?:은|는|으로|로|에서|에는|\?)\s*$", "", last_user_text.strip())
+                    merged_slots.shop_id = None
+                    merged_slots.shop_name = None
+                elif chip_action_id == "change_date":
+                    merged_slots.requested_cal_day = _requested_reservation_cal_day_or_today(last_user_text)
+                    if not getattr(merged_slots, "availability_intent", None):
+                        merged_slots.availability_intent = "today_install"
+                if getattr(merged_slots, "availability_intent", None) == "today_install":
+                    merged_slots.pending_intent = merged_slots.pending_intent or "stock"
+                    merged_slots.goal_type = merged_slots.goal_type or "store_with_stock"
+                logger.info(
+                    "[SLOTS] Applied CTA action context action=%s before=%s after=%s",
+                    chip_action_id,
+                    {k: v for k, v in before_cta_slots.items() if v not in (None, "", [], {})},
+                    {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
                 )
 
             # Carry multi-variant recommendation requests across slot-fill turns.

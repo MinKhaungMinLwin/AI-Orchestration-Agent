@@ -165,6 +165,8 @@ from services.tstation.chat import (
     _should_force_best_seller_code_route,
     _quickreply_cta_clarification_event,
     _sanitize_transaction_cta_contracts,
+    _apply_cta_context_to_slots,
+    _merged_quickreply_cta_context,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
@@ -225,11 +227,14 @@ def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
     event = _quickreply_cta_clarification_event(
         "다른 지역 입력",
         {"domain": "TRANSACTION", "actionId": "enter_region", "intentKey": "today_install"},
+        cta_context={"goodsNo": "G000000317729", "ordQty": 4, "requestedCalDay": "20260618"},
     )
 
     assert event is not None
     assert event["template"] == "quickReply"
     assert "지역명" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["ctaContext"]["goodsNo"] == "G000000317729"
+    assert event["data"]["metadata"]["ctaContext"]["requestedCalDay"] == "20260618"
     assert [chip["actionId"] for chip in event["data"]["quickReplies"]] == [
         "change_region",
         "change_region",
@@ -253,6 +258,55 @@ def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_
     assert changed is True
     assert _labels(event_data["quickReplies"]) == ["다른 지역 입력", "다른 상품 보기"]
     assert event_data["quickReplies"][0]["actionId"] == "enter_region"
+
+
+def test_cta_context_recovers_from_latest_quickreply_template_when_chip_has_no_metadata() -> None:
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "확인할 지역명을 입력해 주세요.",
+            "quickReplies": [],
+            "metadata": {
+                "ctaContext": {
+                    "intentKey": "today_install",
+                    "goodsNo": "G000000317729",
+                    "tireSize": "235/35R20",
+                    "ordQty": 4,
+                    "requestedCalDay": "20260618",
+                }
+            },
+        },
+    }
+
+    context = _merged_quickreply_cta_context(
+        {"domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+        latest_quickreply,
+    )
+
+    assert context["goodsNo"] == "G000000317729"
+    assert context["ordQty"] == 4
+    assert context["requestedCalDay"] == "20260618"
+
+
+def test_apply_cta_context_to_slots_preserves_today_install_preview_slots() -> None:
+    slots = ConversationSlots()
+    context = {
+        "intentKey": "today_install",
+        "goodsNo": "G000000317729",
+        "tireSize": "235/35R20",
+        "ordQty": 4,
+        "requestedCalDay": "20260618",
+    }
+
+    updated = _apply_cta_context_to_slots(slots, context)
+
+    assert updated.goods_no == "G000000317729"
+    assert updated.tire_size == "235/35R20"
+    assert updated.ord_qty == 4
+    assert updated.requested_cal_day == "20260618"
+    assert updated.availability_intent == "today_install"
+    assert updated.pending_intent == "stock"
+    assert updated.goal_type == "store_with_stock"
 
 
 def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:
