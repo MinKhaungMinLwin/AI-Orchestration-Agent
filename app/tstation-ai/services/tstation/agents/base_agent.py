@@ -292,7 +292,7 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
         return "snow"
     if re.search(r"여름|썸머", text, re.IGNORECASE):
         return "summer"
-    if re.search(r"올웨더|올시즌|전천후", text, re.IGNORECASE):
+    if re.search(r"사계절|올시즌|all[-\s]?season|올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
         return "all_weather"
     if re.search(r"빗길|젖은", text, re.IGNORECASE):
         return "wet"
@@ -301,6 +301,19 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
     if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
         return "performance"
     return "tstation"
+
+
+def _recommendation_season_from_vehicle_text(user_text: str) -> str | None:
+    text = user_text or ""
+    if re.search(r"올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
+        return "올웨더"
+    if re.search(r"사계절|올시즌|all[-\s]?season", text, re.IGNORECASE):
+        return "사계절"
+    if re.search(r"겨울|윈터|눈길", text, re.IGNORECASE):
+        return "겨울"
+    if re.search(r"여름|썸머", text, re.IGNORECASE):
+        return "여름"
+    return None
 
 
 def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: list[dict]) -> dict | None:
@@ -314,11 +327,15 @@ def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: 
     tire_size = row.get("tire_size_fr") or row.get("tire_size_re")
     if not (car_lnc_cd or tire_size):
         return None
+    latest_user_text = _latest_user_text(messages)
     args: dict[str, Any] = {
-        "rcmd_type": _recommendation_type_from_vehicle_text(_latest_user_text(messages)),
+        "rcmd_type": _recommendation_type_from_vehicle_text(latest_user_text),
         "limit": 3,
         "brand_cd": "HK",
     }
+    season_nm = _recommendation_season_from_vehicle_text(latest_user_text)
+    if season_nm:
+        args["season_nm"] = season_nm
     if car_lnc_cd:
         args["car_lnc_cd"] = car_lnc_cd
     else:

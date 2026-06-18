@@ -170,8 +170,8 @@ from services.tstation.policies.delivery_policy_gate import (
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.template_mapper import current_discovery_response_decision, current_user_text
-from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame
+from services.tstation.template_mapper import current_discovery_response_decision, current_user_text, try_build_template
+from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.price_response_policy import build_price_intent_frame, decide_price_response
 from services.tstation.source_filter import filter_for_context
@@ -4649,6 +4649,103 @@ def test_followup_size_input_does_not_infer_from_assistant_recommendation_labels
     assert _infer_followup_recommendation_context(messages, "225/45R18") is None
 
 
+def test_followup_size_input_preserves_all_season_as_four_season_context() -> None:
+    messages = [
+        {"role": "user", "content": "올시즌 타이어 추천해줘"},
+        {"role": "assistant", "content": "타이어 사이즈를 입력해 주세요."},
+        {"role": "user", "content": "2355519"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "2355519")
+
+    assert context is not None
+    assert "사계절" in context
+    assert "rcmd_type='all_weather'" in context
+    assert "season_nm='사계절'" in context
+    assert "season_nm='올웨더'" not in context
+
+
+def test_followup_size_input_preserves_all_weather_context_separately() -> None:
+    messages = [
+        {"role": "user", "content": "올웨더 타이어 추천해줘"},
+        {"role": "assistant", "content": "타이어 사이즈를 입력해 주세요."},
+        {"role": "user", "content": "2355519"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "2355519")
+
+    assert context is not None
+    assert "올웨더" in context
+    assert "rcmd_type='all_weather'" in context
+    assert "season_nm='올웨더'" in context
+    assert "season_nm='사계절'" not in context
+
+
+def test_sized_all_season_recommendation_uses_four_season_tool_filter() -> None:
+    frame = build_discovery_intent_frame("2355519 올시즌 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["tire_size"] == "235/55R19"
+    assert frame.entities["season"] == "all_season"
+    assert plan.tool_args_patch["tire_size"] == "235/55R19"
+    assert plan.tool_args_patch["rcmd_type"] == "all_weather"
+    assert plan.tool_args_patch["season_nm"] == "사계절"
+
+
+def test_sized_all_weather_recommendation_uses_all_weather_tool_filter() -> None:
+    frame = build_discovery_intent_frame("2355519 올웨더 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["tire_size"] == "235/55R19"
+    assert frame.entities["season"] == "all_weather"
+    assert plan.tool_args_patch["tire_size"] == "235/55R19"
+    assert plan.tool_args_patch["rcmd_type"] == "all_weather"
+    assert plan.tool_args_patch["season_nm"] == "올웨더"
+
+
+def _recommendation_template_entry(*, season_nm: str) -> dict:
+    return {
+        "tool": "get_products_recommendations_tool",
+        "args": {
+            "rcmd_type": "all_weather",
+            "season_nm": season_nm,
+            "tire_size": "235/55R19",
+        },
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "235/55R19",
+                        "season_nm": season_nm,
+                    }
+                ]
+            },
+        },
+    }
+
+
+def test_recommendation_response_uses_all_season_label_separately_from_all_weather() -> None:
+    event = try_build_template([_recommendation_template_entry(season_nm="사계절")], "상품을 찾았어요.")
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert "235/55R19 사계절 조건" in response
+    assert "올웨더 조건" not in response
+
+
+def test_recommendation_response_uses_all_weather_label_when_requested() -> None:
+    event = try_build_template([_recommendation_template_entry(season_nm="올웨더")], "상품을 찾았어요.")
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert "235/55R19 올웨더 조건" in response
+    assert "사계절 조건" not in response
+
+
 def test_followup_size_input_preserves_prior_multi_brand_user_request_as_variants() -> None:
     messages = [
         {"role": "user", "content": "미쉐린, 콘티넨탈, 브리지스톤 상품 1개씩 BMW 3시리즈에 맞는 타이어 추천해줘"},
@@ -4725,7 +4822,7 @@ def test_followup_size_input_preserves_prior_multi_season_user_request_as_varian
     assert constraints is not None
     assert constraints["variants"] == (
         {"season_nm": "여름", "label": "여름용"},
-        {"rcmd_type": "all_weather", "label": "사계절"},
+        {"rcmd_type": "all_weather", "season_nm": "사계절", "label": "사계절"},
     )
     assert constraints["limit_per_variant"] == 1
 

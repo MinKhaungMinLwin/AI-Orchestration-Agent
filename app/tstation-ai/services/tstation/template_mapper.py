@@ -197,7 +197,7 @@ _INTERNAL_POLICY_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_PRODUCT_RESPONSE_RE = re.compile(
-    r"(추천\s*상품\s*\d*개?.*선택해\s*주세요|추천\s*상품을\s*확인했어요|상품을\s*검색했습니다)",
+    r"(추천\s*상품\s*\d*개?.*선택해\s*주세요|추천\s*상품을\s*확인했어요|상품을\s*(?:검색했습니다|찾았어요))",
     re.IGNORECASE,
 )
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)

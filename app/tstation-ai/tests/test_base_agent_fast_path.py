@@ -615,3 +615,51 @@ def test_owner_lookup_vehicle_recommendation_uses_car_code_directly() -> None:
         "brand_cd": "HK",
         "car_lnc_cd": "W011338",
     }
+
+
+def test_owner_lookup_vehicle_recommendation_maps_all_season_to_four_season_filter() -> None:
+    owner_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "26저7922",
+                    "car_lnc_cd": "W011338",
+                    "tire_size_fr": "225/55R17",
+                }
+            ]
+        },
+    }
+
+    args = _owner_lookup_vehicle_recommendation_args(
+        owner_result,
+        [{"role": "user", "content": "26저7922 황지훈 올시즌 타이어 추천"}],
+    )
+
+    assert args is not None
+    assert args["rcmd_type"] == "all_weather"
+    assert args["season_nm"] == "사계절"
+
+
+def test_owner_lookup_vehicle_recommendation_maps_all_weather_separately() -> None:
+    owner_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "26저7922",
+                    "car_lnc_cd": "W011338",
+                    "tire_size_fr": "225/55R17",
+                }
+            ]
+        },
+    }
+
+    args = _owner_lookup_vehicle_recommendation_args(
+        owner_result,
+        [{"role": "user", "content": "26저7922 황지훈 올웨더 타이어 추천"}],
+    )
+
+    assert args is not None
+    assert args["rcmd_type"] == "all_weather"
+    assert args["season_nm"] == "올웨더"

@@ -230,9 +230,9 @@ def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
     if _WINTER_RE.search(text or ""):
         season_variants.append({"rcmd_type": "snow", "season_nm": "겨울", "label": "겨울용"})
     if _ALL_WEATHER_RE.search(text or ""):
-        season_variants.append({"rcmd_type": "all_weather", "label": "올웨더"})
+        season_variants.append({"rcmd_type": "all_weather", "season_nm": "올웨더", "label": "올웨더"})
     if _ALL_SEASON_RE.search(text or ""):
-        season_variants.append({"rcmd_type": "all_weather", "label": "사계절"})
+        season_variants.append({"rcmd_type": "all_weather", "season_nm": "사계절", "label": "사계절"})
     deduped: list[dict[str, Any]] = []
     seen_keys: set[tuple[tuple[str, Any], ...]] = set()
     for variant in season_variants:
@@ -651,7 +651,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         if args.get("rcmd_type"):
             args["season_nm"] = "올웨더"
         else:
-            args.update({"rcmd_type": "all_weather"})
+            args.update({"rcmd_type": "all_weather", "season_nm": "올웨더"})
     elif entities.get("season") == "all_season":
         if args.get("rcmd_type"):
             args["season_nm"] = "사계절"

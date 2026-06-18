@@ -3552,7 +3552,7 @@ def _recommendation_type_for_vehicle_auto_continue(user_text: str) -> str:
         return "snow"
     if re.search(r"여름|썸머", text, re.IGNORECASE):
         return "summer"
-    if re.search(r"올웨더|올시즌|전천후", text, re.IGNORECASE):
+    if re.search(r"사계절|올시즌|all[-\s]?season|올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
         return "all_weather"
     if re.search(r"빗길|젖은", text, re.IGNORECASE):
         return "wet"
@@ -8940,6 +8940,10 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
         lines.append(f"- get_products_recommendations_tool 호출 시 rcmd_type='{rcmd_type}' 를 우선 사용하세요.")
         if rcmd_type == "snow":
             lines.append("- 겨울/윈터 의도이므로 season_nm='겨울' 도 함께 전달하세요.")
+        if "사계절" in labels:
+            lines.append("- 올시즌/사계절 의도이므로 season_nm='사계절' 도 함께 전달하세요.")
+        if "올웨더" in labels:
+            lines.append("- 올웨더/전천후 의도이므로 season_nm='올웨더' 도 함께 전달하세요.")
     else:
         lines.append(
             "- 해당 조건에 직접 대응하는 rcmd_type 이 없으면 rcmd_type='tstation' 으로 조회하되, "
