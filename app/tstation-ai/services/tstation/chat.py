@@ -5281,9 +5281,9 @@ def _build_coupon_channel_policy_event(
         lines.append("지정 매장에서 사용할 수 있고, 온라인 상품 가격에는 반영되지 않습니다.")
         store_names = _coupon_store_names_from_applicable_result(applicable_result)
         if store_names:
-            lines.append(f"적용 가능 매장 예시는 {', '.join(store_names)}입니다.")
+            lines.append(f"적용 가능 매장은 {', '.join(store_names)}입니다.")
         else:
-            lines.append("적용 가능 매장 예시는 쿠폰 적용 매장 조회에서 확인해 주세요.")
+            lines.append("적용 가능 매장은 쿠폰 적용 매장 조회에서 확인해 주세요.")
         quick_replies = [
             {"label": "적용 매장 보기", "domain": "TRANSACTION"},
             {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},

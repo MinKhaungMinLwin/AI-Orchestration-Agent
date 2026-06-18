@@ -2170,7 +2170,7 @@ def test_coupon_channel_policy_store_only_keeps_usage_template_without_store_res
     labels = _labels(event["data"]["quickReplies"])
     assert "매장 전용 쿠폰" in response
     assert "온라인 상품 가격에는 반영되지 않습니다" in response
-    assert "적용 가능 매장 예시" in response
+    assert "적용 가능 매장은" in response
     assert labels == ["적용 매장 보기", "내 쿠폰 조회", "매장 찾기"]
     assert "상품 가격 확인" not in labels
 
