@@ -1539,6 +1539,18 @@ class StreamingMultiAgentCoordinator:
                 tool_slots["shop_id"] = input_shop_id
 
         if tool_name == "transaction_store_preview_tool" and tool_input:
+            input_goods_no = tool_input.get("goods_no")
+            if input_goods_no:
+                tool_slots["goods_no"] = input_goods_no
+            input_tire_size = tool_input.get("tire_size")
+            if input_tire_size:
+                tool_slots["tire_size"] = input_tire_size
+            input_quantity = tool_input.get("ord_qty") or tool_input.get("quantity")
+            if input_quantity:
+                try:
+                    tool_slots["ord_qty"] = int(input_quantity)
+                except (TypeError, ValueError):
+                    pass
             input_requested_cal_day = tool_input.get("requested_cal_day")
             if input_requested_cal_day:
                 tool_slots["requested_cal_day"] = str(input_requested_cal_day)
