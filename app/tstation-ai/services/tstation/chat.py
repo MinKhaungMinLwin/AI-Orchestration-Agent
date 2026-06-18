@@ -7839,6 +7839,10 @@ _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE = re.compile(
     r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|\d+\s*개",
     re.IGNORECASE,
 )
+_STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
+    r"장착\s*가능|오늘|내일|예약|매장|지점|재고|스케줄|시간|방문",
+    re.IGNORECASE,
+)
 
 
 def _fallback_sized_product_keyword(user_text: str) -> str:
@@ -8008,6 +8012,122 @@ def _build_size_only_product_search_tool_input(
     if not keyword:
         return None
     return {"keyword": keyword, "limit": 10, "size": tire_size}
+
+
+def _is_size_only_store_availability_continuation(
+    user_text: str,
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    messages: list[dict] | None = None,
+    slots: Any | None = None,
+) -> bool:
+    if not _SIZE_ONLY_RE.match(str(user_text or "")):
+        return False
+    if not _build_size_only_product_search_tool_input(
+        user_text,
+        prev_tool_data=prev_tool_data,
+        recent_context=recent_context,
+        slots=slots,
+    ):
+        return False
+    context_parts = [recent_context]
+    for message in reversed((messages or [])[-8:]):
+        content = str(message.get("content") or "")
+        template_data = message.get("template_data")
+        if isinstance(template_data, dict):
+            content += " " + json.dumps(template_data, ensure_ascii=False)
+        context_parts.append(content)
+    context_blob = "\n".join(part for part in context_parts if part)
+    return bool(_STORE_AVAILABILITY_CONTINUATION_RE.search(context_blob))
+
+
+def _recent_store_name_for_availability_continuation(
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    messages: list[dict] | None = None,
+    slots: Any | None = None,
+) -> str | None:
+    slot_store = str(getattr(slots, "shop_name", None) or "").strip() if slots is not None else ""
+    if slot_store:
+        return slot_store
+
+    for entry in reversed(prev_tool_data or []):
+        if entry.get("tool") not in ("search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"):
+            continue
+        data = entry.get("data")
+        items: list[dict] = []
+        if isinstance(data, list):
+            items = [item for item in data if isinstance(item, dict) and not item.get("_truncated")]
+        elif isinstance(data, dict) and isinstance(data.get("stores"), list):
+            items = [item for item in data["stores"] if isinstance(item, dict)]
+        if len(items) == 1:
+            store_name = str(items[0].get("shop_nm") or items[0].get("name") or "").strip()
+            if store_name:
+                return store_name
+
+    context_parts = [recent_context]
+    for message in reversed((messages or [])[-8:]):
+        context_parts.append(str(message.get("content") or ""))
+    context_blob = "\n".join(part for part in context_parts if part)
+    match = re.search(r"(?:티스테이션\s*)?([A-Za-z0-9가-힣]+점)", context_blob)
+    if match:
+        return match.group(0).strip()
+    return None
+
+
+def _requested_cal_day_from_availability_context(user_text: str, recent_context: str) -> str | None:
+    if _parse_requested_reservation_date(user_text) is not None:
+        return _requested_reservation_cal_day_or_today(user_text)
+    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
+        if _parse_requested_reservation_date(line) is not None:
+            return _requested_reservation_cal_day_or_today(line)
+    return None
+
+
+def _requested_day_label_from_availability_context(user_text: str, recent_context: str) -> str:
+    text = f"{user_text}\n{recent_context}"
+    for label in ("오늘", "내일", "모레"):
+        if label in text:
+            return label
+    return "오늘"
+
+
+def _build_store_availability_quantity_prompt_event(
+    *,
+    product_keyword: str,
+    tire_size: str,
+    store_name: str | None,
+    goods_no: str | None = None,
+    requested_day_label: str = "오늘",
+) -> dict:
+    store_label = str(store_name or "해당 매장").strip()
+    day_label = str(requested_day_label or "오늘").strip()
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_store_availability_size_followup_quantity_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{product_keyword} {tire_size} 상품은 확인했어요. "
+                f"{store_label} {day_label} 장착 가능 여부를 확인하려면 장착 수량을 알려주세요."
+            ),
+            "quickReplies": [
+                {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "4개", "domain": "TRANSACTION"},
+                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "goodsId": goods_no,
+                "tireSize": tire_size,
+                "productName": product_keyword,
+                "storeName": store_name,
+            },
+        },
+    }
 
 
 def _recent_product_coupon_price_target(user_text: str, recent_context: str) -> dict[str, Any] | None:
@@ -10640,6 +10760,13 @@ class TStationChatServiceV2:
 
             current_turn_store_name = regex_slots.shop_name
             current_turn_has_store_anchor = bool(current_turn_store_name or regex_slots.region)
+            size_only_store_availability_continuation = _is_size_only_store_availability_continuation(
+                last_user_text,
+                prev_tool_data=prev_tool_data,
+                recent_context=_recent_user_context_for_policy(request.messages),
+                messages=request.messages,
+                slots=merged_slots,
+            )
             if _is_new_store_name_anchor_for_current_turn(
                 current_turn_store_name,
                 existing_slots.shop_name,
@@ -11084,7 +11211,7 @@ class TStationChatServiceV2:
             if (
                 merged_slots.shop_id is None
                 and prev_tool_data
-                and regex_slots.pending_intent in ("order", "stock")
+                and (regex_slots.pending_intent in ("order", "stock") or size_only_store_availability_continuation)
                 and not re.search(r"다른\s*매장|근처\s*매장|주변\s*매장|매장\s*찾|지역", last_user_text or "")
                 and not current_turn_has_store_anchor
             ):
@@ -11109,6 +11236,20 @@ class TStationChatServiceV2:
                             f"[SLOTS] Carried forward shop_name={resolved_store_name!r} from recent assistant text "
                             f"for fresh pending_intent={regex_slots.pending_intent!r}"
                         )
+
+            if size_only_store_availability_continuation and not merged_slots.shop_name:
+                resolved_store_name = _recent_store_name_for_availability_continuation(
+                    prev_tool_data=prev_tool_data,
+                    recent_context=_recent_user_context_for_policy(request.messages),
+                    messages=request.messages,
+                    slots=merged_slots,
+                )
+                if resolved_store_name:
+                    merged_slots.shop_name = resolved_store_name
+                    logger.debug(
+                        "[SLOTS] Recovered shop_name=%r for size-only store availability continuation",
+                        resolved_store_name,
+                    )
 
             if (
                 merged_slots.ord_qty is not None
@@ -12076,6 +12217,13 @@ class TStationChatServiceV2:
         current_excluded_store_ids.set(excluded_store_ids)
         current_store_date_availability.set(
             _should_preserve_store_date_availability_context(last_user_text, request.messages)
+            or _is_size_only_store_availability_continuation(
+                last_user_text,
+                prev_tool_data=prev_tool_data,
+                recent_context=_recent_user_context_for_policy(request.messages),
+                messages=request.messages,
+                slots=merged_slots,
+            )
         )
 
         _t_prestream = time.perf_counter()
@@ -13905,7 +14053,17 @@ class TStationChatServiceV2:
                 recent_context=recent_user_context_text,
                 slots=initial_slots,
             )
-            if domains != [MultiAgentDomain.Domain.DISCOVERY] and not (
+            is_store_availability_size_followup = _is_size_only_store_availability_continuation(
+                user_query,
+                prev_tool_data=prev_tool_data or [],
+                recent_context=recent_user_context_text,
+                messages=messages,
+                slots=initial_slots,
+            )
+            if (
+                not is_store_availability_size_followup
+                and domains != [MultiAgentDomain.Domain.DISCOVERY]
+            ) and not (
                 size_only_tool_input
                 and domains
                 and MultiAgentDomain.Domain.DISCOVERY in domains
@@ -13933,6 +14091,9 @@ class TStationChatServiceV2:
                 get_product_description_tool as _get_product_description_tool,
             )
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+            from services.tstation.agents.c_transaction_agent.tools import (
+                transaction_store_preview_tool as _transaction_store_preview_tool,
+            )
             from services.tstation.template_mapper import try_build_template
 
             product_name = str(tool_input.get("keyword") or "")
@@ -13981,6 +14142,116 @@ class TStationChatServiceV2:
                 )
                 goods_no = str((row or {}).get("goods_no") or "").strip()
                 if goods_no:
+                    if is_store_availability_size_followup:
+                        tire_size = str(tool_input.get("size") or "")
+                        ord_qty = getattr(initial_slots, "ord_qty", None) if initial_slots is not None else None
+                        try:
+                            ord_qty = int(ord_qty) if ord_qty is not None else None
+                        except (TypeError, ValueError):
+                            ord_qty = None
+                        store_name = _recent_store_name_for_availability_continuation(
+                            prev_tool_data=prev_tool_data or [],
+                            recent_context=recent_user_context_text,
+                            messages=messages,
+                            slots=initial_slots,
+                        )
+                        requested_day_label = _requested_day_label_from_availability_context(
+                            user_query,
+                            recent_user_context_text,
+                        )
+                        if not ord_qty:
+                            return emitted_events, _build_store_availability_quantity_prompt_event(
+                                product_keyword=preferred_keyword,
+                                tire_size=tire_size,
+                                store_name=store_name,
+                                goods_no=goods_no,
+                                requested_day_label=requested_day_label,
+                            )
+                        if not store_name:
+                            return emitted_events, _build_store_availability_quantity_prompt_event(
+                                product_keyword=preferred_keyword,
+                                tire_size=tire_size,
+                                store_name=None,
+                                goods_no=goods_no,
+                                requested_day_label=requested_day_label,
+                            )
+
+                        preview_input = {
+                            "goods_no": goods_no,
+                            "ord_qty": ord_qty,
+                            "store_nm": store_name,
+                            "include_price": True,
+                        }
+                        requested_cal_day = _requested_cal_day_from_availability_context(
+                            user_query,
+                            recent_user_context_text,
+                        )
+                        if requested_cal_day:
+                            preview_input["requested_cal_day"] = requested_cal_day
+                        emitted_events.append({
+                            "type": "status",
+                            "status": "tool_start",
+                            "tool": "transaction_store_preview_tool",
+                            "display_name": "장착 가능 일정 확인 중...",
+                            "source_domain": "transaction",
+                        })
+                        try:
+                            raw_preview = await asyncio.to_thread(
+                                _transaction_store_preview_tool.invoke,
+                                preview_input,
+                            )
+                            preview_result = _tool_result_dict(raw_preview)
+                        except Exception as exc:
+                            logger.exception(
+                                "[STORE_AVAILABILITY_SIZE_FOLLOWUP] transaction_store_preview_tool failed goods_no=%s",
+                                goods_no,
+                            )
+                            preview_result = {
+                                "status": "error",
+                                "http_status": None,
+                                "message": str(exc),
+                                "data": {},
+                            }
+                        _record_code_tool_result("transaction_store_preview_tool", preview_input, preview_result)
+                        emitted_events.append({
+                            "type": "agent_flow",
+                            "agent": "[Store/Stock AF]",
+                            "agent_class": "Transaction Agent",
+                            "status": preview_result.get("status", "success"),
+                            "source_domain": "transaction",
+                        })
+                        emitted_events.append({
+                            "type": "tool",
+                            "input": preview_input,
+                            "output": json.dumps(preview_result, ensure_ascii=False),
+                            "node": "tools",
+                            "tool": "transaction_store_preview_tool",
+                            "source_domain": "transaction",
+                        })
+                        intro = f"{preferred_keyword} {tire_size} {ord_qty}개 기준으로 {store_name} 장착 가능 여부를 확인했어요."
+                        mapped_event = try_build_template(
+                            [
+                                {"tool": "search_product_tool", "args": tool_input, "data": search_result},
+                                {
+                                    "tool": "transaction_store_preview_tool",
+                                    "args": preview_input,
+                                    "data": preview_result,
+                                },
+                            ],
+                            intro,
+                        )
+                        if mapped_event is not None:
+                            mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                            mapped_event["assistant_response_source"] = "code_store_availability_size_followup"
+                            return emitted_events, mapped_event
+                        return emitted_events, _build_store_availability_quantity_prompt_event(
+                            product_keyword=preferred_keyword,
+                            tire_size=tire_size,
+                            store_name=store_name,
+                            goods_no=goods_no,
+                            requested_day_label=requested_day_label,
+                        )
+
                     detail_input = {"goods_no": goods_no}
                     emitted_events.append({
                         "type": "status",

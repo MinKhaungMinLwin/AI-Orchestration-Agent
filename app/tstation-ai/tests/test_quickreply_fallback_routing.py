@@ -50,6 +50,7 @@ from services.tstation.chat import (
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
+    _build_store_availability_quantity_prompt_event,
     _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
@@ -90,6 +91,7 @@ from services.tstation.chat import (
     _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
+    _is_size_only_store_availability_continuation,
     _is_owned_coupon_best_discount_query,
     _is_owned_coupon_expiry_lookup_query,
     _coupon_target_product_name_for_query,
@@ -134,6 +136,7 @@ from services.tstation.chat import (
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
     _recent_product_coupon_price_target,
+    _recent_store_name_for_availability_continuation,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
     _parse_requested_reservation_date,
@@ -1654,6 +1657,74 @@ def test_bare_product_search_tool_input_preserves_same_turn_size() -> None:
         "size": "225/45R17",
         "brand_cd": "HK",
     }
+
+
+def test_size_only_store_availability_continuation_recovers_product_context() -> None:
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "input": {"keyword": "벤투스 에어S", "limit": 10},
+        "data": {
+            "items": [{
+                "goods_no": "G000000319593",
+                "goods_nm": "벤투스 에어S",
+                "tire_size_1": "235/55R19",
+            }]
+        },
+    }]
+    recent_context = "판교점에서 ventus air S 오늘 장착 가능해?\n규격을 알려주세요."
+
+    assert _build_size_only_product_search_tool_input(
+        "2355519",
+        prev_tool_data=prev_tool_data,
+        recent_context=recent_context,
+    ) == {"keyword": "벤투스 에어S", "limit": 10, "size": "235/55R19"}
+    assert _is_size_only_store_availability_continuation(
+        "2355519",
+        prev_tool_data=prev_tool_data,
+        recent_context=recent_context,
+    ) is True
+
+
+def test_size_only_store_availability_continuation_requires_availability_context() -> None:
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "input": {"keyword": "벤투스 에어S", "limit": 10},
+        "data": {"items": [{"goods_nm": "벤투스 에어S"}]},
+    }]
+
+    assert _is_size_only_store_availability_continuation(
+        "2355519",
+        prev_tool_data=prev_tool_data,
+        recent_context="벤투스 에어S 설명해줘\n규격을 알려주세요.",
+    ) is False
+
+
+def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
+    event = _build_store_availability_quantity_prompt_event(
+        product_keyword="벤투스 에어S",
+        tire_size="235/55R19",
+        store_name="티스테이션 판교점",
+        goods_no="G000000319593",
+    )
+
+    response = event["data"]["assistantResponse"]
+    assert event["source_domain"] == "transaction"
+    assert event["assistant_response_source"] == "code_store_availability_size_followup_quantity_prompt"
+    assert "벤투스 에어S 235/55R19 상품은 확인했어요" in response
+    assert "티스테이션 판교점 오늘 장착 가능 여부" in response
+    assert "장착 수량을 알려주세요" in response
+    assert "상품 검색하겠습니다" not in response
+    assert "프리미엄이 제공하는" not in response
+    assert _labels(event["data"]["quickReplies"]) == ["2개", "4개", "다른 매장 찾기"]
+
+
+def test_store_availability_continuation_recovers_recent_single_store_name() -> None:
+    prev_tool_data = [{
+        "tool": "get_store_list_tool",
+        "data": [{"shop_id": "F00098", "shop_nm": "티스테이션 판교점"}],
+    }]
+
+    assert _recent_store_name_for_availability_continuation(prev_tool_data=prev_tool_data) == "티스테이션 판교점"
 
 
 def test_sized_bare_product_search_can_resolve_unique_goods_no_for_detail() -> None:
