@@ -697,6 +697,10 @@ def _preview_has_no_fulfillment(raw: dict) -> bool:
     return logistics_qty <= 0 and not today_ids and not tna_ids and schedule_empty
 
 
+def _unsafe_no_fulfillment_copy(text: str) -> bool:
+    return bool(re.search(r"목록|선택|예약\s*가능|주문\s*가능|장착\s*가능|확인했어요", text or ""))
+
+
 def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Block product order/stock previews from falling through to a general store schedule."""
     for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
@@ -719,7 +723,7 @@ def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant
             not short
             or len(short) > 160
             or "```" in short
-            or re.search(r"선택|예약 가능|주문 가능|장착 가능 여부가 확인|확인했어요", short)
+            or _unsafe_no_fulfillment_copy(short)
             or not re.search(r"없|불가|확인되지|품절|부족|재고", short)
         ):
             short = (
@@ -3361,7 +3365,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 return None
             store_nm = _get_str(args, "store_nm") if isinstance(args, dict) else ""
             short = (assistant_text or "").strip()
-            if not short or len(short) > 120:
+            if not short or len(short) > 120 or _unsafe_no_fulfillment_copy(short):
                 short = (
                     f"{store_nm} 기준으로 오늘 장착 가능 일정이 확인되지 않았어요."
                     if store_nm
