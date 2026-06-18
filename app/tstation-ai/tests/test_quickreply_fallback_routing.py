@@ -47,6 +47,7 @@ from services.tstation.chat import (
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
+    _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
@@ -1433,6 +1434,34 @@ def test_external_price_comparison_event_uses_internal_price_policy_copy_and_cta
         "회원 쿠폰 적용가 보기",
         "다른 사이즈 확인",
     ]
+
+
+def test_external_price_comparison_event_can_use_product_description_source() -> None:
+    search_results = _external_price_search_results_from_sources([
+        (
+            "get_product_description_tool",
+            {
+                "status": "success",
+                "data": {
+                    "goods_nm": "벤투스 에어S",
+                    "tire_size_1": "235/45R18",
+                    "sale_prc": 253000,
+                    "cheapest_final_prc": 177100,
+                },
+            },
+        )
+    ])
+
+    event = _build_external_price_comparison_event_from_search_results(
+        "벤투스 air S 2354518 다나와에서 최저가 찾아줘",
+        search_results,
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "직접 수집하거나 비교할 수는 없어요" in assistant
+    assert "내부 최저 혜택가 177,100원" in assistant
+    assert "프리미엄이 제공하는" not in assistant
 
 
 def test_product_description_turn_does_not_apply_attribute_resolver() -> None:

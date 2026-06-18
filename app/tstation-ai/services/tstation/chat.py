@@ -7365,6 +7365,20 @@ def _build_external_price_comparison_event_from_search_results(
     }
 
 
+def _external_price_search_results_from_sources(
+    structured_sources: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    results: list[tuple[str, dict]] = []
+    for tool_name, result in structured_sources:
+        if tool_name == "search_product_tool":
+            results.append(("", result))
+        elif tool_name == "get_product_description_tool":
+            data = _unwrap_tool_data(result)
+            if data:
+                results.append(("", {"status": result.get("status", "success"), "data": {"items": [data]}}))
+    return results
+
+
 def _build_product_attribute_event_from_search_results(
     user_text: str,
     search_results: list[tuple[str, dict]],
@@ -14378,6 +14392,29 @@ class TStationChatServiceV2:
                 if isinstance(event_response_source, str):
                     last_assistant_response_source = event_response_source
                 event_data = event.get("data", {})
+                if is_external_price_comparison_request(user_query):
+                    deterministic_external_price_event = _build_external_price_comparison_event_from_search_results(
+                        user_query,
+                        [
+                            *search_product_tool_results,
+                            *_external_price_search_results_from_sources(structured_sources),
+                        ],
+                    )
+                    if deterministic_external_price_event is not None:
+                        logger.info("[EXTERNAL_PRICE] replacing data event with external price policy summary")
+                        event = deterministic_external_price_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_external_price_comparison_policy"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
                 if event.get("template") == "listCar":
                     if (
                         _should_apply_product_attribute_resolver(user_query, called_tool_names)
