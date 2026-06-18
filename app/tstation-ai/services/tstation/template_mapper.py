@@ -376,10 +376,27 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
         v = d.get(k)
         if v is not None:
             try:
-                return type(default)(v)
+                return type(default)(str(v).replace(",", ""))
             except (ValueError, TypeError):
                 pass
     return default
+
+
+def _display_final_unit_price(row: dict) -> int:
+    """FINAL unit price for product cards/comparison, not order payment total."""
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "price",
+        "sale_prc",
+    ):
+        value = int(_get_num(row, key, default=0))
+        if value:
+            return value
+    return 0
 
 
 def _normalize_vehicle_key(value: Any) -> str:
@@ -2217,10 +2234,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # for each search result; pairing by `input.goods_no` is the only robust
     # way (parallel completion order is non-deterministic).
     #
-    # Price priority: cheapest_final_prc (회원 보유 쿠폰 적용 후 최저가, 사이트
-    # 결제 페이지와 일치) → extra_fvr_sale_prc (사이트 일반 노출 혜택가, "모든
-    # 쿠폰 적용 가정") → sale_prc (정가). cheapest_final_prc 가 non-null 이면
-    # 무조건 그것을 써야 결제 카드 paymentAmount 가 사이트와 일치한다.
+    # Price priority: cheapest_final_prc → final_unit_price/final_prc →
+    # extra_fvr_sale_prc → price → sale_prc. This is display/comparison FINAL
+    # unit price; order payment totals add wage and quantity in their own path.
     price_map: dict[str, int] = {}
     for entry in _find_entries(tool_data_list, "get_final_price_tool"):
         # base_agent.py populates `args` (line 319); chat.py path uses `input`.
@@ -2231,11 +2247,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         price_data = _unwrap(entry)
         if not isinstance(price_data, dict):
             continue
-        price = int(_get_num(price_data, "cheapest_final_prc", default=0))
-        if not price:
-            price = int(_get_num(price_data, "extra_fvr_sale_prc", default=0))
-        if not price:
-            price = int(_get_num(price_data, "sale_prc", default=0))
+        price = _display_final_unit_price(price_data)
         if price:
             price_map[goods_no] = price
 
@@ -2266,15 +2278,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             goods_nm = _get_str(row, "goods_nm", "title")
             tire_size = _get_str(row, "tire_size_1", "tire_size_2")
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
-            # Price priority: matched get_final_price_tool result > inline row
-            # field (cheapest_final_prc > price/extra_fvr_sale_prc fallback).
-            # cheapest_final_prc 는 BE 가 enrich 한 회원 보유 쿠폰 적용 후 최저가 —
-            # 사이트 결제 페이지와 일치한다. 없으면 사이트 노출가로 fallback.
-            price = (
-                price_map.get(goods_no)
-                or int(_get_num(row, "cheapest_final_prc", default=0))
-                or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
-            )
+            price = price_map.get(goods_no) or _display_final_unit_price(row)
             original_price = int(_get_num(row, "sale_prc", default=0)) or None
             discount_rate = float(_get_num(row, "extra_fvr_sale_per", default=0.0)) or None
             discount_amount = (
@@ -2664,11 +2668,10 @@ def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> di
                 int(c.get("discount_amt", 0)) for c in applied
                 if isinstance(c, dict) and c.get("stage") in ("payment", "plus")
             )
-            final_price = int(_get_num(row, "final_prc", "final_unit_price", default=0))
         else:
             product_discount = int(_get_num(row, "product_discount", default=0))
             coupon_discount = int(_get_num(row, "coupon_discount", default=0))
-            final_price = int(_get_num(row, "final_unit_price", "final_prc", default=0))
+        final_price = _display_final_unit_price(row)
 
         items.append({
             "title": _get_str(row, "goods_nm", "title", default=goods_no),
@@ -2742,7 +2745,7 @@ def _map_runflat_price_comparison(tool_data_list: list[dict], assistant_text: st
         product_row = product_by_goods_no.get(goods_no)
         if not product_row:
             continue
-        final_unit_price = int(_get_num(price_row, "final_unit_price", default=0))
+        final_unit_price = _display_final_unit_price(price_row)
         if not final_unit_price:
             continue
         rows.append({
@@ -4305,20 +4308,14 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
 
     # Enrich paymentAmount from same-turn price tool.
     # Definition mirrors get_final_price_tool docs: (FINAL + wage_prc) × qty,
-    # with FINAL resolved as cheapest_final_prc → extra_fvr_sale_prc → sale_prc.
+    # with FINAL resolved as cheapest_final_prc → final_unit_price/final_prc →
+    # extra_fvr_sale_prc → price → sale_prc.
     payment_amount: int | None = None
     for price_entry in _find_entries(tool_data_list, "get_final_price_tool"):
         praw = _unwrap(price_entry)
         if not isinstance(praw, dict):
             continue
-        final_unit = _get_num(
-            praw,
-            "cheapest_final_prc",
-            "extra_fvr_sale_prc",
-            "sale_prc",
-            "final_unit_price",
-            default=0,
-        )
+        final_unit = _display_final_unit_price(praw)
         wage = _get_num(praw, "wage_prc", default=0)
         if final_unit:
             payment_amount = int((final_unit + wage) * ord_qty)

@@ -47,6 +47,7 @@ from services.tstation.chat import (
     _build_store_holiday_period_event,
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
+    _final_price_from_row,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
@@ -172,7 +173,12 @@ from services.tstation.policies.delivery_policy_gate import (
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.template_mapper import current_discovery_response_decision, current_user_text, try_build_template
+from services.tstation.template_mapper import (
+    current_discovery_response_decision,
+    current_runflat_comparison,
+    current_user_text,
+    try_build_template,
+)
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.price_response_policy import build_price_intent_frame, decide_price_response
@@ -1205,6 +1211,46 @@ def test_grade_comparison_event_prefers_higher_price_grade() -> None:
         "벤투스 에어S이 키너지 EX보다 상위 등급입니다. (벤투스 에어S: 프리미엄, 키너지 EX: 스탠다드)"
     )
     assert _labels(event["data"]["quickReplies"]) == ["구매하기", "다른 상품 비교", "내 차량 보기"]
+
+
+def test_final_price_from_row_prefers_member_best_price_before_generic_fields() -> None:
+    assert _final_price_from_row({
+        "cheapest_final_prc": 85000,
+        "final_unit_price": 90000,
+        "extra_fvr_sale_prc": 100000,
+        "price": 110000,
+        "sale_prc": 120000,
+    }) == 85000
+    assert _final_price_from_row({"final_unit_price": 91000, "extra_fvr_sale_prc": 100000}) == 91000
+    assert _final_price_from_row({"final_prc": 92000, "extra_fvr_sale_prc": 100000}) == 92000
+
+
+def test_price_comparison_event_uses_same_final_price_priority_as_product_cards() -> None:
+    event = _build_product_comparison_event(
+        "키너지 EX랑 벤투스 air S 가격 비교해줘",
+        [
+            (
+                "키너지 EX",
+                {
+                    "goods_nm": "키너지 EX",
+                    "sale_prc": 120000,
+                    "extra_fvr_sale_prc": 100000,
+                    "cheapest_final_prc": 85000,
+                },
+            ),
+            (
+                "벤투스 에어S",
+                {
+                    "goods_nm": "벤투스 에어S",
+                    "sale_prc": 130000,
+                    "extra_fvr_sale_prc": 95000,
+                },
+            ),
+        ],
+    )
+
+    assert "키너지 EX는 최종 85,000원" in event["data"]["assistantResponse"]
+    assert "벤투스 에어S는 최종 95,000원" in event["data"]["assistantResponse"]
 
 
 def test_mileage_comparison_event_prefers_higher_life_span() -> None:
@@ -2401,6 +2447,165 @@ def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> Non
     assert "쿠폰 적용 할인액: 200,000원" in assistant
     assert "최종 혜택가: 600,000원" in assistant
     assert "한국타이어 30% 할인권" in assistant
+
+
+def test_product_coupon_price_amount_event_uses_final_unit_price_when_cheapest_missing() -> None:
+    event = _build_product_coupon_price_amount_event(
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000317729",
+                "goods_nm": "벤투스 에어S",
+                "sale_prc": 200000,
+                "final_unit_price": 160000,
+                "extra_fvr_sale_prc": 180000,
+            },
+        },
+        product_name="벤투스 에어S",
+        tire_size="225/55R17",
+        quantity=2,
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "정가 합계: 400,000원" in assistant
+    assert "쿠폰 적용 할인액: 80,000원" in assistant
+    assert "최종 혜택가: 320,000원" in assistant
+
+
+def test_product_card_mapper_uses_display_final_price_priority() -> None:
+    event = try_build_template(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 에어S", "limit": 10, "size": "225/55R17"},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G1",
+                                "goods_nm": "벤투스 에어S",
+                                "tire_size_1": "225/55R17",
+                                "sale_prc": 120000,
+                                "extra_fvr_sale_prc": 100000,
+                                "final_unit_price": 90000,
+                                "cheapest_final_prc": 85000,
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        "상품을 확인했어요.",
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    product = event["data"]["products"][0]
+    assert product["price"] == 85000
+    assert product["originalPrice"] == 120000
+    assert product["discountAmount"] == 35000
+
+
+def test_compare_discount_mapper_uses_final_unit_price_without_cheapest_final_price() -> None:
+    event = try_build_template(
+        [
+            {
+                "tool": "compare_discount_tool",
+                "args": {"goods_no_list": ["G1", "G2"], "quantity": 1},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "cheapest_goods_no": "G1",
+                        "quantity": 1,
+                        "items": [
+                            {
+                                "goods_no": "G1",
+                                "goods_nm": "벤투스 에어S",
+                                "sale_prc": 120000,
+                                "extra_fvr_sale_prc": 100000,
+                                "final_unit_price": 85000,
+                                "total_discount": 35000,
+                            },
+                            {
+                                "goods_no": "G2",
+                                "goods_nm": "키너지 EX",
+                                "sale_prc": 120000,
+                                "extra_fvr_sale_prc": 95000,
+                                "final_unit_price": 90000,
+                                "total_discount": 30000,
+                            },
+                        ],
+                    },
+                },
+            }
+        ],
+        "최저가 상품을 확인했어요.",
+    )
+
+    assert event is not None
+    assert event["template"] == "cheapestProduct"
+    assert event["data"]["cheapestProduct"][0]["finalPrice"] == 85000
+
+
+def test_runflat_price_comparison_uses_final_unit_price_as_final_price() -> None:
+    token = current_runflat_comparison.set(True)
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "search_product_tool",
+                    "args": {"keyword": "벤투스", "limit": 10, "size": "225/45R17"},
+                    "data": {
+                        "status": "success",
+                        "http_status": 200,
+                        "data": {
+                            "items": [
+                                {
+                                    "goods_no": "G1",
+                                    "goods_nm": "벤투스 일반",
+                                    "tire_size_1": "225/45R17",
+                                    "goods_pfm_nm": "COMFORT",
+                                },
+                                {
+                                    "goods_no": "G2",
+                                    "goods_nm": "벤투스 런플랫",
+                                    "tire_size_1": "225/45R17",
+                                    "goods_pfm_nm": "RUNFLAT",
+                                },
+                            ]
+                        },
+                    },
+                },
+                {
+                    "tool": "compare_discount_tool",
+                    "args": {"goods_no_list": ["G1", "G2"], "quantity": 1},
+                    "data": {
+                        "status": "success",
+                        "http_status": 200,
+                        "data": {
+                            "items": [
+                                {"goods_no": "G1", "final_unit_price": 85000, "extra_fvr_sale_prc": 100000},
+                                {"goods_no": "G2", "final_unit_price": 105000, "extra_fvr_sale_prc": 120000},
+                            ]
+                        },
+                    },
+                },
+            ],
+            "런플랫과 일반 타이어 가격을 비교했어요.",
+        )
+    finally:
+        current_runflat_comparison.reset(token)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assistant = event["data"]["assistantResponse"]
+    assert "85,000원" in assistant
+    assert "105,000원" in assistant
+    assert "+20,000원" in assistant
 
 
 def test_product_coupon_price_no_product_event_stops_without_price_cta() -> None:

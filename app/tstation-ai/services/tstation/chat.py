@@ -1539,7 +1539,7 @@ class StreamingMultiAgentCoordinator:
         # 결제금액 slot 산출: get_final_price_tool 성공 + ord_qty 슬롯 보유 시
         # `payment_amount = (final_unit + wage_prc) * ord_qty` 로 계산한다.
         # final_unit 은 사이트 결제 페이지와 같은 cheapest_final_prc 를 최우선으로
-        # 사용하고, 값이 없을 때만 extra_fvr_sale_prc → sale_prc 순으로 fallback 한다.
+        # 사용하고, 값이 없을 때만 final_unit_price/final_prc → extra_fvr_sale_prc → sale_prc 순으로 fallback 한다.
         # template_mapper 의 orderComplete payment_amount 계산식과 동일.
         # 산출된 슬롯은 다음 턴 LLM 컨텍스트(`[확인된 고객 정보]`)에 "결제금액"으로
         # 노출되어, 할부 계산 같은 후속 질문에서 LLM 이 단가·수량을 임의로 곱해
@@ -1550,7 +1550,7 @@ class StreamingMultiAgentCoordinator:
                 final_unit = next(
                     (
                         price_data.get(key)
-                        for key in ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc")
+                        for key in ("cheapest_final_prc", "final_unit_price", "final_prc", "extra_fvr_sale_prc", "sale_prc")
                         if price_data.get(key) is not None
                     ),
                     None,
@@ -1559,7 +1559,10 @@ class StreamingMultiAgentCoordinator:
                 qty = slots.ord_qty
                 if final_unit is not None and qty is not None and qty > 0:
                     try:
-                        tool_slots["payment_amount"] = int((int(final_unit) + int(wage)) * int(qty))
+                        parsed_final_unit = _to_int(final_unit)
+                        parsed_wage = _to_int(wage) or 0
+                        if parsed_final_unit is not None:
+                            tool_slots["payment_amount"] = int((parsed_final_unit + parsed_wage) * int(qty))
                     except (TypeError, ValueError):
                         logger.debug(
                             "[SLOTS] payment_amount calc skipped: non-numeric inputs "
@@ -6718,7 +6721,7 @@ def _build_product_coupon_price_amount_event(
         return None
 
     sale_unit = _to_int(row.get("sale_prc"))
-    final_unit = _to_int(row.get("cheapest_final_prc") or row.get("extra_fvr_sale_prc") or row.get("sale_prc"))
+    final_unit = _final_price_from_row(row)
     unit_discount = _to_int(row.get("cheapest_total_discount"))
     if sale_unit is not None and final_unit is not None:
         unit_discount = max(0, sale_unit - final_unit)
@@ -7081,6 +7084,7 @@ _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
     r"(?:상품\s*)?(?:설명|특징|장점|후기|리뷰)\s*비교|비교.*(?:설명|특징|장점|후기|리뷰)",
     re.IGNORECASE,
 )
+_PRODUCT_PRICE_COMPARE_TEXT_RE = re.compile(r"가격|금액|혜택가|최종가|할인가|얼마|저렴|비싸", re.IGNORECASE)
 
 
 def _product_comparison_names(user_text: str) -> tuple[str, ...]:
@@ -7281,16 +7285,24 @@ def _to_float(value: Any) -> float | None:
 
 
 def _final_price_from_row(row: dict) -> int | None:
-    """FINAL price for a product row: cheapest_final_prc → extra_fvr_sale_prc →
-    sale_prc fallback order — same priority rule as get_final_price_tool callers
-    (cheapest_final_prc matches the member's actual checkout price)."""
-    for key in ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"):
+    """FINAL unit price for product display/comparison.
+
+    This is for product exposure and comparison only. Order totals still add
+    wage_prc and multiply by quantity in their own calculation path.
+    """
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "price",
+        "sale_prc",
+    ):
         value = row.get(key)
-        if value:
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
+        parsed = _to_int(value)
+        if parsed:
+            return parsed
     return None
 
 
@@ -7318,7 +7330,7 @@ def _quantity_price_summary(price_result: dict, quantity: int) -> dict[str, Any]
         return None
 
     sale_unit = _to_int(row.get("sale_prc") or row.get("originalPrice"))
-    final_unit = _to_int(row.get("final_prc") or row.get("final_unit_price") or row.get("finalPrice"))
+    final_unit = _final_price_from_row(row)
     if sale_unit is None or final_unit is None:
         return None
 
@@ -7492,6 +7504,8 @@ def _build_product_comparison_event(
 
     frame = build_discovery_intent_frame(user_text)
     compare_metric = str(frame.entities.get("compare_metric") or "")
+    if not compare_metric and _PRODUCT_PRICE_COMPARE_TEXT_RE.search(user_text):
+        compare_metric = "price"
     sub_intent = str(frame.sub_intent or "")
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
 
