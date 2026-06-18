@@ -167,6 +167,7 @@ from services.tstation.chat import (
     _sanitize_transaction_cta_contracts,
     _apply_cta_context_to_slots,
     _merged_quickreply_cta_context,
+    _cta_preview_input_from_slots,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
@@ -307,6 +308,37 @@ def test_apply_cta_context_to_slots_preserves_today_install_preview_slots() -> N
     assert updated.availability_intent == "today_install"
     assert updated.pending_intent == "stock"
     assert updated.goal_type == "store_with_stock"
+
+
+def test_cta_preview_input_uses_recovered_region_and_requested_day() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317729",
+        tire_size="235/35R20",
+        ord_qty=4,
+        region="서울",
+        requested_cal_day="20260618",
+        availability_intent="today_install",
+    )
+
+    preview_input, missing_slot = _cta_preview_input_from_slots(slots)
+
+    assert missing_slot is None
+    assert preview_input == {
+        "goods_no": "G000000317729",
+        "ord_qty": 4,
+        "include_price": True,
+        "region_code": "서울",
+        "requested_cal_day": "20260618",
+    }
+
+
+def test_cta_preview_input_reports_missing_location_without_generic_guard() -> None:
+    slots = ConversationSlots(goods_no="G000000317729", ord_qty=4)
+
+    preview_input, missing_slot = _cta_preview_input_from_slots(slots)
+
+    assert preview_input is None
+    assert missing_slot == "location"
 
 
 def test_registered_vehicle_staggered_fitment_builds_size_selection_prompt() -> None:

@@ -3467,6 +3467,63 @@ def _apply_cta_context_to_slots(slots: Any, cta_context: dict[str, Any], *, sour
         return slots
 
 
+def _cta_missing_slot_event(missing_slot: str) -> dict:
+    if missing_slot == "location":
+        response = "확인할 지역명이나 매장명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요."
+        chips = [
+            {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+            {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+            {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+        ]
+    elif missing_slot == "quantity":
+        response = "확인할 수량을 알려주세요."
+        chips = [
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+            {"label": "3개", "domain": "TRANSACTION"},
+            {"label": "4개", "domain": "TRANSACTION"},
+        ]
+    else:
+        response = "상품 정보를 먼저 확인해야 다음 단계로 진행할 수 있어요."
+        chips = [{"label": "조건 다시 입력", "domain": "TRANSACTION"}]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_cta_action_guard",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": chips,
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _cta_preview_input_from_slots(slots: Any) -> tuple[dict[str, Any] | None, str | None]:
+    if not getattr(slots, "goods_no", None):
+        return None, "product"
+    if not getattr(slots, "ord_qty", None):
+        return None, "quantity"
+    if not (
+        getattr(slots, "region", None)
+        or getattr(slots, "shop_name", None)
+        or getattr(slots, "shop_id", None)
+    ):
+        return None, "location"
+    preview_input: dict[str, Any] = {
+        "goods_no": slots.goods_no,
+        "ord_qty": int(slots.ord_qty),
+        "include_price": True,
+    }
+    if getattr(slots, "region", None):
+        preview_input["region_code"] = slots.region
+    elif getattr(slots, "shop_name", None):
+        preview_input["store_nm"] = slots.shop_name
+    if getattr(slots, "requested_cal_day", None):
+        preview_input["requested_cal_day"] = slots.requested_cal_day
+    return preview_input, None
+
+
 def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
     if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
         return False
@@ -11611,6 +11668,73 @@ class TStationChatServiceV2:
                     {k: v for k, v in before_cta_slots.items() if v not in (None, "", [], {})},
                     {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
                 )
+                preview_input, missing_slot = _cta_preview_input_from_slots(merged_slots)
+                if missing_slot is not None:
+                    missing_event = _cta_missing_slot_event(missing_slot)
+                    guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(missing_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=guard_text)
+
+                assert preview_input is not None
+
+                from services.tstation.agents.c_transaction_agent.tools import (
+                    transaction_store_preview_tool as _transaction_store_preview_tool,
+                )
+                from services.tstation.template_mapper import (
+                    current_goal_type as _cta_current_goal_type,
+                    current_pending_intent as _cta_current_pending_intent,
+                    current_user_text as _cta_current_user_text,
+                    try_build_template as _try_build_template,
+                )
+
+                _cta_current_user_text.set(last_user_text)
+                _cta_current_pending_intent.set(merged_slots.pending_intent)
+                _cta_current_goal_type.set(merged_slots.goal_type)
+                try:
+                    raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
+                    preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
+                    if not isinstance(preview_result, dict):
+                        preview_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+                except Exception as exc:
+                    logger.exception("[CTA_ACTION] transaction_store_preview_tool failed input=%s", preview_input)
+                    preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+
+                mapped_event = _try_build_template(
+                    [{"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result}],
+                    "요청하신 조건으로 장착 가능 여부를 확인했어요.",
+                )
+                if mapped_event is None:
+                    mapped_event = _cta_missing_slot_event("location")
+                mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                mapped_event["assistant_response_source"] = "code_cta_action_preview"
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_cta_tool_response(preview_input, preview_result, mapped_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                return TStationChatResponse(
+                    content=str((mapped_event.get("data") or {}).get("assistantResponse") or "")
+                )
 
             # Carry multi-variant recommendation requests across slot-fill turns.
             # Example:
@@ -13200,6 +13324,21 @@ class TStationChatServiceV2:
         yield f"data: {json.dumps({'type': 'token', 'content': msg}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': f'[{source_domain} AGENT]'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_cta_tool_response(tool_input: dict, tool_result: dict, event: dict):
+        """Stream deterministic CTA action output after a direct tool invocation."""
+        event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        msg = str(event_data.get("assistantResponse") or "")
+        yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'transaction_store_preview_tool', 'display_name': '장착 가능 일정 확인 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[Store/Stock AF]', 'agent_class': 'Transaction Agent', 'status': tool_result.get('status', 'success'), 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'tool', 'input': tool_input, 'output': json.dumps(tool_result, ensure_ascii=False), 'node': 'tools', 'tool': 'transaction_store_preview_tool', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        if msg:
+            yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
