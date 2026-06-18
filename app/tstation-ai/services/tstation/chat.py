@@ -6902,6 +6902,7 @@ def _build_coupon_applicability_event(
     coupon_row: dict,
     *,
     target_product_name: str | None = None,
+    target_brand: dict | None = None,
 ) -> dict:
     data = _unwrap_tool_data(tool_result)
     coupon_name = str(coupon_row.get("cpn_nm") or "해당 쿠폰")
@@ -6919,6 +6920,45 @@ def _build_coupon_applicability_event(
     total_stores = int(data.get("total_stores") or len(stores))
 
     lines: list[str] = []
+    if target_brand:
+        target_brand_cd = str(target_brand.get("brand_cd") or "").strip().upper()
+        target_brand_label = str(target_brand.get("label") or _brand_label_for_code(target_brand_cd)).strip()
+        matched_products: list[str] = []
+        for item in products:
+            row_brand_cd = str(item.get("brand_cd") or item.get("brandCode") or "").strip().upper()
+            row_brand_nm = str(item.get("brand_nm") or item.get("brand_name") or item.get("brandName") or "").strip()
+            row_goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            if not row_goods_nm:
+                continue
+            if (
+                (target_brand_cd and row_brand_cd == target_brand_cd)
+                or (target_brand_label and target_brand_label.casefold() in row_brand_nm.casefold())
+                or (target_brand_label and target_brand_label.casefold() in row_goods_nm.casefold())
+            ):
+                matched_products.append(row_goods_nm)
+        if matched_products:
+            lines.append(f"‘{coupon_name}’은 {target_brand_label} 상품에도 적용 가능해요.")
+            lines.append("확인된 대표 상품은 " + ", ".join(matched_products[:5]) + "입니다.")
+        else:
+            lines.append(f"적용 가능 상품 목록에서 {target_brand_label} 상품은 확인되지 않았어요.")
+            lines.append("쿠폰함에서 상세 적용 조건을 확인해 주세요.")
+        quick_replies = [
+            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            {"label": "적용 상품 다시 확인", "domain": "TRANSACTION"},
+        ]
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_coupon_resolver",
+            "data": {
+                "assistantResponse": "\n".join(lines),
+                "quickReplies": quick_replies,
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
+
     target_keys = _coupon_product_match_keys(target_product_name)
     if target_keys:
         product_names = [
@@ -7179,6 +7219,34 @@ def _coupon_target_product_name_for_query(user_text: str) -> str | None:
     product_name = str(frame.entities.get("product_name") or "").strip()
     normalized = _split_product_size_quantity_from_text(product_name, user_text)
     return str(normalized.get("product_name") or "").strip() or None
+
+
+_COUPON_TARGET_BRAND_ALIASES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("HK", "한국타이어", ("한국타이어", "hankook")),
+    ("LF", "라우펜", ("라우펜", "laufenn")),
+    ("MC", "미쉐린", ("미쉐린", "michelin")),
+    ("PI", "피렐리", ("피렐리", "pirelli")),
+    ("BS", "브리지스톤", ("브리지스톤", "bridgestone")),
+    ("CT", "콘티넨탈", ("콘티넨탈", "continental")),
+    ("GY", "굿이어", ("굿이어", "goodyear")),
+)
+
+
+def _coupon_target_brand_for_query(user_text: str) -> dict | None:
+    text = str(user_text or "")
+    if not text:
+        return None
+    if not _COUPON_WORD_RE.search(text):
+        return None
+    if not re.search(r"적용|사용|쓸\s*수|먹", text, re.IGNORECASE):
+        return None
+
+    for brand_cd, label, aliases in _COUPON_TARGET_BRAND_ALIASES:
+        for alias in aliases:
+            if not re.search(rf"{re.escape(alias)}\s*(?:도|에도|상품|타이어|브랜드)", text, re.IGNORECASE):
+                continue
+            return {"brand_cd": brand_cd, "label": label}
+    return None
 
 
 def _is_strong_coupon_applicability_query(user_text: str) -> bool:
@@ -14161,6 +14229,7 @@ class TStationChatServiceV2:
                 followup_result,
                 matched_coupon,
                 target_product_name=_coupon_target_product_name_for_query(user_query),
+                target_brand=_coupon_target_brand_for_query(user_query),
             )
 
         async def _resolve_owned_coupon_lookup_with_code() -> tuple[list[dict], dict]:

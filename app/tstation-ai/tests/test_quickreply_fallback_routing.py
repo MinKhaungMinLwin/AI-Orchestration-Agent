@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
@@ -100,6 +101,7 @@ from services.tstation.chat import (
     _is_product_size_list_intent,
     _is_owned_coupon_best_discount_query,
     _is_owned_coupon_expiry_lookup_query,
+    _coupon_target_brand_for_query,
     _coupon_target_product_name_for_query,
     _split_product_size_quantity_from_text,
     _delivery_policy_guard_event,
@@ -2549,8 +2551,82 @@ def test_tc005_coupon_applicability_answers_pattern_without_size_listing() -> No
     ]
 
 
+def test_coupon_applicability_answers_brand_target_without_full_product_listing() -> None:
+    event = _build_coupon_applicability_event(
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_no": "C001",
+                        "total": 44,
+                        "items": [
+                            {"goods_nm": "벤투스 에어S", "brand_cd": "HK", "brand_nm": "HANKOOK"},
+                            {"goods_nm": "미쉐린 파일럿 스포츠 5", "brand_cd": "MC", "brand_nm": "MICHELIN"},
+                            {"goods_nm": "미쉐린 프라이머시 4", "brand_cd": "MC", "brand_nm": "MICHELIN"},
+                        ],
+                    }
+                ],
+                "stores": [],
+                "total_products": 44,
+                "total_stores": 0,
+            },
+        },
+        {"cpn_no": "C001", "cpn_nm": "타이어 경정비 싹-다 1만원 할인쿠폰"},
+        target_brand=_coupon_target_brand_for_query("타이어 경정비 싹-다 1만원 할인쿠폰은 미쉐린도 적용 돼?"),
+    )
+
+    response = event["data"]["assistantResponse"]
+    labels = [chip["label"] for chip in event["data"]["quickReplies"]]
+
+    assert "미쉐린 상품에도 적용 가능" in response
+    assert "확인된 대표 상품" in response
+    assert "적용 가능 상품은 44개" not in response
+    assert "미쉐린 파일럿 스포츠 5" in response
+    assert labels == ["쿠폰함 바로가기", "내 쿠폰 조회", "적용 상품 다시 확인"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MY_COUPON_LIST_PC
+    assert "보유차량 중 선택" not in labels
+    assert "사이즈 직접 입력" not in labels
+
+
+def test_coupon_applicability_brand_target_reports_absence_without_purchase_cta() -> None:
+    event = _build_coupon_applicability_event(
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_no": "C001",
+                        "total": 1,
+                        "items": [{"goods_nm": "벤투스 에어S", "brand_cd": "HK", "brand_nm": "HANKOOK"}],
+                    }
+                ],
+                "stores": [],
+                "total_products": 1,
+                "total_stores": 0,
+            },
+        },
+        {"cpn_no": "C001", "cpn_nm": "타이어 경정비 싹-다 1만원 할인쿠폰"},
+        target_brand={"brand_cd": "MC", "label": "미쉐린"},
+    )
+
+    response = event["data"]["assistantResponse"]
+    labels = [chip["label"] for chip in event["data"]["quickReplies"]]
+
+    assert "적용 가능 상품 목록에서 미쉐린 상품은 확인되지 않았어요" in response
+    assert "쿠폰함에서 상세 적용 조건을 확인" in response
+    assert labels == ["쿠폰함 바로가기", "내 쿠폰 조회", "적용 상품 다시 확인"]
+    assert "보유차량 중 선택" not in labels
+    assert "사이즈 직접 입력" not in labels
+
+
 def test_discount_rate_coupon_targets_do_not_force_product_narrowing() -> None:
     assert _coupon_target_product_name_for_query("30% 할인 쿠폰 적용 가능 상품 뭐뭐 있어?") is None
+    assert _coupon_target_brand_for_query("한국타이어 16% 상품 할인쿠폰 적용 가능한 상품이 뭐있어?") is None
+    assert _coupon_target_brand_for_query("타이어 경정비 싹-다 1만원 할인쿠폰은 미쉐린도 적용 돼?") == {
+        "brand_cd": "MC",
+        "label": "미쉐린",
+    }
 
 
 def test_strong_coupon_applicability_query_accepts_applicable_variants() -> None:
