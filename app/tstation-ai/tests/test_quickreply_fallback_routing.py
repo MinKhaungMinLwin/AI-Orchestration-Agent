@@ -5095,6 +5095,22 @@ def test_recommendation_response_does_not_call_under_cap_request_a_max_limit() -
     assert "추천은 최대 5개" not in response
 
 
+def test_recommendation_response_uses_current_turn_count_not_previous_over_cap_count() -> None:
+    token = current_user_text.set("2355519 20개 추천\n2355519 올시즌 5개 추천")
+    try:
+        event = try_build_template(
+            [_recommendation_template_entry(season_nm="사계절", limit=5, requested_limit=5, effective_limit=5, item_count=5)],
+            "추천 상품을 확인했어요.",
+        )
+    finally:
+        current_user_text.reset(token)
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert response == "235/55R19 사계절 조건으로 찾은 상품 5개입니다. 원하시는 상품을 선택해 주세요."
+    assert "추천은 최대 10개" not in response
+
+
 def test_followup_size_input_preserves_prior_multi_brand_user_request_as_variants() -> None:
     messages = [
         {"role": "user", "content": "미쉐린, 콘티넨탈, 브리지스톤 상품 1개씩 BMW 3시리즈에 맞는 타이어 추천해줘"},

@@ -1971,7 +1971,7 @@ def _positive_int_or_none(value: Any) -> int | None:
 
 
 def _recommendation_requested_limit(entry: dict, raw: dict | list) -> int | None:
-    user_requested = _recommendation_requested_limit_from_user_text(current_user_text.get() or "")
+    user_requested = _recommendation_requested_limit_from_user_text(_current_user_turn_text())
     if isinstance(raw, dict):
         requested = _positive_int_or_none(raw.get("requested_limit"))
         if user_requested is not None and requested is not None and user_requested > requested:
@@ -1982,6 +1982,12 @@ def _recommendation_requested_limit(entry: dict, raw: dict | list) -> int | None
     if user_requested is not None and requested is not None and user_requested > requested:
         return user_requested
     return user_requested or requested
+
+
+def _current_user_turn_text() -> str:
+    text = current_user_text.get() or ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else text
 
 
 _KOREAN_COUNT_WORDS: dict[str, int] = {
