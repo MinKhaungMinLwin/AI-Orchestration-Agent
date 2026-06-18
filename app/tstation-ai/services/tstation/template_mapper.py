@@ -700,15 +700,17 @@ def _preview_has_no_fulfillment(raw: dict) -> bool:
 def _preview_has_no_requested_day_fulfillment(raw: dict) -> bool:
     """True when a date-specific preview found no store on the requested day.
 
-    `tnaShopArray` can still contain future delivery candidates, but if
-    `requested_cal_day` is present and the filtered schedule is `none`, the
-    current answer must be "not available for that day", not a generic
-    reservation-store list.
+    todayShopArray and tnaShopArray are inventory-proven today-installable
+    candidates. A missing schedule slot must not override those inventory
+    results for today-install copy.
     """
     requested_cal_day = _get_str(raw, "requested_cal_day")
     schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
     requested_cal_day = requested_cal_day or _get_str(schedule, "requested_cal_day")
     if not requested_cal_day:
+        return False
+    inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+    if _inventory_shop_ids(inventory, "todayShopArray") or _inventory_shop_ids(inventory, "tnaShopArray"):
         return False
     schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
     return _get_str(schedule, "tier").lower() == "none" or (
