@@ -49,6 +49,7 @@ from services.tstation.chat import (
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
     _quantity_benefit_continuation_frame_from_pending,
+    _resolve_goods_no_from_product_template_selection,
     _final_price_from_row,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
@@ -5858,3 +5859,45 @@ def test_plain_product_size_search_does_not_trigger_quantity_benefit_without_pen
     frame = _quantity_benefit_continuation_frame_from_pending("옵티모 2454519", slots=ConversationSlots())
 
     assert frame is None
+
+
+def test_goods_no_from_product_template_selection_resolves_named_variant() -> None:
+    product_template = {
+        "products": [
+            {"title": "옵티모 H108 245/45R19", "titleProductName": "옵티모 H108", "titleTires": "245/45R19"},
+            {"title": "옵티모 H426 245/45R19", "titleProductName": "옵티모 H426", "titleTires": "245/45R19"},
+        ],
+        "metadata": [{"goodsId": "G000000309817"}, {"goodsId": "G000000309961"}],
+    }
+
+    assert (
+        _resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
+        == "G000000309961"
+    )
+
+
+def test_quantity_benefit_product_selection_continues_to_goods_no_comparison() -> None:
+    product_template = {
+        "products": [
+            {"title": "옵티모 H108 245/45R19", "titleProductName": "옵티모 H108", "titleTires": "245/45R19"},
+            {"title": "옵티모 H426 245/45R19", "titleProductName": "옵티모 H426", "titleTires": "245/45R19"},
+        ],
+        "metadata": [{"goodsId": "G000000309817"}, {"goodsId": "G000000309961"}],
+        "quantityBenefitComparison": {
+            "pendingIntent": "quantity_benefit_comparison",
+            "quantityOptions": [2, 4],
+            "productName": "Optimo",
+            "missingSlot": "goods_no",
+        },
+    }
+
+    frame = _quantity_benefit_continuation_frame_from_pending(
+        "옵티모 H426 245/45R19",
+        slots=ConversationSlots(),
+        latest_product_tmpl=product_template,
+    )
+
+    assert frame is not None
+    assert frame.sub_intent == "quantity_benefit_comparison"
+    assert frame.known_slots["goods_no"] == "G000000309961"
+    assert frame.entities["quantity_options"] == (2, 4)

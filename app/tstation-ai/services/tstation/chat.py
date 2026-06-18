@@ -7426,6 +7426,9 @@ def _quantity_benefit_pending_values_from_template(template_data: dict | None) -
         return {}
     data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
     metadata = data.get("metadata") if isinstance(data, dict) else None
+    quantity_meta = data.get("quantityBenefitComparison") if isinstance(data, dict) else None
+    if isinstance(quantity_meta, dict):
+        metadata = quantity_meta
     if not isinstance(metadata, dict):
         return {}
     if metadata.get("pendingIntent") != "quantity_benefit_comparison":
@@ -7475,20 +7478,76 @@ def _quantity_benefit_pending_values_from_slots(slots: Any | None) -> dict[str, 
     }
 
 
+def _resolve_goods_no_from_product_template_selection(user_text: str, template_data: dict | None) -> str | None:
+    if not user_text or not isinstance(template_data, dict):
+        return None
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    if not isinstance(data, dict):
+        return None
+    products = data.get("products")
+    metadata = data.get("metadata")
+    if not isinstance(products, list) or not isinstance(metadata, list):
+        return None
+    if not products or len(products) != len(metadata):
+        return None
+
+    text = user_text.strip()
+    ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
+    if ordinal_match:
+        idx = int(ordinal_match.group(1)) - 1
+        if 0 <= idx < len(metadata) and isinstance(metadata[idx], dict):
+            goods_no = str(metadata[idx].get("goodsId") or metadata[idx].get("goodsNo") or "").strip()
+            return goods_no or None
+
+    target_size = normalize_tire_size(text)
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+    best_goods_no = ""
+    best_score = 0
+    tied = False
+    for product, meta in zip(products, metadata):
+        if not isinstance(product, dict) or not isinstance(meta, dict):
+            continue
+        product_size = normalize_tire_size(str(product.get("titleTires") or product.get("tireSize") or ""))
+        if target_size and product_size != target_size:
+            continue
+        title = " ".join(
+            str(product.get(key) or "")
+            for key in ("title", "titleProductName", "productName", "goodsNm")
+        ).lower()
+        score = sum(1 for token in tokens if token in title)
+        goods_no = str(meta.get("goodsId") or meta.get("goodsNo") or "").strip()
+        if score > best_score:
+            best_score = score
+            best_goods_no = goods_no
+            tied = False
+        elif score == best_score and score > 0:
+            tied = True
+    if best_goods_no and best_score >= 2 and not tied:
+        return best_goods_no
+    return None
+
+
 def _quantity_benefit_continuation_frame_from_pending(
     user_text: str,
     *,
     slots: Any | None = None,
     latest_quickreply_tmpl: dict | None = None,
+    latest_product_tmpl: dict | None = None,
     current_goods_no: str | None = None,
 ) -> IntentFrame | None:
     current_size = normalize_tire_size(user_text)
-    goods_no = str(current_goods_no or getattr(slots, "goods_no", None) or "").strip()
+    goods_no = str(
+        current_goods_no
+        or _resolve_goods_no_from_product_template_selection(user_text, latest_product_tmpl)
+        or getattr(slots, "goods_no", None)
+        or ""
+    ).strip()
     if not current_size and not goods_no:
         return None
     pending = (
         _quantity_benefit_pending_values_from_slots(slots)
         or _quantity_benefit_pending_values_from_template(latest_quickreply_tmpl)
+        or _quantity_benefit_pending_values_from_template(latest_product_tmpl)
     )
     if not pending:
         return None
@@ -10923,6 +10982,7 @@ class TStationChatServiceV2:
             )
             latest_datepick_tmpl = latest_template_data_from_messages(recent_template_msgs, "datepick")
             latest_quickreply_tmpl = latest_template_data_from_messages(recent_template_msgs, "quickReply")
+            latest_product_tmpl = latest_template_data_from_messages(recent_template_msgs, "product")
             latest_preorder_tmpl = latest_template_data_from_messages(recent_template_msgs, "preOrder")
             _t_slots = time.perf_counter()
             logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
@@ -12605,6 +12665,7 @@ class TStationChatServiceV2:
                     request_started_at=_t0,
                     latest_datepick_tmpl=latest_datepick_tmpl,
                     latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
                     intent_group=intent_group,
                 ),
@@ -12639,6 +12700,7 @@ class TStationChatServiceV2:
                 request_started_at=_t0,
                 latest_datepick_tmpl=latest_datepick_tmpl,
                 latest_quickreply_tmpl=latest_quickreply_tmpl,
+                latest_product_tmpl=latest_product_tmpl,
                 prev_tool_data=prev_tool_data,
                 intent_group=intent_group,
             ):
@@ -12763,6 +12825,7 @@ class TStationChatServiceV2:
         request_started_at: float | None = None,
         latest_datepick_tmpl: dict | None = None,
         latest_quickreply_tmpl: dict | None = None,
+        latest_product_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
         intent_group: str | None = None,
     ):
@@ -14246,6 +14309,7 @@ class TStationChatServiceV2:
                 user_query,
                 slots=initial_slots,
                 latest_quickreply_tmpl=latest_quickreply_tmpl,
+                latest_product_tmpl=latest_product_tmpl,
                 current_goods_no=current_goods_no,
             )
             if pending_frame is not None:
@@ -14371,7 +14435,14 @@ class TStationChatServiceV2:
                     if mapped_goods_no:
                         goods_no = mapped_goods_no
                     else:
-                        await _clear_quantity_benefit_pending_slots()
+                        event_data = mapped_event.get("data")
+                        if isinstance(event_data, dict):
+                            event_data["quantityBenefitComparison"] = {
+                                "pendingIntent": "quantity_benefit_comparison",
+                                "quantityOptions": list(quantities),
+                                "productName": str(product_names[0]),
+                                "missingSlot": "goods_no",
+                            }
                         mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
                         mapped_event["assistant_response_source"] = "code_quantity_benefit_product_selection"
                         return emitted_events, mapped_event
