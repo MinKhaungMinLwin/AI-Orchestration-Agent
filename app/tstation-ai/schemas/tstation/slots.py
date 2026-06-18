@@ -47,6 +47,8 @@ class ConversationSlots(BaseModel):
     car_model: Optional[str] = None      # e.g. "쏘나타"
     car_no: Optional[str] = None         # e.g. "12가3456"
     car_lnc_cd: Optional[str] = None     # vehicle WCODE
+    car_type: Optional[str] = None       # raw registered vehicle type, e.g. "SUV"
+    vehicle_type: Optional[str] = None   # normalized recommendation filter, e.g. "suv"
     mbr_car_reg_seq: Optional[str] = None  # member car registration sequence
     pending_vehicle_lookup_car_no: Optional[str] = None  # unmatched plate awaiting owner name
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
@@ -81,6 +83,8 @@ class ConversationSlots(BaseModel):
         "car_model": [
             "car_no",
             "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
             "mbr_car_reg_seq",
             "tire_size",
             "tire_size_front",
@@ -91,6 +95,8 @@ class ConversationSlots(BaseModel):
         "car_no": [
             "car_model",
             "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
             "mbr_car_reg_seq",
             "tire_size",
             "tire_size_front",
@@ -119,6 +125,8 @@ class ConversationSlots(BaseModel):
         "car_model": [
             "car_no",
             "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
             "mbr_car_reg_seq",
             "tire_size",
             "tire_size_front",
@@ -129,6 +137,8 @@ class ConversationSlots(BaseModel):
         "car_no": [
             "car_model",
             "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
             "mbr_car_reg_seq",
             "tire_size",
             "tire_size_front",

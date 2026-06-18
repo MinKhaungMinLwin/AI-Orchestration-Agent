@@ -869,6 +869,41 @@ def test_vehicle_selection_slot_values_use_structured_car_model_when_present() -
     assert slot_values["car_model"] == "GV70"
 
 
+def test_vehicle_selection_slot_values_normalize_car_type_to_vehicle_type() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "205소4214",
+            "info": "제네시스 GV70 (1세대) (2021 - 2024)",
+        },
+        "meta": {
+            "carNo": "205소4214",
+            "tireSize": "235/55R19",
+            "carNm": "GV70",
+            "carLncCd": "W049847",
+            "carType": "SUV",
+        },
+    })
+
+    assert slot_values["car_type"] == "SUV"
+    assert slot_values["vehicle_type"] == "suv"
+
+
+def test_vehicle_selection_slot_values_normalize_ev_model_to_vehicle_type() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "11가1111",
+            "info": "아이오닉 5",
+        },
+        "meta": {
+            "carNo": "11가1111",
+            "tireSize": "235/55R19",
+            "carNm": "아이오닉 5",
+        },
+    })
+
+    assert slot_values["vehicle_type"] == "ev"
+
+
 def test_vehicle_selection_slot_values_preserve_staggered_front_rear_without_default_selected_size() -> None:
     slot_values = _vehicle_selection_slot_values({
         "car": {
@@ -904,6 +939,8 @@ def test_vehicle_selection_atomic_update_preserves_new_front_rear_when_car_chang
         "car_model": "BMW 3시리즈 그란 투리스모",
         "car_no": "56모2162",
         "car_lnc_cd": "W049847",
+        "car_type": "승용차",
+        "vehicle_type": "passenger",
         "tire_size_front": "225/50R18",
         "tire_size_rear": "255/50R18",
     }
@@ -913,6 +950,8 @@ def test_vehicle_selection_atomic_update_preserves_new_front_rear_when_car_chang
     assert updated.car_model == "BMW 3시리즈 그란 투리스모"
     assert updated.car_no == "56모2162"
     assert updated.car_lnc_cd == "W049847"
+    assert updated.car_type == "승용차"
+    assert updated.vehicle_type == "passenger"
     assert updated.tire_size is None
     assert updated.tire_size_front == "225/50R18"
     assert updated.tire_size_rear == "255/50R18"
@@ -5031,6 +5070,34 @@ def test_discovery_policy_context_preserves_ev_and_quiet_axes_for_size_followup(
         "rcmd_type": "low_vibration",
         "tire_size": "255/50R18",
     }
+
+
+def test_discovery_policy_context_applies_selected_vehicle_type_to_followup_recommendation() -> None:
+    patch, _decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="조용한 걸로 추천해줘",
+        context_text="GV70 선택\n조용한 걸로 추천해줘",
+        tire_size="235/55R19",
+        vehicle_type="suv",
+    )
+
+    assert patch == {
+        "rcmd_type": "low_vibration",
+        "tire_size": "235/55R19",
+        "vehicle_type": "suv",
+    }
+
+
+def test_discovery_policy_context_prefers_current_turn_vehicle_type_over_selected_vehicle_slot() -> None:
+    patch, _decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="전기차용으로 추천해줘",
+        context_text="GV70 선택\n전기차용으로 추천해줘",
+        tire_size="235/55R19",
+        vehicle_type="suv",
+    )
+
+    assert patch == {"tire_size": "235/55R19", "vehicle_type": "ev"}
 
 
 def test_followup_size_input_preserves_non_ev_vehicle_category_context() -> None:

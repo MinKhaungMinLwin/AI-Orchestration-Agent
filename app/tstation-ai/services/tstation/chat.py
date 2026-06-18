@@ -4458,6 +4458,31 @@ def _resolve_vehicle_tire_position_selection(
     return None
 
 
+def _normalize_vehicle_type_from_car_type(raw_car_type: Any, *, fallback_text: str | None = None) -> str | None:
+    """Normalize registered car type into recommendation vehicle_type."""
+    combined = " ".join(
+        part
+        for part in (
+            str(raw_car_type or "").strip(),
+            str(fallback_text or "").strip(),
+        )
+        if part
+    )
+    if not combined:
+        return None
+
+    normalized = re.sub(r"[\s_\-/]+", "", combined).lower()
+    if re.search(r"전기차|electric|아이오닉|ioniq|electrified|gv70ev|\bev\b", combined, re.IGNORECASE):
+        return "ev"
+    if "스포츠유틸리티" in normalized or "suv" in normalized:
+        return "suv"
+    if any(token in normalized for token in ("승용차", "승용", "세단", "sedan", "스포츠카", "passenger")):
+        return "passenger"
+    if any(token in normalized for token in ("경트럭", "트럭", "truck", "밴", "van", "화물")):
+        return "truck_van"
+    return None
+
+
 def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, Any]:
     selected_car = (selected_vehicle or {}).get("car") or {}
     selected_meta = (selected_vehicle or {}).get("meta") or {}
@@ -4488,6 +4513,32 @@ def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, A
     car_lnc_cd = str(selected_meta.get("carLncCd") or "").strip()
     if car_lnc_cd:
         slot_values["car_lnc_cd"] = car_lnc_cd
+    raw_car_type = (
+        selected_meta.get("carType")
+        or selected_meta.get("car_type")
+        or selected_meta.get("carTypeNm")
+        or selected_meta.get("car_type_nm")
+        or selected_car.get("carType")
+        or selected_car.get("car_type")
+        or selected_car.get("type")
+        or selected_car.get("vehicleType")
+    )
+    car_type = str(raw_car_type or "").strip()
+    vehicle_type = _normalize_vehicle_type_from_car_type(
+        car_type,
+        fallback_text=" ".join(
+            part
+            for part in (
+                car_model,
+                str(selected_car.get("info") or selected_car.get("description") or "").strip(),
+            )
+            if part
+        ),
+    )
+    if car_type:
+        slot_values["car_type"] = car_type
+    if vehicle_type:
+        slot_values["vehicle_type"] = vehicle_type
     mbr_car_reg_seq = str(selected_meta.get("mbrCarRegSeq") or "").strip()
     if mbr_car_reg_seq:
         slot_values["mbr_car_reg_seq"] = mbr_car_reg_seq
@@ -4508,6 +4559,8 @@ def _apply_vehicle_selection_slot_values(base_slots: Any, slot_values: dict[str,
         "car_model",
         "car_no",
         "car_lnc_cd",
+        "car_type",
+        "vehicle_type",
         "mbr_car_reg_seq",
         "tire_size",
         "tire_size_front",
@@ -9335,6 +9388,7 @@ def _build_discovery_policy_context(
     context_text: str,
     tire_size: str | None,
     goods_no: str | None = None,
+    vehicle_type: str | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Discovery policy context for tool/mapper integration.
 
@@ -9345,14 +9399,17 @@ def _build_discovery_policy_context(
     if MultiAgentDomain.Domain.DISCOVERY not in domains or not last_user_text:
         return {}, None
     try:
+        known_slots = {"tire_size": tire_size} if tire_size else {}
+        if vehicle_type:
+            known_slots["vehicle_type"] = vehicle_type
         discovery_frame = build_discovery_intent_frame(
             last_user_text,
-            known_slots={"tire_size": tire_size} if tire_size else {},
+            known_slots=known_slots,
         )
         if discovery_frame.entities.get("product_names") and not discovery_frame.entities.get("attribute_metrics"):
             context_frame = build_discovery_intent_frame(
                 context_text,
-                known_slots={"tire_size": tire_size} if tire_size else {},
+                known_slots=known_slots,
             )
             attribute_metrics = tuple(
                 metric
@@ -9373,7 +9430,7 @@ def _build_discovery_policy_context(
         elif discovery_frame.intent == "product_recommendation":
             context_frame = build_discovery_intent_frame(
                 context_text,
-                known_slots={"tire_size": tire_size} if tire_size else {},
+                known_slots=known_slots,
             )
             if context_frame.intent == "product_recommendation":
                 merged_entities = dict(discovery_frame.entities)
@@ -9406,6 +9463,14 @@ def _build_discovery_policy_context(
             and "tire_size" not in discovery_tool_patch
         ):
             discovery_tool_patch["tire_size"] = tire_size
+        if (
+            vehicle_type
+            and discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
+            and discovery_frame.intent == "product_recommendation"
+            and "vehicle_type" not in discovery_tool_patch
+            and not discovery_frame.entities.get("vehicle_category")
+        ):
+            discovery_tool_patch["vehicle_type"] = vehicle_type
         logger.debug(
             "[POLICY][discovery] frame=%s tool_plan=%s response_decision=%s",
             discovery_frame.to_dict(),
@@ -13093,6 +13158,7 @@ class TStationChatServiceV2:
             context_text="\n".join(reversed(recent_user_texts)) or last_user_text,
             tire_size=merged_slots.tire_size,
             goods_no=merged_slots.goods_no,
+            vehicle_type=merged_slots.vehicle_type,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)
@@ -15475,6 +15541,7 @@ class TStationChatServiceV2:
             selected_meta = selected.get("meta") or {}
             car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
             car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+            vehicle_type = str(vehicle_slot_values.get("vehicle_type") or "").strip()
 
             def _active_purchase_slots() -> Any | None:
                 slots = pending_slots or initial_slots
@@ -15783,6 +15850,8 @@ class TStationChatServiceV2:
                 tool_input["car_lnc_cd"] = car_lnc_cd
             elif tire_size:
                 tool_input["tire_size"] = tire_size
+            if vehicle_type:
+                tool_input["vehicle_type"] = vehicle_type
 
             emitted_events = [{
                 "type": "status",
