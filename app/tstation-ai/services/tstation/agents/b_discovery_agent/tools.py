@@ -1370,7 +1370,9 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     """Compare discount prices across multiple products.
 
     Use when user asks to compare prices, "가장 저렴한/싼" product, or "비교".
-    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price, cheapest_goods_no.
+    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price,
+    cheapest_final_prc, cheapest_total_discount, cheapest_applied_coupons, cheapest_goods_no.
+    Use cheapest_final_prc as the user-facing final benefit price when present.
 
     Args:
         goods_no_list (list[str]): 2+ product numbers to compare.
