@@ -5113,6 +5113,9 @@ def test_recommendation_response_uses_current_turn_count_not_previous_over_cap_c
 
 def test_product_store_purchase_without_size_maps_to_size_selection_product_card() -> None:
     token = current_user_text.set("판교점에서 dynapro hpx 2개 구매하고싶어")
+    decision_token = current_discovery_response_decision.set(
+        decide_discovery_response(build_discovery_intent_frame("판교점에서 dynapro hpx 2개 구매하고싶어"))
+    )
     try:
         event = try_build_template(
             [{
@@ -5142,9 +5145,13 @@ def test_product_store_purchase_without_size_maps_to_size_selection_product_card
                 },
                 "args": {"keyword": "Dynapro HPX", "brand_cd": "HK"},
             }],
-            "상품을 찾았어요.",
+            (
+                "차량 규격이 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n"
+                "다이나프로 HPX\nSUV용 사계절 컴포트 타이어입니다."
+            ),
         )
     finally:
+        current_discovery_response_decision.reset(decision_token)
         current_user_text.reset(token)
 
     assert event is not None

@@ -2177,6 +2177,8 @@ def _safe_service_unsized_policy_response(tool_data_list: list[dict]) -> str:
 
 def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Honor Discovery policy decisions that forbid card-first rendering."""
+    if _is_product_transaction_missing_size_turn():
+        return None
     decision = current_discovery_response_decision.get()
     if decision is None or decision.template != TemplateName.QUICK_REPLY:
         return None
