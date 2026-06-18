@@ -15727,6 +15727,47 @@ class TStationChatServiceV2:
                         if tool_name == "search_product_tool":
                             search_keyword = str(input_data.get("keyword") or "").strip()
                             search_product_tool_results.append((search_keyword, parsed_for_verifier))
+                    turn_tool_slots: dict[str, Any] = {}
+                    if tool_name == "search_product_tool" and isinstance(parsed_for_verifier, dict):
+                        data = parsed_for_verifier.get("data")
+                        items = data.get("items") if isinstance(data, dict) else None
+                        if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
+                            item = items[0]
+                            if item.get("goods_no"):
+                                turn_tool_slots["goods_no"] = item.get("goods_no")
+                            tire_size = item.get("tire_size") or item.get("tire_size_1") or item.get("tireSize")
+                            if tire_size:
+                                turn_tool_slots["tire_size"] = tire_size
+                    elif tool_name == "transaction_store_preview_tool" and isinstance(input_data, dict):
+                        if input_data.get("goods_no"):
+                            turn_tool_slots["goods_no"] = input_data.get("goods_no")
+                        tire_size = input_data.get("tire_size")
+                        if tire_size:
+                            turn_tool_slots["tire_size"] = tire_size
+                        quantity = input_data.get("ord_qty") or input_data.get("quantity")
+                        if quantity:
+                            try:
+                                turn_tool_slots["ord_qty"] = int(quantity)
+                            except (TypeError, ValueError):
+                                pass
+                        region = input_data.get("region_code") or input_data.get("region")
+                        if region:
+                            turn_tool_slots["region"] = region
+                        requested_cal_day = input_data.get("requested_cal_day")
+                        if requested_cal_day:
+                            turn_tool_slots["requested_cal_day"] = str(requested_cal_day)
+                            turn_tool_slots["availability_intent"] = "today_install"
+                    if turn_tool_slots:
+                        base_slots = pending_slots
+                        if base_slots is None:
+                            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        updated_slots = base_slots.apply_runtime_values(
+                            turn_tool_slots,
+                            source=f"outer_tool:{tool_name}",
+                        )
+                        if updated_slots.model_dump() != base_slots.model_dump():
+                            pending_slots = updated_slots
+                            logger.info("[SLOTS] staged outer tool slots from %s: %s", tool_name, turn_tool_slots)
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
