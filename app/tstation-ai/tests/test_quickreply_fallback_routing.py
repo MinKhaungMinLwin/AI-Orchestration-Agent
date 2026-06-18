@@ -1715,7 +1715,7 @@ def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
     assert "장착 수량을 알려주세요" in response
     assert "상품 검색하겠습니다" not in response
     assert "프리미엄이 제공하는" not in response
-    assert _labels(event["data"]["quickReplies"]) == ["2개", "4개", "다른 매장 찾기"]
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
 
 
 def test_store_availability_continuation_recovers_recent_single_store_name() -> None:

@@ -8115,9 +8115,10 @@ def _build_store_availability_quantity_prompt_event(
                 f"{store_label} {day_label} 장착 가능 여부를 확인하려면 장착 수량을 알려주세요."
             ),
             "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
                 {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "3개", "domain": "TRANSACTION"},
                 {"label": "4개", "domain": "TRANSACTION"},
-                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
             ],
             "predictedDomains": ["TRANSACTION"],
             "metadata": {
