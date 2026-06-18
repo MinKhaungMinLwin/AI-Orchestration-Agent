@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from services.tstation.agents.base_agent import (
     BaseAgent,
     _AssistantResponseStreamer,
+    _build_owner_vehicle_lookup_event,
     _build_product_warranty_quickreply_event,
     _is_explicit_vehicle_list_request,
     _normalize_qty_quick_replies,
@@ -74,6 +75,59 @@ def test_product_warranty_tool_result_builds_support_quickreply() -> None:
     assert "사이즈가 아직 확인되지 않아" not in data["assistantResponse"]
     assert [chip["label"] for chip in data["quickReplies"]][:1] == ["나의 워런티 확인"]
     assert data["predictedDomains"] == ["SUPPORT"]
+
+
+def test_owner_lookup_vehicle_event_includes_car_maker_when_present() -> None:
+    event = _build_owner_vehicle_lookup_event(
+        "get_user_vehicles_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "car_no": "56모2162",
+                        "car_lnc_cd": "W049847",
+                        "car_maker": "BMW",
+                        "car_nm": "3-series(F30) 320d A/T",
+                        "car_model_det": "3-series(F30)",
+                        "tire_size_fr": "225/50R17",
+                        "tire_size_re": "225/50R17",
+                    }
+                ]
+            },
+        },
+        [{"role": "user", "content": "56모2162 심지영"}],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "BMW 3-series(F30) 320d A/T 차량의 타이어 사이즈는 225/50R17입니다." in (
+        event["data"]["assistantResponse"]
+    )
+    assert event["data"]["metadata"]["carMaker"] == "BMW"
+
+
+def test_owner_lookup_vehicle_event_does_not_intercept_recommendation_request() -> None:
+    event = _build_owner_vehicle_lookup_event(
+        "get_user_vehicles_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "car_no": "56모2162",
+                        "car_lnc_cd": "W049847",
+                        "car_maker": "BMW",
+                        "car_nm": "3-series(F30) 320d A/T",
+                        "tire_size_fr": "225/50R17",
+                    }
+                ]
+            },
+        },
+        [{"role": "user", "content": "56모2162 심지영 타이어 추천"}],
+    )
+
+    assert event is None
 
 
 def test_fast_path_allows_transaction_preview_terminal_templates():

@@ -343,6 +343,65 @@ def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: 
     return args
 
 
+def _owner_lookup_vehicle_display_name(row: dict) -> str:
+    car_maker = str(row.get("car_maker") or "").strip()
+    car_name = str(row.get("car_nm") or row.get("ver_opt_choc") or row.get("car_model_det") or "").strip()
+    if car_maker and car_name and _normalize_vehicle_key(car_maker) not in _normalize_vehicle_key(car_name):
+        return f"{car_maker} {car_name}"
+    return car_name or car_maker or "조회된 차량"
+
+
+def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages: list[dict]) -> dict | None:
+    if tool_name != "get_user_vehicles_tool":
+        return None
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return None
+    user_text = _latest_user_text(messages)
+    if not _CAR_NO_OWNER_RE.search(user_text or ""):
+        return None
+    if _REGISTERED_VEHICLE_RECOMMEND_RE.search(user_text or ""):
+        return None
+    rows = _extract_tool_rows(tool_result)
+    if len(rows) != 1:
+        return None
+
+    row = rows[0]
+    vehicle_name = _owner_lookup_vehicle_display_name(row)
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    if front_size and rear_size and front_size != rear_size:
+        size_text = f"전륜 {front_size}, 후륜 {rear_size}"
+    else:
+        size_text = front_size or rear_size
+    if size_text:
+        assistant_response = f"조회되었습니다. {vehicle_name} 차량의 타이어 사이즈는 {size_text}입니다."
+    else:
+        assistant_response = f"조회되었습니다. {vehicle_name} 차량 정보는 확인했지만 타이어 사이즈는 확인되지 않았어요."
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_owner_vehicle_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "다시 검색", "domain": "DISCOVERY"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "metadata": {
+                "carNo": row.get("car_no"),
+                "carLncCd": row.get("car_lnc_cd"),
+                "carMaker": row.get("car_maker"),
+                "carName": row.get("car_nm"),
+                "carModelDet": row.get("car_model_det"),
+                "tireSize": front_size,
+                "tireSizeRe": rear_size,
+            },
+        },
+    }
+
+
 def _vehicle_aliases(row: dict) -> set[str]:
     aliases: set[str] = set()
     for key in ("car_nm", "car_model_det", "car_engine", "ver_opt_choc", "car_maker"):
@@ -1189,6 +1248,20 @@ class BaseAgent(ABC):
                                     ):
                                         yield event
                                     return
+                            owner_lookup_event = _build_owner_vehicle_lookup_event(
+                                message.name,
+                                tool_result,
+                                messages,
+                            )
+                            if owner_lookup_event is not None:
+                                logger.info("[%s] Owner vehicle lookup resolved via deterministic quickReply", self.name)
+                                for event in self._code_template_events(
+                                    owner_lookup_event,
+                                    response_streamer,
+                                    answering_emitted,
+                                ):
+                                    yield event
+                                return
                             owner_lookup_args = _vehicle_owner_lookup_args_after_registered_mismatch(
                                 message.name,
                                 tool_result,
