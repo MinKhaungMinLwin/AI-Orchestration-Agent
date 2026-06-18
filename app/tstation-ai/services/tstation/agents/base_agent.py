@@ -155,6 +155,17 @@ def _latest_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _messages_include_resolved_product_tool_fact(messages: list[dict]) -> bool:
+    """True when a prior Discovery handoff already supplied a concrete goods_no."""
+    for msg in reversed(messages[-8:]):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content") or "")
+        if "search_product_tool" in content and re.search(r"\bG\d{9,}\b", content):
+            return True
+    return False
+
+
 def _recent_context_text(messages: list[dict], *, limit: int = 8) -> str:
     lines: list[str] = []
     for msg in messages[-limit:]:
@@ -1045,7 +1056,7 @@ class BaseAgent(ABC):
                                             ):
                                                 yield event
                                             return
-                                    blocked_event = self._transaction_policy_blocked_event(tool_name)
+                                    blocked_event = self._transaction_policy_blocked_event(tool_name, messages)
                                     if blocked_event is not None:
                                         logger.info(
                                             "[%s] Transaction policy blocked tool=%s required_slots=%s",
@@ -1797,7 +1808,7 @@ class BaseAgent(ABC):
         return template in terminal_templates_by_tool.get(tool_name, set())
 
     @staticmethod
-    def _transaction_policy_blocked_event(tool_name: str) -> dict | None:
+    def _transaction_policy_blocked_event(tool_name: str, messages: list[dict] | None = None) -> dict | None:
         """Return a deterministic clarification when Transaction lacks required slots."""
         transaction_tools_requiring_slots = {
             "search_stores_tool",
@@ -1825,6 +1836,8 @@ class BaseAgent(ABC):
             or decision.template != TemplateName.QUICK_REPLY
             or not decision.required_slots
         ):
+            return None
+        if "product" in decision.required_slots and _messages_include_resolved_product_tool_fact(messages or []):
             return None
 
         slot_labels = {

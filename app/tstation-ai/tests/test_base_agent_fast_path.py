@@ -163,6 +163,34 @@ def test_transaction_policy_blocks_store_list_tool_when_required_slot_missing():
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["1개", "2개", "3개", "4개"]
 
 
+def test_transaction_policy_does_not_block_when_previous_tool_facts_have_goods_no():
+    token = current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("product",),
+            forbidden_behaviors=("empty_location_card",),
+            assistant_guidance="상품을 먼저 확인한다.",
+        )
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": (
+                '[Previous agent tool facts]\n'
+                '[{"tool":"search_product_tool","data":{"status":"success","data":{"items":'
+                '[{"goods_no":"G000000309783","goods_nm":"벤투스 S2 AS"}]}}}]'
+            ),
+        }
+    ]
+    try:
+        event = BaseAgent._transaction_policy_blocked_event("get_store_list_tool", messages)
+    finally:
+        current_transaction_response_decision.reset(token)
+
+    assert event is None
+
+
 def test_qty_quickreply_normalizer_preserves_staggered_max_two_chips():
     payload = {
         "type": "data",
