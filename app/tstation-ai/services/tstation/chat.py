@@ -2640,7 +2640,7 @@ _TIRE_PRODUCT_CONTEXT_RE = re.compile(
     r"goods_no|G\d{12}|"
     r"\d{3}\s*/\s*\d{2}\s*R\s*\d{2}|"
     r"벤투스|키너지|아이온|마일리지|드라이브웨이|다이나프로|라우펜|"
-    r"ventus|kinergy|ion\b|mileage",
+    r"ventus|kinergy|dynapro|ion\b|mileage",
     re.IGNORECASE,
 )
 _SHOP_SEQ_RE = re.compile(r'"shop[_\s]*seq"\s*:\s*"([A-Z]?\d{4,})"', re.IGNORECASE)
@@ -5502,6 +5502,10 @@ _PLAIN_STORE_INFO_RE = re.compile(
     r"T\s*바로\s*배송|T바로배송|온라인\s*장착|수입차|전경|사진|외관|내부|모습|이미지",
     re.IGNORECASE,
 )
+_PRODUCT_STORE_TRANSACTION_ACTION_RE = re.compile(
+    r"구매|주문|결제|살래|살게|사고\s*싶|사려고|예약|장착|재고|오늘\s*서비스|오늘서비스|당일\s*서비스",
+    re.IGNORECASE,
+)
 _STORE_RESERVATION_ACTION_RE = re.compile(
     r"예약\s*(?:가능|시간|일정|변경|바꾸|바꿔|취소|해줘|잡아)|"
     r"방문\s*(?:가능|시간|일정|변경)|"
@@ -5514,6 +5518,12 @@ _STORE_RESERVATION_ACTION_RE = re.compile(
 def _extract_plain_store_info_store_name(user_text: str | None) -> str | None:
     text = user_text or ""
     if not _PLAIN_STORE_INFO_RE.search(text):
+        return None
+    if (
+        _TIRE_PRODUCT_CONTEXT_RE.search(text)
+        and _PRODUCT_STORE_TRANSACTION_ACTION_RE.search(text)
+        and not re.search(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", text, re.IGNORECASE)
+    ):
         return None
     if _STORE_RESERVATION_ACTION_RE.search(text):
         return None

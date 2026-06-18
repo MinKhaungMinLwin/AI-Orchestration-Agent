@@ -77,18 +77,6 @@ def deterministic_schedule_gate_decision(
     if not text:
         return None
 
-    if _ARRIVAL_OR_STATUS_VISIT_RE.search(text):
-        return ScheduleToolGateDecision(
-            allow=False,
-            action="check_order",
-            reason="Arrival or store-visit status question should not render booking slots.",
-        )
-    if _RESERVATION_STATUS_RE.search(text):
-        return ScheduleToolGateDecision(
-            allow=False,
-            action="check_order",
-            reason="Reservation/status confirmation question should use existing order or reservation context.",
-        )
     if (
         isinstance(tool_args, dict)
         and tool_args.get("shop_id")
@@ -105,6 +93,18 @@ def deterministic_schedule_gate_decision(
             allow=True,
             action="allow",
             reason="User explicitly asks for available reservation or install time slots.",
+        )
+    if _ARRIVAL_OR_STATUS_VISIT_RE.search(text):
+        return ScheduleToolGateDecision(
+            allow=False,
+            action="check_order",
+            reason="Arrival or store-visit status question should not render booking slots.",
+        )
+    if _RESERVATION_STATUS_RE.search(text):
+        return ScheduleToolGateDecision(
+            allow=False,
+            action="check_order",
+            reason="Reservation/status confirmation question should use existing order or reservation context.",
         )
     return None
 

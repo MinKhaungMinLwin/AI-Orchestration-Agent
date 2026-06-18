@@ -206,6 +206,12 @@ _PRODUCT_TRANSACTION_MISSING_SIZE_RE = re.compile(
     r"청량리|인천|하남|청주|제주|서귀포))",
     re.IGNORECASE,
 )
+_PRODUCT_DESCRIPTION_ONLY_RE = re.compile(r"설명|뭐야|뭔지|특징|장점|어때|상세", re.IGNORECASE)
+_PRODUCT_TRANSACTION_ACTION_RE = re.compile(
+    r"구매|주문|결제|살래|살게|사고\s*싶|사려고|예약|장착|재고|오늘\s*서비스|오늘서비스|당일\s*서비스|"
+    r"가격|할인가|쿠폰|장바구니",
+    re.IGNORECASE,
+)
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)
 _DEMOGRAPHIC_AGE_GENDER_RE = re.compile(
     r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
@@ -235,7 +241,14 @@ def _is_goal_booking_followup() -> bool:
     """Read the request-scoped goal_type and decide if isBookingFlow should be
     forced True. Returns False when no goal is set (preserves legacy behavior).
     """
+    if _is_product_description_only_turn():
+        return False
     return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
+
+
+def _is_product_description_only_turn() -> bool:
+    text = _current_turn_user_text()
+    return bool(text and _PRODUCT_DESCRIPTION_ONLY_RE.search(text) and not _PRODUCT_TRANSACTION_ACTION_RE.search(text))
 
 
 def _is_product_transaction_missing_size_turn() -> bool:
@@ -2293,10 +2306,16 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 },
                 "assistant_response_source": "code_mapper",
             }
-    if current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
-        "store_with_stock",
-        "place_order",
-        "price_inquiry",
+    if (
+        not _is_product_description_only_turn()
+        and (
+            current_pending_intent.get() in ("stock", "order", "reservation")
+            or current_goal_type.get() in (
+                "store_with_stock",
+                "place_order",
+                "price_inquiry",
+            )
+        )
     ):
         return None
     if _is_product_transaction_missing_size_turn():

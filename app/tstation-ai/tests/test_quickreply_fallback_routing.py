@@ -178,6 +178,8 @@ from services.tstation.policies.store_service_gate import decide_store_service_g
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.template_mapper import (
     current_discovery_response_decision,
+    current_goal_type,
+    current_pending_intent,
     current_runflat_comparison,
     current_user_text,
     try_build_template,
@@ -3615,6 +3617,7 @@ def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
 def test_plain_store_info_query_extracts_store_name_without_reservation_action() -> None:
     assert _extract_plain_store_info_store_name("고양시청점 정보") == "고양시청점"
     assert _extract_plain_store_info_store_name("티스테이션 고양시청점 전화번호 알려줘") == "고양시청점"
+    assert _extract_plain_store_info_store_name("판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어") is None
     assert _extract_plain_store_info_store_name("고양시청점 예약시간 내일 18시로 변경해줘") is None
     assert _extract_plain_store_info_store_name("고양시청점 18시 예약 가능해?") is None
 
@@ -5164,6 +5167,54 @@ def test_product_store_purchase_without_size_maps_to_size_selection_product_card
     assert data["metadata"][0]["requestedFlow"] == "purchase_or_install"
     assert data["metadata"][0]["ordQty"] == 2
     assert data["metadata"][0]["shopName"] == "판교점"
+
+
+def test_product_description_turn_ignores_stale_booking_goal_for_unsized_summary() -> None:
+    text_token = current_user_text.set("dynapro hpx 설명해줘")
+    goal_token = current_goal_type.set("place_order")
+    pending_token = current_pending_intent.set("order")
+    decision_token = current_discovery_response_decision.set(
+        decide_discovery_response(build_discovery_intent_frame("dynapro hpx 설명해줘"))
+    )
+    try:
+        event = try_build_template(
+            [{
+                "tool": "search_product_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000309001",
+                                "goods_nm": "다이나프로 HPX",
+                                "tire_size_1": "255/45R20",
+                                "ptrn_d_nm": "SUV용 사계절 컴포트 타이어",
+                                "brand_nm": "HANKOOK",
+                            },
+                            {
+                                "goods_no": "G000000309002",
+                                "goods_nm": "다이나프로 HPX",
+                                "tire_size_1": "255/55R18",
+                                "ptrn_d_nm": "SUV용 사계절 컴포트 타이어",
+                                "brand_nm": "HANKOOK",
+                            },
+                        ],
+                    },
+                },
+                "args": {"keyword": "Dynapro HPX", "brand_cd": "HK"},
+            }],
+            "다이나프로 HPX 상품 설명입니다.",
+        )
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+        current_pending_intent.reset(pending_token)
+        current_goal_type.reset(goal_token)
+        current_user_text.reset(text_token)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "다이나프로 HPX" in event["data"]["assistantResponse"]
+    assert "구매를 진행하려면" not in event["data"]["assistantResponse"]
 
 
 def test_followup_size_input_preserves_prior_multi_brand_user_request_as_variants() -> None:
