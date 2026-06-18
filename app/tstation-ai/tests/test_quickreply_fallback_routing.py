@@ -5083,6 +5083,18 @@ def test_recommendation_response_mentions_shortfall_for_requested_limit_under_ca
     )
 
 
+def test_recommendation_response_does_not_call_under_cap_request_a_max_limit() -> None:
+    event = try_build_template(
+        [_recommendation_template_entry(season_nm="사계절", limit=5, requested_limit=5, effective_limit=3, item_count=3)],
+        "추천 상품을 확인했어요.",
+    )
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert response == "요청하신 5개 중 조건에 맞는 상품은 현재 3개만 확인돼요. 원하시는 상품을 선택해 주세요."
+    assert "추천은 최대 5개" not in response
+
+
 def test_followup_size_input_preserves_prior_multi_brand_user_request_as_variants() -> None:
     messages = [
         {"role": "user", "content": "미쉐린, 콘티넨탈, 브리지스톤 상품 1개씩 BMW 3시리즈에 맞는 타이어 추천해줘"},

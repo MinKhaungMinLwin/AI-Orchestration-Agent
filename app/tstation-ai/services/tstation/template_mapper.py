@@ -2041,10 +2041,11 @@ def _recommendation_limit_notice(
 ) -> str:
     if requested_limit is None or effective_limit is None:
         return ""
-    if requested_limit > effective_limit:
-        if item_count >= effective_limit:
-            return f"추천은 최대 {effective_limit}개까지만 가능해요. 조건에 맞는 상품 {item_count}개를 보여드릴게요."
-        return f"추천은 최대 {effective_limit}개까지만 가능해요. 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
+    cap_limit = 10
+    if requested_limit > cap_limit:
+        if item_count >= cap_limit:
+            return f"추천은 최대 {cap_limit}개까지만 가능해요. 조건에 맞는 상품 {item_count}개를 보여드릴게요."
+        return f"추천은 최대 {cap_limit}개까지만 가능해요. 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
     if item_count < requested_limit:
         return f"요청하신 {requested_limit}개 중 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
     return ""
