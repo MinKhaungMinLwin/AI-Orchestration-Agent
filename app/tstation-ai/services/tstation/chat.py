@@ -49,6 +49,7 @@ from services.tstation.policies.discovery_intent_policy import (
     build_discovery_intent_frame,
     is_default_benefit_request,
     is_default_tire_shopping_request,
+    is_external_price_comparison_request,
     normalize_tire_size,
     plan_discovery_tools,
 )
@@ -7288,10 +7289,88 @@ def _build_product_comparison_event_from_search_results(
     return _build_product_comparison_event(user_text, product_rows)
 
 
+def _first_product_row_from_search_result(tool_result: dict) -> dict | None:
+    data = _unwrap_tool_data(tool_result)
+    rows = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return None
+    return next((row for row in rows if isinstance(row, dict)), None)
+
+
+def _build_external_price_comparison_event_from_search_results(
+    user_text: str,
+    search_results: list[tuple[str, dict]],
+) -> dict | None:
+    frame = build_discovery_intent_frame(user_text)
+    if frame.sub_intent != "external_price_comparison_request":
+        return None
+
+    product_names = tuple(frame.entities.get("product_names") or ())
+    row: dict | None = None
+    if product_names:
+        product_name = product_names[0]
+        preferred_keyword = _preferred_product_search_keyword(product_name)
+        for keyword, result in search_results:
+            row = _pick_product_row_from_search_result(
+                result,
+                product_name,
+                preferred_keyword,
+                keyword,
+                allow_first_row_fallback=True,
+            )
+            if row is not None:
+                break
+    else:
+        for _keyword, result in search_results:
+            row = _first_product_row_from_search_result(result)
+            if row is not None:
+                break
+
+    lines = [
+        "다나와/구글/네이버 같은 외부 사이트의 실시간 최저가를 제가 직접 수집하거나 비교할 수는 없어요.",
+        "대신 T'Station 내부 판매가와 회원 쿠폰 기준 최저 혜택가는 확인해 드릴 수 있습니다.",
+    ]
+    if row is not None:
+        product_label = str(row.get("goods_nm") or row.get("title") or "").strip()
+        tire_size = str(row.get("tire_size_1") or row.get("tire_size_2") or frame.entities.get("tire_size") or "").strip()
+        final_price = _final_price_from_row(row)
+        sale_price = _to_int(row.get("sale_prc"))
+        price_bits: list[str] = []
+        if sale_price is not None:
+            price_bits.append(f"정가 {sale_price:,}원")
+        if final_price is not None:
+            price_bits.append(f"내부 최저 혜택가 {final_price:,}원")
+        target = product_label or (product_names[0] if product_names else "요청하신 상품")
+        if tire_size:
+            target = f"{target} {tire_size}"
+        if price_bits:
+            lines.extend(["", f"T'Station 기준으로는 {target}: {', '.join(price_bits)}까지 확인돼요."])
+        else:
+            lines.extend(["", f"T'Station 기준 상품은 {target}까지 확인됐고, 정확한 혜택가는 가격 확인 단계에서 안내드릴게요."])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_external_price_comparison_policy",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "T'Station 가격 확인", "domain": "TRANSACTION"},
+                {"label": "회원 쿠폰 적용가 보기", "domain": "TRANSACTION"},
+                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+        },
+    }
+
+
 def _build_product_attribute_event_from_search_results(
     user_text: str,
     search_results: list[tuple[str, dict]],
 ) -> dict | None:
+    if is_external_price_comparison_request(user_text):
+        return None
     if _is_ev_suitability_turn(user_text):
         return None
     if is_warranty_claim_signal(user_text):
@@ -7350,6 +7429,8 @@ def _is_product_comparison_query(user_text: str) -> bool:
 
 
 def _is_product_attribute_lookup_query(user_text: str) -> bool:
+    if is_external_price_comparison_request(user_text):
+        return False
     if _is_ev_suitability_turn(user_text):
         return False
     if is_warranty_claim_signal(user_text):
@@ -12993,6 +13074,8 @@ class TStationChatServiceV2:
             return emitted_events, _build_product_comparison_event(comparison_query, product_rows)
 
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
+            if is_external_price_comparison_request(user_query):
+                return None
             if is_warranty_claim_signal(user_query):
                 return None
             frame = build_discovery_intent_frame(user_query)
@@ -14446,12 +14529,35 @@ class TStationChatServiceV2:
                         next_predicted_domain_values.append(value)
                 if (
                     str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.DISCOVERY.value
-                    and event.get("template") in {"product", "quickReply"}
+                    and event.get("template") in {"product", "quickReply", "listCar"}
                 ):
-                    comparison_query = _comparison_query_with_recent_context(user_query, messages)
-                    deterministic_compare_event = _build_product_comparison_event_from_search_results(
-                        comparison_query,
+                    deterministic_external_price_event = _build_external_price_comparison_event_from_search_results(
+                        user_query,
                         search_product_tool_results,
+                    )
+                    if deterministic_external_price_event is not None:
+                        logger.info("[EXTERNAL_PRICE] replacing discovery event with external price policy summary")
+                        event = deterministic_external_price_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_external_price_comparison_policy"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
+                    comparison_query = _comparison_query_with_recent_context(user_query, messages)
+                    deterministic_compare_event = (
+                        None
+                        if deterministic_external_price_event is not None
+                        else _build_product_comparison_event_from_search_results(
+                            comparison_query,
+                            search_product_tool_results,
+                        )
                     )
                     if (
                         _is_product_comparison_query(comparison_query)
@@ -14481,9 +14587,13 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
-                    apply_product_attribute_resolver = _should_apply_product_attribute_resolver(
-                        user_query,
-                        called_tool_names,
+                    apply_product_attribute_resolver = (
+                        False
+                        if deterministic_external_price_event is not None
+                        else _should_apply_product_attribute_resolver(
+                            user_query,
+                            called_tool_names,
+                        )
                     )
                     deterministic_attribute_event = (
                         _build_product_attribute_event_from_search_results(

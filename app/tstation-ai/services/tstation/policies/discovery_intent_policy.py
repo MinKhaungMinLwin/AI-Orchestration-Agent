@@ -16,6 +16,18 @@ _ALL_WEATHER_RE = re.compile(r"올웨더|all\s*weather", re.IGNORECASE)
 _ALL_SEASON_RE = re.compile(r"사계절|올시즌|all\s*season", re.IGNORECASE)
 _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re.IGNORECASE)
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
+_EXTERNAL_PRICE_COMPARE_ANCHOR_RE = re.compile(
+    r"다나와|구글|google|네이버(?:\s*쇼핑)?|naver(?:\s*shopping)?|쇼핑\s*검색|쇼핑몰|온라인\s*몰|온라인몰|"
+    r"외부\s*(?:몰|사이트|채널)|오픈\s*마켓|오픈마켓|가격\s*비교\s*(?:사이트|앱|플랫폼)?|가격비교|"
+    r"포털|검색\s*엔진|검색엔진|쿠팡|coupang|11\s*번가|십일번가|옥션|auction|g\s*마켓|지마켓|gmarket|"
+    r"롯데\s*온|롯데온|ssg|쓱|카카오\s*쇼핑|카카오쇼핑|위메프|티몬",
+    re.IGNORECASE,
+)
+_EXTERNAL_PRICE_COMPARE_REQUEST_RE = re.compile(
+    r"최저\s*가|최저\s*가격|가격\s*비교|비교\s*가격|어디(?:가|서)?\s*(?:제일|가장)?\s*(?:싸|저렴)|"
+    r"(?:싼|저렴한)\s*(?:곳|데|몰|사이트|채널)|외부\s*(?:가격|최저가)|검색(?:해|해서)?\s*(?:줘|봐|찾)",
+    re.IGNORECASE,
+)
 _VALUE_RECOMMENDATION_RE = re.compile(r"가성비|합리적|가격\s*대비|value", re.IGNORECASE)
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
@@ -292,6 +304,32 @@ def is_quantity_benefit_comparison_request(text: str) -> bool:
     )
 
 
+def is_external_price_comparison_request(
+    text: str,
+    *,
+    known_slots: dict[str, Any] | None = None,
+) -> bool:
+    """External-mall price lookup intent anchored by a marketplace/search site mention.
+
+    The external anchor is required so ordinary "최저가 타이어 추천" and
+    "할인가 얼마야" flows remain internal T'Station price/search requests.
+    """
+    text = text or ""
+    slots = known_slots or {}
+    has_product_or_size = bool(
+        normalize_tire_size(text)
+        or extract_product_names(text)
+        or slots.get("tire_size")
+        or slots.get("product_name")
+        or slots.get("goods_no")
+    )
+    return (
+        has_product_or_size
+        and bool(_EXTERNAL_PRICE_COMPARE_ANCHOR_RE.search(text))
+        and bool(_EXTERNAL_PRICE_COMPARE_REQUEST_RE.search(text))
+    )
+
+
 def build_discovery_intent_frame(
     last_user_text: str,
     *,
@@ -358,6 +396,8 @@ def build_discovery_intent_frame(
         entities["value_focus"] = True
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
+    if is_external_price_comparison_request(text, known_slots=slots):
+        entities["external_price_comparison"] = True
     best_seller_period = best_seller_period_from_text(text)
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
@@ -372,7 +412,10 @@ def build_discovery_intent_frame(
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if entities.get("default_benefit"):
+    if entities.get("external_price_comparison"):
+        intent = "product_search"
+        sub_intent = "external_price_comparison_request"
+    elif entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
     elif entities.get("deal_list_only"):
@@ -485,6 +528,26 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "external_price_comparison_request":
+        product_names = entities.get("product_names") or ()
+        args = {"limit": 5, "sort_by": "price_asc"}
+        if product_names:
+            args["keyword"] = product_names[0]
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=(
+                "get_product_description_tool",
+                "get_products_recommendations_tool",
+                "product_attribute_lookup",
+                "external_price_scraping",
+            ),
+        )
     if frame.sub_intent == "benefit_event_deal_list":
         return ToolPlan(
             allowed_tools=("get_events_tool", "get_deals_tool"),

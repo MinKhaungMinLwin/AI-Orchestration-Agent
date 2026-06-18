@@ -45,6 +45,7 @@ from services.tstation.chat import (
     _build_store_holiday_period_event,
     _build_product_attribute_event_from_search_results,
     _build_bare_product_search_tool_input,
+    _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
@@ -1364,6 +1365,74 @@ def test_product_attribute_load_question_replaces_accidental_listcar() -> None:
 
     assert _is_product_attribute_lookup_query(text) is True
     assert _should_replace_listcar_with_product_attribute_lookup(event, text) is True
+
+
+def test_external_price_comparison_does_not_enter_product_attribute_resolver() -> None:
+    text = "벤투스 air S 2354518 네이버 쇼핑 최저가"
+
+    assert _is_product_attribute_lookup_query(text) is False
+    assert _should_apply_product_attribute_resolver(text, set()) is False
+    assert (
+        _build_product_attribute_event_from_search_results(
+            text,
+            [
+                (
+                    "벤투스 에어S",
+                    {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {
+                                    "goods_nm": "벤투스 에어S",
+                                    "tire_size_1": "235/45R18",
+                                    "sale_prc": 160000,
+                                }
+                            ]
+                        },
+                    },
+                )
+            ],
+        )
+        is None
+    )
+
+
+def test_external_price_comparison_event_uses_internal_price_policy_copy_and_ctas() -> None:
+    event = _build_external_price_comparison_event_from_search_results(
+        "벤투스 air S 2354518 다나와에서 최저가 찾아줘",
+        [
+            (
+                "벤투스 에어S",
+                {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_nm": "벤투스 에어S",
+                                "tire_size_1": "235/45R18",
+                                "sale_prc": 160000,
+                                "extra_fvr_sale_prc": 140000,
+                                "cheapest_final_prc": 128000,
+                            }
+                        ]
+                    },
+                },
+            )
+        ],
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "외부 사이트의 실시간 최저가" in assistant
+    assert "직접 수집하거나 비교할 수는 없어요" in assistant
+    assert "T'Station 기준" in assistant
+    assert "내부 최저 혜택가 128,000원" in assistant
+    assert "상품이에요" not in assistant
+    assert _labels(event["data"]["quickReplies"]) == [
+        "T'Station 가격 확인",
+        "회원 쿠폰 적용가 보기",
+        "다른 사이즈 확인",
+    ]
 
 
 def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
