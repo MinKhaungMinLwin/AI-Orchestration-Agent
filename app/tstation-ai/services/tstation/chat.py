@@ -9834,6 +9834,50 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=_regional_canned_msg)
 
+        if is_external_price_comparison_request(last_user_msg):
+            logger.info(
+                "[CHAT_V2] External price comparison fast-path intercept: %s",
+                last_user_msg[:80],
+            )
+            frame = build_discovery_intent_frame(last_user_msg)
+            tool_plan = plan_discovery_tools(frame)
+            tool_input = dict(tool_plan.tool_args_patch or {})
+            event: dict | None = None
+            try:
+                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+
+                raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                search_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+                if not isinstance(search_result, dict):
+                    search_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": "Invalid tool response",
+                        "data": {},
+                    }
+                keyword = str(tool_input.get("keyword") or "").strip()
+                event = _build_external_price_comparison_event_from_search_results(
+                    last_user_msg,
+                    [(keyword, search_result)],
+                )
+            except Exception as exc:
+                logger.exception("[EXTERNAL_PRICE] search_product_tool fast-path failed: %s", exc)
+            if event is None:
+                event = _build_external_price_comparison_event_from_search_results(last_user_msg, [])
+            if event is not None:
+                assistant_text = str((event.get("data") or {}).get("assistantResponse") or "")
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                return TStationChatResponse(content=assistant_text)
+
         past_event_page_event = _past_event_page_event(last_user_msg)
         if past_event_page_event is not None:
             logger.info(
@@ -10792,8 +10836,6 @@ class TStationChatServiceV2:
             parent_span_id=_parent_span_id,
             input=last_user_text,
         ) as _classify_span:
-            import asyncio
-
             if classify_future is None:
                 classify_future = _speculative_classify_executor.submit(
                     _coordinator.classify_multi_intent,
