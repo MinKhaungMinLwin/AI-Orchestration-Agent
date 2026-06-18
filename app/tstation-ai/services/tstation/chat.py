@@ -1995,8 +1995,11 @@ class StreamingMultiAgentCoordinator:
 
                                 # Stage tool-derived slot changes in memory; persist once after streaming.
                                 if pending_slots is not None and isinstance(parsed, dict):
+                                    slot_parsed = event.get("slot_data")
+                                    if not isinstance(slot_parsed, dict):
+                                        slot_parsed = parsed
                                     pending_slots_dirty = self._apply_tool_derived_slots(
-                                        pending_slots, tool_name, parsed, event.get("input", {})
+                                        pending_slots, tool_name, slot_parsed, event.get("input", {})
                                     ) or pending_slots_dirty
 
                             except (json.JSONDecodeError, TypeError):

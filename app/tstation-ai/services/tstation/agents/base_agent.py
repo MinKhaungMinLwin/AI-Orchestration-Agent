@@ -601,6 +601,32 @@ def _sanitize_tool_output_for_sse(content: Any) -> Any:
         return content
 
 
+def _slot_data_for_tool_event(tool_name: str, tool_result: Any) -> dict | None:
+    """Return minimal raw data needed by the coordinator to update slots.
+
+    The SSE-visible `output` is sanitized. Slot extraction needs fields such as
+    goods_no from the raw tool result, but exposing the full raw payload would be
+    noisy. Keep this payload intentionally small.
+    """
+    if tool_name != "search_product_tool" or not isinstance(tool_result, dict):
+        return None
+    data = tool_result.get("data")
+    if not isinstance(data, dict):
+        return None
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+        return None
+    item = items[0]
+    goods_no = item.get("goods_no")
+    if not goods_no:
+        return None
+    slot_item = {"goods_no": goods_no}
+    tire_size = item.get("tire_size") or item.get("tire_size_1") or item.get("tireSize")
+    if tire_size:
+        slot_item["tire_size_1"] = tire_size
+    return {"status": tool_result.get("status", "success"), "data": {"items": [slot_item]}}
+
+
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 # Matches trailing `quickReplies: [...]` that the model sometimes appends when it fails
 # to emit a proper fenced JSON block (plain-text fallback path in stream()).
@@ -1117,6 +1143,7 @@ class BaseAgent(ABC):
                                 "output": _sanitize_tool_output_for_sse(
                                     tool_result if tool_result is not None else message.content
                                 ),
+                                "slot_data": _slot_data_for_tool_event(message.name, tool_result),
                                 "node": node,
                                 "tool": message.name,
                             }

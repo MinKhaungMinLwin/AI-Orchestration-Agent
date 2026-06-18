@@ -21,6 +21,7 @@ from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
     _is_staggered_registered_vehicle,
     _registered_vehicle_slot_values,
+    _slot_data_for_tool_event,
 )
 from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.chat import (
@@ -1571,6 +1572,41 @@ def test_recent_single_store_context_not_reused_when_current_turn_names_store() 
     assert regex_slots.shop_name == "모란점"
     assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
     assert _is_new_store_name_anchor_for_current_turn(regex_slots.shop_name, None, "F00409") is True
+
+
+def test_search_product_tool_slot_data_preserves_goods_no_for_chained_transaction() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "goods_no": "G000000309783",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "225/45R17",
+                    "sale_prc": 150000,
+                }
+            ]
+        },
+    }
+
+    slot_data = _slot_data_for_tool_event("search_product_tool", tool_result)
+    slots = ConversationSlots(pending_intent="stock", shop_name="모란점", ord_qty=4)
+
+    assert slot_data == {
+        "status": "success",
+        "data": {"items": [{"goods_no": "G000000309783", "tire_size_1": "225/45R17"}]},
+    }
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_product_tool",
+        slot_data,
+        {"keyword": "벤투스 S2 AS", "size": "225/45R17"},
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000309783"
+    assert slots.tire_size == "225/45R17"
+    assert slots.pending_intent == "stock"
 
 
 def test_grade_comparison_search_uses_korean_preferred_keywords() -> None:
