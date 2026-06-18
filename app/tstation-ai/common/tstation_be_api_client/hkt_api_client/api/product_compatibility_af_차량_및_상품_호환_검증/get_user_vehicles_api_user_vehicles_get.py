@@ -6,6 +6,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
+from ...models.user_vehicle_lookup_response import UserVehicleLookupResponse
 from ...types import UNSET, Response
 
 
@@ -34,9 +35,10 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | HTTPValidationError | None:
+) -> HTTPValidationError | UserVehicleLookupResponse | None:
     if response.status_code == 200:
-        response_200 = response.json()
+        response_200 = UserVehicleLookupResponse.from_dict(response.json())
+
         return response_200
 
     if response.status_code == 422:
@@ -52,7 +54,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | HTTPValidationError]:
+) -> Response[HTTPValidationError | UserVehicleLookupResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -66,7 +68,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     car_no: str,
     owner_nm: str,
-) -> Response[Any | HTTPValidationError]:
+) -> Response[HTTPValidationError | UserVehicleLookupResponse]:
     """Get User Vehicles
 
     Args:
@@ -78,7 +80,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | HTTPValidationError]
+        Response[HTTPValidationError | UserVehicleLookupResponse]
     """
 
     kwargs = _get_kwargs(
@@ -98,7 +100,7 @@ def sync(
     client: AuthenticatedClient,
     car_no: str,
     owner_nm: str,
-) -> Any | HTTPValidationError | None:
+) -> HTTPValidationError | UserVehicleLookupResponse | None:
     """Get User Vehicles
 
     Args:
@@ -110,7 +112,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | HTTPValidationError
+        HTTPValidationError | UserVehicleLookupResponse
     """
 
     return sync_detailed(
@@ -125,7 +127,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     car_no: str,
     owner_nm: str,
-) -> Response[Any | HTTPValidationError]:
+) -> Response[HTTPValidationError | UserVehicleLookupResponse]:
     """Get User Vehicles
 
     Args:
@@ -137,7 +139,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | HTTPValidationError]
+        Response[HTTPValidationError | UserVehicleLookupResponse]
     """
 
     kwargs = _get_kwargs(
@@ -155,7 +157,7 @@ async def asyncio(
     client: AuthenticatedClient,
     car_no: str,
     owner_nm: str,
-) -> Any | HTTPValidationError | None:
+) -> HTTPValidationError | UserVehicleLookupResponse | None:
     """Get User Vehicles
 
     Args:
@@ -167,7 +169,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | HTTPValidationError
+        HTTPValidationError | UserVehicleLookupResponse
     """
 
     return (
