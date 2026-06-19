@@ -3026,7 +3026,7 @@ def test_missing_store_order_policy_renders_nearby_store_candidates() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert result["data"]["isBookingFlow"] is True
-    assert result["data"]["assistantResponse"] == "요청하신 조건으로 장착 가능 여부가 확인된 매장 1곳입니다. 원하시는 매장을 선택해 주세요."
+    assert result["data"]["assistantResponse"] == "요청하신 조건에 맞는 매장 1곳입니다. 원하시는 매장을 선택해 주세요."
     assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 덕이점"
     assert result["data"]["metadata"] == [{"shopId": "F00499"}]
 

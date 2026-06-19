@@ -4065,8 +4065,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         short = quality_short
         response_source = "code_mapper"
     elif has_booking_intent and items:
-        today_prefix = "오늘 " if re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "") else ""
-        short = f"요청하신 조건으로 {today_prefix}장착 가능 여부가 확인된 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
+        short = f"요청하신 조건에 맞는 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
         response_source = "code_mapper"
     elif plain_store_search_user_text and items and re.search(r"오늘\s*장착|장착 가능 여부|재고", short or ""):
         short = f"요청하신 지역의 매장 {len(items)}곳을 안내드립니다. 원하시는 매장을 선택해 주세요."
