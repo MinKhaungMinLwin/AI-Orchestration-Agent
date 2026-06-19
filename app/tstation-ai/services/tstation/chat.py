@@ -7519,7 +7519,6 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
     big_goods_name = str(row.get("big_goods_nm") or "").strip()
     slogan = _clean_product_sentence(row.get("slogan"))
-    remark = _clean_product_sentence(row.get("pc_prod_remark_desc"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
     pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
     season = str(row.get("season_nm") or "").strip()
@@ -7556,9 +7555,8 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     if identity_parts:
         lines.extend(["", f"규격/분류는 {' · '.join(identity_parts[:5])} 기준으로 확인돼요."])
 
-    marketing_bits = [text for text in (remark, tech) if text]
-    if marketing_bits:
-        lines.extend(["", " ".join(marketing_bits)[:220]])
+    if tech:
+        lines.extend(["", tech[:160]])
 
     performance_bits: list[str] = []
     if comfort and comfort > 0:

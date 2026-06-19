@@ -2119,7 +2119,11 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
             "goods_no": "G000000309783",
             "tire_size_1": "225/45R17",
             "slogan": "고속 주행에서 느끼는 Comfort Technology",
-            "pc_prod_remark_desc": "사계절 승용차용으로 정숙성과 승차감을 강화한 패턴입니다.",
+            "pc_prod_remark_desc": (
+                "<ol><li><span>제조사</span> 한국타이어</li>"
+                "<li><span>품질 보증</span> 제조상의 과실에 의한 하자가 발생 시 A/S 처리해드립니다.</li>"
+                "<li><span>특이사항</span> TPMS 또는 런플랫 타이어는 추가 비용이 발생합니다.</li></ol>"
+            ),
             "pc_prod_tech_desc": "<ol><li>승차감 : 조용하고 안락한 승차감 제공</li></ol>",
             "ptrn_d_nm": "벤투스 슈퍼 컴포트",
             "season_nm": "사계절",
@@ -2148,7 +2152,12 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     assert "사계절" in assistant_response
     assert "승용차" in assistant_response
     assert "COMFORT" in assistant_response
-    assert "정숙성과 승차감을 강화한 패턴" in assistant_response
+    assert "승차감 : 조용하고 안락한 승차감 제공" in assistant_response
+    assert "품질 보증" not in assistant_response
+    assert "제조상의 과실" not in assistant_response
+    assert "A/S" not in assistant_response
+    assert "특이사항" not in assistant_response
+    assert "TPMS" not in assistant_response
     assert "승차감 4.5/5" in assistant_response
     assert "정숙성 4.3/5" in assistant_response
     assert "마일리지 4.1/5" in assistant_response
