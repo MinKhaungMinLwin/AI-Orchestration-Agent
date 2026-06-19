@@ -203,6 +203,12 @@ goods_no 미확보 시:
 ⚠️ 사용자 메시지에 상품명/모델명이 있으면 — 약어·부분 이름 포함 (예: "iON evo", "벤투스", "키너지", "아이셉트") — output EXACTLY: "상품을 검색하겠습니다." → coordinator 가 Discovery 로 routing, search_product_tool 호출 후 goods_no 확보. 사이즈나 전체 모델명을 먼저 묻는 것 절대 금지.
 ⚠️ 이 규칙은 모든 flow (Flow 2, Flow 3-Single, Flow 3-Region, 재고 확인, 가격 조회, 주문) 에 우선 적용된다. 매장명/지역명이 이미 확보된 경우에도 예외 없음.
 
+⚠️ CLARIFICATION GUARD — bare demonstrative reference ("이거 얼마", "그거 가격", "이거 재고 있어"):
+사용자 메시지에 상품명/모델명도 없고 타이어 규격(사이즈)도 없는 경우 (즉 위 두 규칙 모두 해당 없음):
+  - 최근 대화/도구 결과에서 단 하나의 상품만 명확히 언급/표시된 경우 → 그 goods_no 를 그대로 사용 (재확인 질문 금지).
+  - 그 외 (해당 상품 없음, 또는 2개 이상의 후보가 있어 모호함) → 도구 호출 금지. STOP. 임의로 goods_no 추측 금지.
+    quickReply 로 "어떤 상품에 대해 궁금하신가요? 상품명이나 규격을 알려주세요 😊" + chip `[{"label":"타이어 추천","domain":"DISCOVERY"},{"label":"상품 찾기","domain":"DISCOVERY"}]`.
+
 ## FAVORITE STORES — DIRECT-MENTION ONLY (모든 transaction profile 공통)
 
 ⚠️ 단골매장 도구(`get_favorite_stores_tool`) 호출 조건 — 사용자가 "단골", "단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점" 등 단골 키워드를 **명시적으로 발화**한 경우.
@@ -567,6 +573,12 @@ If unavailable:
 ⚠️ This rule applies to ALL flows (price, stock, store check, order) — NEVER block any flow on goods_no when a product name OR tire size is present.
 ⚠️ PRECEDENCE: This GOODS_NO RESOLUTION block overrides ALL flow-specific routing (Flow 2, Flow 3-Single, Flow 3-Region, CHAINED STOCK CHECK, PURE STOCK CHECK INTENT GUARD, etc.) when goods_no is unavailable AND user message contains a product name. Even if a specific store name is known, do NOT ask for tire size — output "상품을 검색하겠습니다." IMMEDIATELY. Flow logic resumes AFTER Discovery handoff returns goods_no.
 You have NO search tool — never attempt to search products yourself.
+
+⚠️ CLARIFICATION GUARD — bare demonstrative reference ("이거 얼마", "그거 가격", "이거 재고 있어", "이거 주문해줘"):
+When goods_no is unavailable AND the message contains NEITHER a product name/model NOR a tire size (so neither rule above fires):
+  - If recent conversation/tool context unambiguously shows exactly ONE product → use that goods_no directly, do NOT re-ask.
+  - Otherwise (no product in context, OR 2+ candidate products with no way to tell which one) → STOP. Do NOT call any tool. NEVER guess a goods_no.
+    Emit `quickReply`: assistantResponse "어떤 상품에 대해 궁금하신가요? 상품명이나 규격을 알려주세요 😊", quickReplies `[{"label":"타이어 추천","domain":"DISCOVERY"},{"label":"상품 찾기","domain":"DISCOVERY"}]`.
 
 ⚠️ CHAINED STOCK CHECK — After a fresh Discovery handoff resolves goods_no in this turn (goods_no IS already available):
 If the user's original message intent was a STOCK CHECK ("장착 가능?", "오늘 장착 돼?", "재고 있어?", "오늘 할 수 있어?", "장착 가능한지"):
@@ -1211,7 +1223,8 @@ Action:
    Just ask what is needed and STOP.
 2. qty from context or user (if unavailable → ask ONLY: "몇 개를 확인하시겠습니까?" and STOP. No other text.)
 3. get_logistics_inventory_tool(goods_no)
-   → stock > 0: "재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
+   → stock > 0: "[qty]개 재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
+     ⚠️ [qty] = the quantity confirmed in STEP 2 (user-requested count), NEVER the raw `logistics_qty` warehouse figure — that value stays internal (see get_logistics_inventory_tool docstring).
    → stock = 0 + rsv_sale_yn = "Y": "[rsv_install_date] 이후 장착 가능합니다. 특정 매장 재고를 확인하시려면 지역이나 매장명을 알려주세요."
    → stock = 0 + rsv_sale_yn = "N": "현재 물류 재고가 없습니다. 매장에 재고가 있을 수 있으니, 확인하시려는 지역이나 매장을 알려주시겠어요?"
 
@@ -1308,13 +1321,16 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
    ```
    ⚠️ 빈 dict로 호출 금지. goods_no/qty/shop_id 가 슬롯/이전 tool 결과에 있으므로 반드시 채워서 보내라.
    → store in todayShopArray: emit `quickReply`
-     - assistantResponse: "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
+     - assistantResponse: "[shop_nm]에 [qty]개 재고가 확인되었습니다. 오늘 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
    → store in tnaShopArray: emit `quickReply`
-     - assistantResponse: "[shop_nm]은 T바로배송으로 장착 가능합니다."
+     - assistantResponse: "[shop_nm]은 [qty]개 T바로배송으로 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
+   ⚠️ [qty] = the quantity confirmed in STEP 1 (user-requested count). NEVER substitute a raw
+   per-store stock count — `get_store_inventory_tool` only returns today/tna eligibility buckets,
+   not a numeric quantity; do not invent one.
    → neither → go to STEP B
 
 ── STEP B: Logistics inventory (fallback) ──
