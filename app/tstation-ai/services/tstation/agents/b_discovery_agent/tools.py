@@ -60,6 +60,8 @@ current_discovery_recommendation_tool_patch: contextvars.ContextVar[dict[str, An
     "current_discovery_recommendation_tool_patch", default={}
 )
 
+_RECOMMENDATION_LIMIT_CAP = 10
+
 def _apply_recommendation_policy_patch(
     *,
     patch: dict[str, Any],
@@ -532,7 +534,8 @@ def search_product_tool(
     Brand codes: HK=Hankook, LF=Laufenn, MC=Michelin, PI=Pirelli,
                  BS=Bridgestone, CT=Continental, GY=Goodyear.
     If the user did not specify a brand, omit brand_cd and search all brands.
-    Unsupported brands (금호, 넥센 etc.) → decline, do not search.
+    Unsupported brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis,
+    Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline, do not search.
 
     Args:
         keyword (str | None): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX').
@@ -940,7 +943,9 @@ def get_products_recommendations_tool(
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 3, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 3, maximum is 10.
+            If the user requests more than 10, call with limit=10 and explain that
+            recommendations are available up to 10 items.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -966,8 +971,9 @@ def get_products_recommendations_tool(
             - "겨울": 겨울용 타이어만 (PR_GOODS_BASE.SEASON_NM='겨울')
             - "사계절": 사계절 타이어만 (PR_GOODS_BASE.SEASON_NM='사계절')
             - "올웨더": 올웨더 패턴만 (PR_PATTERN_BASE.ALLWEATHER_YN='Y')
-              ⚠️ 사용자가 "올웨더 / all-weather / 올시즌 / 전천후" 라고 명시하면
-              `season_nm="올웨더"` 사용. "사계절" 이라고 명시하면 `season_nm="사계절"`.
+              ⚠️ 사용자가 "올웨더 / all-weather / 전천후" 라고 명시하면
+              `season_nm="올웨더"` 사용. "사계절 / 올시즌 / all-season" 이라고 명시하면
+              `season_nm="사계절"`.
             ⚠️ 신규(동적) rcmd_type 에만 적용됨 (tstation/discount/value 제외).
             "여름용 타이어 추천" 단일 의도면 rcmd_type="summer" 사용 (필터 불필요).
         pfm_nm (str | None, optional): 성능 등급 직교 필터. rcmd_type 과 직교로 적용된다.
@@ -1126,16 +1132,19 @@ def get_products_recommendations_tool(
                 tire_size,
             )
 
+    requested_limit = limit
+    effective_limit = min(max(int(limit or 3), 1), _RECOMMENDATION_LIMIT_CAP)
+    limit_capped = requested_limit > effective_limit
+
     # Price filtering is now SQL-side on BE — no client-side post-filter.
-    # newest_desc is a client-side sort BE doesn't support → still fetch >limit then re-sort.
     has_price_filter = bool(min_price or max_price)
     has_newest_sort = sort_by == "newest_desc"
-    fetch_limit = max(limit, 100) if has_newest_sort else limit
+    fetch_limit = effective_limit
     requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
     requested_season_nm = season_nm
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, vehicle_type=%s, min_price=%s, max_price=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price,
+        rcmd_type, effective_limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price,
     )
 
     def _fetch_recommendation_once(
@@ -1188,7 +1197,10 @@ def get_products_recommendations_tool(
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], sort_by)
             if has_newest_sort:
-                data["items"] = data["items"][:limit]
+                data["items"] = data["items"][:effective_limit]
+            data["requested_limit"] = requested_limit
+            data["effective_limit"] = effective_limit
+            data["limit_capped"] = limit_capped
         return _success_response(response.status_code, data)
 
     try:
@@ -1369,7 +1381,9 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     """Compare discount prices across multiple products.
 
     Use when user asks to compare prices, "가장 저렴한/싼" product, or "비교".
-    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price, cheapest_goods_no.
+    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price,
+    cheapest_final_prc, cheapest_total_discount, cheapest_applied_coupons, cheapest_goods_no.
+    Use cheapest_final_prc as the user-facing final benefit price when present.
 
     Args:
         goods_no_list (list[str]): 2+ product numbers to compare.

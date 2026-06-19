@@ -180,6 +180,24 @@ def test_initial_route_keeps_transaction_chain_when_size_is_in_user_text() -> No
     assert "quantity" in plan.subtasks[1].required_slots
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "판교점에서 dynapro hpx 2개 구매하고싶어",
+        "판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        "서초점에서 키너지 ST AS 4개 예약해줘",
+    ],
+)
+def test_product_store_purchase_without_size_starts_discovery_only(text: str) -> None:
+    plan = plan_cross_domain_turn(text)
+
+    assert agent_domain_values_for_plan(plan) == ["discovery", "transaction"]
+    assert agent_domain_values_for_initial_route(plan, known_slots={}) == ["discovery"]
+    assert [task.intent for task in plan.subtasks] == ["resolve_or_describe_product", "stock_store_or_reservation"]
+    assert "goods_no" in plan.subtasks[1].required_slots
+    assert "tire_size" in plan.subtasks[1].required_slots
+
+
 def test_named_store_stock_request_preserves_location_after_product_resolution_first() -> None:
     plan = plan_cross_domain_turn("판교점에 ion evo as 재고 있어?")
 

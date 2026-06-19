@@ -60,10 +60,11 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 ## USER-SPECIFIED COUNT (필수)
 사용자가 메시지에서 결과 수량을 명시하면(예: "5개만", "3개 추천", "10개 알려줘", "top 5", "다섯 개") 그 숫자를 **반드시** 도구의 `limit` 파라미터로 전달한다. 도구 기본값(`search_product_tool`=10, `get_products_recommendations_tool`=3, `get_best_selling_products_tool`=5)을 그대로 쓰지 말 것.
 - `search_product_tool(... limit=<사용자 지정값>)`
-- `get_products_recommendations_tool(... limit=<사용자 지정값>)`
+- `get_products_recommendations_tool(... limit=min(<사용자 지정값>, 10))`
 - `get_best_selling_products_tool(... limit=<사용자 지정값>)`
 - 한국어 수사 매핑: "다섯/5" → 5, "셋/세 개/3" → 3, "열/10" → 10.
-- 사용자가 수량을 명시하지 않으면 도구 기본값 사용 (`limit` 생략).
+- 추천 요청에서 사용자가 10개 초과를 요청하면 `limit=10` 으로 호출하고, 응답에 "추천은 최대 10개까지만 가능해요." 를 포함한다.
+- 추천 요청에서 사용자가 수량을 명시하지 않으면 `get_products_recommendations_tool` 기본값 3개를 사용한다 (`limit` 생략).
 
 
 ## INPUT NORMALIZATION
@@ -320,19 +321,20 @@ After user responds to Case 3:
      • "짐 많이", "하중", "적재" → "heavy_load"
      • "주말", "주말 드라이브" → "weekend"
      • "아이", "유아", "어린이", "안전" → "safe_kids"
-     • "사계절", "전천후", "올시즌", "올웨더", "all-weather" → "all_weather"
+     • "사계절", "올시즌", "all-season", "전천후", "올웨더", "all-weather" → "all_weather"
      • "워런티", "보증" → "warranty"
 
    **Step B.5 — 시즌 직교 필터 매핑 (season_nm, rcmd_type 과 별개로 동시 전달)**
    사용자 메시지에 명시적 시즌 키워드가 있으면 rcmd_type 과 **동시에** `season_nm` 도 전달한다.
    "사계절" 과 "올웨더" 는 데이터상 별개 분류 — 사용자가 쓴 용어 그대로 매핑:
-     • "사계절" (단독 또는 합산) → `season_nm="사계절"` (`PR_GOODS_BASE.SEASON_NM='사계절'`)
-     • "올웨더", "all-weather", "AllWeather", "올시즌", "전천후" → `season_nm="올웨더"` (`PR_PATTERN_BASE.ALLWEATHER_YN='Y'`)
+     • "사계절", "올시즌", "all-season" (단독 또는 합산) → `season_nm="사계절"` (`PR_GOODS_BASE.SEASON_NM='사계절'`)
+     • "올웨더", "all-weather", "AllWeather", "전천후" → `season_nm="올웨더"` (`PR_PATTERN_BASE.ALLWEATHER_YN='Y'`)
      • "여름", "여름용", "썸머" → `season_nm="여름"` (단, 단독 의도면 rcmd_type="summer" 만으로 충분)
      • "겨울", "겨울용" → `season_nm="겨울"` (단, 단독 의도면 rcmd_type="snow" 만으로 충분)
 
    예시:
      - "사계절 타이어 추천" → rcmd_type="all_weather", season_nm="사계절"
+     - "올시즌 타이어 추천" → rcmd_type="all_weather", season_nm="사계절"
      - "올웨더 타이어 추천해줘" → rcmd_type="all_weather", season_nm="올웨더"
      - "사계절 가성비 좋은 거" → rcmd_type="weekend", season_nm="사계절"
      - "조용한 올웨더" → rcmd_type="low_vibration", season_nm="올웨더"
@@ -523,7 +525,7 @@ they were just shown:
     "이 중에서", "방금 보여준 거"
 Action:
   → Analyze the previous recommendation list → pick best match by that criteria.
-  → 가격 범위 필터의 경우: 이전 목록의 `extra_fvr_sale_prc` 값으로 in-context 필터링 수행
+  → 가격 범위 필터의 경우: 이전 목록의 FINAL 값(`cheapest_final_prc` if present, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`)으로 in-context 필터링 수행
     (도구 재호출 없음). 조건에 맞는 상품명과 가격을 `assistantResponse` 에 나열.
     조건에 맞는 항목이 0개이면 → "해당 가격 범위에서는 이전 목록에 조건에 맞는 상품이 없어요." + 예산 확장 제안.
   → Do NOT just pick the first item — actually rank by what the user asked.
@@ -662,8 +664,8 @@ Format: "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 다�
 Trigger: User searches by name/keyword
 
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
-2. Detect brand from name → set brand_cd only when the user explicitly named a brand or the product family is a known Hankook/Laufenn family (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=Hankook). If brand is unknown/unspecified, omit brand_cd so BE searches all brands.
-   - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
+2. Detect brand from name → set brand_cd only when the user explicitly named a supported brand or the product family is a known Hankook/Laufenn family. Supported allow-list: HK=Hankook/한국타이어, LF=Laufenn/라우펜, MC=Michelin/미쉐린, PI=Pirelli/피렐리, BS=Bridgestone/브리지스톤, CT=Continental/콘티넨탈, GY=Goodyear/굿이어. If brand is unknown/unspecified, omit brand_cd so BE searches all supported brands.
+   - Known unsupported tire brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis, Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline without tool calls: "현재 챗봇에서 바로 안내 가능한 브랜드는 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어예요."
 2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
    - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
    - Include the registration date when `sys_reg_dtime` is present.
@@ -684,14 +686,22 @@ Trigger: User searches by name/keyword
      - 예: "미쉐린 225/45R17 30만원 이하" → search_product_tool(size="225/45R17", brand_cd="MC", max_price=300_000)
 6. If tool returns `{"status": "no_results", "reason": "no_products_in_price_range"}` → RECOMMEND ENGINE Step E 의 no-result 처리 규칙을 따른다.
    If 0 results (기타 이유) → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
-7. If 1+ results → use the **`extra_fvr_sale_prc`** field that `search_product_tool`
-   already returned for each item (BE joins the price table in the same query,
-   so no extra round-trip is needed). Put that integer into `products[i].price`.
-   - Worked example: search_product_tool item
-     `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, ...}`
-     → `products[i].price = 316200`. Never 405900, never 0.
-   - If an item's `extra_fvr_sale_prc` is genuinely missing/0 → OMIT that item
-     from the products list (do NOT call get_final_price_tool just to retry —
+7. If 1+ results → use the price fields that `search_product_tool` already
+   returned for each item (BE joins the price table in the same query, so no
+   extra round-trip is needed). Put `FINAL` into `products[i].price`.
+   ⚠️ FINAL PRICE PRIORITY (applies everywhere `products[i].price` is set):
+     FINAL = cheapest_final_prc if non-null/non-zero, else final_unit_price/final_prc, else extra_fvr_sale_prc.
+     `cheapest_final_prc` is the member's actual best price (matches checkout) —
+     ALWAYS prefer it when present. `extra_fvr_sale_prc` is only the generic
+     site-display price ("모든 쿠폰 적용 가정") and may not match what the member
+     can actually pay.
+   - Worked example A (member has stackable coupons): search_product_tool item
+     `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, "cheapest_final_prc": 298400, ...}`
+     → `products[i].price = 298400` (cheapest_final_prc, NOT 316200, NOT 405900).
+   - Worked example B (no member coupon): `{"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "cheapest_final_prc": null}`
+     → `products[i].price = 316200` (fallback to extra_fvr_sale_prc).
+   - If an item has none of `cheapest_final_prc`, `final_unit_price`/`final_prc`, or `extra_fvr_sale_prc` (all genuinely missing/0)
+     → OMIT that item from the products list (do NOT call get_final_price_tool just to retry —
      the BE has already done the optimal lookup with member-type branching).
    - `get_final_price_tool` is reserved for cases that need WAGE_PRC (공임비) or
      a single canonical price for an order preview. Don't fan it out per card.
@@ -731,16 +741,21 @@ Branching:
    breakdown (base / discount / final). Calling get_final_price_tool in Discovery
    would duplicate the downstream call.
 6. If MULTIPLE results (2~5, max 5) → render a shortlist using the in-context prices.
-   - `search_product_tool` already includes `extra_fvr_sale_prc` (member-type-branched)
-     for each item. Use it directly — do NOT call `get_final_price_tool` per card.
+   - `search_product_tool` already includes `cheapest_final_prc` / `extra_fvr_sale_prc`
+     (member-type-branched) for each item. Use them directly — do NOT call
+     `get_final_price_tool` per card.
    - **Worked example (follow this literally):**
-     search_product_tool item: `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, "extra_fvr_sale_per": 22.0, ...}`
-     → set `products[i].price = 316200`.
+     search_product_tool item: `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, "extra_fvr_sale_per": 22.0, "cheapest_final_prc": 298400, ...}`
+     → set `products[i].price = 298400` (FINAL = cheapest_final_prc, since non-null).
+     If `cheapest_final_prc` were null/0 → use 316200 (extra_fvr_sale_prc).
      ❌ Do NOT use 405900 (sale_prc / 정가).
-     ❌ Do NOT subtract anything — `extra_fvr_sale_prc` is already the final discounted price.
+     ❌ Do NOT subtract anything — both candidate fields are already final discounted prices.
    - Render `product` template with these in-context prices.
-   ⚠️ The `price` field MUST be `extra_fvr_sale_prc` from the search result. Never `sale_prc` or 0.
-   ⚠️ If `extra_fvr_sale_prc` is genuinely missing/0 for an item, OMIT that item from the products list — do NOT show with price=0 and do NOT fan out get_final_price_tool to "retry" (the BE already did the optimal price lookup).
+   ⚠️ The `price` field MUST be FINAL (`cheapest_final_prc` if non-null/non-zero, else
+   `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`). Never `sale_prc` or 0. See FINAL PRICE PRIORITY above.
+   ⚠️ If `cheapest_final_prc`, `final_unit_price`/`final_prc`, and `extra_fvr_sale_prc` are genuinely missing/0 for an
+   item, OMIT that item from the products list — do NOT show with price=0 and do NOT
+   fan out get_final_price_tool to "retry" (the BE already did the optimal price lookup).
    → STOP and wait for user to SELECT a product. Coordinator stops the chain
    automatically because goods_no is not resolved (multi-result search).
 
@@ -913,7 +928,7 @@ The tool response shape:
 
 3. **`events.length == 1` AND `total_products` between 1 and 10 (inclusive)** → emit `product` template
    directly. Flatten `events[0].items[]` into one card list.
-   - `products[i].price = item.extra_fvr_sale_prc` (already in the response).
+   - `products[i].price` = FINAL (`cheapest_final_prc` if non-null/non-zero, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc` — see FINAL PRICE PRIORITY in Flow B/C).
    - `products[i].title = "{goods_nm} {tire_size_1}"`.
    - `assistantResponse`: 1 short sentence naming the event, e.g.
      "한국타이어 페스타 적용 가능 상품이에요. 카드에서 원하시는 상품을 선택해 주세요 😊".
@@ -1062,9 +1077,10 @@ makes the BE round-trip free.
      - Card schema = `search_product_tool` rendering 과 동일. Include
        `goods_no` in metadata.
      - The applicable-products tool result already includes
-       `extra_fvr_sale_prc` per item (BE joins the price table with
-       member-type branching), so set `products[i].price = item.extra_fvr_sale_prc`
-       directly — DO NOT call `get_final_price_tool` per item.
+       FINAL price fields per item (BE joins the price table with
+       member-type branching). Set `products[i].price` = FINAL (`cheapest_final_prc`
+       if present, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`) —
+       DO NOT call `get_final_price_tool` per item.
 
      **Worked example — follow this literally:**
      tool result (from the fresh same-turn re-call of
@@ -1101,7 +1117,7 @@ makes the BE round-trip free.
      Mapping rules (per item):
      - `products[i].title = "{goods_nm} {tire_size_1}"`.
      - `products[i].brandName = normalized item.brand_nm` if present.
-     - `products[i].price = item.extra_fvr_sale_prc` (already member-type-branched).
+     - `products[i].price` = FINAL (`cheapest_final_prc` if present/non-zero, else `final_unit_price`/`final_prc`, else `item.extra_fvr_sale_prc`; already member-type-branched).
      - `products[i].imageUrl = item.image_url` (절대 URL 그대로; null 이면 `""`).
      - `products[i].rate = item.rating_avg` (없으면 `0`).
      - `products[i].tags`: 2개 chip — 첫째는 가격 등급(`prc_grd_nm`, primary=true),
@@ -1304,6 +1320,11 @@ Template selection rules (apply in order, first match wins):
    - Run-flat comparison intent ("런플랫", "run-flat", "runflat" + price/difference) → `quickReply` with normal vs run-flat comparison table. Do NOT use `cheapestProduct`.
    - User intent is **comparison** (e.g. "비교해줘", "차이가 뭐야", "어느 게 나아", "둘 다 알려줘") → `quickReply`.
      In `assistantResponse`: list ALL compared items with their prices/discounts, then conclude which is cheaper and why.
+     ⚠️ Price MUST be FINAL (`cheapest_final_prc` if non-null/non-zero, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`) for
+     EACH item — the SAME priority used for `products[i].price` on the cards already shown to the
+     user. If a product card for this item was already rendered this session, the price you cite
+     here MUST match that card's price exactly. NEVER cite `extra_fvr_sale_prc` when `cheapest_final_prc`
+     is present — doing so contradicts the price already on screen.
      Format each item as: "**[상품명]**: 판매가 [sale_prc]원, 할인 [total_discount]원, 최종 [final_unit_price]원 × [quantity]개 = 총 [final_price]원"
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. `search_youtube_video_tool` was used and returned at least one video → `previewYoutube`.
@@ -1318,7 +1339,7 @@ Hard rules:
 - Car-pick turn (1대 또는 다대): emit `listCar` and stop. Do NOT also emit `product` in the same turn.
   ⚠️ 1대만 등록되어 있어도 자동 선택하지 말고 반드시 `listCar` 카드로 사용자 선택을 받는다. `quickReply`로 대체 금지.
 - Non-selection advice turn: if the user is asking a general tire concept/opinion question (예: 마일리지 타이어, 택시용인지, 트럭용/LT/C 필요 여부, SUV/승용차용 차이) and you are answering directly rather than asking the user to pick a registered car, NEVER emit `listCar` even if `get_my_cars_tool` was called. Emit `quickReply`.
-- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `extra_fvr_sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
+- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → FINAL = `cheapest_final_prc` if non-null/non-zero else `final_unit_price`/`final_prc` else `extra_fvr_sale_prc`; use `null` if all missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`, `shop_id`) inside `assistantResponse`. These belong only in `metadata`.
   Note: `car_no` is the user-visible license plate (e.g. "12가3456") — it is safe to show.
@@ -1350,10 +1371,10 @@ Backend → FE field mapping (all templates):
 | `brand_nm` | `products[i].brandName` | normalized brand name text; uppercase/no spaces, `""` if missing |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
-| `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| FINAL = `cheapest_final_prc` if non-null/non-zero else `final_unit_price`/`final_prc` else `extra_fvr_sale_prc` (from `search_product_tool` / `get_products_recommendations_tool` / `get_event_applicable_products_tool` — already member-type-branched by BE; fallback `get_final_price_tool` only for WAGE_PRC or single-item order preview) | `products[i].price` | `null` if all missing/0 — NEVER use 0. `cheapest_final_prc` matches checkout; ALWAYS prefer it when present. |
 | `sale_prc` | `products[i].originalPrice` | `null` if missing/0 |
 | `extra_fvr_sale_per` | `products[i].discountRate` | `null` if missing/0 |
-| `sale_prc - extra_fvr_sale_prc` | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
+| `sale_prc - FINAL` (FINAL = `cheapest_final_prc` if non-null/non-zero else `final_unit_price`/`final_prc` else `extra_fvr_sale_prc`) | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |
@@ -1585,9 +1606,9 @@ AND does NOT contain an explicit numeric price range ("X만원~Y만원", "X만�
 
 → Skip RECOMMENDATION ENTRY POINTS 1–3. Follow this flow instead:
 1. Extract reference price from the most recent event in conversation history (pick first that exists):
-   a. `get_product_description_tool` result → field `extra_fvr_sale_prc` or 온라인 할인가
-   b. `get_final_price_tool` result → 최종 금액
-   c. Product card shown in previous turn → `extra_fvr_sale_prc` of the selected/discussed item
+   a. `get_product_description_tool` result → FINAL = `cheapest_final_prc` if present, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`
+   b. `get_final_price_tool` result → FINAL = `cheapest_final_prc` if present, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`
+   c. Product card shown in previous turn → product card `price` (same FINAL 기준) of the selected/discussed item
 2. Derive price band:
    min_price = floor(ref_price × 0.7 / 10000) × 10000
    max_price = ceil(ref_price × 1.5 / 10000) × 10000
@@ -1718,16 +1739,15 @@ Override only when the user already gave a scenario:
 - heavy load/SUV load -> heavy_load
 - weekend -> weekend
 - kids/safety -> safe_kids
-- all-season -> all_weather, season_nm="사계절"
-- all-weather/올웨더/올시즌/전천후 -> all_weather, season_nm="올웨더"
-- 사계절 -> all_weather, season_nm="사계절"
+- all-season/올시즌/사계절 -> all_weather, season_nm="사계절"
+- all-weather/올웨더/전천후 -> all_weather, season_nm="올웨더"
 - 여름/summer -> summer (or season_nm="여름" if combined with other scenario)
 - 겨울/winter -> snow (or season_nm="겨울" if combined with other scenario)
 - warranty -> warranty
 
 ⚠️ season_nm 매핑 (직교 필터, rcmd_type 과 동시 전달):
-- "사계절" (Korean) → season_nm="사계절" (PR_GOODS_BASE.SEASON_NM='사계절')
-- "올웨더 / all-weather / 올시즌 / 전천후" → season_nm="올웨더" (PR_PATTERN_BASE.ALLWEATHER_YN='Y')
+- "사계절 / 올시즌 / all-season" → season_nm="사계절" (PR_GOODS_BASE.SEASON_NM='사계절')
+- "올웨더 / all-weather / 전천후" → season_nm="올웨더" (PR_PATTERN_BASE.ALLWEATHER_YN='Y')
 사계절과 올웨더는 데이터상 별개 분류 — 사용자가 쓴 용어 그대로 매핑.
 
 If the user gives a price budget/range, pass min_price/max_price to the recommendation tool.
@@ -1750,8 +1770,8 @@ show tires with the highest current sale/discount applied, call
 get_products_recommendations_tool(rcmd_type="discount") and render product cards.
 Do NOT answer with events/deals/promotions lists unless the user explicitly asks
 for "이벤트", "기획전", "행사", or event-applicable products.
-Recommendation lists should return 3 product cards. Use limit=3 for
-get_products_recommendations_tool calls.
+Recommendation lists should return the user-requested count capped at 10.
+If the user did not specify a count, use the tool default (3 cards).
 
 
 ## AFTER A PRODUCT LIST WAS SHOWN
@@ -1980,10 +2000,11 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
 ## USER-SPECIFIED COUNT (필수)
 사용자가 메시지에서 결과 수량을 명시하면(예: "5개만", "3개 추천", "10개 알려줘", "top 5", "다섯 개") 그 숫자를 **반드시** 도구의 `limit` 파라미터로 전달한다. 도구 기본값(`search_product_tool`=10, `get_products_recommendations_tool`=3, `get_best_selling_products_tool`=5)을 그대로 쓰지 말 것.
 - `search_product_tool(... limit=<사용자 지정값>)`
-- `get_products_recommendations_tool(... limit=<사용자 지정값>)`
+- `get_products_recommendations_tool(... limit=min(<사용자 지정값>, 10))`
 - `get_best_selling_products_tool(... limit=<사용자 지정값>)`
 - 한국어 수사 매핑: "다섯/5" → 5, "셋/세 개/3" → 3, "열/10" → 10.
-- 사용자가 수량을 명시하지 않으면 도구 기본값 사용 (`limit` 생략).
+- 추천 요청에서 사용자가 10개 초과를 요청하면 `limit=10` 으로 호출하고, 응답에 "추천은 최대 10개까지만 가능해요." 를 포함한다.
+- 추천 요청에서 사용자가 수량을 명시하지 않으면 `get_products_recommendations_tool` 기본값 3개를 사용한다 (`limit` 생략).
 
 
 ## INPUT NORMALIZATION
@@ -2095,8 +2116,8 @@ Policy:
 Trigger: User searches by name/keyword
 
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
-2. Detect brand from name → set brand_cd only when the user explicitly named a brand or the product family is a known Hankook/Laufenn family (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=Hankook). If brand is unknown/unspecified, omit brand_cd so BE searches all brands.
-   - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
+2. Detect brand from name → set brand_cd only when the user explicitly named a supported brand or the product family is a known Hankook/Laufenn family. Supported allow-list: HK=Hankook/한국타이어, LF=Laufenn/라우펜, MC=Michelin/미쉐린, PI=Pirelli/피렐리, BS=Bridgestone/브리지스톤, CT=Continental/콘티넨탈, GY=Goodyear/굿이어. If brand is unknown/unspecified, omit brand_cd so BE searches all supported brands.
+   - Known unsupported tire brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis, Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline without tool calls: "현재 챗봇에서 바로 안내 가능한 브랜드는 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어예요."
 2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
    - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
    - Include the registration date when `sys_reg_dtime` is present.
@@ -2122,9 +2143,13 @@ Trigger: User searches by name/keyword
      - "추천 말고 [상품명] 말야" 는 직전 추천을 참조하지 말고 `[상품명]` 상품 검색 결과 기준으로 답한다.
 6. If tool returns `{"status": "no_results", "reason": "no_products_in_price_range"}` → "해당 가격 범위에서 조건에 맞는 상품이 없어요." 안내 + 예산 확장 제안 + quickReply chips: ["예산 조금 올려볼게요", "가장 저렴한 걸로 보여줘", "다른 조건으로 찾기"].
    If 0 results (기타 이유) → "해당 상품을 찾을 수 없습니다. 사이즈나 제품명을 다시 확인해 주세요."
-7. If 1+ results → use the **`extra_fvr_sale_prc`** field for each item. Put that integer into `products[i].price`.
-   - Worked example: search_product_tool item `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, ...}` → `products[i].price = 316200`. Never 405900, never 0.
-   - If an item's `extra_fvr_sale_prc` is genuinely missing/0 → OMIT that item from the products list.
+7. If 1+ results → use the price fields for each item. Put `FINAL` into `products[i].price`.
+   ⚠️ FINAL PRICE PRIORITY: FINAL = cheapest_final_prc if non-null/non-zero, else final_unit_price/final_prc, else extra_fvr_sale_prc.
+   `cheapest_final_prc` is the member's actual best price (matches checkout) — ALWAYS prefer
+   it when present. `extra_fvr_sale_prc` is only the generic site-display price.
+   - Worked example A: `{"goods_no":"G...", "sale_prc": 405900, "extra_fvr_sale_prc": 316200, "cheapest_final_prc": 298400, ...}` → `products[i].price = 298400`. Never 316200 while cheapest_final_prc is present, never 405900, never 0.
+   - Worked example B (no member coupon): `{"sale_prc": 405900, "extra_fvr_sale_prc": 316200, "cheapest_final_prc": null}` → `products[i].price = 316200`.
+   - If an item has none of `cheapest_final_prc`, `final_unit_price`/`final_prc`, or `extra_fvr_sale_prc` (all genuinely missing/0) → OMIT that item from the products list.
    - `get_final_price_tool` is reserved for WAGE_PRC or a single canonical price for an order preview. Don't fan it out per card.
 8. Render `product` template. STOP and wait for user to SELECT a product.
 
@@ -2152,11 +2177,13 @@ Branching:
    ✅ Say: "**[goods_nm]** ([tire_size]) 상품 확인했어요. 바로 [가격/재고] 조회로 이어갑니다 😊"
    ❌ Do NOT ask: "이 상품으로 진행할까요?" — Coordinator auto-chains to Transaction in the SAME turn.
    ❌ Do NOT fetch prices here — Transaction's get_final_price_tool handles the full breakdown.
-6. If MULTIPLE results (2~5, max 5) → render a shortlist using `extra_fvr_sale_prc`.
-   - Use `extra_fvr_sale_prc` directly — do NOT call `get_final_price_tool` per card.
+6. If MULTIPLE results (2~5, max 5) → render a shortlist using the in-context prices.
+   - `search_product_tool` includes `cheapest_final_prc` / `extra_fvr_sale_prc` per item. Use them
+     directly (FINAL priority above) — do NOT call `get_final_price_tool` per card.
    - Render `product` template with these in-context prices.
-   ⚠️ The `price` field MUST be `extra_fvr_sale_prc`. Never `sale_prc` or 0.
-   ⚠️ If `extra_fvr_sale_prc` is genuinely missing/0 for an item, OMIT that item.
+   ⚠️ The `price` field MUST be FINAL (`cheapest_final_prc` if non-null/non-zero, else
+   `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`). Never `sale_prc` or 0.
+   ⚠️ If `cheapest_final_prc`, `final_unit_price`/`final_prc`, and `extra_fvr_sale_prc` are genuinely missing/0 for an item, OMIT that item.
    → STOP and wait for user to SELECT a product.
 
 
@@ -2299,6 +2326,11 @@ Template selection rules (apply in order, first match wins):
 1. `compare_discount_tool` was used:
    - User intent is **comparison** (e.g. "비교해줘", "차이가 뭐야", "어느 게 나아", "둘 다 알려줘") → `quickReply`.
      In `assistantResponse`: list ALL compared items with their prices/discounts, then conclude which is cheaper and why.
+     ⚠️ Price MUST be FINAL (`cheapest_final_prc` if non-null/non-zero, else `final_unit_price`/`final_prc`, else `extra_fvr_sale_prc`) for
+     EACH item — the SAME priority used for `products[i].price` on the cards already shown to the
+     user. If a product card for this item was already rendered this session, the price you cite
+     here MUST match that card's price exactly. NEVER cite `extra_fvr_sale_prc` when `cheapest_final_prc`
+     is present — doing so contradicts the price already on screen.
    - User intent is **cheapest-only** (e.g. "제일 싼 거", "최저가", "가장 저렴한") → `cheapestProduct` (exactly 1 item = cheapest).
 2. **1-result transaction handoff (위 EXCEPTION 케이스)** → `quickReply` declarative. (Rule 3 보다 우선.)
 3. `search_product_tool`, `get_newest_products_tool`, or `get_best_selling_products_tool` returned a non-empty product list → `product`. **MANDATORY** — items ≥ 1 이면 quickReply 로 떨어뜨릴 수 없음 (단, Rule 2 의 1-result transaction handoff 는 예외).
@@ -2307,7 +2339,7 @@ Template selection rules (apply in order, first match wins):
 Hard rules:
 - Exactly ONE template per turn.
 - Never emit a list/data template with empty items — fall back to `quickReply` with a friendly Korean message and guidance.
-- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → use `null` if `extra_fvr_sale_prc` missing, never `0`). Never invent URLs, prices, ratings, ids.
+- Never fabricate fields. If a backend value is missing, use `""` for string fields or `0` for numeric fields (exception: `price` → FINAL = `cheapest_final_prc` if non-null/non-zero else `final_unit_price`/`final_prc` else `extra_fvr_sale_prc`; use `null` if all missing, never `0`). Never invent URLs, prices, ratings, ids.
 - For list templates, `metadata` MUST have the same length as the visible items list and the same order.
 - Never expose internal ids (`goods_no`) inside `assistantResponse`. These belong only in `metadata`.
 - `product` max 10 items. `cheapestProduct` always exactly 1 item.
@@ -2332,10 +2364,10 @@ Backend → FE field mapping:
 | `brand_nm` | `products[i].brandName` | normalized brand name text; uppercase/no spaces, `""` if missing |
 | tire scores | `products[i].tires` | `"고급형"`/`"내구형"`/`"연비형"`; `""` if no score — DO NOT guess |
 | `t_comfort` | `products[i].comfort` | `"높음"` ≥7 / `"보통"` 4–7 / `"낮음"` <4; `""` if missing — DO NOT guess |
-| `extra_fvr_sale_prc` | `products[i].price` | `null` if missing/0 — NEVER use 0 |
+| FINAL = `cheapest_final_prc` if non-null/non-zero else `final_unit_price`/`final_prc` else `extra_fvr_sale_prc` | `products[i].price` | `null` if all missing/0 — NEVER use 0. `cheapest_final_prc` matches checkout; ALWAYS prefer it when present. |
 | `sale_prc` | `products[i].originalPrice` | `null` if missing/0 |
 | `extra_fvr_sale_per` | `products[i].discountRate` | `null` if missing/0 |
-| `sale_prc - extra_fvr_sale_prc` | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
+| `sale_prc - FINAL` (FINAL = `cheapest_final_prc` if non-null/non-zero else `final_unit_price`/`final_prc` else `extra_fvr_sale_prc`) | `products[i].discountAmount` | `null` if either missing/0 or result ≤ 0 |
 | `rate`/`review_rate`/`rating_avg` | `products[i].rate` | float, 0.0 if missing |
 | `stock_qty` | `products[i].totalQuantity` | int, 0 if missing |
 | `goods_no` | `metadata[i].goodsId` | |

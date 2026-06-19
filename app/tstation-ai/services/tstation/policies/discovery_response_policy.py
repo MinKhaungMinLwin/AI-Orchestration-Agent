@@ -10,6 +10,24 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
     entities = frame.entities
     tire_size = entities.get("tire_size")
 
+    if frame.sub_intent == "external_price_comparison_request":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=(
+                "claim_external_price_checked",
+                "external_price_scraping",
+                "product_description_answer",
+                "generic_recommendation_cta",
+            ),
+            assistant_guidance=(
+                "다나와/구글/네이버/오픈마켓 등 외부 사이트 실시간 최저가 비교는 하지 않는다고 명확히 밝힌다. "
+                "대신 T'Station 내부 가격과 회원 쿠폰 기준 최저 혜택가만 안내할 수 있다."
+            ),
+            metadata={"response_shape_key": "external_price_comparison_unavailable_internal_price"},
+        )
+
     if frame.sub_intent == "season_concept_compare":
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,

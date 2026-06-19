@@ -1,6 +1,4 @@
-import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +10,13 @@ class ChipContext(BaseModel):
         default=None,
         description="Target domain declared by the chip emitter. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING.",
     )
+    actionId: Optional[str] = Field(default=None, description="Executable quick reply action identifier.")
+    action_id: Optional[str] = Field(default=None, description="Executable quick reply action identifier.")
+    intentKey: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
+    intent_key: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
+    metadata: Optional[dict] = Field(default=None, description="Action-specific metadata emitted with the chip.")
+
+    model_config = {"extra": "allow"}
 
 
 class ChatMessageRequest(BaseModel):

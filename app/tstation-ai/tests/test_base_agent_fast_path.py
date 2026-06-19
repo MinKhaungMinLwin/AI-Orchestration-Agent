@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from services.tstation.agents.base_agent import (
     BaseAgent,
     _AssistantResponseStreamer,
+    _build_owner_vehicle_lookup_event,
     _build_product_warranty_quickreply_event,
     _is_explicit_vehicle_list_request,
     _normalize_qty_quick_replies,
@@ -74,6 +75,59 @@ def test_product_warranty_tool_result_builds_support_quickreply() -> None:
     assert "사이즈가 아직 확인되지 않아" not in data["assistantResponse"]
     assert [chip["label"] for chip in data["quickReplies"]][:1] == ["나의 워런티 확인"]
     assert data["predictedDomains"] == ["SUPPORT"]
+
+
+def test_owner_lookup_vehicle_event_includes_car_maker_when_present() -> None:
+    event = _build_owner_vehicle_lookup_event(
+        "get_user_vehicles_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "car_no": "56모2162",
+                        "car_lnc_cd": "W049847",
+                        "car_maker": "BMW",
+                        "car_nm": "3-series(F30) 320d A/T",
+                        "car_model_det": "3-series(F30)",
+                        "tire_size_fr": "225/50R17",
+                        "tire_size_re": "225/50R17",
+                    }
+                ]
+            },
+        },
+        [{"role": "user", "content": "56모2162 심지영"}],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "BMW 3-series(F30) 320d A/T 차량의 타이어 사이즈는 225/50R17입니다." in (
+        event["data"]["assistantResponse"]
+    )
+    assert event["data"]["metadata"]["carMaker"] == "BMW"
+
+
+def test_owner_lookup_vehicle_event_does_not_intercept_recommendation_request() -> None:
+    event = _build_owner_vehicle_lookup_event(
+        "get_user_vehicles_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "car_no": "56모2162",
+                        "car_lnc_cd": "W049847",
+                        "car_maker": "BMW",
+                        "car_nm": "3-series(F30) 320d A/T",
+                        "tire_size_fr": "225/50R17",
+                    }
+                ]
+            },
+        },
+        [{"role": "user", "content": "56모2162 심지영 타이어 추천"}],
+    )
+
+    assert event is None
 
 
 def test_fast_path_allows_transaction_preview_terminal_templates():
@@ -161,6 +215,34 @@ def test_transaction_policy_blocks_store_list_tool_when_required_slot_missing():
     assert event["assistant_response_source"] == "transaction_policy_guard"
     assert event["data"]["requiredSlots"] == ["quantity"]
     assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["1개", "2개", "3개", "4개"]
+
+
+def test_transaction_policy_does_not_block_when_previous_tool_facts_have_goods_no():
+    token = current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("product",),
+            forbidden_behaviors=("empty_location_card",),
+            assistant_guidance="상품을 먼저 확인한다.",
+        )
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": (
+                '[Previous agent tool facts]\n'
+                '[{"tool":"search_product_tool","data":{"status":"success","data":{"items":'
+                '[{"goods_no":"G000000309783","goods_nm":"벤투스 S2 AS"}]}}}]'
+            ),
+        }
+    ]
+    try:
+        event = BaseAgent._transaction_policy_blocked_event("get_store_list_tool", messages)
+    finally:
+        current_transaction_response_decision.reset(token)
+
+    assert event is None
 
 
 def test_qty_quickreply_normalizer_preserves_staggered_max_two_chips():
@@ -587,3 +669,51 @@ def test_owner_lookup_vehicle_recommendation_uses_car_code_directly() -> None:
         "brand_cd": "HK",
         "car_lnc_cd": "W011338",
     }
+
+
+def test_owner_lookup_vehicle_recommendation_maps_all_season_to_four_season_filter() -> None:
+    owner_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "26저7922",
+                    "car_lnc_cd": "W011338",
+                    "tire_size_fr": "225/55R17",
+                }
+            ]
+        },
+    }
+
+    args = _owner_lookup_vehicle_recommendation_args(
+        owner_result,
+        [{"role": "user", "content": "26저7922 황지훈 올시즌 타이어 추천"}],
+    )
+
+    assert args is not None
+    assert args["rcmd_type"] == "all_weather"
+    assert args["season_nm"] == "사계절"
+
+
+def test_owner_lookup_vehicle_recommendation_maps_all_weather_separately() -> None:
+    owner_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "26저7922",
+                    "car_lnc_cd": "W011338",
+                    "tire_size_fr": "225/55R17",
+                }
+            ]
+        },
+    }
+
+    args = _owner_lookup_vehicle_recommendation_args(
+        owner_result,
+        [{"role": "user", "content": "26저7922 황지훈 올웨더 타이어 추천"}],
+    )
+
+    assert args is not None
+    assert args["rcmd_type"] == "all_weather"
+    assert args["season_nm"] == "올웨더"

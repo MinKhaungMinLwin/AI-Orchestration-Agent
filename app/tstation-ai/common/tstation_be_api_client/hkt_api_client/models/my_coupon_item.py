@@ -29,6 +29,10 @@ class MyCouponItem:
         rt_amt_val (float | None | Unset): 정률/정액 값
         min_pur_amt (int | None | Unset): 최소 구매 금액
         max_dscnt_amt (int | None | Unset): 최대 할인 금액
+        cpn_onoff_cd (None | str | Unset): 쿠폰 온/오프라인 코드
+        coupon_channel_type (None | str | Unset): 정규화된 쿠폰 사용처: online, offline, onoff, store_only, partner_only
+        has_store_mapping (bool | Unset): 매장 적용 대상 매핑(TGT_SCT_CD='90') 보유 여부 Default: False.
+        has_partner_mapping (bool | Unset): 제휴사 적용 대상 매핑(TGT_SCT_CD='100') 보유 여부 Default: False.
     """
 
     cpn_issu_no: str
@@ -45,6 +49,10 @@ class MyCouponItem:
     rt_amt_val: float | None | Unset = UNSET
     min_pur_amt: int | None | Unset = UNSET
     max_dscnt_amt: int | None | Unset = UNSET
+    cpn_onoff_cd: None | str | Unset = UNSET
+    coupon_channel_type: None | str | Unset = UNSET
+    has_store_mapping: bool | Unset = False
+    has_partner_mapping: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,6 +128,22 @@ class MyCouponItem:
         else:
             max_dscnt_amt = self.max_dscnt_amt
 
+        cpn_onoff_cd: None | str | Unset
+        if isinstance(self.cpn_onoff_cd, Unset):
+            cpn_onoff_cd = UNSET
+        else:
+            cpn_onoff_cd = self.cpn_onoff_cd
+
+        coupon_channel_type: None | str | Unset
+        if isinstance(self.coupon_channel_type, Unset):
+            coupon_channel_type = UNSET
+        else:
+            coupon_channel_type = self.coupon_channel_type
+
+        has_store_mapping = self.has_store_mapping
+
+        has_partner_mapping = self.has_partner_mapping
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -151,6 +175,14 @@ class MyCouponItem:
             field_dict["min_pur_amt"] = min_pur_amt
         if max_dscnt_amt is not UNSET:
             field_dict["max_dscnt_amt"] = max_dscnt_amt
+        if cpn_onoff_cd is not UNSET:
+            field_dict["cpn_onoff_cd"] = cpn_onoff_cd
+        if coupon_channel_type is not UNSET:
+            field_dict["coupon_channel_type"] = coupon_channel_type
+        if has_store_mapping is not UNSET:
+            field_dict["has_store_mapping"] = has_store_mapping
+        if has_partner_mapping is not UNSET:
+            field_dict["has_partner_mapping"] = has_partner_mapping
 
         return field_dict
 
@@ -262,6 +294,28 @@ class MyCouponItem:
 
         max_dscnt_amt = _parse_max_dscnt_amt(d.pop("max_dscnt_amt", UNSET))
 
+        def _parse_cpn_onoff_cd(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cpn_onoff_cd = _parse_cpn_onoff_cd(d.pop("cpn_onoff_cd", UNSET))
+
+        def _parse_coupon_channel_type(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        coupon_channel_type = _parse_coupon_channel_type(d.pop("coupon_channel_type", UNSET))
+
+        has_store_mapping = d.pop("has_store_mapping", UNSET)
+
+        has_partner_mapping = d.pop("has_partner_mapping", UNSET)
+
         my_coupon_item = cls(
             cpn_issu_no=cpn_issu_no,
             mbr_no=mbr_no,
@@ -277,6 +331,10 @@ class MyCouponItem:
             rt_amt_val=rt_amt_val,
             min_pur_amt=min_pur_amt,
             max_dscnt_amt=max_dscnt_amt,
+            cpn_onoff_cd=cpn_onoff_cd,
+            coupon_channel_type=coupon_channel_type,
+            has_store_mapping=has_store_mapping,
+            has_partner_mapping=has_partner_mapping,
         )
 
         my_coupon_item.additional_properties = d

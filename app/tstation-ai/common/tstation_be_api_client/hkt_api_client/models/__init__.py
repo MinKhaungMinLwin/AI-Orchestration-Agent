@@ -111,6 +111,7 @@ from .store_list_response import StoreListResponse
 from .store_schedule_response import StoreScheduleResponse
 from .store_schedule_slot import StoreScheduleSlot
 from .tire_spec import TireSpec
+from .user_vehicle_lookup_response import UserVehicleLookupResponse
 from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
 from .vehicle_type import VehicleType
@@ -223,6 +224,7 @@ __all__ = (
     "StoreScheduleResponse",
     "StoreScheduleSlot",
     "TireSpec",
+    "UserVehicleLookupResponse",
     "ValidationError",
     "ValidationErrorContext",
     "VehicleType",

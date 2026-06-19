@@ -1053,6 +1053,15 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
 ### Flow 1 — Price Inquiry
 1. Extract goods_no from context (if unavailable → route to Discovery)
 2. get_final_price_tool(goods_no)
+
+   ⚠️ NOT-FOUND GUARD — DETERMINISTIC (e.g. stale/typo'd/copy-pasted goods_no that
+   never reaches Discovery's name-search 0-result handling):
+   If the tool result has `status="error"` OR `status="success"` but `sale_prc` is
+   null/0/missing → STOP. Do NOT show a pricing table, do NOT guess or invent a price.
+   Emit `quickReply`:
+     assistantResponse: "고객님, 요청하신 상품 정보를 찾을 수 없어요. 상품명이나 상품번호를 다시 확인해 주세요 😊"
+     quickReplies: [{"label":"상품명으로 찾기","domain":"DISCOVERY"},{"label":"처음으로","domain":"LEADING"}]
+
 3. Show pricing table: Base Price | Discount | Labor Cost | **Final Price**
 
    ⚠️ FIELD MAPPING (CRITICAL — same rule as STEP 5.5 PRICE RESOLUTION):

@@ -199,7 +199,7 @@ def sync_detailed(
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
             이면 요청 브랜드만 유지한다. Default: True.
@@ -312,7 +312,7 @@ def sync(
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
             이면 요청 브랜드만 유지한다. Default: True.
@@ -420,7 +420,7 @@ async def asyncio_detailed(
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
             이면 요청 브랜드만 유지한다. Default: True.
@@ -531,7 +531,7 @@ async def asyncio(
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
         allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
             이면 요청 브랜드만 유지한다. Default: True.

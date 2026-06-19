@@ -16,6 +16,18 @@ _ALL_WEATHER_RE = re.compile(r"올웨더|all\s*weather", re.IGNORECASE)
 _ALL_SEASON_RE = re.compile(r"사계절|올시즌|all\s*season", re.IGNORECASE)
 _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re.IGNORECASE)
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
+_EXTERNAL_PRICE_COMPARE_ANCHOR_RE = re.compile(
+    r"다나와|구글|google|네이버(?:\s*쇼핑)?|naver(?:\s*shopping)?|쇼핑\s*검색|쇼핑몰|온라인\s*몰|온라인몰|"
+    r"외부\s*(?:몰|사이트|채널)|오픈\s*마켓|오픈마켓|가격\s*비교\s*(?:사이트|앱|플랫폼)?|가격비교|"
+    r"포털|검색\s*엔진|검색엔진|쿠팡|coupang|11\s*번가|십일번가|옥션|auction|g\s*마켓|지마켓|gmarket|"
+    r"롯데\s*온|롯데온|ssg|쓱|카카오\s*쇼핑|카카오쇼핑|위메프|티몬",
+    re.IGNORECASE,
+)
+_EXTERNAL_PRICE_COMPARE_REQUEST_RE = re.compile(
+    r"최저\s*가|최저\s*가격|가격\s*비교|비교\s*가격|어디(?:가|서)?\s*(?:제일|가장)?\s*(?:싸|저렴)|"
+    r"(?:싼|저렴한)\s*(?:곳|데|몰|사이트|채널)|외부\s*(?:가격|최저가)|검색(?:해|해서)?\s*(?:줘|봐|찾)",
+    re.IGNORECASE,
+)
 _VALUE_RECOMMENDATION_RE = re.compile(r"가성비|합리적|가격\s*대비|value", re.IGNORECASE)
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
@@ -42,7 +54,17 @@ _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNO
 _COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
 _BEST_SELLER_RE = re.compile(
-    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|젤\s*많이\s*(?:구매한|산)|잘\s*나가",
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔린)|잘\s*나가|"
+    r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)",
+    re.IGNORECASE,
+)
+_BEST_SELLER_AGGREGATE_RE = re.compile(
+    r"베스트\s*셀러|"
+    r"(?=.*(?:타이어|상품))"
+    r"(?=.*(?:베스트|인기|잘\s*팔리|많이\s*(?:사는|구매한|산|팔린)|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔린)|잘\s*나가|"
+    r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)))",
     re.IGNORECASE,
 )
 _DEMOGRAPHIC_ATTRIBUTE_RE = re.compile(
@@ -218,9 +240,9 @@ def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
     if _WINTER_RE.search(text or ""):
         season_variants.append({"rcmd_type": "snow", "season_nm": "겨울", "label": "겨울용"})
     if _ALL_WEATHER_RE.search(text or ""):
-        season_variants.append({"rcmd_type": "all_weather", "label": "올웨더"})
+        season_variants.append({"rcmd_type": "all_weather", "season_nm": "올웨더", "label": "올웨더"})
     if _ALL_SEASON_RE.search(text or ""):
-        season_variants.append({"rcmd_type": "all_weather", "label": "사계절"})
+        season_variants.append({"rcmd_type": "all_weather", "season_nm": "사계절", "label": "사계절"})
     deduped: list[dict[str, Any]] = []
     seen_keys: set[tuple[tuple[str, Any], ...]] = set()
     for variant in season_variants:
@@ -234,6 +256,20 @@ def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
     return ()
 
 
+def is_best_seller_request(text: str, *, include_demographic_preference: bool = True) -> bool:
+    """Return true for aggregate popularity/sales-ranking requests.
+
+    Keep this helper as the single policy source for best-seller routing so the
+    deterministic runtime path and Discovery intent policy do not drift.
+    """
+    text = text or ""
+    if _BEST_SELLER_RE.search(text) and _BEST_SELLER_AGGREGATE_RE.search(text):
+        return True
+    if not include_demographic_preference:
+        return False
+    return bool(_DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text))
+
+
 def best_seller_period_from_text(text: str) -> str | None:
     """Map best-seller wording to BE period values.
 
@@ -242,10 +278,7 @@ def best_seller_period_from_text(text: str) -> str | None:
     ranking window the BE supports unless the user names a narrower period.
     """
     text = text or ""
-    is_demographic_preference = bool(
-        _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text)
-    )
-    if not _BEST_SELLER_RE.search(text) and not is_demographic_preference:
+    if not is_best_seller_request(text):
         return None
     if _BEST_SELLER_DAY_RE.search(text):
         return "day"
@@ -289,6 +322,32 @@ def is_quantity_benefit_comparison_request(text: str) -> bool:
         len(quantity_options) >= 2
         and bool(_QUANTITY_BENEFIT_RE.search(text or ""))
         and bool(_QUANTITY_COMPARE_RE.search(text or ""))
+    )
+
+
+def is_external_price_comparison_request(
+    text: str,
+    *,
+    known_slots: dict[str, Any] | None = None,
+) -> bool:
+    """External-mall price lookup intent anchored by a marketplace/search site mention.
+
+    The external anchor is required so ordinary "최저가 타이어 추천" and
+    "할인가 얼마야" flows remain internal T'Station price/search requests.
+    """
+    text = text or ""
+    slots = known_slots or {}
+    has_product_or_size = bool(
+        normalize_tire_size(text)
+        or extract_product_names(text)
+        or slots.get("tire_size")
+        or slots.get("product_name")
+        or slots.get("goods_no")
+    )
+    return (
+        has_product_or_size
+        and bool(_EXTERNAL_PRICE_COMPARE_ANCHOR_RE.search(text))
+        and bool(_EXTERNAL_PRICE_COMPARE_REQUEST_RE.search(text))
     )
 
 
@@ -358,6 +417,8 @@ def build_discovery_intent_frame(
         entities["value_focus"] = True
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
+    if is_external_price_comparison_request(text, known_slots=slots):
+        entities["external_price_comparison"] = True
     best_seller_period = best_seller_period_from_text(text)
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
@@ -372,7 +433,10 @@ def build_discovery_intent_frame(
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if entities.get("default_benefit"):
+    if entities.get("external_price_comparison"):
+        intent = "product_search"
+        sub_intent = "external_price_comparison_request"
+    elif entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
     elif entities.get("deal_list_only"):
@@ -485,6 +549,26 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "external_price_comparison_request":
+        product_names = entities.get("product_names") or ()
+        args = {"limit": 5, "sort_by": "price_asc"}
+        if product_names:
+            args["keyword"] = product_names[0]
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=(
+                "get_product_description_tool",
+                "get_products_recommendations_tool",
+                "product_attribute_lookup",
+                "external_price_scraping",
+            ),
+        )
     if frame.sub_intent == "benefit_event_deal_list":
         return ToolPlan(
             allowed_tools=("get_events_tool", "get_deals_tool"),
@@ -588,7 +672,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         if args.get("rcmd_type"):
             args["season_nm"] = "올웨더"
         else:
-            args.update({"rcmd_type": "all_weather"})
+            args.update({"rcmd_type": "all_weather", "season_nm": "올웨더"})
     elif entities.get("season") == "all_season":
         if args.get("rcmd_type"):
             args["season_nm"] = "사계절"

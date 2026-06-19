@@ -197,7 +197,19 @@ _INTERNAL_POLICY_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_PRODUCT_RESPONSE_RE = re.compile(
-    r"(추천\s*상품\s*\d*개?.*선택해\s*주세요|추천\s*상품을\s*확인했어요|상품을\s*검색했습니다)",
+    r"(추천\s*상품\s*\d*개?.*선택해\s*주세요|추천\s*상품을\s*확인했어요|상품을\s*(?:검색했습니다|찾았어요))",
+    re.IGNORECASE,
+)
+_PRODUCT_TRANSACTION_MISSING_SIZE_RE = re.compile(
+    r"(?=.*(?:구매|주문|결제|살래|살게|사고\s*싶|사려고|예약|장착|재고|오늘\s*서비스|오늘서비스|당일\s*서비스))"
+    r"(?=.*(?:점|매장|서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
+    r"청량리|인천|하남|청주|제주|서귀포))",
+    re.IGNORECASE,
+)
+_PRODUCT_DESCRIPTION_ONLY_RE = re.compile(r"설명|뭐야|뭔지|특징|장점|어때|상세", re.IGNORECASE)
+_PRODUCT_TRANSACTION_ACTION_RE = re.compile(
+    r"구매|주문|결제|살래|살게|사고\s*싶|사려고|예약|장착|재고|오늘\s*서비스|오늘서비스|당일\s*서비스|"
+    r"가격|할인가|쿠폰|장바구니",
     re.IGNORECASE,
 )
 _BEST_SELLER_COUNT_QUERY_RE = re.compile(r"몇\s*개|몇개|판매량|팔렸", re.IGNORECASE)
@@ -229,11 +241,45 @@ def _is_goal_booking_followup() -> bool:
     """Read the request-scoped goal_type and decide if isBookingFlow should be
     forced True. Returns False when no goal is set (preserves legacy behavior).
     """
+    if _is_product_description_only_turn():
+        return False
     return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
 
 
+def _is_product_description_only_turn() -> bool:
+    text = _current_turn_user_text()
+    return bool(text and _PRODUCT_DESCRIPTION_ONLY_RE.search(text) and not _PRODUCT_TRANSACTION_ACTION_RE.search(text))
+
+
+def _is_product_transaction_missing_size_turn() -> bool:
+    text = _current_turn_user_text()
+    if not text or re.search(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", text, re.IGNORECASE):
+        return False
+    return bool(_PRODUCT_TRANSACTION_MISSING_SIZE_RE.search(text))
+
+
+def _product_transaction_pending_context() -> dict[str, object]:
+    text = _current_turn_user_text()
+    context: dict[str, object] = {
+        "pendingIntent": "order",
+        "requestedFlow": "purchase_or_install",
+    }
+    qty_match = re.search(r"(\d{1,2})\s*(?:개|본|짝)", text)
+    if qty_match:
+        try:
+            context["ordQty"] = int(qty_match.group(1))
+        except ValueError:
+            pass
+    store_match = re.search(r"([가-힣A-Za-z0-9]+(?:점|매장))", text)
+    if store_match:
+        context["shopName"] = store_match.group(1)
+    return context
+
+
 def _single_product_transaction_handoff_event(items: list[dict], metadata: list[dict]) -> dict | None:
-    if len(items) != 1 or len(metadata) != 1 or not _is_goal_booking_followup():
+    if len(items) != 1 or len(metadata) != 1 or not (
+        _is_goal_booking_followup() or _is_product_transaction_missing_size_turn()
+    ):
         return None
     goal_type = current_goal_type.get()
     pending_intent = current_pending_intent.get()
@@ -241,6 +287,8 @@ def _single_product_transaction_handoff_event(items: list[dict], metadata: list[
         action_text = "가격 확인을 이어갈게요."
     elif goal_type == "store_with_stock" or pending_intent == "stock":
         action_text = "장착 가능 매장 확인을 이어갈게요."
+    elif _is_product_transaction_missing_size_turn():
+        action_text = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요."
     else:
         action_text = "오늘서비스 구매 진행을 이어갈게요."
     title = str(items[0].get("title") or items[0].get("titleProductName") or "상품").strip()
@@ -376,10 +424,27 @@ def _get_num(d: dict, *keys: str, default: int | float = 0) -> int | float:
         v = d.get(k)
         if v is not None:
             try:
-                return type(default)(v)
+                return type(default)(str(v).replace(",", ""))
             except (ValueError, TypeError):
                 pass
     return default
+
+
+def _display_final_unit_price(row: dict) -> int:
+    """FINAL unit price for product cards/comparison, not order payment total."""
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "price",
+        "sale_prc",
+    ):
+        value = int(_get_num(row, key, default=0))
+        if value:
+            return value
+    return 0
 
 
 def _normalize_vehicle_key(value: Any) -> str:
@@ -451,14 +516,22 @@ def _inventory_shop_ids(raw_inventory: object, key: str) -> set[str]:
     return ids
 
 
-def _preview_location_assistant_response(tier: str, region: str, item_count: int) -> str | None:
+def _preview_location_assistant_response(
+    tier: str,
+    region: str,
+    item_count: int,
+    *,
+    requested_cal_day: str | None = None,
+) -> str | None:
     """Build preview-specific location copy from resolved inventory/schedule tier."""
     tier_normalized = (tier or "").strip().lower()
     if not tier_normalized:
         return None
     count_text = f"{item_count}곳"
     region_prefix = f"{region}에서 " if region else ""
-    today_requested = bool(re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or ""))
+    today_requested = bool(requested_cal_day) or bool(
+        re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "")
+    )
     if tier_normalized == "logistics_only":
         if today_requested:
             return (
@@ -562,6 +635,62 @@ def _same_turn_inventory_stock_labels(tool_data_list: list[dict]) -> dict[str, s
     return labels
 
 
+def _preview_candidate_shop_ids(raw: dict) -> list[str]:
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    candidates = schedule.get("candidate_shop_ids") or raw.get("candidate_shop_ids") or []
+    out: list[str] = []
+    if isinstance(candidates, list):
+        for value in candidates:
+            shop_id = str(value or "").strip()
+            if shop_id and shop_id not in out:
+                out.append(shop_id)
+    stores = raw.get("stores")
+    if isinstance(stores, list):
+        for store in stores:
+            if not isinstance(store, dict):
+                continue
+            shop_id = _get_str(store, "shop_id", "shopId")
+            if shop_id and shop_id not in out:
+                out.append(shop_id)
+    inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+    for key in ("todayShopArray", "tnaShopArray"):
+        for shop_id in sorted(_inventory_shop_ids(inventory, key)):
+            if shop_id not in out:
+                out.append(shop_id)
+    return out
+
+
+def _preview_cta_context(args: dict, raw: dict, *, fallback_intent: str = "reservation") -> dict[str, Any]:
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    requested_cal_day = (
+        _get_str(args, "requested_cal_day")
+        or _get_str(raw, "requested_cal_day")
+        or _get_str(schedule, "requested_cal_day")
+    )
+    intent_key = "today_install" if requested_cal_day or _today_service_context() else fallback_intent
+    context: dict[str, Any] = {
+        "intentKey": intent_key,
+        "goodsNo": _get_str(args, "goods_no") or _get_str(raw, "goods_no"),
+        "tireSize": _get_str(args, "tire_size") or _get_str(raw, "tire_size"),
+        "ordQty": args.get("ord_qty") or args.get("quantity") or raw.get("ord_qty"),
+        "regionCode": _get_str(args, "region_code"),
+        "storeName": _get_str(args, "store_nm"),
+        "requestedCalDay": requested_cal_day,
+        "candidateShopIds": _preview_candidate_shop_ids(raw),
+    }
+    return {key: value for key, value in context.items() if value not in (None, "", [])}
+
+
+def _cta_chip(label: str, *, domain: str, action_id: str, intent_key: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "label": label,
+        "domain": domain,
+        "actionId": action_id,
+        "intentKey": intent_key,
+        "metadata": metadata,
+    }
+
+
 def _same_turn_logistics_schedule_has_slots(tool_data_list: list[dict]) -> bool:
     schedule_entries = _find_entries(tool_data_list, "get_store_schedule_tool")
     if not schedule_entries:
@@ -587,6 +716,9 @@ def _map_inventory_stock_result(tool_data_list: list[dict], assistant_text: str)
     short = (assistant_text or "").strip()
     if not short or len(short) > 160 or not re.search(r"없|불가|확인되지|품절|부족", short):
         short = "요청하신 조건으로 바로 장착 가능한 매장 재고가 확인되지 않았어요. 다른 매장이나 날짜로 다시 확인해 드릴게요."
+    cta_context = {
+        "intentKey": "stock",
+    }
     return {
         "type": "data",
         "template": "quickReply",
@@ -594,11 +726,24 @@ def _map_inventory_stock_result(tool_data_list: list[dict], assistant_text: str)
         "data": {
             "assistantResponse": short,
             "quickReplies": [
-                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
-                {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                _cta_chip(
+                    "다른 지역 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_region",
+                    intent_key="stock",
+                    metadata=cta_context,
+                ),
+                _cta_chip(
+                    "다른 날짜 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_date",
+                    intent_key="stock",
+                    metadata=cta_context,
+                ),
                 {"label": "대체상품 찾기", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {"ctaContext": cta_context},
         },
     }
 
@@ -624,6 +769,31 @@ def _preview_has_no_fulfillment(raw: dict) -> bool:
     return logistics_qty <= 0 and not today_ids and not tna_ids and schedule_empty
 
 
+def _preview_has_no_requested_day_fulfillment(raw: dict) -> bool:
+    """True when a date-specific preview found no store on the requested day.
+
+    todayShopArray and tnaShopArray are inventory-proven today-installable
+    candidates. A missing schedule slot must not override those inventory
+    results for today-install copy.
+    """
+    requested_cal_day = _get_str(raw, "requested_cal_day")
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    requested_cal_day = requested_cal_day or _get_str(schedule, "requested_cal_day")
+    if not requested_cal_day:
+        return False
+    inventory = raw.get("inventory") if isinstance(raw.get("inventory"), dict) else {}
+    if _inventory_shop_ids(inventory, "todayShopArray") or _inventory_shop_ids(inventory, "tnaShopArray"):
+        return False
+    schedule_stores = schedule.get("stores") if isinstance(schedule, dict) else None
+    return _get_str(schedule, "tier").lower() == "none" or (
+        isinstance(schedule_stores, list) and not schedule_stores
+    )
+
+
+def _unsafe_no_fulfillment_copy(text: str) -> bool:
+    return bool(re.search(r"목록|선택|예약\s*가능|주문\s*가능|장착\s*가능|확인했어요", text or ""))
+
+
 def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Block product order/stock previews from falling through to a general store schedule."""
     for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
@@ -634,9 +804,9 @@ def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant
         if not args.get("goods_no"):
             continue
         stores = raw.get("stores")
-        if not isinstance(stores, list) or not stores:
-            continue
-        if not _preview_has_no_fulfillment(raw):
+        if not _preview_has_no_requested_day_fulfillment(raw) and (
+            not isinstance(stores, list) or not stores or not _preview_has_no_fulfillment(raw)
+        ):
             continue
 
         region = _get_str(args, "region_code") or _get_str(args, "store_nm")
@@ -646,13 +816,15 @@ def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant
             not short
             or len(short) > 160
             or "```" in short
-            or re.search(r"선택|예약 가능|주문 가능|장착 가능 여부가 확인|확인했어요", short)
+            or _unsafe_no_fulfillment_copy(short)
             or not re.search(r"없|불가|확인되지|품절|부족|재고", short)
         ):
             short = (
                 f"{prefix}요청하신 상품과 수량으로 바로 장착 가능한 재고가 확인되지 않았어요. "
                 "다른 지역이나 다른 상품으로 다시 확인해 드릴게요."
             )
+        cta_context = _preview_cta_context(args, raw, fallback_intent="today_install")
+        intent_key = str(cta_context.get("intentKey") or "today_install")
         return {
             "type": "data",
             "template": "quickReply",
@@ -660,10 +832,17 @@ def _map_preview_no_fulfillment_quickreply(tool_data_list: list[dict], assistant
             "data": {
                 "assistantResponse": short,
                 "quickReplies": [
-                    {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key=intent_key,
+                        metadata=cta_context,
+                    ),
                     {"label": "다른 상품 보기", "domain": "DISCOVERY"},
                 ],
                 "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                "metadata": {"ctaContext": cta_context},
             },
         }
     return None
@@ -712,10 +891,24 @@ def _map_store_validation_quickreply(tool_data_list: list[dict], assistant_text:
             if len(stored_candidates) == 1:
                 quick_replies = [
                     {"label": "네, 맞아요", "domain": "TRANSACTION"},
-                    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key="store_search",
+                        metadata={"intentKey": "store_search"},
+                    ),
                 ]
             elif chips:
-                quick_replies = chips + [{"label": "다른 매장 찾기", "domain": "TRANSACTION"}]
+                quick_replies = chips + [
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key="store_search",
+                        metadata={"intentKey": "store_search"},
+                    )
+                ]
 
         region_candidates = raw.get("region_candidates")
         if not quick_replies and isinstance(region_candidates, list) and region_candidates:
@@ -729,14 +922,28 @@ def _map_store_validation_quickreply(tool_data_list: list[dict], assistant_text:
                 labels.append({"label": f"{region_text} 지역 검색", "domain": "TRANSACTION"})
             if stored_regions:
                 confirmation_meta["regionCandidates"] = stored_regions
-                quick_replies = labels + [{"label": "다른 매장 찾기", "domain": "TRANSACTION"}]
+                quick_replies = labels + [
+                    _cta_chip(
+                        "다른 지역 입력",
+                        domain="TRANSACTION",
+                        action_id="enter_region",
+                        intent_key="store_search",
+                        metadata={"intentKey": "store_search"},
+                    )
+                ]
 
         suggested_region = _get_str(raw, "suggested_region")
         if not quick_replies and suggested_region:
             confirmation_meta["suggestedRegion"] = suggested_region
             quick_replies = [
                 {"label": f"네, {suggested_region} 지역으로 검색", "domain": "TRANSACTION"},
-                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                _cta_chip(
+                    "다른 지역 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_region",
+                    intent_key="store_search",
+                    metadata={"intentKey": "store_search"},
+                ),
             ]
 
         if not quick_replies:
@@ -809,8 +1016,17 @@ def _reservation_sale_date_quickreply(min_install_date: str) -> dict:
         "assistant_response_source": "code_mapper_reservation_sale_date_guard",
         "data": {
             "assistantResponse": f"해당 상품은 {install_date} 이후 장착 가능합니다. 다른 날짜를 선택해 주세요.",
-            "quickReplies": [{"label": "다른 날짜 확인", "domain": "TRANSACTION"}],
+            "quickReplies": [
+                _cta_chip(
+                    "다른 날짜 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_date",
+                    intent_key="reservation",
+                    metadata={"intentKey": "reservation", "minInstallDate": min_install_date},
+                )
+            ],
             "predictedDomains": ["TRANSACTION"],
+            "metadata": {"ctaContext": {"intentKey": "reservation", "minInstallDate": min_install_date}},
         },
     }
 
@@ -929,10 +1145,17 @@ def _store_specialty_no_match_quickreply(region: str, *, require_ev_specialty: b
                 f"{region_prefix}매장을 찾았지만, 요청하신 {condition} 조건에 맞는 매장은 현재 확인되지 않았어요."
             ),
             "quickReplies": [
-                {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                _cta_chip(
+                    "다른 지역 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_region",
+                    intent_key="store_search",
+                    metadata={"intentKey": "store_search"},
+                ),
                 {"label": "다른 조건으로 찾기", "domain": "TRANSACTION"},
             ],
             "predictedDomains": ["TRANSACTION"],
+            "metadata": {"ctaContext": {"intentKey": "store_search"}},
         },
     }
 
@@ -1918,6 +2141,15 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         if not isinstance(args, dict):
             continue
+        requested_limit = _recommendation_requested_limit(entry, raw)
+        effective_limit = _recommendation_effective_limit(entry, raw, requested_limit)
+        prefix = _recommendation_limit_notice(
+            requested_limit=requested_limit,
+            effective_limit=effective_limit,
+            item_count=item_count,
+        )
+        if prefix:
+            return f"{prefix} 원하시는 상품을 선택해 주세요."
         tire_size = _get_str(args, "tire_size")
         season = _get_str(args, "season_nm")
         rcmd_type = _get_str(args, "rcmd_type")
@@ -1934,6 +2166,101 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
             return f"조건에 맞는 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
 
     return _TEMPLATE_DEFAULTS.get("product", "").format(n=item_count)
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _recommendation_requested_limit(entry: dict, raw: dict | list) -> int | None:
+    user_requested = _recommendation_requested_limit_from_user_text(_current_user_turn_text())
+    if isinstance(raw, dict):
+        requested = _positive_int_or_none(raw.get("requested_limit"))
+        if user_requested is not None and requested is not None and user_requested > requested:
+            return user_requested
+        if requested is not None:
+            return requested
+    requested = _positive_int_or_none(_tool_args(entry).get("requested_limit") or _tool_args(entry).get("limit"))
+    if user_requested is not None and requested is not None and user_requested > requested:
+        return user_requested
+    return user_requested or requested
+
+
+def _current_user_turn_text() -> str:
+    text = current_user_text.get() or ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else text
+
+
+_KOREAN_COUNT_WORDS: dict[str, int] = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+    "열한": 11,
+    "열두": 12,
+    "열세": 13,
+    "열네": 14,
+    "열다섯": 15,
+    "스무": 20,
+    "스물": 20,
+}
+
+
+def _recommendation_requested_limit_from_user_text(text: str) -> int | None:
+    if not text:
+        return None
+    match = re.search(r"(?<!\d)(\d{1,2})\s*(?:개|가지|종)(?:\s*(?:추천|보여|알려|찾아|만))?", text)
+    if match:
+        return _positive_int_or_none(match.group(1))
+    word_pattern = "|".join(sorted(map(re.escape, _KOREAN_COUNT_WORDS), key=len, reverse=True))
+    match = re.search(rf"({word_pattern})\s*(?:개|가지|종)(?:\s*(?:추천|보여|알려|찾아|만))?", text)
+    if match:
+        return _KOREAN_COUNT_WORDS.get(match.group(1))
+    return None
+
+
+def _recommendation_effective_limit(entry: dict, raw: dict | list, requested_limit: int | None) -> int | None:
+    if isinstance(raw, dict):
+        effective = _positive_int_or_none(raw.get("effective_limit"))
+        if effective is not None:
+            return effective
+    requested = requested_limit or _positive_int_or_none(_tool_args(entry).get("limit"))
+    if requested is None:
+        return None
+    return min(requested, 10)
+
+
+def _recommendation_limit_notice(
+    *,
+    requested_limit: int | None,
+    effective_limit: int | None,
+    item_count: int,
+) -> str:
+    if requested_limit is None or effective_limit is None:
+        return ""
+    cap_limit = 10
+    if requested_limit > cap_limit:
+        if item_count >= cap_limit:
+            return f"추천은 최대 {cap_limit}개까지만 가능해요. 조건에 맞는 상품 {item_count}개를 보여드릴게요."
+        return f"추천은 최대 {cap_limit}개까지만 가능해요. 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
+    if item_count < requested_limit:
+        return f"요청하신 {requested_limit}개 중 조건에 맞는 상품은 현재 {item_count}개만 확인돼요."
+    return ""
 
 
 def _technology_unsized_policy_response(tool_data_list: list[dict]) -> str:
@@ -2021,6 +2348,8 @@ def _safe_service_unsized_policy_response(tool_data_list: list[dict]) -> str:
 
 def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Honor Discovery policy decisions that forbid card-first rendering."""
+    if _is_product_transaction_missing_size_turn():
+        return None
     decision = current_discovery_response_decision.get()
     if decision is None or decision.template != TemplateName.QUICK_REPLY:
         return None
@@ -2135,11 +2464,19 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 },
                 "assistant_response_source": "code_mapper",
             }
-    if current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
-        "store_with_stock",
-        "place_order",
-        "price_inquiry",
+    if (
+        not _is_product_description_only_turn()
+        and (
+            current_pending_intent.get() in ("stock", "order", "reservation")
+            or current_goal_type.get() in (
+                "store_with_stock",
+                "place_order",
+                "price_inquiry",
+            )
+        )
     ):
+        return None
+    if _is_product_transaction_missing_size_turn():
         return None
 
     rows_by_name: dict[str, dict] = {}
@@ -2217,10 +2554,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # for each search result; pairing by `input.goods_no` is the only robust
     # way (parallel completion order is non-deterministic).
     #
-    # Price priority: cheapest_final_prc (회원 보유 쿠폰 적용 후 최저가, 사이트
-    # 결제 페이지와 일치) → extra_fvr_sale_prc (사이트 일반 노출 혜택가, "모든
-    # 쿠폰 적용 가정") → sale_prc (정가). cheapest_final_prc 가 non-null 이면
-    # 무조건 그것을 써야 결제 카드 paymentAmount 가 사이트와 일치한다.
+    # Price priority: cheapest_final_prc → final_unit_price/final_prc →
+    # extra_fvr_sale_prc → price → sale_prc. This is display/comparison FINAL
+    # unit price; order payment totals add wage and quantity in their own path.
     price_map: dict[str, int] = {}
     for entry in _find_entries(tool_data_list, "get_final_price_tool"):
         # base_agent.py populates `args` (line 319); chat.py path uses `input`.
@@ -2231,11 +2567,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         price_data = _unwrap(entry)
         if not isinstance(price_data, dict):
             continue
-        price = int(_get_num(price_data, "cheapest_final_prc", default=0))
-        if not price:
-            price = int(_get_num(price_data, "extra_fvr_sale_prc", default=0))
-        if not price:
-            price = int(_get_num(price_data, "sale_prc", default=0))
+        price = _display_final_unit_price(price_data)
         if price:
             price_map[goods_no] = price
 
@@ -2266,20 +2598,16 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             goods_nm = _get_str(row, "goods_nm", "title")
             tire_size = _get_str(row, "tire_size_1", "tire_size_2")
             title = f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm
-            # Price priority: matched get_final_price_tool result > inline row
-            # field (cheapest_final_prc > price/extra_fvr_sale_prc fallback).
-            # cheapest_final_prc 는 BE 가 enrich 한 회원 보유 쿠폰 적용 후 최저가 —
-            # 사이트 결제 페이지와 일치한다. 없으면 사이트 노출가로 fallback.
-            price = (
-                price_map.get(goods_no)
-                or int(_get_num(row, "cheapest_final_prc", default=0))
-                or int(_get_num(row, "price", "extra_fvr_sale_prc", default=0))
-            )
+            price = price_map.get(goods_no) or _display_final_unit_price(row)
             original_price = int(_get_num(row, "sale_prc", default=0)) or None
-            discount_rate = float(_get_num(row, "extra_fvr_sale_per", default=0.0)) or None
             discount_amount = (
                 original_price - price
                 if original_price and price and original_price > price
+                else None
+            )
+            discount_rate = (
+                round(discount_amount / original_price * 100, 1)
+                if original_price and discount_amount
                 else None
             )
             # Tag chips:
@@ -2328,7 +2656,14 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
     short, response_source = _summarize_with_source(assistant_text, "product", len(items))
-    if _find_entries(tool_data_list, "get_best_selling_products_tool"):
+    if _is_product_transaction_missing_size_turn():
+        short = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
+        response_source = "code_product_transaction_missing_size"
+        pending_context = _product_transaction_pending_context()
+        for meta in metadata:
+            if isinstance(meta, dict):
+                meta.update(pending_context)
+    elif _find_entries(tool_data_list, "get_best_selling_products_tool"):
         short = _product_result_context_message(tool_data_list, len(items))
         response_source = "code_mapper"
     elif response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
@@ -2351,7 +2686,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         "data": {
             "products": items,
             "metadata": metadata,
-            "isBookingFlow": _is_goal_booking_followup(),
+            "isBookingFlow": _is_goal_booking_followup() or _is_product_transaction_missing_size_turn(),
             "assistantResponse": short,
         },
         "assistant_response_source": response_source,
@@ -2508,6 +2843,8 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "carName": _get_str(row, "car_nm") or None,
                 "carTrim": _get_str(row, "ver_opt_choc") or None,
                 "carEngine": _get_str(row, "car_engine") or None,
+                "carType": _get_str(row, "car_type") or None,
+                "car_type": _get_str(row, "car_type") or None,
                 # Persist front/rear tire sizes alongside the car identifier so
                 # the coordinator's selection-time resolver can recover
                 # tire_size from the listCar template metadata when the user
@@ -2664,11 +3001,10 @@ def _map_cheapest_product(tool_data_list: list[dict], assistant_text: str) -> di
                 int(c.get("discount_amt", 0)) for c in applied
                 if isinstance(c, dict) and c.get("stage") in ("payment", "plus")
             )
-            final_price = int(_get_num(row, "final_prc", "final_unit_price", default=0))
         else:
             product_discount = int(_get_num(row, "product_discount", default=0))
             coupon_discount = int(_get_num(row, "coupon_discount", default=0))
-            final_price = int(_get_num(row, "final_unit_price", "final_prc", default=0))
+        final_price = _display_final_unit_price(row)
 
         items.append({
             "title": _get_str(row, "goods_nm", "title", default=goods_no),
@@ -2742,7 +3078,7 @@ def _map_runflat_price_comparison(tool_data_list: list[dict], assistant_text: st
         product_row = product_by_goods_no.get(goods_no)
         if not product_row:
             continue
-        final_unit_price = int(_get_num(price_row, "final_unit_price", default=0))
+        final_unit_price = _display_final_unit_price(price_row)
         if not final_unit_price:
             continue
         rows.append({
@@ -3139,10 +3475,17 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                     "data": {
                         "assistantResponse": f"현재 조건으로는 {shop_nm}만 예약 가능해요. 다른 지역으로도 찾아드릴까요?",
                         "quickReplies": [
-                            {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                            _cta_chip(
+                                "다른 지역 입력",
+                                domain="TRANSACTION",
+                                action_id="enter_region",
+                                intent_key="reservation",
+                                metadata={"intentKey": "reservation"},
+                            ),
                             {"label": "다른 상품 보기", "domain": "DISCOVERY"},
                         ],
                         "predictedDomains": ["TRANSACTION"],
+                        "metadata": {"ctaContext": {"intentKey": "reservation"}},
                     },
                 }
         for entry in _find_entries(tool_data_list, "transaction_store_preview_tool"):
@@ -3177,7 +3520,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 return None
             store_nm = _get_str(args, "store_nm") if isinstance(args, dict) else ""
             short = (assistant_text or "").strip()
-            if not short or len(short) > 120:
+            if not short or len(short) > 120 or _unsafe_no_fulfillment_copy(short):
                 short = (
                     f"{store_nm} 기준으로 오늘 장착 가능 일정이 확인되지 않았어요."
                     if store_nm
@@ -3190,10 +3533,23 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "data": {
                     "assistantResponse": short,
                     "quickReplies": [
-                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
-                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                        _cta_chip(
+                            "다른 지역 입력",
+                            domain="TRANSACTION",
+                            action_id="enter_region",
+                            intent_key="today_install",
+                            metadata={"intentKey": "today_install"},
+                        ),
+                        _cta_chip(
+                            "다른 날짜 입력",
+                            domain="TRANSACTION",
+                            action_id="enter_date",
+                            intent_key="today_install",
+                            metadata={"intentKey": "today_install"},
+                        ),
                     ],
                     "predictedDomains": ["TRANSACTION"],
+                    "metadata": {"ctaContext": {"intentKey": "today_install"}},
                 },
             }
 
@@ -3509,10 +3865,23 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "data": {
                     "assistantResponse": f"오늘 장착 가능한 매장 일정이 확인되지 않아요.{earliest_suffix} 다른 날짜나 다른 매장으로 확인해 주세요.",
                     "quickReplies": [
-                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
-                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                        _cta_chip(
+                            "다른 날짜 입력",
+                            domain="TRANSACTION",
+                            action_id="enter_date",
+                            intent_key="today_install",
+                            metadata={"intentKey": "today_install"},
+                        ),
+                        _cta_chip(
+                            "다른 지역 입력",
+                            domain="TRANSACTION",
+                            action_id="enter_region",
+                            intent_key="today_install",
+                            metadata={"intentKey": "today_install"},
+                        ),
                     ],
                     "predictedDomains": ["TRANSACTION"],
+                    "metadata": {"ctaContext": {"intentKey": "today_install"}},
                 },
             }
         if filtered_by_exact_time:
@@ -3525,10 +3894,17 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "data": {
                     "assistantResponse": "앞서 안내한 매장 외에 추가로 확인되는 매장이 없어요. 다른 지역으로 확인해 주세요.",
                     "quickReplies": [
-                        {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                        _cta_chip(
+                            "다른 지역 입력",
+                            domain="TRANSACTION",
+                            action_id="enter_region",
+                            intent_key="reservation",
+                            metadata={"intentKey": "reservation"},
+                        ),
                         {"label": "처음으로", "domain": "LEADING"},
                     ],
                     "predictedDomains": ["TRANSACTION"],
+                    "metadata": {"ctaContext": {"intentKey": "reservation"}},
                 },
             }
         if require_ev_specialty or require_ev_charge:
@@ -3606,6 +3982,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     guarded_preview_is_order = False
     preview_schedule_tier = ""
     preview_schedule_region = ""
+    preview_requested_cal_day = ""
     for entry in _find_entries(tool_data_list, "transaction_store_preview_tool"):
         raw = _unwrap(entry)
         schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
@@ -3618,6 +3995,11 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         ):
             preview_schedule_tier = _get_str(schedule, "tier").lower()
             preview_schedule_region = _get_str(args, "region_code") if isinstance(args, dict) else ""
+            preview_requested_cal_day = (
+                (_get_str(args, "requested_cal_day") if isinstance(args, dict) else "")
+                or _get_str(raw, "requested_cal_day")
+                or _get_str(schedule, "requested_cal_day")
+            )
         if not isinstance(raw, dict) or not raw.get("instruction_to_agent"):
             continue
         schedule_empty = (
@@ -3674,6 +4056,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             preview_schedule_tier,
             preview_schedule_region,
             len(items),
+            requested_cal_day=preview_requested_cal_day,
         )
         if preview_short:
             short = preview_short
@@ -3682,8 +4065,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         short = quality_short
         response_source = "code_mapper"
     elif has_booking_intent and items:
-        today_prefix = "오늘 " if re.search(r"오늘|당일|지금|바로|당장", current_user_text.get() or "") else ""
-        short = f"요청하신 조건으로 {today_prefix}장착 가능 여부가 확인된 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
+        short = f"요청하신 조건에 맞는 매장 {len(items)}곳입니다. 원하시는 매장을 선택해 주세요."
         response_source = "code_mapper"
     elif plain_store_search_user_text and items and re.search(r"오늘\s*장착|장착 가능 여부|재고", short or ""):
         short = f"요청하신 지역의 매장 {len(items)}곳을 안내드립니다. 원하시는 매장을 선택해 주세요."
@@ -3781,10 +4163,17 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
                     "assistantResponse": f"{region_code}에서 {threshold}시 이후 예약 가능한 매장이 현재 없어요. 다른 시간대나 지역으로 찾아드릴까요?",
                     "quickReplies": [
                         {"label": "다른 시간대 찾기", "domain": "TRANSACTION"},
-                        {"label": "다른 지역 찾기", "domain": "TRANSACTION"},
+                        _cta_chip(
+                            "다른 지역 입력",
+                            domain="TRANSACTION",
+                            action_id="enter_region",
+                            intent_key="reservation",
+                            metadata={"intentKey": "reservation"},
+                        ),
                         {"label": "처음으로", "domain": "LEADING"},
                     ],
                     "predictedDomains": ["TRANSACTION"],
+                    "metadata": {"ctaContext": {"intentKey": "reservation"}},
                 },
             }
 
@@ -3899,9 +4288,16 @@ def _exact_time_no_slot_quickreply(shop_nm: str = "") -> dict:
             "assistantResponse": f"{subject} 해당 날짜{hour_text} 예약 가능 시간이 확인되지 않아요. 다른 시간이나 다른 매장으로 확인해 주세요.",
             "quickReplies": [
                 {"label": "다른 시간 확인", "domain": "TRANSACTION"},
-                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                _cta_chip(
+                    "다른 지역 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_region",
+                    intent_key="reservation",
+                    metadata={"intentKey": "reservation"},
+                ),
             ],
             "predictedDomains": ["TRANSACTION"],
+            "metadata": {"ctaContext": {"intentKey": "reservation"}},
         },
     }
 
@@ -4305,20 +4701,14 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
 
     # Enrich paymentAmount from same-turn price tool.
     # Definition mirrors get_final_price_tool docs: (FINAL + wage_prc) × qty,
-    # with FINAL resolved as cheapest_final_prc → extra_fvr_sale_prc → sale_prc.
+    # with FINAL resolved as cheapest_final_prc → final_unit_price/final_prc →
+    # extra_fvr_sale_prc → price → sale_prc.
     payment_amount: int | None = None
     for price_entry in _find_entries(tool_data_list, "get_final_price_tool"):
         praw = _unwrap(price_entry)
         if not isinstance(praw, dict):
             continue
-        final_unit = _get_num(
-            praw,
-            "cheapest_final_prc",
-            "extra_fvr_sale_prc",
-            "sale_prc",
-            "final_unit_price",
-            default=0,
-        )
+        final_unit = _display_final_unit_price(praw)
         wage = _get_num(praw, "wage_prc", default=0)
         if final_unit:
             payment_amount = int((final_unit + wage) * ord_qty)
@@ -4455,6 +4845,7 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     shop_nm = _get_str(raw, "shop_nm")
     if not shop_nm:
         return None
+    shop_id = _get_str(raw, "shop_seq", "shop_id", "shopId", "shopSeq")
 
     tel_no = _format_phone(_get_str(raw, "tel_no"))
     holiday = _get_str(raw, "holiday")
@@ -4499,6 +4890,25 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     svc_labels = _svc_code_label_list(raw.get("svc_codes"))
     if svc_labels:
         lines.append(f"• 제공 서비스: {' | '.join(svc_labels)}")
+    if _is_store_operation_uncertain_query():
+        lines.extend([
+            "",
+            "일요일/공휴일 운영 여부는 매장 사정에 따라 달라질 수 있어 매장에 직접 확인해 주세요.",
+        ])
+
+    quick_replies = [
+        {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    ]
+    if shop_id:
+        quick_replies.insert(
+            0,
+            {
+                "label": "매장 상세 페이지로 이동",
+                "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", shop_id),
+                "domain": "TRANSACTION",
+            },
+        )
 
     return {
         "type": "data",
@@ -4506,11 +4916,7 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
         "assistant_response_source": "code_mapper",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "다른 매장 정보", "domain": "TRANSACTION"},
-                {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            ],
+            "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION"],
         },
     }
@@ -4563,7 +4969,12 @@ _STORE_BOOKING_FOLLOWUP_SIGNAL_RE = re.compile(
     re.IGNORECASE,
 )
 _STORE_OPERATION_INFO_SIGNAL_RE = re.compile(
-    r"영업|운영|휴무|휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    r"영업|운영|휴무|휴일|공휴일|쉬어|문\s*열|문\s*닫|열어|닫아|여나|하나",
+    re.IGNORECASE,
+)
+_STORE_OPERATION_UNCERTAIN_QUERY_RE = re.compile(
+    r"휴무|휴일|공휴일|일요일|이번\s*주\s*일요일|문\s*열|문\s*닫|열어|닫아|쉬어|"
+    r"영업\s*(?:해|하니|하냐|하나요|하나|여부|중)",
     re.IGNORECASE,
 )
 _STORE_DATE_REFERENCE_RE = re.compile(
@@ -4628,6 +5039,19 @@ def _should_treat_store_detail_slots_as_datepick() -> bool:
         _STORE_DATE_REFERENCE_RE.search(user_text)
         and _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(user_text)
     )
+
+
+def _is_store_operation_uncertain_query() -> bool:
+    user_text = current_user_text.get() or ""
+    if not user_text or not _STORE_OPERATION_UNCERTAIN_QUERY_RE.search(user_text):
+        return False
+    if _STORE_BOOKING_FOLLOWUP_SIGNAL_RE.search(user_text) and not re.search(
+        r"휴무|휴일|공휴일|문\s*열|문\s*닫|열어|닫아|쉬어|영업\s*(?:해|하니|하냐|하나요|하나|여부|중)",
+        user_text,
+        re.IGNORECASE,
+    ):
+        return False
+    return True
 
 
 def _summarize_with_source(full_text: str, template: str, item_count: int) -> tuple[str, str]:

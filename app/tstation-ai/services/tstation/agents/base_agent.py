@@ -155,6 +155,17 @@ def _latest_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _messages_include_resolved_product_tool_fact(messages: list[dict]) -> bool:
+    """True when a prior Discovery handoff already supplied a concrete goods_no."""
+    for msg in reversed(messages[-8:]):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content") or "")
+        if "search_product_tool" in content and re.search(r"\bG\d{9,}\b", content):
+            return True
+    return False
+
+
 def _recent_context_text(messages: list[dict], *, limit: int = 8) -> str:
     lines: list[str] = []
     for msg in messages[-limit:]:
@@ -281,7 +292,7 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
         return "snow"
     if re.search(r"여름|썸머", text, re.IGNORECASE):
         return "summer"
-    if re.search(r"올웨더|올시즌|전천후", text, re.IGNORECASE):
+    if re.search(r"사계절|올시즌|all[-\s]?season|올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
         return "all_weather"
     if re.search(r"빗길|젖은", text, re.IGNORECASE):
         return "wet"
@@ -290,6 +301,19 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
     if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
         return "performance"
     return "tstation"
+
+
+def _recommendation_season_from_vehicle_text(user_text: str) -> str | None:
+    text = user_text or ""
+    if re.search(r"올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
+        return "올웨더"
+    if re.search(r"사계절|올시즌|all[-\s]?season", text, re.IGNORECASE):
+        return "사계절"
+    if re.search(r"겨울|윈터|눈길", text, re.IGNORECASE):
+        return "겨울"
+    if re.search(r"여름|썸머", text, re.IGNORECASE):
+        return "여름"
+    return None
 
 
 def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: list[dict]) -> dict | None:
@@ -303,16 +327,79 @@ def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: 
     tire_size = row.get("tire_size_fr") or row.get("tire_size_re")
     if not (car_lnc_cd or tire_size):
         return None
+    latest_user_text = _latest_user_text(messages)
     args: dict[str, Any] = {
-        "rcmd_type": _recommendation_type_from_vehicle_text(_latest_user_text(messages)),
+        "rcmd_type": _recommendation_type_from_vehicle_text(latest_user_text),
         "limit": 3,
         "brand_cd": "HK",
     }
+    season_nm = _recommendation_season_from_vehicle_text(latest_user_text)
+    if season_nm:
+        args["season_nm"] = season_nm
     if car_lnc_cd:
         args["car_lnc_cd"] = car_lnc_cd
     else:
         args["tire_size"] = tire_size
     return args
+
+
+def _owner_lookup_vehicle_display_name(row: dict) -> str:
+    car_maker = str(row.get("car_maker") or "").strip()
+    car_name = str(row.get("car_nm") or row.get("ver_opt_choc") or row.get("car_model_det") or "").strip()
+    if car_maker and car_name and _normalize_vehicle_key(car_maker) not in _normalize_vehicle_key(car_name):
+        return f"{car_maker} {car_name}"
+    return car_name or car_maker or "조회된 차량"
+
+
+def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages: list[dict]) -> dict | None:
+    if tool_name != "get_user_vehicles_tool":
+        return None
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return None
+    user_text = _latest_user_text(messages)
+    if not _CAR_NO_OWNER_RE.search(user_text or ""):
+        return None
+    if _REGISTERED_VEHICLE_RECOMMEND_RE.search(user_text or ""):
+        return None
+    rows = _extract_tool_rows(tool_result)
+    if len(rows) != 1:
+        return None
+
+    row = rows[0]
+    vehicle_name = _owner_lookup_vehicle_display_name(row)
+    front_size, rear_size = _registered_vehicle_tire_sizes(row)
+    if front_size and rear_size and front_size != rear_size:
+        size_text = f"전륜 {front_size}, 후륜 {rear_size}"
+    else:
+        size_text = front_size or rear_size
+    if size_text:
+        assistant_response = f"조회되었습니다. {vehicle_name} 차량의 타이어 사이즈는 {size_text}입니다."
+    else:
+        assistant_response = f"조회되었습니다. {vehicle_name} 차량 정보는 확인했지만 타이어 사이즈는 확인되지 않았어요."
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_owner_vehicle_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "다시 검색", "domain": "DISCOVERY"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "metadata": {
+                "carNo": row.get("car_no"),
+                "carLncCd": row.get("car_lnc_cd"),
+                "carMaker": row.get("car_maker"),
+                "carName": row.get("car_nm"),
+                "carModelDet": row.get("car_model_det"),
+                "tireSize": front_size,
+                "tireSizeRe": rear_size,
+            },
+        },
+    }
 
 
 def _vehicle_aliases(row: dict) -> set[str]:
@@ -599,6 +686,32 @@ def _sanitize_tool_output_for_sse(content: Any) -> Any:
         return json.dumps(parsed, ensure_ascii=False)
     except (TypeError, ValueError):
         return content
+
+
+def _slot_data_for_tool_event(tool_name: str, tool_result: Any) -> dict | None:
+    """Return minimal raw data needed by the coordinator to update slots.
+
+    The SSE-visible `output` is sanitized. Slot extraction needs fields such as
+    goods_no from the raw tool result, but exposing the full raw payload would be
+    noisy. Keep this payload intentionally small.
+    """
+    if tool_name != "search_product_tool" or not isinstance(tool_result, dict):
+        return None
+    data = tool_result.get("data")
+    if not isinstance(data, dict):
+        return None
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+        return None
+    item = items[0]
+    goods_no = item.get("goods_no")
+    if not goods_no:
+        return None
+    slot_item = {"goods_no": goods_no}
+    tire_size = item.get("tire_size") or item.get("tire_size_1") or item.get("tireSize")
+    if tire_size:
+        slot_item["tire_size_1"] = tire_size
+    return {"status": tool_result.get("status", "success"), "data": {"items": [slot_item]}}
 
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -1019,7 +1132,7 @@ class BaseAgent(ABC):
                                             ):
                                                 yield event
                                             return
-                                    blocked_event = self._transaction_policy_blocked_event(tool_name)
+                                    blocked_event = self._transaction_policy_blocked_event(tool_name, messages)
                                     if blocked_event is not None:
                                         logger.info(
                                             "[%s] Transaction policy blocked tool=%s required_slots=%s",
@@ -1117,6 +1230,7 @@ class BaseAgent(ABC):
                                 "output": _sanitize_tool_output_for_sse(
                                     tool_result if tool_result is not None else message.content
                                 ),
+                                "slot_data": _slot_data_for_tool_event(message.name, tool_result),
                                 "node": node,
                                 "tool": message.name,
                             }
@@ -1134,6 +1248,20 @@ class BaseAgent(ABC):
                                     ):
                                         yield event
                                     return
+                            owner_lookup_event = _build_owner_vehicle_lookup_event(
+                                message.name,
+                                tool_result,
+                                messages,
+                            )
+                            if owner_lookup_event is not None:
+                                logger.info("[%s] Owner vehicle lookup resolved via deterministic quickReply", self.name)
+                                for event in self._code_template_events(
+                                    owner_lookup_event,
+                                    response_streamer,
+                                    answering_emitted,
+                                ):
+                                    yield event
+                                return
                             owner_lookup_args = _vehicle_owner_lookup_args_after_registered_mismatch(
                                 message.name,
                                 tool_result,
@@ -1770,7 +1898,7 @@ class BaseAgent(ABC):
         return template in terminal_templates_by_tool.get(tool_name, set())
 
     @staticmethod
-    def _transaction_policy_blocked_event(tool_name: str) -> dict | None:
+    def _transaction_policy_blocked_event(tool_name: str, messages: list[dict] | None = None) -> dict | None:
         """Return a deterministic clarification when Transaction lacks required slots."""
         transaction_tools_requiring_slots = {
             "search_stores_tool",
@@ -1798,6 +1926,8 @@ class BaseAgent(ABC):
             or decision.template != TemplateName.QUICK_REPLY
             or not decision.required_slots
         ):
+            return None
+        if "product" in decision.required_slots and _messages_include_resolved_product_tool_fact(messages or []):
             return None
 
         slot_labels = {

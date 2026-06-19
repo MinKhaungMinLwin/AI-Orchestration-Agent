@@ -103,9 +103,12 @@ def _apply_store_preview_policy_patch(
     """Fill only missing preview args from the request-scoped Transaction ToolPlan."""
     if not patch:
         return goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos
-    if not goods_no and patch.get("goods_no"):
+    preserve_confirmed = bool(patch.get("preserve_confirmed_product_slots"))
+    if patch.get("goods_no") and (not goods_no or (preserve_confirmed and goods_no != str(patch["goods_no"]))):
         goods_no = str(patch["goods_no"])
-    if (ord_qty is None or ord_qty < 1) and (patch.get("ord_qty") or patch.get("quantity")):
+    if (patch.get("ord_qty") or patch.get("quantity")) and (
+        ord_qty is None or ord_qty < 1 or preserve_confirmed
+    ):
         try:
             ord_qty = int(patch.get("ord_qty") or patch.get("quantity"))
         except (TypeError, ValueError):
@@ -2137,9 +2140,13 @@ def transaction_store_preview_tool(
         has_logistics=logistics_qty > 0,
     )
     schedule_data = schedule.get("data") if isinstance(schedule, dict) else schedule
-    schedule_data = _filter_schedule_by_cal_day(schedule_data, requested_cal_day)
+    # todayShopArray/tnaShopArray are already inventory-proven today-installable
+    # candidates. Do not erase those candidates just because the range schedule
+    # endpoint has no slot with today's cal_day.
+    requested_day_filter = None if (today_shop_ids or tna_shop_ids) else requested_cal_day
+    schedule_data = _filter_schedule_by_cal_day(schedule_data, requested_day_filter)
     scheduled_shop_ids = _scheduled_shop_ids_with_slots(schedule_data)
-    if requested_cal_day:
+    if requested_day_filter:
         scheduled_set = set(scheduled_shop_ids)
         candidates = [store for store in candidates if (_shop_id(store) in scheduled_set)]
         shop_ids = [sid for sid in shop_ids if sid in scheduled_set]
