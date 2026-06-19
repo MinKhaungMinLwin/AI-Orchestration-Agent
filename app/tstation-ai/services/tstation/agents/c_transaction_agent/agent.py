@@ -1267,7 +1267,8 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
 4. (선택) `get_logistics_inventory_tool(goods_no)`를 같은 턴에 parallel로 호출해서 매장재고 0 케이스의 물류 가용 여부 확인.
 5. 결과 분류 + 응답 템플릿:
    → **재고 있는 매장 ≥ 1** (todayShopArray ∪ tnaShopArray): emit `location` 템플릿
-     - assistantResponse: "전국에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+     - assistantResponse: "전국 매장 {N}곳의 재고를 비교했어요. 그중 {M}곳에서 재고가 확인됐어요. 원하시는 매장을 선택해 주세요."
+       ⚠️ {N} = STEP 2 get_store_list_tool 결과의 매장 수, {M} = todayShopArray ∪ tnaShopArray 매장 수. 실제 도구 결과 개수만 사용 — 임의 추측 금지.
      - location.stores: **재고 있는 매장만 필터링**해서 표시. 각 store description 끝에 라벨 추가 — 매장재고: "[매장재고]" / T바로배송: "[T바로배송]"
      → STOP. 사용자가 매장 선택 시 Flow 3-Single STEP A의 결과를 재사용해 응답 (이미 inventory 결과가 있으므로 inventory 재호출 금지).
    → **매장재고 0 + 물류재고 있음** (`logistics_qty > 0`): emit `location` 템플릿
@@ -1295,7 +1296,8 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
 4. (선택) `get_logistics_inventory_tool(goods_no)`를 같은 턴에 parallel로 호출해서 매장재고 0 케이스의 물류 가용 여부 확인.
 5. 결과 분류 + 응답 템플릿:
    → **재고 있는 매장 ≥ 1** (todayShopArray ∪ tnaShopArray): emit `location` 템플릿
-     - assistantResponse: "[지역]에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+     - assistantResponse: "[지역] 매장 {N}곳의 재고를 비교했어요. 그중 {M}곳에서 재고가 확인됐어요. 원하시는 매장을 선택해 주세요."
+       ⚠️ {N} = STEP 2 get_store_list_tool 결과의 매장 수, {M} = todayShopArray ∪ tnaShopArray 매장 수. 실제 도구 결과 개수만 사용 — 임의 추측 금지.
      - location.stores: **재고 있는 매장만 필터링**해서 표시. 각 store description 끝에 라벨 추가 — 매장재고: "[매장재고]" / T바로배송: "[T바로배송]"
      → STOP. 사용자가 매장 선택 시 Flow 3-Single STEP A의 결과를 재사용해 응답 (이미 inventory 결과가 있으므로 inventory 재호출 금지).
    → **매장재고 0 + 물류재고 있음** (`logistics_qty > 0`): emit `location` 템플릿
