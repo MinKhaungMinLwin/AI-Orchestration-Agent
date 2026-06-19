@@ -534,7 +534,8 @@ def search_product_tool(
     Brand codes: HK=Hankook, LF=Laufenn, MC=Michelin, PI=Pirelli,
                  BS=Bridgestone, CT=Continental, GY=Goodyear.
     If the user did not specify a brand, omit brand_cd and search all brands.
-    Unsupported brands (금호, 넥센 etc.) → decline, do not search.
+    Unsupported brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis,
+    Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline, do not search.
 
     Args:
         keyword (str | None): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX').

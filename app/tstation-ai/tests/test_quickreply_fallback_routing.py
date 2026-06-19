@@ -147,6 +147,7 @@ from services.tstation.chat import (
     _pickup_service_guard_event,
     _past_event_page_event,
     _price_policy_guard_event,
+    _unsupported_brand_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
     _recent_product_coupon_price_target,
     _recent_product_keyword_for_size_only_search,
@@ -518,6 +519,46 @@ def test_price_policy_guard_keeps_expired_coupon_restore_and_event_reuse() -> No
     assert event_event is not None
     assert "원복 또는 재사용이 어렵" in coupon_event["data"]["assistantResponse"]
     assert "원복 또는 재사용이 어렵" in event_event["data"]["assistantResponse"]
+
+
+def test_unsupported_brand_policy_blocks_store_search_for_kumho_store_query() -> None:
+    event = _unsupported_brand_policy_guard_event("티스테이션 판교점에 금호 타이어 취급해?")
+
+    assert event is not None
+    data = event["data"]
+    assert event["assistant_response_source"] == "code_unsupported_brand_policy_guard"
+    assert (
+        "현재 챗봇에서 바로 안내 가능한 브랜드는 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어"
+        in data["assistantResponse"]
+    )
+    assert "금호" in data["assistantResponse"]
+    assert "매장별 별도 취급 여부는 실시간 데이터가 없어 확정할 수 없으니 매장에 직접 확인해 주세요." in data["assistantResponse"]
+    assert _labels(data["quickReplies"]) == ["지원 브랜드 상품 보기", "다른 브랜드 추천"]
+
+
+def test_unsupported_brand_policy_uses_recent_store_context_for_followup_brand_query() -> None:
+    event = _unsupported_brand_policy_guard_event(
+        "넥센도 판매해?",
+        recent_context="이전 문의: 티스테이션 판교점에 금호 타이어 취급해?",
+    )
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert "넥센" in response
+    assert "매장별 별도 취급 여부" in response
+
+
+def test_unsupported_brand_policy_does_not_block_supported_or_place_name_queries() -> None:
+    assert _unsupported_brand_policy_guard_event("미쉐린도 판매해?") is None
+    assert _unsupported_brand_policy_guard_event("브리지스톤 판교점에 있어?") is None
+    assert _unsupported_brand_policy_guard_event("금호동 근처 매장 찾아줘") is None
+    assert _unsupported_brand_policy_guard_event("판교점 영업시간 알려줘") is None
+
+
+def test_unsupported_brand_policy_detects_extended_known_tire_brands() -> None:
+    assert _unsupported_brand_policy_guard_event("요코하마 타이어 판매해?") is not None
+    assert _unsupported_brand_policy_guard_event("Dunlop 2355519 가격 있어?") is not None
+    assert _unsupported_brand_policy_guard_event("BFGoodrich 타이어도 취급해?") is not None
 
 
 def test_past_event_page_event_routes_ended_event_list_queries() -> None:

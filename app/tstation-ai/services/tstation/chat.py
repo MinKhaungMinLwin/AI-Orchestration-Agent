@@ -62,6 +62,10 @@ from services.tstation.policies.price_response_policy import (
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.brand_policy import (
+    SUPPORTED_BRANDS,
+    unsupported_brand_policy_match,
+)
 from services.tstation.policies.cross_domain_policy import (
     agent_domain_values_for_initial_route,
     is_warranty_claim_signal,
@@ -7374,6 +7378,40 @@ def _coupon_target_brand_for_query(user_text: str) -> dict | None:
     return None
 
 
+def _unsupported_brand_policy_guard_event(user_text: str, recent_context: str = "") -> dict | None:
+    match = unsupported_brand_policy_match(user_text, recent_context=recent_context)
+    if match is None:
+        return None
+
+    supported_labels = ", ".join(SUPPORTED_BRANDS.values())
+    lines = [
+        f"현재 챗봇에서 바로 안내 가능한 브랜드는 {supported_labels}예요.",
+        f"{match.label} 등은 현재 상품 검색/추천 대상 브랜드가 아니어서 가격·재고·장착 가능 여부를 확정 안내하기 어려워요.",
+    ]
+    if match.has_store_context:
+        lines.append("매장별 별도 취급 여부는 실시간 데이터가 없어 확정할 수 없으니 매장에 직접 확인해 주세요.")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_unsupported_brand_policy_guard",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "지원 브랜드 상품 보기", "domain": "DISCOVERY"},
+                {"label": "다른 브랜드 추천", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "unsupportedBrand": match.label,
+                "supportedBrandCodes": list(SUPPORTED_BRANDS.keys()),
+                "hasStoreContext": match.has_store_context,
+            },
+        },
+    }
+
+
 def _is_strong_coupon_applicability_query(user_text: str) -> bool:
     frame = build_price_intent_frame(user_text)
     if _COUPON_ISSUE_INTENT_RE.search(user_text):
@@ -11498,6 +11536,28 @@ class TStationChatServiceV2:
                     },
                 )
             return TStationChatResponse(content=_regional_canned_msg)
+
+        unsupported_brand_guard = _unsupported_brand_policy_guard_event(
+            last_user_msg,
+            recent_context=_recent_user_context_for_policy(request.messages),
+        )
+        if unsupported_brand_guard is not None:
+            logger.info(
+                "[CHAT_V2] Unsupported brand policy fast-path intercept: %s",
+                last_user_msg[:80],
+            )
+            guard_text = str((unsupported_brand_guard.get("data") or {}).get("assistantResponse") or "")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(unsupported_brand_guard),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=guard_text)
 
         if is_external_price_comparison_request(last_user_msg):
             logger.info(

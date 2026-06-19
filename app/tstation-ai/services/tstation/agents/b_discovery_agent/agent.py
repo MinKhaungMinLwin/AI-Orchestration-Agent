@@ -664,8 +664,8 @@ Format: "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 다�
 Trigger: User searches by name/keyword
 
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
-2. Detect brand from name → set brand_cd only when the user explicitly named a brand or the product family is a known Hankook/Laufenn family (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=Hankook). If brand is unknown/unspecified, omit brand_cd so BE searches all brands.
-   - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
+2. Detect brand from name → set brand_cd only when the user explicitly named a supported brand or the product family is a known Hankook/Laufenn family. Supported allow-list: HK=Hankook/한국타이어, LF=Laufenn/라우펜, MC=Michelin/미쉐린, PI=Pirelli/피렐리, BS=Bridgestone/브리지스톤, CT=Continental/콘티넨탈, GY=Goodyear/굿이어. If brand is unknown/unspecified, omit brand_cd so BE searches all supported brands.
+   - Known unsupported tire brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis, Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline without tool calls: "현재 챗봇에서 바로 안내 가능한 브랜드는 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어예요."
 2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
    - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
    - Include the registration date when `sys_reg_dtime` is present.
@@ -2116,8 +2116,8 @@ Policy:
 Trigger: User searches by name/keyword
 
 1. Normalize keyword to Korean per INPUT NORMALIZATION rules above.
-2. Detect brand from name → set brand_cd only when the user explicitly named a brand or the product family is a known Hankook/Laufenn family (MC=Michelin, PI=Pirelli, BS=Bridgestone, CT=Continental, GY=Goodyear, LF=Laufenn, HK=Hankook). If brand is unknown/unspecified, omit brand_cd so BE searches all brands.
-   - Brand not in list (금호, 넥센 etc.) → decline: "해당 브랜드는 취급하지 않아요. 한국타이어, 미쉐린 등으로 추천해 드릴까요?"
+2. Detect brand from name → set brand_cd only when the user explicitly named a supported brand or the product family is a known Hankook/Laufenn family. Supported allow-list: HK=Hankook/한국타이어, LF=Laufenn/라우펜, MC=Michelin/미쉐린, PI=Pirelli/피렐리, BS=Bridgestone/브리지스톤, CT=Continental/콘티넨탈, GY=Goodyear/굿이어. If brand is unknown/unspecified, omit brand_cd so BE searches all supported brands.
+   - Known unsupported tire brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis, Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline without tool calls: "현재 챗봇에서 바로 안내 가능한 브랜드는 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어예요."
 2.5. **Newest / 신제품 general query**: if the user asks for the newest/latest tire product and does NOT name a specific product/model, immediately call `get_newest_products_tool(brand_cd="HK", limit=20)`.
    - If the tool returns 1+ items, answer from the first item using this exact confident pattern: "최신 상품은 [goods_nm]입니다."
    - Include the registration date when `sys_reg_dtime` is present.
