@@ -27,6 +27,11 @@ _NEARBY_RE = re.compile(r"근처|주변|가까운|인근", re.IGNORECASE)
 _STORE_SUFFIX_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|찾아|알려|보여", re.IGNORECASE)
 _OTHER_STORE_RE = re.compile(r"다른\s*(?:매장|지점|곳)|다시\s*(?:확인|찾|검색)|새로\s*(?:찾|검색)", re.IGNORECASE)
+_STORE_SCOPE_FOLLOWUP_RE = re.compile(
+    r"다른\s*(?:매장|지점|곳)|근처(?:에)?\s*(?:다른\s*)?(?:매장|지점|곳)|주변\s*(?:매장|지점)|"
+    r"(?:매장|지점)\s*(?:더|또|추가)|다른\s*지역|예약\s*가능\s*시간|가능\s*시간|가능\s*일정",
+    re.IGNORECASE,
+)
 _RESULT_LIMIT_RE = re.compile(r"(\d+)\s*(?:개|곳|군데)\s*(?:만|까지)?")
 _KOREAN_RESULT_LIMITS = {
     "한": 1,
@@ -159,6 +164,10 @@ def _has_pending_today_install_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("requested_cal_day") and slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
 
+def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
+    return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
+
+
 def build_transaction_intent_frame(
     last_user_text: str,
     *,
@@ -179,6 +188,7 @@ def build_transaction_intent_frame(
     current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
     plain_store_search = current_store_search and not current_stock and not current_price and not current_reservation
     pending_today_install = _has_pending_today_install_context(slots)
+    confirmed_product_quantity_context = _has_confirmed_product_quantity_context(slots)
     other_store_today_install_continuation = (
         pending_today_install
         and bool(_OTHER_STORE_RE.search(text))
@@ -212,6 +222,16 @@ def build_transaction_intent_frame(
         and not current_reservation
         and not plain_store_search
     )
+    store_scope_product_continuation = (
+        confirmed_product_quantity_context
+        and bool(_STORE_SCOPE_FOLLOWUP_RE.search(text) or (current_region and len(text.strip()) <= 20))
+        and not current_store_name
+        and not current_has_product
+        and not explicit_tire_size
+        and not extract_quantity(text)
+        and not current_price
+        and not current_purchase
+    )
 
     tire_size = explicit_tire_size or slots.get("tire_size")
     quantity = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
@@ -224,17 +244,22 @@ def build_transaction_intent_frame(
         or date_only_today_install_continuation
         or other_store_today_install_continuation
     )
-    goods_no = None if plain_store_search and not current_has_product and not preserve_pending_today_install else slots.get("goods_no")
+    preserve_transaction_product_context = preserve_pending_today_install or store_scope_product_continuation
+    goods_no = (
+        None
+        if plain_store_search and not current_has_product and not preserve_transaction_product_context
+        else slots.get("goods_no")
+    )
     product_name = (
         current_product_name
         or (
             None
-            if plain_store_search and not preserve_pending_today_install
+            if plain_store_search and not preserve_transaction_product_context
             else slots.get("product_name") or slots.get("pattern_name")
         )
     )
     store_name = current_store_name or (
-        None if plain_store_search and not preserve_pending_today_install else slots.get("store_name")
+        None if plain_store_search and not preserve_transaction_product_context else slots.get("store_name")
     )
     region = current_region or slots.get("region") or slots.get("place")
 
@@ -259,6 +284,9 @@ def build_transaction_intent_frame(
     if preserve_pending_today_install:
         intent = "stock_store_search"
         sub_intent = "today_install"
+    elif store_scope_product_continuation:
+        intent = "stock_store_search"
+        sub_intent = "stock"
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
@@ -302,7 +330,7 @@ def build_transaction_intent_frame(
     }
     if intent == "stock_store_search" and requested_cal_day:
         known["availability_intent"] = "today_install"
-    if plain_store_search and not current_has_product and not preserve_pending_today_install:
+    if plain_store_search and not current_has_product and not preserve_transaction_product_context:
         for key in ("goods_no", "product_name", "pattern_name", "tire_size", "quantity", "ord_qty", "store_name"):
             known.pop(key, None)
     else:

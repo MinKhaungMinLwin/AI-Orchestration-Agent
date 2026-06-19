@@ -100,6 +100,7 @@ from services.tstation.chat import (
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
     _is_size_only_store_availability_continuation,
+    _is_confirmed_product_store_scope_followup,
     _is_strong_product_name_match,
     _is_product_size_list_intent,
     _is_owned_coupon_best_discount_query,
@@ -163,6 +164,7 @@ from services.tstation.chat import (
     _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
     _should_prompt_order_quantity_before_store,
+    _is_plain_store_search_reset_allowed,
     _is_quantityless_cart_or_order_cta,
     _should_preserve_store_date_availability_context,
     _should_suppress_inherited_recommendation_context_for_product_attribute,
@@ -181,6 +183,7 @@ from services.tstation.chat import (
     TStationChatServiceV2,
 )
 from schemas.tstation.chat_message import ChatMessageRequest
+from services.tstation.agents.c_transaction_agent.tools import _apply_store_preview_policy_patch
 from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
 from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
 from services.tstation.policies.delivery_policy_gate import (
@@ -4572,6 +4575,77 @@ def test_order_quantity_prompt_precedes_store_when_region_entered_without_quanti
     )
 
     assert _should_prompt_order_quantity_before_store("강남", slots) is True
+
+
+def test_store_scope_followup_preserves_confirmed_product_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317900",
+        tire_size="205/65R15",
+        tire_model="세레니티 플러스",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        shop_name="티스테이션 모란점",
+    )
+    regex_slots = ConversationSlots.extract_from_user_text("근처에 다른 매장은?")
+
+    assert _is_confirmed_product_store_scope_followup("근처에 다른 매장은?", slots) is True
+    assert _is_plain_store_search_reset_allowed("근처에 다른 매장은?", regex_slots, slots) is False
+
+    patch, _decision = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="근처에 다른 매장은?",
+        known_slots={
+            "goods_no": slots.goods_no,
+            "tire_size": slots.tire_size,
+            "product_name": slots.tire_model,
+            "ord_qty": slots.ord_qty,
+            "store_name": slots.shop_name,
+            "pending_intent": slots.pending_intent,
+            "goal_type": slots.goal_type,
+        },
+    )
+
+    assert patch["goods_no"] == "G000000317900"
+    assert patch["quantity"] == 4
+    assert patch["preserve_confirmed_product_slots"] is True
+
+
+def test_store_preview_policy_patch_overrides_first_row_and_default_quantity_fallback() -> None:
+    goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
+        patch={
+            "goods_no": "G000000317900",
+            "quantity": 4,
+            "store_name": "티스테이션 모란점",
+            "preserve_confirmed_product_slots": True,
+        },
+        goods_no="G000000317899",
+        ord_qty=2,
+        region_code=None,
+        store_nm=None,
+        user_xpos=None,
+        user_ypos=None,
+    )
+
+    assert goods_no == "G000000317900"
+    assert ord_qty == 4
+    assert store_nm == "티스테이션 모란점"
+    assert region_code is None
+    assert user_xpos is None
+    assert user_ypos is None
+
+
+def test_store_scope_followup_allows_explicit_quantity_or_size_change() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317900",
+        tire_size="205/65R15",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+
+    assert _is_confirmed_product_store_scope_followup("2개로 다시 확인해줘", slots) is False
+    assert _is_confirmed_product_store_scope_followup("195/65R15로 근처 매장 확인", slots) is False
 
 
 def test_order_quantity_prompt_fires_when_product_is_selected_this_turn() -> None:

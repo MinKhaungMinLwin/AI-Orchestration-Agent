@@ -9,7 +9,7 @@ import threading
 import logging
 import re
 import time
-from typing import Any, AsyncIterator, ClassVar, Iterator
+from typing import Any, AsyncIterator, ClassVar, Iterator, Mapping
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -1539,13 +1539,33 @@ class StreamingMultiAgentCoordinator:
                 tool_slots["shop_id"] = input_shop_id
 
         if tool_name == "transaction_store_preview_tool" and tool_input:
-            input_goods_no = tool_input.get("goods_no")
+            preview_policy_patch: dict[str, Any] = {}
+            try:
+                from services.tstation.agents.c_transaction_agent.tools import (
+                    current_transaction_store_preview_tool_patch as _preview_patch_var,
+                )
+
+                preview_policy_patch = dict(_preview_patch_var.get() or {})
+            except Exception:
+                preview_policy_patch = {}
+            preserve_confirmed_preview_slots = bool(
+                preview_policy_patch.get("preserve_confirmed_product_slots")
+            )
+            input_goods_no = (
+                preview_policy_patch.get("goods_no")
+                if preserve_confirmed_preview_slots and preview_policy_patch.get("goods_no")
+                else tool_input.get("goods_no")
+            )
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
             input_tire_size = tool_input.get("tire_size")
             if input_tire_size:
                 tool_slots["tire_size"] = input_tire_size
-            input_quantity = tool_input.get("ord_qty") or tool_input.get("quantity")
+            input_quantity = (
+                preview_policy_patch.get("ord_qty") or preview_policy_patch.get("quantity")
+                if preserve_confirmed_preview_slots
+                else tool_input.get("ord_qty") or tool_input.get("quantity")
+            )
             if input_quantity:
                 try:
                     tool_slots["ord_qty"] = int(input_quantity)
@@ -9735,6 +9755,11 @@ def _build_transaction_policy_context(
             if transaction_tool_plan.preferred_tool == "transaction_store_preview_tool"
             else {}
         )
+        if transaction_tool_patch and _is_confirmed_product_store_scope_followup(
+            last_user_text,
+            transaction_frame.known_slots,
+        ):
+            transaction_tool_patch["preserve_confirmed_product_slots"] = True
         return transaction_tool_patch, transaction_response_decision
     except Exception:
         logger.exception("[POLICY][transaction] Failed to build transaction policy context")
@@ -9752,6 +9777,11 @@ _TODAY_INSTALL_STORE_FOLLOWUP_RE = re.compile(
 _TODAY_INSTALL_REGION_ONLY_RE = re.compile(
     r"^(?:서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
     r"청량리|인천|하남|청주|제주|서귀포)(?:에는?|은|는|로|으로)?\??$"
+)
+_STORE_SCOPE_FOLLOWUP_RE = re.compile(
+    r"다른\s*(?:매장|지점|곳)|근처(?:에)?\s*(?:다른\s*)?(?:매장|지점|곳)|주변\s*(?:매장|지점)|"
+    r"(?:매장|지점)\s*(?:더|또|추가)|다른\s*지역|예약\s*가능\s*시간|가능\s*시간|가능\s*일정",
+    re.IGNORECASE,
 )
 
 
@@ -9804,6 +9834,28 @@ def _enrich_today_install_policy_slots(
     return slots
 
 
+def _is_confirmed_product_store_scope_followup(text: str | None, slots: Mapping[str, Any] | Any) -> bool:
+    """True when only the store/search scope changes after product+quantity are confirmed."""
+    text = str(text or "").strip()
+    if not text:
+        return False
+
+    def _slot_value(key: str) -> Any:
+        if isinstance(slots, Mapping):
+            return slots.get(key)
+        return getattr(slots, key, None)
+
+    if not (_slot_value("goods_no") and (_slot_value("ord_qty") or _slot_value("quantity"))):
+        return False
+    regex_slots = ConversationSlots.extract_from_user_text(text)
+    if regex_slots.ord_qty is not None or regex_slots.tire_size is not None:
+        return False
+    if ConversationSlots.has_product_keyword(text) or _has_sized_product_name_hint(text):
+        return False
+    has_region_only = bool(regex_slots.region) and len(text) <= 20
+    return bool(_STORE_SCOPE_FOLLOWUP_RE.search(text) or has_region_only)
+
+
 def _is_ev_suitability_turn(
     text: str,
     pending_intent: str | None = None,
@@ -9835,6 +9887,16 @@ def _is_plain_store_search_turn(text: str, regex_slots: ConversationSlots) -> bo
     if not ConversationSlots.has_store_finder_intent(text):
         return False
     return not ConversationSlots.has_product_keyword(text)
+
+
+def _is_plain_store_search_reset_allowed(
+    text: str,
+    regex_slots: ConversationSlots,
+    slots: ConversationSlots,
+) -> bool:
+    if not _is_plain_store_search_turn(text, regex_slots):
+        return False
+    return not _is_confirmed_product_store_scope_followup(text, slots)
 
 
 def _normalize_store_name_for_slot_compare(store_name: str | None) -> str:
@@ -11933,7 +11995,7 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
-            if _is_plain_store_search_turn(last_user_text, regex_slots):
+            if _is_plain_store_search_reset_allowed(last_user_text, regex_slots, merged_slots):
                 cleared_values = {
                     "pending_intent": merged_slots.pending_intent,
                     "goods_no": merged_slots.goods_no,
@@ -11953,6 +12015,17 @@ class TStationChatServiceV2:
                 logger.debug(
                     "[SLOTS] Plain store-search turn; cleared stale stock/order context: %s",
                     {k: v for k, v in cleared_values.items() if v not in (None, "")},
+                )
+            elif _is_confirmed_product_store_scope_followup(last_user_text, merged_slots):
+                if merged_slots.pending_intent is None:
+                    merged_slots.pending_intent = "stock"
+                if merged_slots.goal_type is None:
+                    merged_slots.goal_type = "store_with_stock"
+                logger.debug(
+                    "[SLOTS] Store-scope follow-up preserves confirmed product slots: goods_no=%r ord_qty=%r text=%r",
+                    merged_slots.goods_no,
+                    merged_slots.ord_qty,
+                    last_user_text,
                 )
 
             chip_action_id = _chip_value(request.chip_context, "actionId", "action_id")
@@ -16577,12 +16650,29 @@ class TStationChatServiceV2:
                             if tire_size:
                                 turn_tool_slots["tire_size"] = tire_size
                     elif tool_name == "transaction_store_preview_tool" and isinstance(input_data, dict):
-                        if input_data.get("goods_no"):
-                            turn_tool_slots["goods_no"] = input_data.get("goods_no")
+                        preserve_confirmed_preview_slots = _is_confirmed_product_store_scope_followup(
+                            user_query,
+                            initial_slots,
+                        )
+                        input_goods_no = input_data.get("goods_no")
+                        if (
+                            preserve_confirmed_preview_slots
+                            and initial_slots is not None
+                            and getattr(initial_slots, "goods_no", None)
+                        ):
+                            input_goods_no = getattr(initial_slots, "goods_no", None)
+                        if input_goods_no:
+                            turn_tool_slots["goods_no"] = input_goods_no
                         tire_size = input_data.get("tire_size")
                         if tire_size:
                             turn_tool_slots["tire_size"] = tire_size
                         quantity = input_data.get("ord_qty") or input_data.get("quantity")
+                        if (
+                            preserve_confirmed_preview_slots
+                            and initial_slots is not None
+                            and getattr(initial_slots, "ord_qty", None)
+                        ):
+                            quantity = getattr(initial_slots, "ord_qty", None)
                         if quantity:
                             try:
                                 turn_tool_slots["ord_qty"] = int(quantity)

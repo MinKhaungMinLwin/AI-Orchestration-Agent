@@ -103,9 +103,12 @@ def _apply_store_preview_policy_patch(
     """Fill only missing preview args from the request-scoped Transaction ToolPlan."""
     if not patch:
         return goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos
-    if not goods_no and patch.get("goods_no"):
+    preserve_confirmed = bool(patch.get("preserve_confirmed_product_slots"))
+    if patch.get("goods_no") and (not goods_no or (preserve_confirmed and goods_no != str(patch["goods_no"]))):
         goods_no = str(patch["goods_no"])
-    if (ord_qty is None or ord_qty < 1) and (patch.get("ord_qty") or patch.get("quantity")):
+    if (patch.get("ord_qty") or patch.get("quantity")) and (
+        ord_qty is None or ord_qty < 1 or preserve_confirmed
+    ):
         try:
             ord_qty = int(patch.get("ord_qty") or patch.get("quantity"))
         except (TypeError, ValueError):
