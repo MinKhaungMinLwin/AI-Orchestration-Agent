@@ -2929,6 +2929,70 @@ def test_product_coupon_eligibility_filters_owned_coupons_by_target_pattern() ->
     assert "사이즈" in response
 
 
+def test_product_coupon_eligibility_brand_target_uses_coupon_cta_not_purchase_cta() -> None:
+    event = _build_product_coupon_eligibility_event(
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_no": "C001",
+                        "total": 2,
+                        "items": [
+                            {"goods_nm": "옵티모 H108", "brand_cd": "HK", "brand_nm": "HANKOOK"},
+                            {"goods_nm": "미쉐린 파일럿 스포츠 5", "brand_cd": "MC", "brand_nm": "MICHELIN"},
+                        ],
+                    }
+                ],
+                "total_products": 2,
+            },
+        },
+        [{"cpn_no": "C001", "cpn_nm": "타이어 경정비 싹-다 1만원 할인쿠폰"}],
+        target_product_name="미쉐린",
+        target_brand={"brand_cd": "MC", "label": "미쉐린"},
+    )
+
+    response = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+
+    assert "미쉐린 상품에도 적용 가능한 쿠폰" in response
+    assert "미쉐린 패턴" not in response
+    assert labels == ["쿠폰함 바로가기", "내 쿠폰 조회", "적용 상품 다시 확인"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MY_COUPON_LIST_PC
+    assert "보유차량 중 선택" not in labels
+    assert "사이즈 직접 입력" not in labels
+
+
+def test_product_coupon_eligibility_brand_target_absence_uses_coupon_cta() -> None:
+    event = _build_product_coupon_eligibility_event(
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_no": "C001",
+                        "total": 1,
+                        "items": [{"goods_nm": "옵티모 H108", "brand_cd": "HK", "brand_nm": "HANKOOK"}],
+                    }
+                ],
+                "total_products": 1,
+            },
+        },
+        [{"cpn_no": "C001", "cpn_nm": "타이어 경정비 싹-다 1만원 할인쿠폰"}],
+        target_product_name="미쉐린",
+        target_brand={"brand_cd": "MC", "label": "미쉐린"},
+    )
+
+    response = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+
+    assert "적용 가능 상품 목록에서 미쉐린 상품은 확인되지 않았어요" in response
+    assert "미쉐린 패턴" not in response
+    assert labels == ["쿠폰함 바로가기", "내 쿠폰 조회", "적용 상품 다시 확인"]
+    assert "보유차량 중 선택" not in labels
+    assert "사이즈 직접 입력" not in labels
+
+
 def test_owned_coupon_best_discount_query_is_not_coupon_name_lookup() -> None:
     assert _is_owned_coupon_best_discount_query("내가 가진 쿠폰 중에서 할인 제일 많이 되는 게 뭐야")
     assert _is_owned_coupon_best_discount_query("내 쿠폰 중 가장 할인 큰 쿠폰 뭐야?")

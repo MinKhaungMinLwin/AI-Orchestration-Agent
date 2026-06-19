@@ -7032,10 +7032,17 @@ def _build_product_coupon_eligibility_event(
     coupon_rows: list[dict],
     *,
     target_product_name: str,
+    target_brand: dict | None = None,
 ) -> dict:
     data = _unwrap_tool_data(tool_result)
     target_display_name = str(target_product_name or "해당 상품").strip() or "해당 상품"
-    target_keys = _coupon_product_match_keys(target_display_name)
+    if target_brand:
+        target_brand_cd = str(target_brand.get("brand_cd") or "").strip().upper()
+        target_brand_label = str(target_brand.get("label") or _brand_label_for_code(target_brand_cd)).strip()
+        target_display_name = target_brand_label or target_display_name
+        target_keys = set()
+    else:
+        target_keys = _coupon_product_match_keys(target_display_name)
     coupon_name_by_no = {
         str(row.get("cpn_no") or "").strip(): str(row.get("cpn_nm") or row.get("disp_nm") or "해당 쿠폰").strip()
         for row in coupon_rows
@@ -7058,33 +7065,72 @@ def _build_product_coupon_eligibility_event(
             goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
             if not goods_nm:
                 continue
-            if target_keys and (
-                target_keys & _coupon_product_match_keys(goods_nm)
-                or any(
-                    target and row_term and (target in row_term or row_term in target)
-                    for target in target_keys
-                    for row_term in _coupon_product_match_keys(goods_nm)
+            if target_brand:
+                row_brand_cd = str(item.get("brand_cd") or item.get("brandCode") or "").strip().upper()
+                row_brand_nm = str(item.get("brand_nm") or item.get("brand_name") or item.get("brandName") or "").strip()
+                matched_target = (
+                    (target_brand_cd and row_brand_cd == target_brand_cd)
+                    or (target_brand_label and target_brand_label.casefold() in row_brand_nm.casefold())
+                    or (target_brand_label and target_brand_label.casefold() in goods_nm.casefold())
                 )
-            ):
+            else:
+                matched_target = bool(
+                    target_keys and (
+                        target_keys & _coupon_product_match_keys(goods_nm)
+                        or any(
+                            target and row_term and (target in row_term or row_term in target)
+                            for target in target_keys
+                            for row_term in _coupon_product_match_keys(goods_nm)
+                        )
+                    )
+                )
+            if matched_target:
                 if coupon_name not in applicable_coupon_names:
                     applicable_coupon_names.append(coupon_name)
                 matched_product_name = matched_product_name or goods_nm
                 break
 
     if applicable_coupon_names:
-        product_label = matched_product_name or target_display_name
-        lines = [
-            f"보유 쿠폰 기준으로 {product_label} 패턴에 적용 가능한 쿠폰을 확인했어요.",
-            *[f"- {name}" for name in applicable_coupon_names[:5]],
-        ]
+        if target_brand:
+            lines = [
+                f"보유 쿠폰 기준으로 {target_display_name} 상품에도 적용 가능한 쿠폰을 확인했어요.",
+                *[f"- {name}" for name in applicable_coupon_names[:5]],
+            ]
+        else:
+            product_label = matched_product_name or target_display_name
+            lines = [
+                f"보유 쿠폰 기준으로 {product_label} 패턴에 적용 가능한 쿠폰을 확인했어요.",
+                *[f"- {name}" for name in applicable_coupon_names[:5]],
+            ]
         if len(applicable_coupon_names) > 5:
             lines.append(f"외 {len(applicable_coupon_names) - 5}개 쿠폰이 더 있어요.")
-        lines.append("정확한 최종 혜택가는 차량이나 타이어 사이즈를 선택한 뒤 확인할 수 있어요.")
+        if not target_brand:
+            lines.append("정확한 최종 혜택가는 차량이나 타이어 사이즈를 선택한 뒤 확인할 수 있어요.")
     else:
-        lines = [
-            f"보유 쿠폰 중 {target_display_name} 패턴에 바로 적용 가능한 쿠폰은 확인되지 않았어요.",
-            "쿠폰함의 적용 조건이나 진행 중인 이벤트를 다시 확인해 주세요.",
+        if target_brand:
+            lines = [
+                f"보유 쿠폰 기준 적용 가능 상품 목록에서 {target_display_name} 상품은 확인되지 않았어요.",
+                "쿠폰함에서 상세 적용 조건을 확인해 주세요.",
+            ]
+        else:
+            lines = [
+                f"보유 쿠폰 중 {target_display_name} 패턴에 바로 적용 가능한 쿠폰은 확인되지 않았어요.",
+                "쿠폰함의 적용 조건이나 진행 중인 이벤트를 다시 확인해 주세요.",
+            ]
+    quick_replies = (
+        [
+            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            {"label": "적용 상품 다시 확인", "domain": "TRANSACTION"},
         ]
+        if target_brand
+        else [
+            {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+        ]
+    )
+    predicted_domains = ["TRANSACTION"] if target_brand else ["DISCOVERY", "TRANSACTION"]
 
     return {
         "type": "data",
@@ -7093,12 +7139,8 @@ def _build_product_coupon_eligibility_event(
         "assistant_response_source": "code_product_coupon_resolver",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "quickReplies": quick_replies,
+            "predictedDomains": predicted_domains,
         },
     }
 
@@ -14779,6 +14821,7 @@ class TStationChatServiceV2:
                 followup_result,
                 coupon_rows,
                 target_product_name=target_product_name,
+                target_brand=_coupon_target_brand_for_query(user_query),
             )
 
         async def _resolve_product_comparison_with_code() -> tuple[list[dict], dict] | None:
