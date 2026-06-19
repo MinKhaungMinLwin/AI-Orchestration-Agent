@@ -62,6 +62,7 @@ from services.tstation.chat import (
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
     _build_product_size_list_event_from_search_results,
+    _build_product_size_list_not_found_event,
     _comparison_query_with_recent_context,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
@@ -99,6 +100,7 @@ from services.tstation.chat import (
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
     _is_size_only_store_availability_continuation,
+    _is_strong_product_name_match,
     _is_product_size_list_intent,
     _is_owned_coupon_best_discount_query,
     _is_owned_coupon_expiry_lookup_query,
@@ -2056,6 +2058,32 @@ def test_sized_product_name_search_can_resolve_unique_ventus_evo_goods_no() -> N
     assert row["goods_no"] == "G000000320136"
 
 
+def test_sized_product_resolver_accepts_alias_but_rejects_same_family_other_model() -> None:
+    assert _is_strong_product_name_match("Ventus air S", "벤투스 에어S") is True
+    assert _is_strong_product_name_match("Dynapro HPX", "다이나프로 HPX") is True
+    assert _is_strong_product_name_match("벤투스 에어S", "벤투스 S1 evo Z AS") is False
+    assert _is_strong_product_name_match("다이나프로 HPX", "다이나프로 HL3") is False
+
+    row = _unique_product_row_from_sized_search_result(
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G-S1",
+                        "goods_nm": "벤투스 S1 evo Z AS",
+                        "tire_size_1": "265/45R19",
+                    }
+                ]
+            },
+        },
+        "벤투스 에어S",
+        "265/45R19",
+    )
+
+    assert row is None
+
+
 def test_sized_bare_product_search_does_not_guess_ambiguous_goods_no() -> None:
     row = _unique_product_row_from_sized_search_result(
         {
@@ -2768,6 +2796,16 @@ def test_size_list_intent_does_not_reuse_other_product_rows_when_pending_product
     )
 
     assert event is None
+
+
+def test_product_size_list_not_found_event_uses_pending_product_cta_contract() -> None:
+    event = _build_product_size_list_not_found_event("벤투스 에어S")
+
+    assistant = event["data"]["assistantResponse"]
+    labels = [chip["label"] for chip in event["data"]["quickReplies"]]
+
+    assert "벤투스 에어S의 다른 규격을 현재 찾을 수 없어요" in assistant
+    assert labels == ["상품명 다시 입력", "타이어 추천 받기", "사이즈 직접 입력"]
 
 
 def test_product_coupon_price_no_product_message_names_product_before_size() -> None:
@@ -4622,6 +4660,54 @@ def test_size_only_order_does_not_clear_stale_product_identity() -> None:
     assert _clear_stale_product_identity_for_fresh_transaction(slots, text, "order") is False
     assert slots.goods_no == "G000000309780"
     assert slots.tire_model == "벤투스 S2 AS"
+
+
+def test_runtime_product_or_size_change_invalidates_goods_no() -> None:
+    base = ConversationSlots(
+        goods_no="G-S1",
+        pending_product_name="벤투스 S1 evo Z",
+        tire_model="벤투스 S1 evo Z",
+        tire_size="225/45R17",
+        payment_amount=100000,
+    )
+
+    changed_product = base.apply_runtime_values(
+        {"pending_product_name": "벤투스 에어S", "tire_model": "벤투스 에어S"},
+        source="test",
+    )
+    changed_size = base.apply_runtime_values({"tire_size": "265/45R19"}, source="test")
+    changed_front = base.apply_runtime_values({"tire_size_front": "225/50R18"}, source="test")
+    changed_rear = base.apply_runtime_values({"tire_size_rear": "255/50R18"}, source="test")
+
+    assert changed_product.goods_no is None
+    assert changed_product.payment_amount is None
+    assert changed_size.goods_no is None
+    assert changed_front.goods_no is None
+    assert changed_rear.goods_no is None
+
+
+def test_fresh_transaction_clear_keeps_current_product_entity_after_pending_update() -> None:
+    slots = ConversationSlots(
+        goods_no="G-S1",
+        pending_product_name="벤투스 에어S",
+        tire_model="벤투스 에어S",
+        tire_size="225/55R17",
+        payment_amount=100000,
+        pending_intent="price",
+        goal_type="price_inquiry",
+    )
+
+    changed = _clear_stale_product_identity_for_fresh_transaction(
+        slots,
+        "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?",
+        "price",
+    )
+
+    assert changed is True
+    assert slots.goods_no is None
+    assert slots.payment_amount is None
+    assert slots.pending_product_name == "벤투스 에어S"
+    assert slots.tire_model == "벤투스 에어S"
 
 
 @pytest.mark.parametrize("text", ["장바구니담기", "장바구니 담기", "장바구니에 담아줘", "구매하기", "주문하기"])

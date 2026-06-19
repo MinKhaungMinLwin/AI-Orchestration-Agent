@@ -5062,22 +5062,55 @@ def _strip_coupon_match_token_suffix(token: str) -> str:
     return token
 
 
+_PRODUCT_MATCH_ALIAS_GROUPS = (
+    {"kinergyex", "키너지ex"},
+    {"dynaprohpx", "다이나프로hpx"},
+    {"dynaprohp3", "다이나프로hp3"},
+    {"ventusairs", "벤투스airs", "벤투스에어s"},
+    {"ventuss2as", "벤투스s2as"},
+    {"ventuss1evoz", "벤투스s1evoz", "벤투스s1에보z"},
+    {"ionevoas", "아이온에보as"},
+    {"ionevo", "아이온에보"},
+)
+
+
 def _coupon_product_match_keys(value: object) -> set[str]:
     normalized = _normalize_coupon_match_text(value)
     if not normalized:
         return set()
     keys = {normalized}
-    alias_groups = (
-        {"kinergyex", "키너지ex"},
-        {"dynaprohpx", "다이나프로hpx"},
-        {"ventusairs", "벤투스airs", "벤투스에어s"},
-        {"ventuss2as", "벤투스s2as"},
-    )
-    for group in alias_groups:
+    for group in _PRODUCT_MATCH_ALIAS_GROUPS:
         if normalized in group:
             keys.update(group)
             break
     return keys
+
+
+def _product_name_match_tokens(value: object) -> set[str]:
+    tokens: set[str] = set()
+    for raw in re.findall(r"[0-9A-Za-z가-힣]+", str(value or "")):
+        token = _normalize_coupon_match_text(raw)
+        if len(token) < 2:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _is_strong_product_name_match(target_name: object, row_name: object) -> bool:
+    target_norm = _normalize_coupon_match_text(target_name)
+    row_norm = _normalize_coupon_match_text(row_name)
+    if not target_norm or not row_norm:
+        return False
+
+    if _coupon_product_match_keys(target_name) & _coupon_product_match_keys(row_name):
+        return True
+
+    if min(len(target_norm), len(row_norm)) >= 5 and (target_norm in row_norm or row_norm in target_norm):
+        return True
+
+    target_tokens = _product_name_match_tokens(target_name)
+    row_tokens = _product_name_match_tokens(row_name)
+    return len(target_tokens & row_tokens) >= 2
 
 
 def _coupon_query_terms(user_text: str) -> list[str]:
@@ -7446,7 +7479,6 @@ def _unique_product_row_from_sized_search_result(tool_result: dict, product_name
     if not isinstance(rows, list):
         return None
 
-    target_terms = _coupon_product_match_keys(product_name)
     requested_size = normalize_tire_size(tire_size)
     matched_by_goods_no: dict[str, dict] = {}
     for row in rows:
@@ -7458,8 +7490,8 @@ def _unique_product_row_from_sized_search_result(tool_result: dict, product_name
         row_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
         if requested_size and row_size and row_size != requested_size:
             continue
-        row_terms = _coupon_product_match_keys(row.get("goods_nm") or row.get("title"))
-        if target_terms and not (target_terms & row_terms):
+        row_name = row.get("goods_nm") or row.get("title")
+        if product_name and not _is_strong_product_name_match(product_name, row_name):
             continue
         matched_by_goods_no.setdefault(goods_no, row)
     if len(matched_by_goods_no) != 1:
@@ -8774,10 +8806,6 @@ def _search_product_rows_from_payload(payload: Any) -> list[dict]:
     return []
 
 
-def _compact_product_match_text(value: object) -> str:
-    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", str(value or "")).lower()
-
-
 def _product_size_list_keyword_from_context(
     user_text: str,
     search_results: list[tuple[str, dict]] | None = None,
@@ -8826,13 +8854,31 @@ def _product_size_list_row_matches_keyword(row: dict, keyword: str | None) -> bo
         return True
     row_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "")
     if not row_name:
-        return True
-    compact_keyword = _compact_product_match_text(keyword)
-    compact_row_name = _compact_product_match_text(row_name)
-    if compact_keyword and (compact_keyword in compact_row_name or compact_row_name in compact_keyword):
-        return True
-    tokens = [token.lower() for token in re.findall(r"[A-Za-z가-힣0-9]+", keyword) if len(token) >= 2]
-    return bool(tokens) and any(token in row_name.lower() for token in tokens)
+        return False
+    return _is_strong_product_name_match(keyword, row_name)
+
+
+def _build_product_size_list_not_found_event(product_name: str) -> dict:
+    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_size_list_not_found",
+        "data": {
+            "assistantResponse": (
+                f"{product_label}의 다른 규격을 현재 찾을 수 없어요.\n"
+                "제품명을 다시 확인하거나 다른 모델명으로 검색해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {"productName": product_label},
+        },
+    }
 
 
 def _build_product_size_list_event_from_search_results(
@@ -9828,10 +9874,38 @@ def _clear_stale_product_identity_for_fresh_transaction(
     """Clear carried product identity when the current turn names a new transactional product."""
     if not _is_fresh_product_transaction_request(text, pending_intent):
         return False
+    current_keyword = ""
+    if _is_product_coupon_price_amount_query(text):
+        coupon_product_name = _coupon_target_product_name_for_query(text)
+        parsed_coupon_target = _split_product_size_quantity_from_text(coupon_product_name, text)
+        current_keyword = str(parsed_coupon_target.get("product_name") or "").strip()
+    if not current_keyword:
+        current_keyword = _fallback_sized_product_keyword(text)
+    current_keyword = _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.sub(" ", current_keyword)
+    current_keyword = re.sub(r"\s+", " ", current_keyword).strip(" ,./")
+    if (
+        current_keyword
+        and (
+            (
+                slots.tire_model is not None
+                and _is_strong_product_name_match(current_keyword, slots.tire_model)
+            )
+            or (
+                slots.pending_product_name is not None
+                and _is_strong_product_name_match(current_keyword, slots.pending_product_name)
+            )
+        )
+    ):
+        if slots.goods_no is None and slots.payment_amount is None:
+            return False
+        slots.goods_no = None
+        slots.payment_amount = None
+        return True
     if slots.goods_no is None and slots.tire_model is None and slots.payment_amount is None:
         return False
     slots.goods_no = None
     slots.tire_model = None
+    slots.pending_product_name = None
     slots.payment_amount = None
     return True
 
@@ -16259,7 +16333,12 @@ class TStationChatServiceV2:
             slots=initial_slots,
         )
         product_size_list_code_events: list[dict] = []
-        if product_size_list_event is None and _is_product_size_list_intent(user_query):
+        pending_size_list_product = (
+            str(getattr(initial_slots, "pending_product_name", None) or "").strip()
+            if initial_slots is not None
+            else ""
+        )
+        if _is_product_size_list_intent(user_query) and (product_size_list_event is None or pending_size_list_product):
             size_list_keyword = _product_size_list_keyword_from_context(
                 user_query,
                 [],
@@ -16307,6 +16386,8 @@ class TStationChatServiceV2:
                     recent_context=recent_user_context_text,
                     slots=initial_slots,
                 )
+                if product_size_list_event is None and pending_size_list_product:
+                    product_size_list_event = _build_product_size_list_not_found_event(size_list_keyword)
         if product_size_list_event is not None:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             for code_event in product_size_list_code_events:

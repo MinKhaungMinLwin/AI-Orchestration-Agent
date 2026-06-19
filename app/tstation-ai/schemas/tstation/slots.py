@@ -75,8 +75,11 @@ class ConversationSlots(BaseModel):
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
+        "pending_product_name": ["goods_no", "payment_amount"],
         "tire_model": ["goods_no", "payment_amount"],
         "tire_size": ["goods_no", "payment_amount"],
+        "tire_size_front": ["goods_no", "payment_amount"],
+        "tire_size_rear": ["goods_no", "payment_amount"],
         "goods_no": ["tire_model", "tire_size", "payment_amount"],
         "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id"],
@@ -116,8 +119,11 @@ class ConversationSlots(BaseModel):
         # Keep tire_size so Discovery/Transaction can re-query the new SKU under
         # the user's active size, but never keep old product label or amount.
         "goods_no": ["tire_model", "payment_amount"],
+        "pending_product_name": ["goods_no", "payment_amount"],
         "tire_model": ["goods_no", "payment_amount"],
         "tire_size": ["goods_no", "payment_amount"],
+        "tire_size_front": ["goods_no", "payment_amount"],
+        "tire_size_rear": ["goods_no", "payment_amount"],
         "ord_qty": ["payment_amount"],
         "shop_name": ["shop_id", "payment_amount"],
         "shop_id": ["payment_amount"],
@@ -146,6 +152,13 @@ class ConversationSlots(BaseModel):
             "goods_no",
             "payment_amount",
         ],
+    }
+    PRODUCT_IDENTITY_FIELDS: ClassVar[set[str]] = {
+        "pending_product_name",
+        "tire_model",
+        "tire_size",
+        "tire_size_front",
+        "tire_size_rear",
     }
 
     # Regex patterns for extracting slots from user messages
@@ -443,8 +456,13 @@ class ConversationSlots(BaseModel):
                 continue
             old_val = getattr(merged, field)
 
-            # Value changed -> reset dependent slots
-            if old_val is not None and old_val != new_val:
+            # Value changed -> reset dependent slots. Product identity fields
+            # invalidate goods_no even on None -> value because goods_no belongs
+            # to a concrete product+size combination.
+            should_reset_dependents = old_val is not None and old_val != new_val
+            if not should_reset_dependents and field in self.PRODUCT_IDENTITY_FIELDS and old_val != new_val:
+                should_reset_dependents = any(getattr(merged, dep, None) is not None for dep in self.DEPENDENT_RESETS.get(field, []))
+            if should_reset_dependents:
                 for dep in self.DEPENDENT_RESETS.get(field, []):
                     logger.info(f"[SLOTS] {field} changed ({old_val} -> {new_val}), resetting {dep}")
                     setattr(merged, dep, None)
@@ -480,7 +498,14 @@ class ConversationSlots(BaseModel):
             old_val = getattr(updated, field)
             if fill_only and old_val is not None:
                 continue
-            if old_val is not None and old_val != new_val:
+            should_reset_dependents = old_val is not None and old_val != new_val
+            if not should_reset_dependents and field in self.PRODUCT_IDENTITY_FIELDS and old_val != new_val:
+                should_reset_dependents = any(
+                    getattr(updated, dep, None) is not None
+                    for dep in self.RUNTIME_DEPENDENT_RESETS.get(field, [])
+                    if dep not in incoming
+                )
+            if should_reset_dependents:
                 for dep in self.RUNTIME_DEPENDENT_RESETS.get(field, []):
                     if dep in incoming:
                         continue
