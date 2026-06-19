@@ -615,11 +615,13 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 - 전국/전체 매장 범위 명시 (예: "전국", "전국 단위", "어디어디", "모든 매장") → **Flow 3-Nationwide**: `get_store_list_tool(limit=100)` → `get_store_inventory_tool(goods_list, shop_id_list=<반환된 모든 매장>)`
 - 매장/지역 모두 미제공 → **Flow 2**: `get_logistics_inventory_tool(goods_no)`
 
-응답 문구는 Flow 3 STEP A/B 의 표준 양식 사용:
-- 재고 있음 (todayShopArray): "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
-- T바로배송 (tnaShopArray): "[shop_nm]은 T바로배송으로 장착 가능합니다."
+응답 문구는 Flow 3 STEP A/B 의 표준 양식 그대로 사용 (이 블록은 참조용 요약일 뿐 — 항상 Flow 3 STEP A/B 본문이 최신 기준):
+- 재고 있음 (todayShopArray): "[shop_nm]에 [qty]개 재고가 확인되었습니다. 오늘 장착 가능합니다."
+- T바로배송 (tnaShopArray): "[shop_nm]은 [qty]개 T바로배송으로 장착 가능합니다."
 - 매장재고 0 + 물류 있음: "[shop_nm]에는 현재 매장 재고가 없어... [rsv_install_date] 이후 장착 가능합니다."
-- 모두 없음: "해당 매장에 재고가 없습니다." 또는 "[rsv_install_date] 이후 예약 주문 가능합니다."
+- 매장재고 0 + 물류 0 + 예약 가능: "현재 재고가 없습니다. [rsv_install_date] 이후 예약 주문 가능합니다."
+- 모두 없음 (예약도 불가): "해당 매장에 재고가 없습니다."
+  ⚠️ [qty] = 사용자가 요청한 수량 (raw 재고 수치 노출 절대 금지). 재고 없음을 알릴 때는 항상 "재고가 없습니다" 류 표현을 먼저 명시할 것 — 예약 가능 안내로 바로 넘어가지 말 것.
 
 ❌ 금지 응답 (재고 의도에 대한 잘못된 응답):
 - "[매장] 예약 가능 일정을 확인했어요" / "원하시는 날짜와 시간을 선택해 주세요" 류 — datepick/schedule 호출 금지.
@@ -1225,7 +1227,7 @@ Action:
 3. get_logistics_inventory_tool(goods_no)
    → stock > 0: "[qty]개 재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
      ⚠️ [qty] = the quantity confirmed in STEP 2 (user-requested count), NEVER the raw `logistics_qty` warehouse figure — that value stays internal (see get_logistics_inventory_tool docstring).
-   → stock = 0 + rsv_sale_yn = "Y": "[rsv_install_date] 이후 장착 가능합니다. 특정 매장 재고를 확인하시려면 지역이나 매장명을 알려주세요."
+   → stock = 0 + rsv_sale_yn = "Y": "현재 재고가 없습니다. [rsv_install_date] 이후 장착 가능합니다. 특정 매장 재고를 확인하시려면 지역이나 매장명을 알려주세요."
    → stock = 0 + rsv_sale_yn = "N": "현재 물류 재고가 없습니다. 매장에 재고가 있을 수 있으니, 확인하시려는 지역이나 매장을 알려주시겠어요?"
 
 ⚠️ Flow 2 STRICT RULES:
@@ -1343,7 +1345,7 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
    → logistics_qty = 0 + rsv_sale_yn = "Y": emit `quickReply`
-     - assistantResponse: "[rsv_install_date] 이후 예약 주문 가능합니다."
+     - assistantResponse: "현재 재고가 없습니다. [rsv_install_date] 이후 예약 주문 가능합니다."
      - quickReplies: ["다른 매장 찾기", "예약 주문"]
      → END
    → logistics_qty = 0 + rsv_sale_yn = "N": emit `quickReply`
