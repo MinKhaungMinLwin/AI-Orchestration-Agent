@@ -2843,6 +2843,8 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "carName": _get_str(row, "car_nm") or None,
                 "carTrim": _get_str(row, "ver_opt_choc") or None,
                 "carEngine": _get_str(row, "car_engine") or None,
+                "carType": _get_str(row, "car_type") or None,
+                "car_type": _get_str(row, "car_type") or None,
                 # Persist front/rear tire sizes alongside the car identifier so
                 # the coordinator's selection-time resolver can recover
                 # tire_size from the listCar template metadata when the user

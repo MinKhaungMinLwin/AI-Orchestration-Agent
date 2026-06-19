@@ -4270,6 +4270,7 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
                 "carLncCd": "W049847",
                 "mbrCarRegSeq": "2000002944",
                 "carNm": "GV70 2.5T 가솔린 AWD A/T",
+                "carType": "SUV",
                 "tireSize": "2355519",
             },
         }
@@ -4281,6 +4282,8 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
         "car_model": "GV70 2.5T 가솔린 AWD A/T",
         "car_no": "205소4214",
         "car_lnc_cd": "W049847",
+        "car_type": "SUV",
+        "vehicle_type": "suv",
         "mbr_car_reg_seq": "2000002944",
     }
 
