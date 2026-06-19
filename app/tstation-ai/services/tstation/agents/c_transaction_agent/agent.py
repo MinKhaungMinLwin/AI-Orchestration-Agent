@@ -1223,7 +1223,8 @@ Action:
    Just ask what is needed and STOP.
 2. qty from context or user (if unavailable → ask ONLY: "몇 개를 확인하시겠습니까?" and STOP. No other text.)
 3. get_logistics_inventory_tool(goods_no)
-   → stock > 0: "재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
+   → stock > 0: "[qty]개 재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
+     ⚠️ [qty] = the quantity confirmed in STEP 2 (user-requested count), NEVER the raw `logistics_qty` warehouse figure — that value stays internal (see get_logistics_inventory_tool docstring).
    → stock = 0 + rsv_sale_yn = "Y": "[rsv_install_date] 이후 장착 가능합니다. 특정 매장 재고를 확인하시려면 지역이나 매장명을 알려주세요."
    → stock = 0 + rsv_sale_yn = "N": "현재 물류 재고가 없습니다. 매장에 재고가 있을 수 있으니, 확인하시려는 지역이나 매장을 알려주시겠어요?"
 
@@ -1320,13 +1321,16 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
    ```
    ⚠️ 빈 dict로 호출 금지. goods_no/qty/shop_id 가 슬롯/이전 tool 결과에 있으므로 반드시 채워서 보내라.
    → store in todayShopArray: emit `quickReply`
-     - assistantResponse: "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
+     - assistantResponse: "[shop_nm]에 [qty]개 재고가 확인되었습니다. 오늘 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
    → store in tnaShopArray: emit `quickReply`
-     - assistantResponse: "[shop_nm]은 T바로배송으로 장착 가능합니다."
+     - assistantResponse: "[shop_nm]은 [qty]개 T바로배송으로 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
+   ⚠️ [qty] = the quantity confirmed in STEP 1 (user-requested count). NEVER substitute a raw
+   per-store stock count — `get_store_inventory_tool` only returns today/tna eligibility buckets,
+   not a numeric quantity; do not invent one.
    → neither → go to STEP B
 
 ── STEP B: Logistics inventory (fallback) ──
