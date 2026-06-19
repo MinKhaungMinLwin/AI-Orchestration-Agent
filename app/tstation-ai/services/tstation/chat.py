@@ -7271,8 +7271,8 @@ def _build_product_coupon_price_no_product_event(product_name: str, tire_size: s
         "assistant_response_source": "code_product_coupon_price_no_product",
         "data": {
             "assistantResponse": (
-                f"{size_label}에 맞는 {product_label} 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
-                "다른 사이즈로 다시 확인하거나, 사이즈 없이 해당 상품 전체를 확인해 주세요."
+                f"{product_label} {size_label} 규격 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
+                "다른 사이즈를 입력하거나 해당 상품의 다른 규격을 확인해 주세요."
             ),
             "quickReplies": [
                 {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
@@ -8676,6 +8676,14 @@ def _recent_product_keyword_for_size_only_search(
     if _fallback_sized_product_keyword(user_text):
         return None
 
+    pending_product_name = str(getattr(slots, "pending_product_name", None) or "").strip() if slots is not None else ""
+    if pending_product_name:
+        return _preferred_product_search_keyword(pending_product_name)
+
+    slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
+    if slot_model:
+        return _preferred_product_search_keyword(slot_model)
+
     for entry in reversed(prev_tool_data or []):
         if entry.get("tool") != "search_product_tool":
             continue
@@ -8693,10 +8701,6 @@ def _recent_product_keyword_for_size_only_search(
                 row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
                 if row_name:
                     return _preferred_product_search_keyword(row_name)
-
-    slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
-    if slot_model:
-        return _preferred_product_search_keyword(slot_model)
 
     current_size = normalize_tire_size(user_text)
     for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
@@ -8787,6 +8791,10 @@ def _product_size_list_keyword_from_context(
     if product_names:
         return _preferred_product_search_keyword(str(product_names[0]))
 
+    pending_product_name = str(getattr(slots, "pending_product_name", None) or "").strip() if slots is not None else ""
+    if pending_product_name:
+        return _preferred_product_search_keyword(pending_product_name)
+
     slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
     if slot_model:
         return _preferred_product_search_keyword(slot_model)
@@ -8857,6 +8865,8 @@ def _build_product_size_list_event_from_search_results(
         matched_rows = [row for row in rows if _product_size_list_row_matches_keyword(row, keyword)]
         if matched_rows:
             rows = matched_rows
+        elif rows:
+            return None
 
     sizes: list[str] = []
     seen_sizes: set[str] = set()
@@ -11717,6 +11727,33 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
+            if _is_product_coupon_price_amount_query(last_user_text):
+                coupon_product_name = _coupon_target_product_name_for_query(last_user_text)
+                parsed_coupon_target = _split_product_size_quantity_from_text(coupon_product_name, last_user_text)
+                parsed_product_name = str(parsed_coupon_target.get("product_name") or "").strip()
+                parsed_tire_size = str(parsed_coupon_target.get("tire_size") or "").strip()
+                parsed_quantity = parsed_coupon_target.get("quantity")
+                if parsed_product_name and parsed_tire_size:
+                    runtime_values: dict[str, Any] = {
+                        "tire_model": parsed_product_name,
+                        "pending_product_name": parsed_product_name,
+                        "tire_size": parsed_tire_size,
+                        "pending_intent": "price",
+                        "goal_type": "price_inquiry",
+                        "pending_required_slot": "goods_no",
+                    }
+                    if parsed_quantity is not None:
+                        runtime_values["ord_qty"] = int(parsed_quantity)
+                    merged_slots = merged_slots.apply_runtime_values(
+                        runtime_values,
+                        source="product_coupon_price_pending_entity",
+                    )
+                    logger.info(
+                        "[SLOTS] Stored pending product price target product=%r size=%r qty=%r",
+                        parsed_product_name,
+                        parsed_tire_size,
+                        parsed_quantity,
+                    )
             fresh_product_transaction_request = _is_fresh_product_transaction_request(
                 last_user_text,
                 regex_slots.pending_intent,
@@ -14711,13 +14748,6 @@ class TStationChatServiceV2:
                     preferred_keyword,
                     target_tire_size,
                 )
-                if product_row is None:
-                    product_row = _pick_product_row_from_search_result(
-                        search_result,
-                        preferred_keyword,
-                        target_product_name,
-                        allow_first_row_fallback=True,
-                )
                 goods_no = str((product_row or {}).get("goods_no") or "").strip()
                 if not goods_no:
                     return emitted_events, _build_product_coupon_price_no_product_event(
@@ -15509,6 +15539,19 @@ class TStationChatServiceV2:
                     detail_event = _build_product_description_quickreply_event(detail_result)
                     if detail_event is not None:
                         return emitted_events, detail_event
+                elif (
+                    size_only_tool_input is not None
+                    and initial_slots is not None
+                    and (
+                        getattr(initial_slots, "pending_intent", None) == "price"
+                        or getattr(initial_slots, "goal_type", None) == "price_inquiry"
+                    )
+                    and str(getattr(initial_slots, "pending_product_name", None) or "").strip()
+                ):
+                    return emitted_events, _build_product_coupon_price_no_product_event(
+                        str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
+                        str(tool_input.get("size") or ""),
+                    )
 
             mapped_event = try_build_template(
                 [{"tool": "search_product_tool", "args": tool_input, "data": search_result}],
@@ -16215,8 +16258,59 @@ class TStationChatServiceV2:
             recent_context=recent_user_context_text,
             slots=initial_slots,
         )
+        product_size_list_code_events: list[dict] = []
+        if product_size_list_event is None and _is_product_size_list_intent(user_query):
+            size_list_keyword = _product_size_list_keyword_from_context(
+                user_query,
+                [],
+                prev_tool_data=[],
+                recent_context=recent_user_context_text,
+                slots=initial_slots,
+            )
+            if size_list_keyword:
+                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+
+                size_list_input = {"keyword": size_list_keyword, "limit": 10}
+                product_size_list_code_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_size_list = await asyncio.to_thread(_search_product_tool.invoke, size_list_input)
+                    size_list_result = _tool_result_dict(raw_size_list)
+                except Exception as exc:
+                    logger.exception("[PRODUCT_SIZE_LIST] search_product_tool failed for %s", size_list_keyword)
+                    size_list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("search_product_tool", size_list_input, size_list_result)
+                product_size_list_code_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Search AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": size_list_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                product_size_list_code_events.append({
+                    "type": "tool",
+                    "input": size_list_input,
+                    "output": json.dumps(size_list_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "search_product_tool",
+                    "source_domain": "discovery",
+                })
+                product_size_list_event = _build_product_size_list_event_from_search_results(
+                    user_query,
+                    [(size_list_keyword, size_list_result)],
+                    prev_tool_data=[],
+                    recent_context=recent_user_context_text,
+                    slots=initial_slots,
+                )
         if product_size_list_event is not None:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in product_size_list_code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(product_size_list_event, ensure_ascii=False)}\n\n"
             assistant_response = str((product_size_list_event.get("data") or {}).get("assistantResponse") or "")

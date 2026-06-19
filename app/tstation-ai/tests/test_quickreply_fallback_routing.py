@@ -140,11 +140,13 @@ from services.tstation.chat import (
     _non_self_vehicle_plate_owner_lookup_plate,
     _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
+    _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
     _past_event_page_event,
     _price_policy_guard_event,
     _recommendation_type_for_vehicle_auto_continue,
     _recent_product_coupon_price_target,
+    _recent_product_keyword_for_size_only_search,
     _recent_store_name_for_availability_continuation,
     _remove_home_quick_reply_chips,
     _reservation_date_range_guard_event,
@@ -2689,6 +2691,93 @@ def test_size_only_followup_recovers_coupon_price_target_from_recent_context() -
         "tire_size": "225/55R17",
         "quantity": 4,
     }
+
+
+def test_size_only_followup_prefers_pending_product_name_over_recent_search_result() -> None:
+    slots = ConversationSlots(
+        pending_product_name="벤투스 에어S",
+        tire_model="벤투스 에어S",
+        pending_intent="price",
+        goal_type="price_inquiry",
+    )
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "args": {"keyword": "벤투스 S1 evo Z", "limit": 10},
+            "data": {
+                "status": "success",
+                "data": {"items": [{"goods_nm": "벤투스 S1 evo Z AS", "tire_size_1": "265/45R19"}]},
+            },
+        }
+    ]
+
+    keyword = _recent_product_keyword_for_size_only_search(
+        "265/45R19",
+        prev_tool_data=prev_tool_data,
+        recent_context="",
+        slots=slots,
+    )
+
+    assert keyword == "벤투스 에어S"
+
+
+def test_size_list_intent_uses_pending_product_name_before_recent_tool_context() -> None:
+    slots = ConversationSlots(pending_product_name="벤투스 에어S", tire_model="벤투스 에어S")
+
+    keyword = _product_size_list_keyword_from_context(
+        "다른 사이즈 확인",
+        [],
+        prev_tool_data=[
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 S1 evo Z", "limit": 10},
+                "data": {"status": "success", "data": {"items": []}},
+            }
+        ],
+        recent_context="",
+        slots=slots,
+    )
+
+    assert keyword == "벤투스 에어S"
+
+
+def test_size_list_intent_does_not_reuse_other_product_rows_when_pending_product_mismatches() -> None:
+    event = _build_product_size_list_event_from_search_results(
+        "다른 사이즈 확인",
+        [],
+        prev_tool_data=[
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 S1 evo Z", "limit": 10},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G1",
+                                "goods_nm": "벤투스 S1 evo Z AS",
+                                "tire_size_1": "265/45R19",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        recent_context="",
+        slots=ConversationSlots(pending_product_name="벤투스 에어S", tire_model="벤투스 에어S"),
+    )
+
+    assert event is None
+
+
+def test_product_coupon_price_no_product_message_names_product_before_size() -> None:
+    event = _build_product_coupon_price_no_product_event("벤투스 에어S", "265/45R19")
+
+    assistant = event["data"]["assistantResponse"]
+    labels = [chip["label"] for chip in event["data"]["quickReplies"]]
+
+    assert "벤투스 에어S 265/45R19 규격 상품을 찾을 수 없어" in assistant
+    assert labels == ["다른 사이즈 확인", "사이즈 없이 검색", "타이어 추천 받기"]
 
 
 def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
