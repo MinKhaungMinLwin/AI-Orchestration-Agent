@@ -2535,6 +2535,15 @@ _SUPPORT_FAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+_REMINDING_ALARM_QUERY_RE = re.compile(
+    r"(?:점검|교체|정비|타이어|차량|스마트케어|smart\s*care)?\s*"
+    r"(?:알람|알림|리마인더|리마인딩|문자|SMS|sms)\s*"
+    r"(?:설정|신청|등록|해지|관리|페이지|어디|어떻게|받|켜|꺼|변경)|"
+    r"(?:알람|알림)\s*설정\s*페이지|"
+    r"(?:문자|SMS|sms)로\s*(?:알려|받)",
+    re.IGNORECASE,
+)
+
 _TRANSACTION_FAST_RE = re.compile(
     r"가격|얼마(?!나)|비용|할인|재고|입고|장착\s*가능|"
     r"주문|구매|사고\s*싶|사려고|살래|쿠폰|장바구니|"
@@ -6308,6 +6317,27 @@ def _all_my_t_benefit_page_event() -> dict:
     }
 
 
+def _reminding_alarm_event() -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_reminding_alarm_cta",
+        "data": {
+            "assistantResponse": (
+                "알림 설정은 채팅창 안에서는 바로 변경할 수 없어요. "
+                "알림 설정 페이지에서 신청하거나 관리할 수 있으며, 아래 버튼을 누르면 해당 페이지로 이동합니다."
+            ),
+            "quickReplies": [
+                {"label": "점검/교체 알림", "url": CTAUrls.REMINDING_ALARM, "domain": "SUPPORT"},
+                {"label": "all my T 점검", "url": CTAUrls.MEMBERSHIP_DASHBOARD, "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT"],
+        },
+    }
+
+
 def _coupon_issue_event() -> dict:
     return _coupon_box_event(
         "고객님, 현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요. "
@@ -9417,6 +9447,9 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             delivery_decision.intent,
             delivery_decision.reason,
         )
+        return [MultiAgentDomain.Domain.SUPPORT]
+    if _REMINDING_ALARM_QUERY_RE.search(text):
+        logger.debug("[SUPPORT_FAST_PATH] reminding alarm CTA → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
     if is_warranty_claim_signal(text):
         logger.debug("[SUPPORT_FAST_PATH] warranty claim signal → SUPPORT: %r", text[:80])
@@ -16026,6 +16059,19 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+
+        if _REMINDING_ALARM_QUERY_RE.search(user_query or ""):
+            alarm_event = _reminding_alarm_event()
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(alarm_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((alarm_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[SUPPORT AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
         default_benefit_resolution = await _resolve_default_benefit_with_code()
         if default_benefit_resolution is not None:

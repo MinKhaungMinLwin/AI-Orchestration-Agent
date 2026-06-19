@@ -46,6 +46,7 @@ from services.tstation.chat import (
     _build_product_coupon_price_amount_event,
     _build_product_coupon_price_no_product_event,
     _build_quantity_benefit_missing_event,
+    _reminding_alarm_event,
     _build_store_holiday_period_event,
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
@@ -4201,6 +4202,27 @@ def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
     assert _support_fast_path("집으로 배송해줘") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_support_fast_path_routes_reminding_alarm_settings() -> None:
+    assert _support_fast_path("알람 설정하는 페이지 어디야?") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("타이어 교체 알림 신청하고 싶어") == [MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_reminding_alarm_event_links_to_cta() -> None:
+    event = _reminding_alarm_event()
+    data = event["data"]
+
+    assert event["source_domain"] == MultiAgentDomain.Domain.SUPPORT.value
+    assert "도와드릴 수 없" not in data["assistantResponse"]
+    assert "채팅창 안에서는 바로 변경할 수 없어요" in data["assistantResponse"]
+    assert "알림 설정 페이지" in data["assistantResponse"]
+    assert "아래 버튼" in data["assistantResponse"]
+    assert data["quickReplies"][0] == {
+        "label": "점검/교체 알림",
+        "url": CTAUrls.REMINDING_ALARM,
+        "domain": "SUPPORT",
+    }
 
 
 def test_support_fast_path_routes_product_warranty_claims() -> None:
