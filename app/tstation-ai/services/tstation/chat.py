@@ -8120,6 +8120,24 @@ def _preferred_product_search_keyword(product_name: str) -> str:
     return _PRODUCT_SEARCH_KEYWORD_OVERRIDES.get(normalized, raw)
 
 
+def _product_search_keyword_candidates(product_name: str) -> tuple[str, ...]:
+    raw = str(product_name or "").strip()
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        item = str(value or "").strip()
+        if item and item not in candidates:
+            candidates.append(item)
+
+    _add(_preferred_product_search_keyword(raw))
+    _add(raw)
+    for canonical_name in extract_product_names(raw):
+        _add(_preferred_product_search_keyword(canonical_name))
+        _add(canonical_name)
+
+    return tuple(candidates)
+
+
 def _pick_product_row_from_search_result(
     tool_result: dict,
     product_name: str,
@@ -16768,50 +16786,58 @@ class TStationChatServiceV2:
 
             product_rows: list[tuple[str, dict | None]] = []
             for product_name in product_names[:2]:
-                preferred_keyword = _preferred_product_search_keyword(product_name)
-                tool_input = {"keyword": preferred_keyword, "limit": 10}
-                if tire_size:
-                    tool_input["size"] = tire_size
-                emitted_events.append({
-                    "type": "status",
-                    "status": "tool_start",
-                    "tool": "search_product_tool",
-                    "display_name": "상품 검색 중...",
-                    "source_domain": "discovery",
-                })
-                try:
-                    raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
-                    search_result = _tool_result_dict(raw_result)
-                except Exception as exc:
-                    logger.exception("[GRADE_COMPARE] search_product_tool failed for %s", product_name)
-                    search_result = {
-                        "status": "error",
-                        "http_status": None,
-                        "message": str(exc),
-                        "data": {},
-                    }
-                _record_code_tool_result("search_product_tool", tool_input, search_result)
-                emitted_events.append({
-                    "type": "agent_flow",
-                    "agent": "[Product Compatibility AF]",
-                    "agent_class": "Discovery Agent",
-                    "status": search_result.get("status", "success"),
-                    "source_domain": "discovery",
-                })
-                emitted_events.append({
-                    "type": "tool",
-                    "input": tool_input,
-                    "output": json.dumps(search_result, ensure_ascii=False),
-                    "node": "tools",
-                    "tool": "search_product_tool",
-                    "source_domain": "discovery",
-                })
-                row = _pick_product_row_from_search_result(
-                    search_result,
-                    product_name,
-                    preferred_keyword,
-                    allow_first_row_fallback=True,
-                )
+                keyword_candidates = _product_search_keyword_candidates(product_name)
+                row: dict | None = None
+                search_result: dict | None = None
+                matched_keyword = ""
+                for idx, keyword_candidate in enumerate(keyword_candidates):
+                    tool_input = {"keyword": keyword_candidate, "limit": 10}
+                    if tire_size:
+                        tool_input["size"] = tire_size
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "search_product_tool",
+                        "display_name": "상품 검색 중...",
+                        "source_domain": "discovery",
+                    })
+                    try:
+                        raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                        search_result = _tool_result_dict(raw_result)
+                    except Exception as exc:
+                        logger.exception("[GRADE_COMPARE] search_product_tool failed for %s", product_name)
+                        search_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": str(exc),
+                            "data": {},
+                        }
+                    _record_code_tool_result("search_product_tool", tool_input, search_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Compatibility AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": search_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": tool_input,
+                        "output": json.dumps(search_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "search_product_tool",
+                        "source_domain": "discovery",
+                    })
+                    row = _pick_product_row_from_search_result(
+                        search_result,
+                        product_name,
+                        *keyword_candidates,
+                        keyword_candidate,
+                        allow_first_row_fallback=idx == len(keyword_candidates) - 1,
+                    )
+                    if row is not None:
+                        matched_keyword = keyword_candidate
+                        break
                 if row and row.get("goods_no"):
                     detail_input = {"goods_no": row["goods_no"]}
                     emitted_events.append({
@@ -16851,6 +16877,13 @@ class TStationChatServiceV2:
                     detail_data = _unwrap_tool_data(detail_result)
                     if isinstance(detail_data, dict) and detail_data:
                         row = {**row, **detail_data}
+                elif search_result is not None:
+                    logger.info(
+                        "[PRODUCT_COMPARE] unresolved comparison target after keyword fallbacks: %s candidates=%s matched_keyword=%s",
+                        product_name,
+                        keyword_candidates,
+                        matched_keyword,
+                    )
                 product_rows.append((product_name, row))
 
             return emitted_events, _build_product_comparison_event(comparison_query, product_rows)

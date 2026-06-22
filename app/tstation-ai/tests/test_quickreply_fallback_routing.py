@@ -164,6 +164,7 @@ from services.tstation.chat import (
     _non_self_vehicle_plate_owner_lookup_plate,
     _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
+    _product_search_keyword_candidates,
     _select_order_history_reorder_row,
     _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
@@ -3107,6 +3108,11 @@ def test_product_row_picker_uses_actual_search_keyword_without_product_alias() -
 
     assert row is not None
     assert row["goods_nm"] == "다이나프로 HP3"
+
+
+def test_product_search_keyword_candidates_include_korean_and_english_dynapro_variants() -> None:
+    assert _product_search_keyword_candidates("Dynapro HPX") == ("다이나프로 HPX", "Dynapro HPX")
+    assert _product_search_keyword_candidates("다이나프로 HPX") == ("다이나프로 HPX", "Dynapro HPX")
 
 
 def test_product_row_picker_matches_partial_pattern_name_generically() -> None:
