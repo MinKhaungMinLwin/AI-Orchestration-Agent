@@ -3502,6 +3502,23 @@ def _merged_quickreply_cta_context(
     return context
 
 
+_AFFIRMATIVE_REPLY_RE = re.compile(r"^\s*(?:응|네|예|좋아|ㅇㅇ|그래|진행해|검색해줘)\s*$", re.IGNORECASE)
+_CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE = re.compile(
+    r"현재\s*위치\s*기반.*(?:가까운|주변)\s*매장\s*검색.*(?:진행|해드릴까요|할까요)|"
+    r"(?:가까운|주변)\s*매장\s*검색.*현재\s*위치\s*기반",
+    re.IGNORECASE,
+)
+
+
+def _is_current_location_store_search_confirmation(user_text: str, latest_quickreply_tmpl: dict | None) -> bool:
+    if not _AFFIRMATIVE_REPLY_RE.match(user_text or ""):
+        return False
+    if not isinstance(latest_quickreply_tmpl, dict):
+        return False
+    assistant_text = str(latest_quickreply_tmpl.get("assistantResponse") or "")
+    return bool(_CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE.search(assistant_text))
+
+
 def _apply_cta_context_to_slots(slots: Any, cta_context: dict[str, Any], *, source: str = "quickreply_cta") -> Any:
     if not cta_context:
         return slots
@@ -6469,6 +6486,53 @@ def _resolve_order_row_for_arrival_query(
 def _date_only(value: object) -> str:
     text = str(value or "").strip()
     return text[:10] if re.match(r"\d{4}-\d{2}-\d{2}", text) else text
+
+
+def _cal_day_from_korean_date_text(value: str | None) -> str | None:
+    text = str(value or "")
+    match = re.search(r"(?P<year>20\d{2})년\s*(?P<month>\d{1,2})월\s*(?P<day>\d{1,2})일", text)
+    if not match:
+        return None
+    return f"{int(match.group('year')):04d}{int(match.group('month')):02d}{int(match.group('day')):02d}"
+
+
+def _reservation_hour_from_text(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    hour_match = re.search(r"(?<!\d)([01]?\d|2[0-3])\s*(?::\s*00|시)(?:\s*예약)?", text)
+    if not hour_match:
+        return None
+    return f"{int(hour_match.group(1)):02d}"
+
+
+def _datepick_requested_cal_day_from_text(
+    user_text: str,
+    datepick_data: dict,
+    *,
+    allow_selected_fallback: bool = False,
+) -> str | None:
+    direct = _cal_day_from_korean_date_text(user_text)
+    if direct:
+        return direct
+
+    dates = datepick_data.get("dates")
+    if not isinstance(dates, list) or not dates:
+        return None
+    for date_item in dates:
+        if not isinstance(date_item, dict):
+            continue
+        label = str(date_item.get("date") or "")
+        cal_day = _cal_day_from_korean_date_text(label)
+        if cal_day and label and label in user_text:
+            return cal_day
+
+    if not allow_selected_fallback:
+        return None
+    selected_idx = datepick_data.get("selectedDate")
+    if isinstance(selected_idx, int) and 0 <= selected_idx < len(dates):
+        selected = dates[selected_idx]
+        if isinstance(selected, dict):
+            return _cal_day_from_korean_date_text(str(selected.get("date") or ""))
+    return None
 
 
 def _build_order_arrival_status_event(order_status_result: dict, order_row: dict | None = None) -> dict:
@@ -11874,6 +11938,58 @@ class TStationChatServiceV2:
         if tire_size:
             slot_values["tire_size"] = tire_size
 
+        booking_datetime = str(order_info.get("bookingDateTime") or "").strip()
+        requested_cal_day = _cal_day_from_korean_date_text(booking_datetime)
+        if requested_cal_day:
+            slot_values["requested_cal_day"] = requested_cal_day
+        rsv_hour = _reservation_hour_from_text(booking_datetime)
+        if rsv_hour:
+            slot_values["rsv_hour"] = rsv_hour
+
+        return slot_values or None
+
+    @staticmethod
+    def _datepick_slot_values_from_data(
+        template_data: dict | None,
+        *,
+        user_text: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Extract durable order slots from a rendered datepick template payload.
+
+        Datepick cards carry the selected shop in metadata. The user's next
+        click may only say "주문 진행" / "주문 정보 확인", so preserve the
+        shop identity independently from the free-form text.
+        """
+        if not isinstance(template_data, dict):
+            return None
+        if template_data.get("template") == "datepick" and isinstance(template_data.get("data"), dict):
+            template_data = template_data["data"]
+
+        metadata = template_data.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+
+        slot_values: dict[str, Any] = {}
+        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or "").strip()
+        if shop_id:
+            slot_values["shop_id"] = shop_id
+        shop_name = str(metadata.get("shopName") or metadata.get("shop_name") or "").strip()
+        if shop_name:
+            slot_values["shop_name"] = shop_name
+
+        text = str(user_text or "").strip()
+        rsv_hour = _reservation_hour_from_text(text)
+        if rsv_hour:
+            slot_values["rsv_hour"] = rsv_hour
+
+        requested_cal_day = _datepick_requested_cal_day_from_text(
+            text,
+            template_data,
+            allow_selected_fallback=bool(text),
+        )
+        if requested_cal_day:
+            slot_values["requested_cal_day"] = requested_cal_day
+
         return slot_values or None
 
     @staticmethod
@@ -12816,6 +12932,41 @@ class TStationChatServiceV2:
                         "[SLOTS] Recovered order slots from latest preOrder template: %s",
                         missing_preorder_values,
                     )
+            datepick_slot_values = TStationChatServiceV2._datepick_slot_values_from_data(
+                latest_datepick_tmpl,
+                user_text=last_user_text,
+            )
+            should_recover_datepick_order_slots = bool(
+                datepick_slot_values
+                and (
+                    merged_slots.goal_type == "place_order"
+                    or merged_slots.pending_intent == "order"
+                    or (merged_slots.goods_no is not None and merged_slots.ord_qty is not None)
+                )
+            )
+            if should_recover_datepick_order_slots:
+                missing_datepick_values = {
+                    field: value
+                    for field, value in datepick_slot_values.items()
+                    if value is not None and getattr(merged_slots, field, None) is None
+                }
+                if missing_datepick_values:
+                    merged_slots = merged_slots.apply_runtime_values(
+                        missing_datepick_values,
+                        source="datepick_recovery",
+                        fill_only=True,
+                    )
+                    logger.info(
+                        "[SLOTS] Recovered order slots from latest datepick template: %s",
+                        missing_datepick_values,
+                    )
+            current_location_store_confirmation = _is_current_location_store_search_confirmation(
+                last_user_text,
+                latest_quickreply_tmpl,
+            )
+            if current_location_store_confirmation:
+                merged_slots.goal_type = "store_finder"
+                merged_slots.pending_intent = None
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
 
             current_turn_store_name = regex_slots.shop_name
@@ -13781,6 +13932,24 @@ class TStationChatServiceV2:
             )
         _t_classify = time.perf_counter()
 
+        if current_location_store_confirmation:
+            previous_domains = list(domains)
+            domains = [MultiAgentDomain.Domain.TRANSACTION]
+            routing_result = MultiAgentDomain(
+                reason="current-location store-search confirmation",
+                domains=domains,
+                execution_plan=["Run TRANSACTION store search with current user location context"],
+                user_behavior="confirming the previous current-location nearby-store search prompt",
+                flow="current_location_store_search_confirmation",
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+            )
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[COORDINATOR] Current-location confirmation route override: %s -> [transaction]",
+                [domain.value for domain in previous_domains],
+            )
+
         # Post-classification redirect: when the user's current-turn reply was a
         # list-selection that just resolved goods_no (via step 3.8) and a
         # transactional intent is still pending, the classifier may still pick
@@ -14377,6 +14546,7 @@ class TStationChatServiceV2:
             "region": merged_slots.region,
             "availability_intent": merged_slots.availability_intent,
             "requested_cal_day": merged_slots.requested_cal_day,
+            "rsv_hour": merged_slots.rsv_hour,
         }
         transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
             domains=domains,
@@ -18298,6 +18468,28 @@ class TStationChatServiceV2:
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info("[PREORDER_SLOT_STAGE] staged order slots from preOrder event: %s", preorder_slots)
+                    datepick_slots = TStationChatServiceV2._datepick_slot_values_from_data(event)
+                    if datepick_slots and (
+                        getattr(pending_slots or initial_slots, "goal_type", None) == "place_order"
+                        or getattr(pending_slots or initial_slots, "pending_intent", None) == "order"
+                        or (
+                            getattr(pending_slots or initial_slots, "goods_no", None) is not None
+                            and getattr(pending_slots or initial_slots, "ord_qty", None) is not None
+                        )
+                    ):
+                        from schemas.tstation.slots import ConversationSlots
+
+                        base_slots = pending_slots
+                        if base_slots is None:
+                            base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        updated_slots = base_slots.apply_runtime_values(
+                            datepick_slots,
+                            source="datepick_event",
+                            fill_only=True,
+                        )
+                        if updated_slots.model_dump() != base_slots.model_dump():
+                            pending_slots = updated_slots
+                            logger.info("[DATEPICK_SLOT_STAGE] staged order slots from datepick event: %s", datepick_slots)
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
                         event_data["assistantResponse"] = assistant_response

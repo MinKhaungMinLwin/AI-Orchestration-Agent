@@ -54,6 +54,7 @@ class ConversationSlots(BaseModel):
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
     availability_intent: Optional[AvailabilityIntent] = None  # e.g. "today_install"
     requested_cal_day: Optional[str] = None  # YYYYMMDD requested install/reservation date
+    rsv_hour: Optional[str] = None       # HH from datepick selection for quick_order_tool
     # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
     # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면
     # LLM 이 컨텍스트만으로 단가·수량 곱셈을 추측해 hallucination 하지 않고
@@ -838,6 +839,7 @@ class ConversationSlots(BaseModel):
             "region": "지역",
             "availability_intent": "장착 가능 조건",
             "requested_cal_day": "요청 장착일",
+            "rsv_hour": "요청 예약시간",
             "payment_amount": "결제금액",
         }
 

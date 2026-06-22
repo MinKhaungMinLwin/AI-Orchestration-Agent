@@ -191,6 +191,7 @@ from services.tstation.chat import (
     _quickreply_cta_clarification_event,
     _sanitize_transaction_cta_contracts,
     _apply_cta_context_to_slots,
+    _is_current_location_store_search_confirmation,
     _merged_quickreply_cta_context,
     _cta_preview_input_from_slots,
     _support_fast_path,
@@ -5322,6 +5323,90 @@ def test_store_scope_followup_preserves_confirmed_product_slots() -> None:
     assert patch["preserve_confirmed_product_slots"] is True
 
 
+def test_datepick_metadata_recovers_order_store_slots() -> None:
+    datepick = {
+        "template": "datepick",
+        "data": {
+            "assistantResponse": "예약하려는 날짜와 시간을 선택해 주세요.",
+            "dates": [
+                {
+                    "date": "2026년 6월 24일 (수)",
+                    "available": True,
+                    "availableTimes": [9, 13],
+                    "index": 0,
+                }
+            ],
+            "selectedDate": 0,
+            "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
+        },
+    }
+
+    values = TStationChatServiceV2._datepick_slot_values_from_data(datepick)
+
+    assert values == {"shop_id": "F00405", "shop_name": "티스테이션 경포점"}
+
+
+def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
+    datepick = {
+        "dates": [
+            {
+                "date": "2026년 6월 24일 (수)",
+                "available": True,
+                "availableTimes": [9, 13],
+                "index": 0,
+            }
+        ],
+        "selectedDate": 0,
+        "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
+    }
+
+    values = TStationChatServiceV2._datepick_slot_values_from_data(
+        datepick,
+        user_text="2026년 6월 24일 (수)\n13:00",
+    )
+
+    assert values["shop_id"] == "F00405"
+    assert values["requested_cal_day"] == "20260624"
+    assert values["rsv_hour"] == "13"
+
+
+def test_datepick_slots_fill_missing_order_state_without_overwriting_preorder_values() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317900",
+        ord_qty=4,
+        shop_id="F00001",
+        shop_name="기존 매장",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    values = {
+        "shop_id": "F00405",
+        "shop_name": "티스테이션 경포점",
+        "requested_cal_day": "20260624",
+        "rsv_hour": "13",
+    }
+
+    updated = slots.apply_runtime_values(values, source="datepick_recovery", fill_only=True)
+
+    assert updated.shop_id == "F00001"
+    assert updated.shop_name == "기존 매장"
+    assert updated.requested_cal_day == "20260624"
+    assert updated.rsv_hour == "13"
+
+
+def test_current_location_store_search_confirmation_is_narrow() -> None:
+    latest_quickreply = {
+        "assistantResponse": "현재 위치 기반으로 가까운 매장 검색을 진행할까요?",
+        "quickReplies": [{"label": "응", "domain": "TRANSACTION"}],
+    }
+
+    assert _is_current_location_store_search_confirmation("응", latest_quickreply)
+    assert not _is_current_location_store_search_confirmation(
+        "응",
+        {"assistantResponse": "예약 가능 시간 보기로 진행할까요?"},
+    )
+
+
 def test_store_preview_policy_patch_overrides_first_row_and_default_quantity_fallback() -> None:
     goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
         patch={
@@ -7134,6 +7219,8 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
         "ord_qty": 2,
         "payment_amount": 237600,
         "tire_size": "225/45R17",
+        "requested_cal_day": "20260609",
+        "rsv_hour": "17",
     }
 
 
