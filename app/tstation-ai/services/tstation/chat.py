@@ -327,6 +327,17 @@ class MultiAgentDomain(BaseModel):
             "Keep under 120 chars."
         ),
     )
+    claim_check_type: str = Field(
+        default="none",
+        description=(
+            "For Discovery product turns, classify product-related claim verification. "
+            "Use 'none' for normal product description/search/recommendation, "
+            "'verifiable_product_attribute' when the user asks to verify an attribute available in product data "
+            "(noise label, wet grade, rolling resistance, price grade, season, vehicle category), "
+            "or 'unverified_external_claim' when the user asks about an external institution, certification, "
+            "award, marketing superlative, or other claim not directly verifiable from current product data."
+        ),
+    )
 
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
@@ -383,6 +394,13 @@ class _SlimMultiAgentDomain(BaseModel):
     execution_plan: list[str] = Field(
         description="Short ordered plan for the selected domains, without tool names or parameters"
     )
+    claim_check_type: str = Field(
+        default="none",
+        description=(
+            "For Discovery product turns, classify product-related claim verification: 'none', "
+            "'verifiable_product_attribute', or 'unverified_external_claim'."
+        ),
+    )
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
@@ -412,14 +430,19 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 6 outputs:
+Produce 7 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
 4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
 5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 
-6. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+6. claim_check_type — for product-related claim verification:
+   - "none": normal product description/search/recommendation, e.g. "벤투스 에어S 설명해줘"
+   - "verifiable_product_attribute": asks whether a product data attribute is true/available, e.g. "벤투스 에어S 최저소음 라벨 맞아?"
+   - "unverified_external_claim": asks about an external institution/certification/award/superlative/marketing claim not directly verifiable from current product data, e.g. "벤투스 에어S가 우주 항공국 인증 제품이라던데 사실이야?"
+
+7. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -709,7 +732,11 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with EXACTLY ONE domain), reason, execution_plan, and agent_prompt_profile.
+Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, and agent_prompt_profile.
+claim_check_type:
+- none: normal product description/search/recommendation
+- verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
+- unverified_external_claim: external institution/certification/award/superlative/marketing claim not directly verifiable from current product data
 agent_prompt_profile:
 - transaction_coupon: coupon/promotion -> transaction_coupon
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
@@ -7984,6 +8011,17 @@ def _tire_sizes_from_product_rows(rows: list[dict]) -> list[str]:
     return sizes
 
 
+def _current_product_claim_check_type() -> str:
+    try:
+        from services.tstation.template_mapper import current_discovery_response_decision as _decision_context
+
+        decision = _decision_context.get()
+    except Exception:
+        return "none"
+    metadata = getattr(decision, "metadata", None) or {}
+    return str(metadata.get("claim_check_type") or "none")
+
+
 def _product_description_lines_and_metadata(
     row: dict,
     *,
@@ -8011,7 +8049,14 @@ def _product_description_lines_and_metadata(
     else:
         intro = f"{intro_subject} 상세 정보가 확인되는 타이어예요."
 
-    lines = [intro]
+    lines = []
+    if _current_product_claim_check_type() == "unverified_external_claim":
+        lines.extend([
+            "말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.",
+            "확인 가능한 상품 설명 기준으로 안내드릴게요.",
+            "",
+        ])
+    lines.append(intro)
     available_sizes = row.get("_available_tire_sizes")
     if isinstance(available_sizes, list):
         available_sizes = [normalize_tire_size(str(size or "")) for size in available_sizes]
@@ -10527,6 +10572,7 @@ def _build_discovery_policy_context(
     tire_size: str | None,
     goods_no: str | None = None,
     vehicle_type: str | None = None,
+    routing_result: Any | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Discovery policy context for tool/mapper integration.
 
@@ -10544,6 +10590,23 @@ def _build_discovery_policy_context(
             last_user_text,
             known_slots=known_slots,
         )
+        routing_claim_check_type = str(getattr(routing_result, "claim_check_type", "") or "").strip()
+        if routing_claim_check_type in {
+            "none",
+            "verifiable_product_attribute",
+            "unverified_external_claim",
+        }:
+            entities = dict(discovery_frame.entities)
+            entities["claim_check_type"] = routing_claim_check_type
+            if routing_claim_check_type == "unverified_external_claim" and entities.get("product_names"):
+                discovery_frame = replace(
+                    discovery_frame,
+                    intent="product_description",
+                    sub_intent="product_claim_check",
+                    entities=entities,
+                )
+            else:
+                discovery_frame = replace(discovery_frame, entities=entities)
         if discovery_frame.entities.get("product_names") and not discovery_frame.entities.get("attribute_metrics"):
             context_frame = build_discovery_intent_frame(
                 context_text,
@@ -14532,6 +14595,7 @@ class TStationChatServiceV2:
             tire_size=merged_slots.tire_size,
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
+            routing_result=routing_result,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)

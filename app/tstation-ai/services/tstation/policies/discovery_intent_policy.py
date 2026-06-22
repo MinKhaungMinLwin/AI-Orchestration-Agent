@@ -109,6 +109,11 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
     {"fuel_efficiency", "wet", "load", "speed"}
 )
+_CLAIM_CHECK_VERIFICATION_RE = re.compile(r"맞아|사실|진짜|확인|검증|이라던데|라던데", re.IGNORECASE)
+_UNVERIFIED_EXTERNAL_CLAIM_RE = re.compile(
+    r"우주|항공|nasa|나사|인증|공인|군용|전투기|특허|1\s*위|세계\s*최고|공식",
+    re.IGNORECASE,
+)
 
 _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("ventus air s", "Ventus air S", "HK"),
@@ -228,6 +233,22 @@ def extract_product_attribute_metrics(text: str) -> tuple[str, ...]:
         if pattern.search(text or "") and metric not in metrics:
             metrics.append(metric)
     return tuple(metrics)
+
+
+def classify_product_claim_check_type(text: str) -> str:
+    """Classify whether a product turn asks for claim verification.
+
+    Keep the classification in policy space so response formatters only consume
+    the structured result and never inspect individual claim words.
+    """
+    text = text or ""
+    if not extract_product_names(text) or not _CLAIM_CHECK_VERIFICATION_RE.search(text):
+        return "none"
+    if extract_product_attribute_metrics(text):
+        return "verifiable_product_attribute"
+    if _UNVERIFIED_EXTERNAL_CLAIM_RE.search(text):
+        return "unverified_external_claim"
+    return "none"
 
 
 def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
@@ -376,6 +397,7 @@ def build_discovery_intent_frame(
         "explicit_tire_size": explicit_tire_size,
         "purchase_intent": bool(_BUY_RE.search(text)),
         "attribute_metrics": attribute_metrics,
+        "claim_check_type": classify_product_claim_check_type(text),
     }
     if quantity_options:
         entities["quantity_options"] = quantity_options
@@ -512,6 +534,9 @@ def build_discovery_intent_frame(
     elif standalone_attribute_metrics:
         intent = "product_description"
         sub_intent = "product_attribute_explanation"
+    elif entities.get("claim_check_type") == "unverified_external_claim" and products:
+        intent = "product_description"
+        sub_intent = "product_claim_check"
     elif _SIMILAR_PRICE_RE.search(text):
         intent = "product_recommendation"
         sub_intent = "similar_price_recommendation"

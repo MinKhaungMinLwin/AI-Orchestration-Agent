@@ -2812,6 +2812,89 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     }
 
 
+def test_product_description_claim_check_prefix_uses_policy_decision_only() -> None:
+    frame = build_discovery_intent_frame("벤투스 air S가 우주 항공국 인증 제품이라던데 사실이야?")
+    decision = decide_discovery_response(frame)
+    assert frame.intent == "product_description"
+    assert frame.entities["claim_check_type"] == "unverified_external_claim"
+    assert decision.metadata["claim_check_type"] == "unverified_external_claim"
+    decision_token = current_discovery_response_decision.set(decision)
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "slogan": "프리미엄이 제공하는 품격있는 정숙성과 승차감",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+            },
+        })
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert assistant_response.startswith("말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.")
+    assert "확인 가능한 상품 설명 기준으로 안내드릴게요." in assistant_response
+    assert "벤투스 에어S는 프리미엄이 제공하는 품격있는 정숙성과 승차감 상품이에요." in assistant_response
+
+
+def test_discovery_policy_context_uses_routing_claim_check_type() -> None:
+    _tool_patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="벤투스 air S가 외부 기관 인증 제품이라던데 사실이야?",
+        context_text="벤투스 air S가 외부 기관 인증 제품이라던데 사실이야?",
+        tire_size=None,
+        routing_result=SimpleNamespace(claim_check_type="unverified_external_claim"),
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "neutral_product_description"
+    assert decision.metadata["claim_check_type"] == "unverified_external_claim"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "벤투스 air S 설명해줘",
+        "벤투스 air S 최저소음 라벨 맞아?",
+    ],
+)
+def test_product_description_prefix_not_added_for_general_or_verifiable_claim(text: str) -> None:
+    frame = build_discovery_intent_frame(text)
+    decision = decide_discovery_response(frame)
+    if "라벨" in text:
+        assert frame.entities["claim_check_type"] == "verifiable_product_attribute"
+        assert decision.metadata["claim_check_type"] == "verifiable_product_attribute"
+    else:
+        assert frame.entities["claim_check_type"] == "none"
+        assert "claim_check_type" not in decision.metadata
+    decision_token = current_discovery_response_decision.set(decision)
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "slogan": "프리미엄이 제공하는 품격있는 정숙성과 승차감",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+            },
+        })
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert not assistant_response.startswith("말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.")
+    assert "확인 가능한 상품 설명 기준으로 안내드릴게요." not in assistant_response
+
+
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:
     event = _build_product_comparison_event_from_search_results(
         "키너지 EX가 벤투스 air S 보다 프리미엄 등급 맞지?",
