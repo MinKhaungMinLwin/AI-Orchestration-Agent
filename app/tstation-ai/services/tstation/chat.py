@@ -8254,10 +8254,7 @@ def _product_feature_summary(row: dict) -> str:
     parts: list[str] = []
     season = str(row.get("season_nm") or "").strip()
     car_kind = str(row.get("car_knd_nm") or "").strip()
-    pattern = str(row.get("ptrn_d_nm") or row.get("big_goods_nm") or "").strip()
     performance = str(row.get("goods_pfm_nm") or "").strip()
-    if pattern:
-        parts.append(pattern)
     if season:
         parts.append(season)
     if car_kind:

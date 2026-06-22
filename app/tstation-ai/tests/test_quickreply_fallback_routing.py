@@ -1631,6 +1631,40 @@ def test_product_comparison_table_does_not_expose_goods_no() -> None:
     assert "G000000222222" not in assistant
 
 
+def test_product_comparison_feature_fallback_omits_pattern_group() -> None:
+    event = _build_product_comparison_event(
+        "벤투스 S2 AS랑 다이나프로 HP3 비교해줘",
+        [
+            (
+                "Ventus S2 AS",
+                {
+                    "goods_nm": "벤투스 S2 AS",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "승용차",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+                },
+            ),
+            (
+                "Dynapro HP3",
+                {
+                    "goods_nm": "다이나프로 HP3",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "SUV",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "다이나프로 컴포트",
+                },
+            ),
+        ],
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert "| 특징 | 사계절, 승용차용, COMFORT | 사계절, SUV용, COMFORT |" in assistant
+    assert "벤투스 슈퍼 컴포트" not in assistant
+    assert "다이나프로 컴포트" not in assistant
+
+
 def test_generic_compare_text_is_product_comparison_query() -> None:
     assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
 
