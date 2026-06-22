@@ -7824,7 +7824,7 @@ def _product_comparison_names(user_text: str) -> tuple[str, ...]:
     product_names = tuple(frame.entities.get("product_names") or ())
     if len(product_names) < 2:
         return ()
-    if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
+    if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare", "general_compare"}:
         return product_names
     if frame.intent in {"product_search", "product_description"} and _PRODUCT_COMPARE_TEXT_RE.search(user_text):
         return product_names

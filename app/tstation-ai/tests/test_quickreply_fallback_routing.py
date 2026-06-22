@@ -1722,6 +1722,14 @@ def test_compare_target_prompt_next_two_product_names_become_comparison() -> Non
     )["assistant_response_source"] == "code_product_compare_resolver"
 
 
+def test_explicit_two_product_compare_with_korean_aliases_remains_comparison() -> None:
+    user_text = "벤투스 에어S랑 키너지 ST AS 비교"
+    query = _comparison_query_with_recent_context(user_text, [{"role": "user", "content": user_text}])
+
+    assert query == user_text
+    assert build_discovery_intent_frame(user_text).intent == "product_comparison"
+
+
 def test_standalone_two_product_names_ask_clarification_without_single_keyword_plan() -> None:
     user_text = "벤투스 에어S랑 키너지 ST AS"
     messages = [{"role": "user", "content": user_text}]

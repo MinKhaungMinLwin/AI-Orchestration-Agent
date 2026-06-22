@@ -481,6 +481,9 @@ def build_discovery_intent_frame(
         intent = "product_comparison"
         sub_intent = "attribute_compare"
         entities["compare_metric"] = attribute_metrics[0]
+    elif len(products) >= 2 and _COMPARE_RE.search(text):
+        intent = "product_comparison"
+        sub_intent = "general_compare"
     elif _OCCUPATION_RE.search(text) and _MILEAGE_ATTRIBUTE_RE.search(text):
         intent = "product_description"
         sub_intent = "mileage_bias_guardrail"
