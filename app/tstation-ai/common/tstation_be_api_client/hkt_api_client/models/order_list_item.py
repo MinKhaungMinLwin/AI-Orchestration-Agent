@@ -21,7 +21,7 @@ class OrderListItem:
         tire_size_1 (None | str | Unset): 타이어 사이즈 1 (예: 235/45R18)
         tire_size_2 (None | str | Unset): 타이어 사이즈 2 (전/후 다른 사이즈인 경우)
         ord_qty (int | None | Unset): 주문 수량
-        sys_reg_dtime (None | str | Unset): 시스템 등록 일시
+        sys_reg_dtime (None | str | Unset): 주문 일자 (VW_OP_ORD_BASE.ORD_DTIME, YYYY-MM-DD)
     """
 
     ord_no: str
