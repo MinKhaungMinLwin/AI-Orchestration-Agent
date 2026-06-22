@@ -1555,8 +1555,12 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
                     "goods_nm": "다이나프로 HPX",
                     "slogan": "SUV용 사계절 컴포트 타이어",
                     "rating": {"rating_avg": 4.8, "review_count": 12},
-                    "reviews": [{"gdas_cont": "승차감이 좋고 조용해서 장거리 주행이 편해요."}],
+                    "reviews": [{"gdas_cont": "승차감이 좋고 조용해서 장거리 주행이 편해요.\n추천해요."}],
                     "sale_prc": 249700,
+                    "t_silence": "5",
+                    "t_comfort": "4.8",
+                    "rr": "3",
+                    "wet": "3",
                 },
             ),
             (
@@ -1565,8 +1569,12 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
                     "goods_nm": "윈터 아이셉트 에보3 X",
                     "slogan": "겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어",
                     "rating": {"rating_avg": 4.6, "review_count": 5},
-                    "reviews": [{"gdas_cont": "눈길 접지력이 안정적이라는 느낌이 있어요."}],
+                    "reviews": [{"gdas_cont": "눈길 접지력이 안정적이라는 | 느낌이 있어요."}],
                     "sale_prc": 256300,
+                    "t_silence": "4",
+                    "t_comfort": "4.2",
+                    "rr": "4",
+                    "wet": "2",
                 },
             ),
         ],
@@ -1577,10 +1585,15 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
     assert "상품 정보를 표로 비교해드릴게요." in assistant
     assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" in assistant
     assert "| 특징 | SUV용 사계절 컴포트 타이어 | 겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어 |" in assistant
+    assert "| 주요 성능 | 정숙성 5, 승차감 4.8, 회전저항 3, 젖은노면 3 | 정숙성 4, 승차감 4.2, 회전저항 4, 젖은노면 2 |" in assistant
     assert "| 리뷰 | 평점 4.8, 리뷰 12건. 대표 리뷰는" in assistant
+    assert "추천해요." in assistant
+    assert "눈길 접지력이 안정적이라는 / 느낌" in assistant
     assert "SUV용 사계절 컴포트 타이어" in assistant
     assert "눈길과 빙판" in assistant
     assert "승차감이 좋고 조용" in assistant
+    assert "\n추천해요" not in assistant
+    assert "| 느낌" not in assistant
     assert "가격 기준" not in assistant
     assert "249,700" not in assistant
 

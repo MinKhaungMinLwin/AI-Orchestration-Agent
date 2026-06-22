@@ -8301,6 +8301,8 @@ def _product_comparison_value(row: dict, key: str) -> str:
         return str(row.get("prc_grd_nm") or "").strip() or "미확인"
     if key == "feature":
         return _product_feature_summary(row)
+    if key == "performance":
+        return _product_performance_summary(row)
     if key == "review":
         return _product_review_summary(row)
     if key == "release":
@@ -8322,6 +8324,31 @@ def _product_comparison_value(row: dict, key: str) -> str:
     return "미확인"
 
 
+def _product_performance_summary(row: dict) -> str:
+    parts: list[str] = []
+    field_specs = (
+        ("정숙성", row.get("t_silence") or row.get("t_com_sil_avg")),
+        ("승차감", row.get("t_comfort") or row.get("t_com_cvs")),
+        ("마일리지", row.get("t_life_span") or row.get("t_milg_cvs")),
+        ("핸들링", row.get("t_handling") or row.get("t_high_hand_avg")),
+        ("고속성능", row.get("t_high_perform")),
+        ("회전저항", row.get("rr")),
+        ("젖은노면", row.get("wet")),
+    )
+    for label, raw_value in field_specs:
+        value = str(raw_value or "").strip()
+        if not value or value in {"0", "0.0", "None", "null"}:
+            continue
+        parts.append(f"{label} {value}")
+    return ", ".join(parts[:4]) if parts else "확인 가능한 주요 성능 정보가 부족해요"
+
+
+def _markdown_table_cell(value: str) -> str:
+    text = re.sub(r"[\r\n\t]+", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.replace("|", "/") or "미확인"
+
+
 def _build_product_comparison_table(
     left_name: str,
     left_row: dict,
@@ -8334,6 +8361,7 @@ def _build_product_comparison_table(
     table_rows = rows or (
         ("상품 등급", "grade"),
         ("특징", "feature"),
+        ("주요 성능", "performance"),
         ("리뷰", "review"),
     )
     lines = [
@@ -8343,8 +8371,8 @@ def _build_product_comparison_table(
         "|---|---|---|",
     ]
     for label, key in table_rows:
-        left_value = _product_comparison_value(left_row, key).replace("|", "/")
-        right_value = _product_comparison_value(right_row, key).replace("|", "/")
+        left_value = _markdown_table_cell(_product_comparison_value(left_row, key))
+        right_value = _markdown_table_cell(_product_comparison_value(right_row, key))
         lines.append(f"| {label} | {left_value} | {right_value} |")
     if verdict:
         lines.extend(["", verdict])
