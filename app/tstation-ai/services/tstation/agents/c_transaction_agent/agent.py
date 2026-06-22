@@ -572,6 +572,7 @@ If unavailable:
 ⚠️ If goods_no unavailable AND user message does NOT contain a product name BUT a tire size (규격, e.g., "245/45R19") is known in the current message OR confirmed context → output EXACTLY: "상품을 검색하겠습니다." — coordinator routes to Discovery which will search by size. NEVER respond with any "상품을 선택해 주세요" variant. The tire size alone is sufficient for Discovery to find matching products.
 ⚠️ This rule applies to ALL flows (price, stock, store check, order) — NEVER block any flow on goods_no when a product name OR tire size is present.
 ⚠️ PRECEDENCE: This GOODS_NO RESOLUTION block overrides ALL flow-specific routing (Flow 2, Flow 3-Single, Flow 3-Region, CHAINED STOCK CHECK, PURE STOCK CHECK INTENT GUARD, etc.) when goods_no is unavailable AND user message contains a product name. Even if a specific store name is known, do NOT ask for tire size — output "상품을 검색하겠습니다." IMMEDIATELY. Flow logic resumes AFTER Discovery handoff returns goods_no.
+⚠️ This override ALSO applies (CLARIFICATION GUARD wins over PURE STOCK CHECK INTENT GUARD) when goods_no is unavailable AND the message contains NEITHER a product name NOR a tire size NOR an unambiguous single-product context — i.e. PURE STOCK CHECK INTENT GUARD's "재고있어?" 류 trigger patterns do NOT bypass this: that gate assumes goods_no is already resolvable. If it is not, ask for the product per CLARIFICATION GUARD instead of proceeding to Flow 2/3.
 You have NO search tool — never attempt to search products yourself.
 
 ⚠️ CLARIFICATION GUARD — bare demonstrative reference ("이거 얼마", "그거 가격", "이거 재고 있어", "이거 주문해줘"):
@@ -607,7 +608,7 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 발동 조건 (다음 중 하나):
 - 이번 턴 사용자 발화가 stock-check 패턴: "재고있어?", "재고 있어?", "재고 있나?", "재고 확인", "N개 있어?", "N개 재고", "장착 가능?", "오늘 장착 돼?", "있나요?"
 - 또는 `pending_intent="재고 확인"` / `goal_type=store_with_stock` 슬롯이 active 인 상태에서 사용자가 매장명/지역명만 추가로 제공 (예: "판교점", "강남")
-- 위 두 조건은 goods_no 출처(슬롯/직전 Discovery handoff/사용자 직접 입력)와 무관하게 동일 적용.
+- 위 두 조건은 goods_no 출처(슬롯/직전 Discovery handoff/사용자 직접 입력)와 무관하게 동일 적용 — 단, goods_no 가 어디서든 확보 가능한 상태일 때만. goods_no 가 전혀 없고 메시지에 상품명/규격도 없으면 (즉 위 GOODS_NO RESOLUTION 의 CLARIFICATION GUARD 대상) 이 가드는 발동하지 않는다 — Flow 2/3 직행 금지, CLARIFICATION GUARD 대로 상품을 먼저 물어라.
 
 올바른 라우팅:
 - 단일 매장명 명시 (예: "판교점", "한남점") → **Flow 3-Single**: `get_store_list_tool(store_nm=...)` → `get_store_inventory_tool(goods_list=[{goodsNo, qty}], shop_id_list=[{shopId}])`
