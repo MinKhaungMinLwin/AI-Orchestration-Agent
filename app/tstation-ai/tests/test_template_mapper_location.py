@@ -2027,6 +2027,18 @@ def test_listcar_kept_for_vehicle_size_retry_request() -> None:
     assert result["template"] == "listCar"
 
 
+def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
+    current_user_text.set("내 차에 맞는 타이어 사이즈는?")
+
+    result = try_build_template(
+        [_registered_vehicle_entry()],
+        "고객님 등록 차량을 확인했어요. 이 차량의 타이어 사이즈를 확인해 주세요 😊",
+    )
+
+    assert result is not None
+    assert result["template"] == "listCar"
+
+
 def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
     current_ev_suitability_comparison.set(True)
 
