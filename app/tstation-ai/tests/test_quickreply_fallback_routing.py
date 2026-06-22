@@ -1923,6 +1923,7 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
                     "season_nm": "사계절",
                     "car_knd_nm": "승용차",
                     "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "벤투스 슈퍼 컴포트",
                     "sale_prc": 152500,
                     "_available_tire_sizes": ["225/45R17", "245/40R18"],
                 },
@@ -1937,6 +1938,7 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
                     "season_nm": "사계절",
                     "car_knd_nm": "SUV",
                     "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "다이나프로 컴포트",
                     "sale_prc": 140800,
                     "_available_tire_sizes": ["225/70R16", "235/60R18"],
                 },
@@ -1954,6 +1956,10 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
     assert "다이나프로 HP3는 SUV를 위한 컴포트 주행 성능 상품이에요." in assistant
     assert "확인 가능한 규격은 225/45R17, 245/40R18" in assistant
     assert "확인 가능한 규격은 225/70R16, 235/60R18" in assistant
+    assert "상품 분류는 사계절 · 승용차 · COMFORT 기준으로 확인돼요." in assistant
+    assert "상품 분류는 사계절 · SUV · COMFORT 기준으로 확인돼요." in assistant
+    assert "벤투스 슈퍼 컴포트" not in assistant
+    assert "다이나프로 컴포트" not in assistant
     assert "정가는 152,500원입니다." not in assistant
     assert "정가는 140,800원입니다." not in assistant
     assert [product["productName"] for product in event["data"]["metadata"]["products"]] == [
@@ -1972,6 +1978,10 @@ def test_multi_product_detail_event_shows_price_when_size_is_specific() -> None:
                     "goods_nm": "벤투스 S2 AS",
                     "tire_size_1": "225/45R17",
                     "slogan": "프리미엄 정숙성과 승차감을 갖춘 사계절 타이어",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "승용차",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "벤투스 슈퍼 컴포트",
                     "sale_prc": 152500,
                     "_available_tire_sizes": ["225/45R17", "245/40R18"],
                 },
@@ -1983,6 +1993,10 @@ def test_multi_product_detail_event_shows_price_when_size_is_specific() -> None:
                     "goods_nm": "다이나프로 HP3",
                     "tire_size_1": "225/45R17",
                     "slogan": "SUV를 위한 컴포트 주행 성능",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "SUV",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "다이나프로 컴포트",
                     "sale_prc": 140800,
                     "_available_tire_sizes": ["225/45R17", "235/60R18"],
                 },
@@ -1993,7 +2007,11 @@ def test_multi_product_detail_event_shows_price_when_size_is_specific() -> None:
 
     assistant = event["data"]["assistantResponse"]
 
-    assert "규격/분류는 225/45R17" in assistant
+    assert "선택한 규격은 225/45R17예요." in assistant
+    assert "상품 분류는 사계절 · 승용차 · COMFORT 기준으로 확인돼요." in assistant
+    assert "상품 분류는 사계절 · SUV · COMFORT 기준으로 확인돼요." in assistant
+    assert "벤투스 슈퍼 컴포트" not in assistant
+    assert "다이나프로 컴포트" not in assistant
     assert "정가는 152,500원입니다." in assistant
     assert "정가는 140,800원입니다." in assistant
     assert "확인 가능한 규격은" not in assistant

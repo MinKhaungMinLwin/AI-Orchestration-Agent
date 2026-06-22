@@ -7705,10 +7705,8 @@ def _product_description_lines_and_metadata(
     goods_no = str(row.get("goods_no") or "").strip()
     name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
     tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
-    big_goods_name = str(row.get("big_goods_nm") or "").strip()
     slogan = _clean_product_sentence(row.get("slogan"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
-    pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
     season = str(row.get("season_nm") or "").strip()
     car_kind = str(row.get("car_knd_nm") or "").strip()
     performance = str(row.get("goods_pfm_nm") or "").strip()
@@ -7721,13 +7719,12 @@ def _product_description_lines_and_metadata(
     intro_subject = f"{name}는"
     if slogan:
         intro = f"{intro_subject} {slogan} 상품이에요."
-    elif pattern:
-        intro = f"{intro_subject} {pattern} 타이어예요."
+    elif performance:
+        intro = f"{intro_subject} {performance} 타이어예요."
     else:
         intro = f"{intro_subject} 상세 정보가 확인되는 타이어예요."
 
     lines = [intro]
-    identity_parts: list[str] = []
     available_sizes = row.get("_available_tire_sizes")
     if isinstance(available_sizes, list):
         available_sizes = [normalize_tire_size(str(size or "")) for size in available_sizes]
@@ -7736,23 +7733,21 @@ def _product_description_lines_and_metadata(
         available_sizes = []
 
     if size_specific and tire_size:
-        identity_parts.append(tire_size)
-    if big_goods_name and big_goods_name != name:
-        identity_parts.append(big_goods_name)
-    if season:
-        identity_parts.append(season)
-    if car_kind:
-        identity_parts.append(car_kind)
-    if performance and performance not in identity_parts:
-        identity_parts.append(performance)
-    if pattern and pattern not in identity_parts:
-        identity_parts.append(pattern)
-    if identity_parts:
-        lines.extend(["", f"규격/분류는 {' · '.join(identity_parts[:5])} 기준으로 확인돼요."])
-    if not size_specific and available_sizes:
+        lines.extend(["", f"선택한 규격은 {tire_size}예요."])
+    elif available_sizes:
         visible_sizes = available_sizes[:8]
         suffix = " 등" if len(available_sizes) > len(visible_sizes) else ""
         lines.extend(["", f"확인 가능한 규격은 {', '.join(visible_sizes)}{suffix}이에요."])
+
+    classification_parts: list[str] = []
+    if season:
+        classification_parts.append(season)
+    if car_kind:
+        classification_parts.append(car_kind)
+    if performance and performance not in classification_parts:
+        classification_parts.append(performance)
+    if classification_parts:
+        lines.extend(["", f"상품 분류는 {' · '.join(classification_parts)} 기준으로 확인돼요."])
 
     if tech:
         lines.extend(["", tech[:160]])
