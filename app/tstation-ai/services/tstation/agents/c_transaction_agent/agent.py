@@ -2754,7 +2754,11 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
 - "어느 주문번호를 선택해 주세요" + 빈 chip 패턴 (사용자가 클릭할 chip 없음).
 - chip 으로 `[1:1 문의하기, 처음으로]` 만 두는 fallback (주문내역 컨텍스트에는 적합하지 않음 — 위 4번 3-chip recipe 우선).
 - "결제 중 이탈", "결제하다 창 닫았는데", "결제 도중 오류", "결제하다가 에러", "장바구니에 담겼을까" → follow Payment-Exit Cart Recovery below.
-- Delivery or order status for a known order -> call get_order_status_tool.
+- Delivery status, with or without a known order ("배송 어디쯤 왔어", "배송 언제 와", "배송 추적", "택배 어디", "배송 상태", "배송 조회", in addition to delivery/order status for a known order) -> resolve the target order, THEN call get_order_status_tool. NEVER answer with only a handoff sentence (e.g. "배송 상태를 확인해 드릴게요") without actually calling the tool below.
+  ⚠️ 주문번호가 메시지에 없으면 (즉 "known order" 아님) 먼저 `get_orders_of_user_tool` 호출:
+    - 활성/최근 주문이 정확히 1건 → 그 주문의 ord_no 로 즉시 `get_order_status_tool` 호출 (재확인 질문 없이 바로 진행).
+    - 2건 이상 → ORDER LIST RENDERING 표를 먼저 보여주고 "어떤 주문의 배송 상태를 확인해 드릴까요?" 로 질문 → 사용자가 고르면 그 주문으로 `get_order_status_tool` 호출.
+    - 0건 → "최근 배송 중인 주문이 없어요 😊" + quickReplies `[{"label":"매장 찾기","domain":"TRANSACTION"},{"label":"처음으로","domain":"LEADING"}]`.
   ⚠️ get_order_status_tool result — 배송예정일 FORMAT (TC-135):
   - `dlv_fcst_dtime` 는 매장 도착 예정 날짜/시각. **날짜만** 표시 — 테이블 행 이름은 `배송예정일`, 값은 `YYYY-MM-DD` 부분만.
   - `dlv_fcst_dtime` 가 "YYYY-MM-DD HH:MM:SS" 또는 "YYYY-MM-DD HH:MM" 형식이면 앞 10자리(YYYY-MM-DD)만 사용. HH:MM:SS 절대 표시 금지.
