@@ -478,6 +478,13 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
     ]
 
 
+def enrich_product_card_items(items: list[dict]) -> list[dict]:
+    """Enrich raw product rows with the fields required by product cards."""
+    if not isinstance(items, list):
+        return items
+    return _enrich_items_with_descriptions(_enrich_items_with_price_fields(items))
+
+
 @tool
 @tool_cache(ttl=3600)
 def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
@@ -1685,8 +1692,7 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
         # logger.debug("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
-            data["items"] = _enrich_items_with_price_fields(data["items"])
-            data["items"] = _enrich_items_with_descriptions(data["items"])
+            data["items"] = enrich_product_card_items(data["items"])
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:
         logger.exception("[TOOL][get_best_selling_products_tool] Failed")

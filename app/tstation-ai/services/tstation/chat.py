@@ -4658,6 +4658,20 @@ def _should_force_best_seller_code_route(user_text: str | None, domains: list[Mu
     return is_best_seller_request(text, include_demographic_preference=False)
 
 
+def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
+    data = tool_result.get("data") if isinstance(tool_result, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return tool_result
+
+    from services.tstation.agents.b_discovery_agent.tools import enrich_product_card_items
+
+    enriched_data = dict(data)
+    enriched_data["items"] = enrich_product_card_items(data["items"])
+    enriched_result = dict(tool_result)
+    enriched_result["data"] = enriched_data
+    return enriched_result
+
+
 def _is_oe_replacement_followup_query(user_text: str | None) -> bool:
     return bool(_OE_REPLACEMENT_FOLLOWUP_RE.search(user_text or ""))
 
@@ -14598,6 +14612,7 @@ class TStationChatServiceV2:
             try:
                 raw_result = await asyncio.to_thread(_best_selling_tool.invoke, tool_input)
                 best_selling_result = _tool_result_dict(raw_result)
+                best_selling_result = _enrich_best_selling_result_for_product_cards(best_selling_result)
             except Exception as exc:
                 logger.exception("[BEST_SELLER] get_best_selling_products_tool failed for period=%s", period)
                 best_selling_result = {
