@@ -19,6 +19,11 @@ _TPMS_RE = re.compile(
     r"|경고등.*안\s*꺼|안\s*꺼.*경고등|경고등.*꺼지지|경고등.*계속",
     re.IGNORECASE,
 )
+_TIRE_STORAGE_RE = re.compile(
+    r"보관\s*서비스|맡긴\s*타이어|타이어\s*보관|보관\s*이력"
+    r"|보관\s*중.*(?:분실|없어|훼손|파손)|맡겨\s*놓은|보관.*확인",
+    re.IGNORECASE,
+)
 _TPMS_SAFETY_RISK_RE = re.compile(
     r"주행\s*중.*(?:흔들|이상|위험|떨림|깜빡)"
     r"|운행\s*중.*(?:흔들|이상|위험|떨림|깜빡)"
@@ -89,6 +94,19 @@ def decide_support_response(
                 "(3) 주행 후 일정 시간 지나면 꺼지는 경우 있음, "
                 "(4) 리셋 방법은 차량 매뉴얼/정비사 확인, "
                 "(5) 계속 경고 시 매장 점검 권장. 자동 1:1 연결 금지."
+            ),
+        )
+
+    if intent == "tire_storage_service" or _TIRE_STORAGE_RE.search(text):
+        return _decision(
+            response_shape_key="keep_service_hist_cta",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("auto_escalate_to_qna", "skip_storage_history_cta"),
+            assistant_guidance=(
+                "매장에 보관한 타이어는 보관 서비스 이력에서 확인할 수 있음을 안내하고 "
+                "keepservice-hist CTA를 첫 번째 chip으로 제공한다. "
+                "분실·훼손 언급이 있어도 1:1 문의 자동 연결 금지 — 보관 이력 확인을 우선."
             ),
         )
 
