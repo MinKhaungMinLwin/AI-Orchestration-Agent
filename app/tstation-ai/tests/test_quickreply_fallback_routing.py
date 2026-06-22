@@ -1460,9 +1460,10 @@ def test_grade_comparison_event_prefers_higher_price_grade() -> None:
         ]
     )
 
-    assert event["data"]["assistantResponse"] == (
-        "벤투스 에어S이 키너지 EX보다 상위 등급입니다. (벤투스 에어S: 프리미엄, 키너지 EX: 스탠다드)"
-    )
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 상품 등급 | 스탠다드 | 프리미엄 |" in assistant
+    assert "벤투스 에어S이 키너지 EX보다 상위 등급입니다." in assistant
     assert _labels(event["data"]["quickReplies"]) == ["구매하기", "다른 상품 비교", "내 차량 보기"]
 
 
@@ -1502,8 +1503,10 @@ def test_price_comparison_event_uses_same_final_price_priority_as_product_cards(
         ],
     )
 
-    assert "키너지 EX는 최종 85,000원" in event["data"]["assistantResponse"]
-    assert "벤투스 에어S는 최종 95,000원" in event["data"]["assistantResponse"]
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 최종 혜택가 | 85,000원 | 95,000원 |" in assistant
+    assert "키너지 EX이 10,000원 더 저렴해요." in assistant
 
 
 def test_mileage_comparison_event_prefers_higher_life_span() -> None:
@@ -1515,7 +1518,10 @@ def test_mileage_comparison_event_prefers_higher_life_span() -> None:
         ]
     )
 
-    assert event["data"]["assistantResponse"] == "마일리지/수명 기준으로는 키너지 EX이 벤투스 에어S보다 유리해요."
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 마일리지/수명 | 4.1 | 3.2 |" in assistant
+    assert "마일리지/수명 기준으로는 키너지 EX이 벤투스 에어S보다 유리해요." in assistant
 
 
 def test_product_comparison_uses_existing_search_results() -> None:
@@ -1568,12 +1574,48 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
 
     assistant = event["data"]["assistantResponse"]
 
-    assert "상품 특징과 리뷰 기준" in assistant
+    assert "상품 정보를 표로 비교해드릴게요." in assistant
+    assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" in assistant
+    assert "| 특징 | SUV용 사계절 컴포트 타이어 | 겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어 |" in assistant
+    assert "| 리뷰 | 평점 4.8, 리뷰 12건. 대표 리뷰는" in assistant
     assert "SUV용 사계절 컴포트 타이어" in assistant
     assert "눈길과 빙판" in assistant
     assert "승차감이 좋고 조용" in assistant
     assert "가격 기준" not in assistant
     assert "249,700" not in assistant
+
+
+def test_product_comparison_table_does_not_expose_goods_no() -> None:
+    event = _build_product_comparison_event(
+        "키너지 EX랑 벤투스 air S 비교해줘",
+        [
+            (
+                "키너지 EX",
+                {
+                    "goods_no": "G000000111111",
+                    "goods_nm": "키너지 EX",
+                    "slogan": "일상 주행용 컴포트 타이어",
+                    "sale_prc": 120000,
+                },
+            ),
+            (
+                "벤투스 에어S",
+                {
+                    "goods_no": "G000000222222",
+                    "goods_nm": "벤투스 에어S",
+                    "slogan": "정숙성과 승차감 중심 타이어",
+                    "sale_prc": 130000,
+                },
+            ),
+        ],
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "상품코드" not in assistant
+    assert "goods_no" not in assistant
+    assert "G000000111111" not in assistant
+    assert "G000000222222" not in assistant
 
 
 def test_generic_compare_text_is_product_comparison_query() -> None:
@@ -1869,6 +1911,7 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
                     "car_knd_nm": "승용차",
                     "goods_pfm_nm": "COMFORT",
                     "sale_prc": 152500,
+                    "_available_tire_sizes": ["225/45R17", "245/40R18"],
                 },
             ),
             (
@@ -1882,6 +1925,7 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
                     "car_knd_nm": "SUV",
                     "goods_pfm_nm": "COMFORT",
                     "sale_prc": 140800,
+                    "_available_tire_sizes": ["225/70R16", "235/60R18"],
                 },
             ),
         ]
@@ -1895,14 +1939,51 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
     assert "다이나프로 HP3" in assistant
     assert "벤투스 S2 AS는 프리미엄 정숙성과 승차감을 갖춘 사계절 타이어 상품이에요." in assistant
     assert "다이나프로 HP3는 SUV를 위한 컴포트 주행 성능 상품이에요." in assistant
-    assert "규격/분류는 225/45R17" in assistant
-    assert "규격/분류는 225/70R16" in assistant
-    assert "정가는 152,500원입니다." in assistant
-    assert "정가는 140,800원입니다." in assistant
+    assert "확인 가능한 규격은 225/45R17, 245/40R18" in assistant
+    assert "확인 가능한 규격은 225/70R16, 235/60R18" in assistant
+    assert "정가는 152,500원입니다." not in assistant
+    assert "정가는 140,800원입니다." not in assistant
     assert [product["productName"] for product in event["data"]["metadata"]["products"]] == [
         "벤투스 S2 AS",
         "다이나프로 HP3",
     ]
+
+
+def test_multi_product_detail_event_shows_price_when_size_is_specific() -> None:
+    event = _build_multi_product_detail_quickreply_event(
+        [
+            (
+                "Ventus S2 AS",
+                {
+                    "goods_no": "101",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "225/45R17",
+                    "slogan": "프리미엄 정숙성과 승차감을 갖춘 사계절 타이어",
+                    "sale_prc": 152500,
+                    "_available_tire_sizes": ["225/45R17", "245/40R18"],
+                },
+            ),
+            (
+                "Dynapro HP3",
+                {
+                    "goods_no": "202",
+                    "goods_nm": "다이나프로 HP3",
+                    "tire_size_1": "225/45R17",
+                    "slogan": "SUV를 위한 컴포트 주행 성능",
+                    "sale_prc": 140800,
+                    "_available_tire_sizes": ["225/45R17", "235/60R18"],
+                },
+            ),
+        ],
+        size_specific=True,
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert "규격/분류는 225/45R17" in assistant
+    assert "정가는 152,500원입니다." in assistant
+    assert "정가는 140,800원입니다." in assistant
+    assert "확인 가능한 규격은" not in assistant
 
 
 def test_multi_product_detail_request_keeps_search_plan_available() -> None:
