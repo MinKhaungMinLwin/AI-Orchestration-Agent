@@ -7991,7 +7991,15 @@ def _recent_multi_product_clarification_names(
 
 
 def _is_multi_product_detail_continuation(user_text: str) -> bool:
-    return bool(re.search(r"각각\s*(?:찾아|검색|설명|알려|보기)|각각|둘\s*다|둘\s*모두", user_text or "", re.IGNORECASE))
+    return bool(
+        re.search(
+            r"각각\s*(?:찾아|검색|설명|알려|보기)|각각|둘\s*다|둘\s*모두|"
+            r"(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개).*(?:정보|보여|찾아|검색|설명|알려)|"
+            r"(?:정보|보여|찾아|검색|설명|알려).*(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개)",
+            user_text or "",
+            re.IGNORECASE,
+        )
+    )
 
 
 def _is_multi_product_compare_continuation(user_text: str) -> bool:
@@ -8005,7 +8013,10 @@ def _multi_product_detail_continuation_names(
 ) -> tuple[str, ...]:
     if not _is_multi_product_detail_continuation(user_text):
         return ()
-    return _recent_multi_product_clarification_names(messages, latest_quickreply_tmpl)
+    names = _recent_multi_product_clarification_names(messages, latest_quickreply_tmpl)
+    if len(names) >= 2:
+        return names
+    return _recent_product_names_for_comparison(messages)
 
 
 def _multi_product_compare_continuation_query(

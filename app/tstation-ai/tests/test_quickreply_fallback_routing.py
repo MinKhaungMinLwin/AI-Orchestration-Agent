@@ -1840,6 +1840,21 @@ def test_multi_product_clarification_detail_chip_restores_products_from_assistan
     )
 
 
+def test_multi_product_detail_followup_restores_recent_pair_without_clarification_prompt() -> None:
+    messages = [
+        {"role": "user", "content": "두개 말고 다른 추천 상품은 없어?"},
+        {"role": "assistant", "content": "비교할 다른 상품명을 알려주시면 특징, 평점, 리뷰 중심으로 비교해드릴게요."},
+        {"role": "user", "content": "ventus air s, dynapro hp3"},
+        {"role": "assistant", "content": "두 상품을 비교해드릴까요, 아니면 각각 상품을 찾아드릴까요?"},
+        {"role": "user", "content": "두 상품 정보 보여줘"},
+    ]
+
+    assert _multi_product_detail_continuation_names("두 상품 정보 보여줘", messages) == (
+        "Ventus air S",
+        "Dynapro HP3",
+    )
+
+
 def test_multi_product_detail_event_keeps_both_products_in_final_response() -> None:
     event = _build_multi_product_detail_quickreply_event(
         [
