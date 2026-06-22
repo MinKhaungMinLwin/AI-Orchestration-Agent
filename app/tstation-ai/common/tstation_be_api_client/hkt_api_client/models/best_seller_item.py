@@ -35,6 +35,8 @@ class BestSellerItem:
         season_nm (None | str | Unset): 계절 속성 (SEASON_NM)
         car_knd_nm (None | str | Unset): 차종 속성 (CAR_KND_NM)
         goods_pfm_nm (None | str | Unset): 성능 속성 (GOODS_PFM_NM)
+        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 응답값: '프리미엄' (DB 원본 '프리미엄+' 도 응답 단계에서 '프리미엄'
+            으로 정규화) / '스탠다드' / '이코노미'
         brand_nm (None | str | Unset): 브랜드명 (BRAND_NM)
         certify_brand_nm (None | str | Unset): 공식인증 브랜드명 (CERTIFY_BRAND_NM)
         orpl_nm (None | str | Unset): 원산지명 (ORPL_NM)
@@ -78,6 +80,7 @@ class BestSellerItem:
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
+    prc_grd_nm: None | str | Unset = UNSET
     brand_nm: None | str | Unset = UNSET
     certify_brand_nm: None | str | Unset = UNSET
     orpl_nm: None | str | Unset = UNSET
@@ -217,6 +220,12 @@ class BestSellerItem:
             goods_pfm_nm = UNSET
         else:
             goods_pfm_nm = self.goods_pfm_nm
+
+        prc_grd_nm: None | str | Unset
+        if isinstance(self.prc_grd_nm, Unset):
+            prc_grd_nm = UNSET
+        else:
+            prc_grd_nm = self.prc_grd_nm
 
         brand_nm: None | str | Unset
         if isinstance(self.brand_nm, Unset):
@@ -389,6 +398,8 @@ class BestSellerItem:
             field_dict["car_knd_nm"] = car_knd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if prc_grd_nm is not UNSET:
+            field_dict["prc_grd_nm"] = prc_grd_nm
         if brand_nm is not UNSET:
             field_dict["brand_nm"] = brand_nm
         if certify_brand_nm is not UNSET:
@@ -610,6 +621,15 @@ class BestSellerItem:
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
 
+        def _parse_prc_grd_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        prc_grd_nm = _parse_prc_grd_nm(d.pop("prc_grd_nm", UNSET))
+
         def _parse_brand_nm(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -820,6 +840,7 @@ class BestSellerItem:
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             goods_pfm_nm=goods_pfm_nm,
+            prc_grd_nm=prc_grd_nm,
             brand_nm=brand_nm,
             certify_brand_nm=certify_brand_nm,
             orpl_nm=orpl_nm,

@@ -183,6 +183,7 @@ from services.tstation.chat import (
     _should_replace_discovery_dead_end_chips,
     _should_force_warranty_claim_support_route,
     _should_force_best_seller_code_route,
+    _enrich_best_selling_result_for_product_cards,
     _quickreply_cta_clarification_event,
     _sanitize_transaction_cta_contracts,
     _apply_cta_context_to_slots,
@@ -2888,6 +2889,82 @@ def test_recommendation_tool_passes_strict_brand_flag(monkeypatch: pytest.Monkey
 
     assert result["status"] == "success"
     assert captured["allow_cross_brand_fill"] is False
+
+
+def test_best_selling_tool_enriches_price_and_description_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _Parsed:
+        def to_dict(self) -> dict:
+            return {
+                "items": [
+                    {
+                        "goods_no": "G000000317682",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "235/55R19",
+                        "extra_fvr_sale_prc": "179700",
+                    }
+                ]
+            }
+
+    def _fake_get_best_sellers(**_kwargs):
+        return SimpleNamespace(status_code=200, parsed=_Parsed(), content=b"")
+
+    def _fake_price_enrich(items: list[dict]) -> list[dict]:
+        calls.append("price")
+        enriched = [dict(item) for item in items]
+        enriched[0]["sale_prc"] = "220000"
+        return enriched
+
+    def _fake_description_enrich(items: list[dict]) -> list[dict]:
+        calls.append("description")
+        enriched = [dict(item) for item in items]
+        enriched[0]["rate"] = 4.8
+        enriched[0]["prc_grd_nm"] = "프리미엄"
+        return enriched
+
+    monkeypatch.setattr(discovery_tools, "get_best_sellers", _fake_get_best_sellers)
+    monkeypatch.setattr(discovery_tools, "_enrich_items_with_price_fields", _fake_price_enrich)
+    monkeypatch.setattr(discovery_tools, "_enrich_items_with_descriptions", _fake_description_enrich)
+
+    result = discovery_tools.get_best_selling_products_tool.invoke({"period": "3months", "limit": 5})
+
+    assert result["status"] == "success"
+    item = result["data"]["items"][0]
+    assert calls == ["price", "description"]
+    assert item["sale_prc"] == "220000"
+    assert item["rate"] == 4.8
+    assert item["prc_grd_nm"] == "프리미엄"
+
+
+def test_best_selling_cached_tool_result_is_enriched_before_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_product_card_enrich(items: list[dict]) -> list[dict]:
+        enriched = [dict(item) for item in items]
+        enriched[0]["sale_prc"] = "220000"
+        enriched[0]["rate"] = 4.8
+        enriched[0]["prc_grd_nm"] = "프리미엄"
+        return enriched
+
+    monkeypatch.setattr(discovery_tools, "enrich_product_card_items", _fake_product_card_enrich)
+
+    result = _enrich_best_selling_result_for_product_cards({
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "goods_no": "G000000317682",
+                    "goods_nm": "다이나프로 HPX",
+                    "tire_size_1": "235/55R19",
+                    "extra_fvr_sale_prc": "179700",
+                }
+            ]
+        },
+    })
+
+    item = result["data"]["items"][0]
+    assert item["sale_prc"] == "220000"
+    assert item["rate"] == 4.8
+    assert item["prc_grd_nm"] == "프리미엄"
 
 
 def test_tc005_family_coupon_matching_ignores_product_terms() -> None:
