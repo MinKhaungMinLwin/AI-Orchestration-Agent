@@ -7676,18 +7676,37 @@ def _format_krw(value: Any) -> str:
     return f"{amount:,}원"
 
 
-def _build_product_description_quickreply_event(detail_result: dict) -> dict | None:
-    row = _unwrap_tool_data(detail_result)
-    if not isinstance(row, dict) or not row:
-        return None
+def _tire_sizes_from_product_rows(rows: list[dict]) -> list[str]:
+    sizes: list[str] = []
+    seen_sizes: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tire_size = normalize_tire_size(
+            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
+        )
+        if not tire_size:
+            tire_size = normalize_tire_size(str(row.get("tire_size_2") or ""))
+        if not tire_size:
+            continue
+        compact_size = re.sub(r"[^0-9]", "", tire_size)
+        if compact_size in seen_sizes:
+            continue
+        seen_sizes.add(compact_size)
+        sizes.append(tire_size)
+    return sizes
 
+
+def _product_description_lines_and_metadata(
+    row: dict,
+    *,
+    size_specific: bool = True,
+) -> tuple[list[str], dict[str, str]]:
     goods_no = str(row.get("goods_no") or "").strip()
     name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
     tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
-    big_goods_name = str(row.get("big_goods_nm") or "").strip()
     slogan = _clean_product_sentence(row.get("slogan"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
-    pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
     season = str(row.get("season_nm") or "").strip()
     car_kind = str(row.get("car_knd_nm") or "").strip()
     performance = str(row.get("goods_pfm_nm") or "").strip()
@@ -7700,27 +7719,35 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     intro_subject = f"{name}는"
     if slogan:
         intro = f"{intro_subject} {slogan} 상품이에요."
-    elif pattern:
-        intro = f"{intro_subject} {pattern} 타이어예요."
+    elif performance:
+        intro = f"{intro_subject} {performance} 타이어예요."
     else:
         intro = f"{intro_subject} 상세 정보가 확인되는 타이어예요."
 
     lines = [intro]
-    identity_parts: list[str] = []
-    if tire_size:
-        identity_parts.append(tire_size)
-    if big_goods_name and big_goods_name != name:
-        identity_parts.append(big_goods_name)
+    available_sizes = row.get("_available_tire_sizes")
+    if isinstance(available_sizes, list):
+        available_sizes = [normalize_tire_size(str(size or "")) for size in available_sizes]
+        available_sizes = [size for size in available_sizes if size]
+    else:
+        available_sizes = []
+
+    if size_specific and tire_size:
+        lines.extend(["", f"선택한 규격은 {tire_size}예요."])
+    elif available_sizes:
+        visible_sizes = available_sizes[:8]
+        suffix = " 등" if len(available_sizes) > len(visible_sizes) else ""
+        lines.extend(["", f"확인 가능한 규격은 {', '.join(visible_sizes)}{suffix}이에요."])
+
+    classification_parts: list[str] = []
     if season:
-        identity_parts.append(season)
+        classification_parts.append(season)
     if car_kind:
-        identity_parts.append(car_kind)
-    if performance and performance not in identity_parts:
-        identity_parts.append(performance)
-    if pattern and pattern not in identity_parts:
-        identity_parts.append(pattern)
-    if identity_parts:
-        lines.extend(["", f"규격/분류는 {' · '.join(identity_parts[:5])} 기준으로 확인돼요."])
+        classification_parts.append(car_kind)
+    if performance and performance not in classification_parts:
+        classification_parts.append(performance)
+    if classification_parts:
+        lines.extend(["", f"상품 분류는 {' · '.join(classification_parts)} 기준으로 확인돼요."])
 
     if tech:
         lines.extend(["", tech[:160]])
@@ -7739,21 +7766,22 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     if performance_bits:
         lines.extend(["", f"주요 성능은 {', '.join(performance_bits)} 수준이에요."])
 
-    sale_price = _format_krw(row.get("sale_prc"))
-    final_price = _format_krw(row.get("cheapest_final_prc"))
-    coupons = row.get("cheapest_applied_coupons")
-    coupon_names: list[str] = []
-    if isinstance(coupons, list):
-        for coupon in coupons:
-            if isinstance(coupon, dict):
-                coupon_name = str(coupon.get("cpn_nm") or "").strip()
-                if coupon_name and coupon_name not in coupon_names:
-                    coupon_names.append(coupon_name)
-    if sale_price and final_price and sale_price != final_price:
-        coupon_text = f"{', '.join(coupon_names[:2])} 적용 시 " if coupon_names else ""
-        lines.extend(["", f"정가 {sale_price}에서 {coupon_text}최종 혜택가는 {final_price}이에요."])
-    elif sale_price:
-        lines.extend(["", f"정가는 {sale_price}입니다."])
+    if size_specific:
+        sale_price = _format_krw(row.get("sale_prc"))
+        final_price = _format_krw(row.get("cheapest_final_prc"))
+        coupons = row.get("cheapest_applied_coupons")
+        coupon_names: list[str] = []
+        if isinstance(coupons, list):
+            for coupon in coupons:
+                if isinstance(coupon, dict):
+                    coupon_name = str(coupon.get("cpn_nm") or "").strip()
+                    if coupon_name and coupon_name not in coupon_names:
+                        coupon_names.append(coupon_name)
+        if sale_price and final_price and sale_price != final_price:
+            coupon_text = f"{', '.join(coupon_names[:2])} 적용 시 " if coupon_names else ""
+            lines.extend(["", f"정가 {sale_price}에서 {coupon_text}최종 혜택가는 {final_price}이에요."])
+        elif sale_price:
+            lines.extend(["", f"정가는 {sale_price}입니다."])
 
     rating = row.get("rating") if isinstance(row.get("rating"), dict) else {}
     review_count = row.get("review_count") or rating.get("review_count")
@@ -7772,6 +7800,16 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
         metadata["tireSize"] = tire_size
     if name:
         metadata["productName"] = name
+
+    return lines, metadata
+
+
+def _build_product_description_quickreply_event(detail_result: dict) -> dict | None:
+    row = _unwrap_tool_data(detail_result)
+    if not isinstance(row, dict) or not row:
+        return None
+
+    lines, metadata = _product_description_lines_and_metadata(row)
 
     return {
         "type": "data",
@@ -8128,7 +8166,11 @@ def _multi_product_intent_clarification_event(product_names: tuple[str, ...] = (
     }
 
 
-def _build_multi_product_detail_quickreply_event(product_rows: list[tuple[str, dict | None]]) -> dict:
+def _build_multi_product_detail_quickreply_event(
+    product_rows: list[tuple[str, dict | None]],
+    *,
+    size_specific: bool = False,
+) -> dict:
     lines = ["요청하신 두 상품을 각각 확인했어요."]
     metadata_products: list[dict[str, str]] = []
     found_count = 0
@@ -8137,22 +8179,11 @@ def _build_multi_product_detail_quickreply_event(product_rows: list[tuple[str, d
             lines.extend(["", f"- {requested_name}: 상품 정보를 찾지 못했어요."])
             continue
         found_count += 1
-        name = str(row.get("goods_nm") or row.get("big_goods_nm") or row.get("title") or requested_name).strip()
-        summary = _product_feature_summary(row)
-        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
-        detail_parts = [summary]
-        if tire_size:
-            detail_parts.append(f"규격 {tire_size}")
-        sale_price = _format_krw(row.get("sale_prc"))
-        if sale_price:
-            detail_parts.append(f"정가 {sale_price}")
-        lines.extend(["", f"- {name}: {' · '.join(part for part in detail_parts if part)}"])
-        product_metadata: dict[str, str] = {"productName": name}
-        goods_no = str(row.get("goods_no") or "").strip()
-        if goods_no:
-            product_metadata["goodsId"] = goods_no
-        if tire_size:
-            product_metadata["tireSize"] = tire_size
+        detail_lines, product_metadata = _product_description_lines_and_metadata(row, size_specific=size_specific)
+        name = product_metadata.get("productName") or str(
+            row.get("goods_nm") or row.get("big_goods_nm") or row.get("title") or requested_name
+        ).strip()
+        lines.extend(["", f"## {name}", *detail_lines])
         metadata_products.append(product_metadata)
 
     if found_count < 2:
@@ -8223,10 +8254,7 @@ def _product_feature_summary(row: dict) -> str:
     parts: list[str] = []
     season = str(row.get("season_nm") or "").strip()
     car_kind = str(row.get("car_knd_nm") or "").strip()
-    pattern = str(row.get("ptrn_d_nm") or row.get("big_goods_nm") or "").strip()
     performance = str(row.get("goods_pfm_nm") or "").strip()
-    if pattern:
-        parts.append(pattern)
     if season:
         parts.append(season)
     if car_kind:
@@ -8260,22 +8288,96 @@ def _product_review_summary(row: dict) -> str:
     return "확인 가능한 리뷰 요약은 아직 없어요."
 
 
+def _product_comparison_value(row: dict, key: str) -> str:
+    if key == "grade":
+        return str(row.get("prc_grd_nm") or "").strip() or "미확인"
+    if key == "feature":
+        return _product_feature_summary(row)
+    if key == "performance":
+        return _product_performance_summary(row)
+    if key == "review":
+        return _product_review_summary(row)
+    if key == "release":
+        return str(row.get("t_rls_yearmon") or row.get("sys_reg_dtime") or "").strip() or "미확인"
+    if key == "price":
+        return _format_krw(_final_price_from_row(row)) or "미확인"
+    if key == "mileage":
+        return str(row.get("t_life_span") or row.get("t_milg_cvs") or "").strip() or "미확인"
+    if key == "noise":
+        silence = str(row.get("t_silence") or row.get("t_com_sil_avg") or "").strip()
+        label = str(row.get("label_pnwave_nm") or "").strip()
+        if silence and label:
+            return f"{silence} ({label})"
+        return silence or label or "미확인"
+    if key == "fuel_efficiency":
+        return str(row.get("t_fuel_eff_convert") or row.get("rr") or "").strip() or "미확인"
+    if key == "wet":
+        return str(row.get("wet") or "").strip() or "미확인"
+    return "미확인"
+
+
+def _product_performance_summary(row: dict) -> str:
+    parts: list[str] = []
+    field_specs = (
+        ("정숙성", row.get("t_silence") or row.get("t_com_sil_avg")),
+        ("승차감", row.get("t_comfort") or row.get("t_com_cvs")),
+        ("마일리지", row.get("t_life_span") or row.get("t_milg_cvs")),
+        ("핸들링", row.get("t_handling") or row.get("t_high_hand_avg")),
+        ("고속성능", row.get("t_high_perform")),
+        ("회전저항", row.get("rr")),
+        ("젖은노면", row.get("wet")),
+    )
+    for label, raw_value in field_specs:
+        value = str(raw_value or "").strip()
+        if not value or value in {"0", "0.0", "None", "null"}:
+            continue
+        parts.append(f"{label} {value}")
+    return ", ".join(parts[:4]) if parts else "확인 가능한 주요 성능 정보가 부족해요"
+
+
+def _markdown_table_cell(value: str) -> str:
+    text = re.sub(r"[\r\n\t]+", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.replace("|", "/") or "미확인"
+
+
+def _build_product_comparison_table(
+    left_name: str,
+    left_row: dict,
+    right_name: str,
+    right_row: dict,
+    *,
+    rows: tuple[tuple[str, str], ...] | None = None,
+    verdict: str | None = None,
+) -> str:
+    table_rows = rows or (
+        ("상품 등급", "grade"),
+        ("특징", "feature"),
+        ("주요 성능", "performance"),
+        ("리뷰", "review"),
+    )
+    lines = [
+        "상품 정보를 표로 비교해드릴게요.",
+        "",
+        f"| 항목 | {left_name} | {right_name} |",
+        "|---|---|---|",
+    ]
+    for label, key in table_rows:
+        left_value = _markdown_table_cell(_product_comparison_value(left_row, key))
+        right_value = _markdown_table_cell(_product_comparison_value(right_row, key))
+        lines.append(f"| {label} | {left_value} | {right_value} |")
+    if verdict:
+        lines.extend(["", verdict])
+    return "\n".join(lines)
+
+
 def _build_product_feature_review_comparison(
     left_name: str,
     left_row: dict,
     right_name: str,
     right_row: dict,
 ) -> str:
-    return "\n".join([
-        "상품 특징과 리뷰 기준으로 비교해드릴게요.",
-        "",
-        f"- {left_name}",
-        f"  - 특징: {_product_feature_summary(left_row)}",
-        f"  - 리뷰: {_product_review_summary(left_row)}",
-        f"- {right_name}",
-        f"  - 특징: {_product_feature_summary(right_row)}",
-        f"  - 리뷰: {_product_review_summary(right_row)}",
-    ])
+    return _build_product_comparison_table(left_name, left_row, right_name, right_row)
 
 
 def _metric_label(metric: str) -> str:
@@ -8737,7 +8839,7 @@ def _build_product_comparison_event(
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
         if _grade_rank_value(left_grade) == _grade_rank_value(right_grade):
-            assistant = (
+            verdict = (
                 f"{left_name}와 {right_name}는 모두 {left_grade} 등급으로 확인돼요. "
                 "두 상품은 같은 등급 안에서 포지션 차이가 있을 수 있어요."
             )
@@ -8746,15 +8848,34 @@ def _build_product_comparison_event(
             worse_name = right_name if better_name == left_name else left_name
             better_grade = left_grade if better_name == left_name else right_grade
             worse_grade = right_grade if worse_name == right_name else left_grade
-            assistant = f"{better_name}이 {worse_name}보다 상위 등급입니다. ({better_name}: {better_grade}, {worse_name}: {worse_grade})"
+            verdict = (
+                f"{better_name}이 {worse_name}보다 상위 등급입니다. "
+                f"({better_name}: {better_grade}, {worse_name}: {worse_grade})"
+            )
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("상품 등급", "grade"), ("특징", "feature"), ("리뷰", "review")),
+            verdict=verdict,
+        )
     elif sub_intent == "latest_compare" or compare_metric == "release":
         left_release = str(left_row.get("t_rls_yearmon") or left_row.get("sys_reg_dtime") or "").strip()
         right_release = str(right_row.get("t_rls_yearmon") or right_row.get("sys_reg_dtime") or "").strip()
         if left_release and right_release and left_release != right_release:
             newer_name = left_name if left_release > right_release else right_name
-            assistant = f"최신 상품은 {newer_name}입니다. ({left_name}: {left_release}, {right_name}: {right_release})"
+            verdict = f"최신 상품은 {newer_name}입니다."
         else:
-            assistant = f"{left_name}와 {right_name}의 출시 시점 차이는 추가 확인이 필요해요."
+            verdict = f"{left_name}와 {right_name}의 출시 시점 차이는 추가 확인이 필요해요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("출시 시점", "release"), ("상품 등급", "grade"), ("특징", "feature")),
+            verdict=verdict,
+        )
     elif sub_intent == "mileage_compare" or compare_metric == "mileage":
         summary = _compare_numeric_metric(
             left_name,
@@ -8764,7 +8885,14 @@ def _build_product_comparison_event(
             higher_is_better=True,
             metric_label="마일리지/수명",
         )
-        assistant = summary or f"{left_name}와 {right_name}의 마일리지/수명 차이는 추가 확인이 필요해요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("마일리지/수명", "mileage"), ("상품 등급", "grade"), ("리뷰", "review")),
+            verdict=summary or f"{left_name}와 {right_name}의 마일리지/수명 차이는 추가 확인이 필요해요.",
+        )
     elif compare_metric == "noise":
         summary = _compare_numeric_metric(
             left_name,
@@ -8774,7 +8902,14 @@ def _build_product_comparison_event(
             higher_is_better=True,
             metric_label="정숙성",
         )
-        assistant = summary or f"{left_name}와 {right_name}의 정숙성 차이는 추가 확인이 필요해요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("정숙성", "noise"), ("상품 등급", "grade"), ("리뷰", "review")),
+            verdict=summary or f"{left_name}와 {right_name}의 정숙성 차이는 추가 확인이 필요해요.",
+        )
     elif compare_metric == "fuel_efficiency":
         summary = _compare_numeric_metric(
             left_name,
@@ -8784,7 +8919,14 @@ def _build_product_comparison_event(
             higher_is_better=True,
             metric_label="연비",
         )
-        assistant = summary or f"{left_name}와 {right_name}의 연비 차이는 추가 확인이 필요해요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("연비/회전저항", "fuel_efficiency"), ("상품 등급", "grade"), ("리뷰", "review")),
+            verdict=summary or f"{left_name}와 {right_name}의 연비 차이는 추가 확인이 필요해요.",
+        )
     elif compare_metric == "wet":
         summary = _compare_numeric_metric(
             left_name,
@@ -8794,27 +8936,46 @@ def _build_product_comparison_event(
             higher_is_better=True,
             metric_label="빗길 성능",
         )
-        assistant = summary or f"{left_name}와 {right_name}의 빗길 성능 차이는 추가 확인이 필요해요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("빗길 성능", "wet"), ("상품 등급", "grade"), ("리뷰", "review")),
+            verdict=summary or f"{left_name}와 {right_name}의 빗길 성능 차이는 추가 확인이 필요해요.",
+        )
     elif compare_metric == "price":
         left_final = _final_price_from_row(left_row)
         right_final = _final_price_from_row(right_row)
         if left_final is not None and right_final is not None and left_final != right_final:
             cheaper_name = left_name if left_final < right_final else right_name
             diff = abs(left_final - right_final)
-            assistant = (
-                f"{left_name}는 최종 {left_final:,}원, {right_name}는 최종 {right_final:,}원으로 "
-                f"{cheaper_name}이 {diff:,}원 더 저렴해요."
-            )
+            verdict = f"{cheaper_name}이 {diff:,}원 더 저렴해요."
         elif left_final is not None and right_final is not None:
-            assistant = f"{left_name}와 {right_name}는 최종 가격이 동일해요. ({left_final:,}원)"
+            verdict = f"{left_name}와 {right_name}는 최종 가격이 동일해요."
         else:
-            assistant = f"{left_name}와 {right_name}의 가격 차이는 추가 확인이 필요해요."
+            verdict = f"{left_name}와 {right_name}의 가격 차이는 추가 확인이 필요해요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("최종 혜택가", "price"), ("상품 등급", "grade"), ("리뷰", "review")),
+            verdict=verdict,
+        )
     else:
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
-        assistant = (
-            f"{left_name}는 {left_grade}, {right_name}는 {right_grade} 등급으로 확인돼요. "
-            f"비교하실 항목({_metric_label(compare_metric or 'grade')})을 더 구체적으로 알려주시면 이어서 정리해 드릴게요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("상품 등급", "grade"), ("특징", "feature"), ("리뷰", "review")),
+            verdict=(
+                f"{left_name}는 {left_grade}, {right_name}는 {right_grade} 등급으로 확인돼요. "
+                f"비교하실 항목({_metric_label(compare_metric or 'grade')})을 더 구체적으로 알려주시면 이어서 정리해 드릴게요."
+            ),
         )
 
     return {
@@ -15647,11 +15808,17 @@ class TStationChatServiceV2:
             )
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
 
+            frame = build_discovery_intent_frame(user_query)
+            tire_size = frame.entities.get("tire_size") or getattr(initial_slots, "tire_size", None)
+            tire_size = normalize_tire_size(str(tire_size or ""))
+            size_specific = bool(tire_size)
             emitted_events: list[dict] = []
             product_rows: list[tuple[str, dict | None]] = []
             for product_name in product_names[:2]:
                 preferred_keyword = _preferred_product_search_keyword(product_name)
                 tool_input = {"keyword": preferred_keyword, "limit": 10}
+                if tire_size:
+                    tool_input["size"] = tire_size
                 emitted_events.append({
                     "type": "status",
                     "status": "tool_start",
@@ -15693,6 +15860,9 @@ class TStationChatServiceV2:
                     preferred_keyword,
                     allow_first_row_fallback=True,
                 )
+                search_data = _unwrap_tool_data(search_result)
+                search_rows = search_data.get("items") if isinstance(search_data, dict) else None
+                available_sizes = _tire_sizes_from_product_rows(search_rows) if isinstance(search_rows, list) else []
                 if row and row.get("goods_no"):
                     detail_input = {"goods_no": row["goods_no"]}
                     emitted_events.append({
@@ -15735,9 +15905,14 @@ class TStationChatServiceV2:
                     detail_data = _unwrap_tool_data(detail_result)
                     if isinstance(detail_data, dict) and detail_data:
                         row = {**row, **detail_data}
+                if row is not None and available_sizes:
+                    row = {**row, "_available_tire_sizes": available_sizes}
                 product_rows.append((product_name, row))
 
-            return emitted_events, _build_multi_product_detail_quickreply_event(product_rows)
+            return emitted_events, _build_multi_product_detail_quickreply_event(
+                product_rows,
+                size_specific=size_specific,
+            )
 
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
             if is_external_price_comparison_request(user_query):
