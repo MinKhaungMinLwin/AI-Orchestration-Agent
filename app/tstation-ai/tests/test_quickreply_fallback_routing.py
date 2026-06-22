@@ -62,9 +62,11 @@ from services.tstation.chat import (
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
     _product_compare_target_prompt_event,
+    _multi_product_intent_clarification_event,
     _build_product_size_list_event_from_search_results,
     _build_product_size_list_not_found_event,
     _comparison_query_with_recent_context,
+    _should_clarify_ambiguous_multi_product_query,
     _should_prompt_for_new_product_compare_target,
     _should_skip_product_compare_override,
     _build_oe_replacement_followup_recommendation_args,
@@ -1690,6 +1692,60 @@ def test_other_product_compare_cta_prompts_for_new_target_without_compare_resolv
     assert "비교할 다른 상품명을 알려주시면" in assistant
     assert "구매하기" not in _labels(event["data"]["quickReplies"])
     assert _labels(event["data"]["quickReplies"])[0] == "상품명 다시 입력"
+
+
+def test_other_product_compare_cta_without_recent_products_does_not_trigger_compare_prompt() -> None:
+    messages = [
+        {"role": "user", "content": "다른 상품 비교"},
+    ]
+
+    assert _should_prompt_for_new_product_compare_target("다른 상품 비교", messages) is False
+
+
+def test_compare_target_prompt_next_two_product_names_become_comparison() -> None:
+    latest_prompt = _product_compare_target_prompt_event()
+    messages = [
+        {"role": "user", "content": "두개 말고 다른 상품은 없어?"},
+        {"role": "assistant", "content": latest_prompt["data"]["assistantResponse"], "template_data": latest_prompt},
+        {"role": "user", "content": "벤투스 에어S랑 키너지 ST AS"},
+    ]
+
+    query = _comparison_query_with_recent_context("벤투스 에어S랑 키너지 ST AS", messages, latest_prompt)
+
+    assert query == "Ventus air S랑 Kinergy ST AS 비교"
+    assert _build_product_comparison_event_from_search_results(
+        query,
+        [
+            ("Ventus air S", {"data": {"items": [{"goods_nm": "벤투스 에어S", "slogan": "프리미엄 컴포트"}]}}),
+            ("Kinergy ST AS", {"data": {"items": [{"goods_nm": "키너지 ST AS", "slogan": "사계절 밸런스"}]}}),
+        ],
+    )["assistant_response_source"] == "code_product_compare_resolver"
+
+
+def test_standalone_two_product_names_ask_clarification_without_single_keyword_plan() -> None:
+    user_text = "벤투스 에어S랑 키너지 ST AS"
+    messages = [{"role": "user", "content": user_text}]
+    event = _multi_product_intent_clarification_event()
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert _should_clarify_ambiguous_multi_product_query(user_text, messages) is True
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_multi_product_intent_clarification"
+    assert "두 상품을 비교해드릴까요" in event["data"]["assistantResponse"]
+    assert "search_product_tool" in plan.forbidden_tools
+    assert plan.tool_args_patch == {}
+
+
+def test_multi_product_detail_request_keeps_search_plan_available() -> None:
+    frame = build_discovery_intent_frame("벤투스 에어S랑 키너지 ST AS 각각 설명해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["multi_product_detail_request"] is True
+    assert "search_product_tool" not in plan.forbidden_tools
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+    assert plan.tool_args_patch == {}
+    assert plan.metadata["response_intent"] == "multi_product_detail"
 
 
 def test_single_product_status_question_does_not_become_comparison() -> None:

@@ -7856,6 +7856,33 @@ def _is_product_compare_context_reset_query(user_text: str) -> bool:
     return bool(_PRODUCT_COMPARE_CONTEXT_RESET_RE.search(text))
 
 
+def _is_compare_target_prompt_template(template_data: dict | None) -> bool:
+    if not isinstance(template_data, dict):
+        return False
+    source = str(template_data.get("assistant_response_source") or "").strip()
+    if source == "code_product_compare_target_prompt":
+        return True
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    assistant = str(data.get("assistantResponse") or "") if isinstance(data, dict) else ""
+    return "비교할 다른 상품명을 알려주시면" in assistant
+
+
+def _has_recent_compare_target_prompt(messages: list[dict], latest_quickreply_tmpl: dict | None = None) -> bool:
+    if _is_compare_target_prompt_template(latest_quickreply_tmpl):
+        return True
+    for message in reversed(messages[:-1]):
+        if message.get("role") != "assistant":
+            continue
+        template_data = message.get("template_data")
+        if _is_compare_target_prompt_template(template_data):
+            return True
+        content = str(message.get("content") or "")
+        if "비교할 다른 상품명을 알려주시면" in content:
+            return True
+        break
+    return False
+
+
 def _can_reuse_recent_products_for_comparison(user_text: str, *, is_description_compare: bool = False) -> bool:
     text = user_text or ""
     if _is_product_compare_context_reset_query(text):
@@ -7869,7 +7896,30 @@ def _should_prompt_for_new_product_compare_target(user_text: str, messages: list
     return _is_product_compare_context_reset_query(user_text) and len(_recent_product_names_for_comparison(messages)) >= 2
 
 
-def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) -> str:
+def _should_clarify_ambiguous_multi_product_query(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> bool:
+    product_names = _product_names_in_text(user_text)
+    if len(product_names) < 2:
+        return False
+    if _product_comparison_names(user_text):
+        return False
+    if _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+        return False
+    if _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text):
+        return False
+    if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", user_text or "", re.IGNORECASE):
+        return False
+    return True
+
+
+def _comparison_query_with_recent_context(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> str:
     if _product_comparison_names(user_text):
         return user_text
     user_text = user_text or ""
@@ -7877,11 +7927,17 @@ def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) 
         return user_text
     is_description_compare = bool(_PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text))
     if not (is_description_compare or _PRODUCT_COMPARE_FOLLOWUP_RE.search(user_text)):
+        current_names = _product_names_in_text(user_text)
+        if len(current_names) >= 2 and _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+            return f"{current_names[0]}랑 {current_names[1]} 비교"
         return user_text
 
     current_names = _product_names_in_text(user_text)
     recent_names = _recent_product_names_for_comparison(messages)
     suffix = "상품 설명 비교" if is_description_compare else "비교"
+
+    if len(current_names) >= 2 and _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+        return f"{current_names[0]}랑 {current_names[1]} {suffix}"
 
     if len(current_names) == 1:
         current_name = current_names[0]
@@ -7914,6 +7970,24 @@ def _product_compare_target_prompt_event() -> dict:
                 {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
                 {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
                 {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+def _multi_product_intent_clarification_event() -> dict:
+    assistant = "두 상품을 비교해드릴까요, 아니면 각각 상품을 찾아드릴까요?"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_multi_product_intent_clarification",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "두 상품 비교", "domain": "DISCOVERY"},
+                {"label": "각각 찾아보기", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY"],
         },
@@ -15272,7 +15346,7 @@ class TStationChatServiceV2:
             )
 
         async def _resolve_product_comparison_with_code() -> tuple[list[dict], dict] | None:
-            comparison_query = _comparison_query_with_recent_context(user_query, messages)
+            comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
             product_names = _product_comparison_names(comparison_query)
             if len(product_names) < 2:
                 return None
@@ -16500,6 +16574,19 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
+        if _should_clarify_ambiguous_multi_product_query(user_query, messages, latest_quickreply_tmpl):
+            clarification_event = _multi_product_intent_clarification_event()
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(clarification_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((clarification_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         if _REMINDING_ALARM_QUERY_RE.search(user_query or ""):
             alarm_event = _reminding_alarm_event()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
@@ -17252,7 +17339,7 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
-                    comparison_query = _comparison_query_with_recent_context(user_query, messages)
+                    comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
                     deterministic_compare_event = (
                         None
                         if (
@@ -17479,7 +17566,7 @@ class TStationChatServiceV2:
                 ):
                     source_domain = str(event.get("source_domain", "ui_template")).lower()
                     if source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
-                        comparison_query = _comparison_query_with_recent_context(user_query, messages)
+                        comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
                         deterministic_compare_event = (
                             None
                             if _should_skip_product_compare_override(user_query, called_tool_names)
