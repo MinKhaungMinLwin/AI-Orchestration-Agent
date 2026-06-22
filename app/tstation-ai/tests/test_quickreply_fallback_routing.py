@@ -61,9 +61,12 @@ from services.tstation.chat import (
     _build_product_description_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _product_compare_target_prompt_event,
     _build_product_size_list_event_from_search_results,
     _build_product_size_list_not_found_event,
     _comparison_query_with_recent_context,
+    _should_prompt_for_new_product_compare_target,
+    _should_skip_product_compare_override,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
@@ -1612,6 +1615,9 @@ def test_pronoun_compare_followup_reuses_two_recent_products() -> None:
     "user_text",
     [
         "두개 말고 다른 추천 상품은 없어?",
+        "둘 말고 다른 상품은?",
+        "이거 말고 다른 추천 상품 없어?",
+        "아까 두 개 말고 다른 걸로 비교하고 싶어",
         "다른 상품 비교",
         "다른 추천 상품 보여줘",
     ],
@@ -1626,6 +1632,64 @@ def test_other_recommendation_text_does_not_reuse_recent_compare_products(user_t
     query = _comparison_query_with_recent_context(user_text, messages)
 
     assert query == user_text
+
+
+@pytest.mark.parametrize(
+    ("user_text", "expected"),
+    [
+        ("두 개 특징 비교해줘", "Ventus air S랑 Ventus S2 AS 상품 설명 비교"),
+        ("가격은 둘 중 뭐가 더 저렴해?", "Ventus air S랑 Ventus S2 AS 비교"),
+    ],
+)
+def test_clear_recent_two_compare_followup_still_reuses_recent_products(user_text: str, expected: str) -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": user_text},
+    ]
+
+    query = _comparison_query_with_recent_context(user_text, messages)
+
+    assert query == expected
+
+
+def test_other_recommendation_text_does_not_rebuild_compare_event_from_previous_results() -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": "두개 말고 다른 추천 상품은 없어?"},
+    ]
+    comparison_query = _comparison_query_with_recent_context("두개 말고 다른 추천 상품은 없어?", messages)
+
+    event = _build_product_comparison_event_from_search_results(
+        comparison_query,
+        [
+            ("Ventus air S", {"data": [{"goods_nm": "벤투스 에어S", "sale_prc": 180000}]}),
+            ("Ventus S2 AS", {"data": [{"goods_nm": "벤투스 S2 AS", "sale_prc": 170000}]}),
+        ],
+    )
+
+    assert event is None
+
+
+def test_other_product_compare_cta_prompts_for_new_target_without_compare_resolver_source() -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": "다른 상품 비교"},
+    ]
+
+    event = _product_compare_target_prompt_event()
+    assistant = event["data"]["assistantResponse"]
+
+    assert _should_prompt_for_new_product_compare_target("다른 상품 비교", messages) is True
+    assert _should_skip_product_compare_override("다른 상품 비교", {"get_products_recommendations_tool"}) is True
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_product_compare_target_prompt"
+    assert event["assistant_response_source"] != "code_product_compare_resolver"
+    assert "비교할 다른 상품명을 알려주시면" in assistant
+    assert "구매하기" not in _labels(event["data"]["quickReplies"])
+    assert _labels(event["data"]["quickReplies"])[0] == "상품명 다시 입력"
 
 
 def test_single_product_status_question_does_not_become_comparison() -> None:
