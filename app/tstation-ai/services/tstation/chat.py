@@ -7943,6 +7943,10 @@ def _is_multi_product_intent_clarification_template(template_data: dict | None) 
     return "두 상품을 비교해드릴까요" in assistant and "각각 상품을 찾아드릴까요" in assistant
 
 
+def _is_multi_product_intent_clarification_text(content: str) -> bool:
+    return "두 상품을 비교해드릴까요" in content and "각각 상품을 찾아드릴까요" in content
+
+
 def _recent_multi_product_clarification_names(
     messages: list[dict],
     latest_quickreply_tmpl: dict | None = None,
@@ -7956,7 +7960,11 @@ def _recent_multi_product_clarification_names(
         if message.get("role") != "assistant":
             continue
         template_data = message.get("template_data")
-        if not _is_multi_product_intent_clarification_template(template_data):
+        content = str(message.get("content") or "")
+        if not (
+            _is_multi_product_intent_clarification_template(template_data)
+            or _is_multi_product_intent_clarification_text(content)
+        ):
             continue
         names = _multi_product_clarification_metadata_product_names(template_data)
         if len(names) >= 2:

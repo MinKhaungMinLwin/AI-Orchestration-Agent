@@ -1815,6 +1815,31 @@ def test_multi_product_clarification_detail_chip_restores_products_from_previous
     )
 
 
+def test_multi_product_clarification_detail_chip_restores_products_from_assistant_text_only_history() -> None:
+    clarification_event = _multi_product_intent_clarification_event()
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as"},
+        {
+            "role": "assistant",
+            "content": (
+                f"{clarification_event['data']['assistantResponse']}\n\n"
+                "[이전 선택된 상품 데이터]\n"
+                '{"type":"data","template":"quickReply","assistant_response_source":'
+                '"code_multi_product_intent_clarification"}'
+            ),
+        },
+        {"role": "user", "content": "각각 찾아보기"},
+    ]
+
+    assert _multi_product_detail_continuation_names("각각 찾아보기", messages) == (
+        "Ventus air S",
+        "Ventus S2 AS",
+    )
+    assert _multi_product_compare_continuation_query("두 상품 비교", messages) == (
+        "Ventus air S랑 Ventus S2 AS 비교"
+    )
+
+
 def test_multi_product_detail_event_keeps_both_products_in_final_response() -> None:
     event = _build_multi_product_detail_quickreply_event(
         [
