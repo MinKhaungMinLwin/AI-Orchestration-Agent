@@ -68,6 +68,7 @@ from services.tstation.chat import (
     _comparison_query_with_recent_context,
     _should_clarify_ambiguous_multi_product_query,
     _should_prompt_for_new_product_compare_target,
+    _should_resolve_compare_target_product_pair,
     _should_skip_product_compare_override,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
@@ -1713,6 +1714,7 @@ def test_compare_target_prompt_next_two_product_names_become_comparison() -> Non
     query = _comparison_query_with_recent_context("벤투스 에어S랑 키너지 ST AS", messages, latest_prompt)
 
     assert query == "Ventus air S랑 Kinergy ST AS 비교"
+    assert _should_resolve_compare_target_product_pair("벤투스 에어S랑 키너지 ST AS", messages, latest_prompt) is True
     assert _build_product_comparison_event_from_search_results(
         query,
         [
@@ -1722,12 +1724,35 @@ def test_compare_target_prompt_next_two_product_names_become_comparison() -> Non
     )["assistant_response_source"] == "code_product_compare_resolver"
 
 
+def test_compare_target_prompt_text_without_template_data_promotes_next_product_pair() -> None:
+    prompt = _product_compare_target_prompt_event()["data"]["assistantResponse"]
+    messages = [
+        {"role": "user", "content": "두개 말고 다른 상품은 없어?"},
+        {"role": "assistant", "content": prompt},
+        {"role": "user", "content": "벤투스 에어S랑 키너지 ST AS"},
+    ]
+
+    query = _comparison_query_with_recent_context("벤투스 에어S랑 키너지 ST AS", messages)
+
+    assert query == "Ventus air S랑 Kinergy ST AS 비교"
+    assert _should_resolve_compare_target_product_pair("벤투스 에어S랑 키너지 ST AS", messages) is True
+
+
 def test_explicit_two_product_compare_with_korean_aliases_remains_comparison() -> None:
     user_text = "벤투스 에어S랑 키너지 ST AS 비교"
     query = _comparison_query_with_recent_context(user_text, [{"role": "user", "content": user_text}])
 
     assert query == user_text
     assert build_discovery_intent_frame(user_text).intent == "product_comparison"
+    event = _build_product_comparison_event_from_search_results(
+        query,
+        [
+            ("Ventus air S", {"data": {"items": [{"goods_nm": "벤투스 에어S", "slogan": "프리미엄 컴포트"}]}}),
+            ("Kinergy ST AS", {"data": {"items": [{"goods_nm": "키너지 ST AS", "slogan": "사계절 밸런스"}]}}),
+        ],
+    )
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
 
 
 def test_standalone_two_product_names_ask_clarification_without_single_keyword_plan() -> None:

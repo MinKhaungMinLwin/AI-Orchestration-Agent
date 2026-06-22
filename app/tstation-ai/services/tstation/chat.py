@@ -7915,6 +7915,19 @@ def _should_clarify_ambiguous_multi_product_query(
     return True
 
 
+def _should_resolve_compare_target_product_pair(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> bool:
+    if _is_product_compare_context_reset_query(user_text):
+        return False
+    if not _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+        return False
+    comparison_query = _comparison_query_with_recent_context(user_text, messages, latest_quickreply_tmpl)
+    return len(_product_comparison_names(comparison_query)) >= 2
+
+
 def _comparison_query_with_recent_context(
     user_text: str,
     messages: list[dict],
@@ -16560,6 +16573,23 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+
+        if _should_resolve_compare_target_product_pair(user_query, messages, latest_quickreply_tmpl):
+            product_compare_resolution = await _resolve_product_comparison_with_code()
+            if product_compare_resolution is not None:
+                code_events, compare_event = product_compare_resolution
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+                for code_event in code_events:
+                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(compare_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((compare_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
         if _should_prompt_for_new_product_compare_target(user_query, messages):
             compare_prompt_event = _product_compare_target_prompt_event()
