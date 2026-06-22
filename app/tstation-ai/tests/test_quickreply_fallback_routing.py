@@ -1997,6 +1997,69 @@ def test_explicit_two_product_compare_with_korean_aliases_remains_comparison() -
     assert event["assistant_response_source"] == "code_product_compare_resolver"
 
 
+def test_overlapping_ion_alias_single_input_stays_single_product() -> None:
+    user_text = "아이온 에보 as"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.entities["product_names"] == ("iON evo AS",)
+    assert _should_clarify_ambiguous_multi_product_query(user_text, [{"role": "user", "content": user_text}]) is False
+
+
+def test_overlapping_ion_alias_suv_single_input_does_not_split() -> None:
+    user_text = "아이온 에보 as suv"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.entities["product_names"] == ("iON evo AS SUV",)
+
+
+def test_overlapping_ion_alias_explicit_compare_keeps_two_distinct_products() -> None:
+    user_text = "아이온 에보랑 아이온 에보 as 비교"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.intent == "product_comparison"
+    assert frame.entities["product_names"] == ("iON evo", "iON evo AS")
+
+
+def test_overlapping_ion_alias_explicit_compare_with_as_suv_keeps_two_distinct_products() -> None:
+    user_text = "아이온 에보 AS랑 아이온 에보 AS SUV 비교"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.intent == "product_comparison"
+    assert frame.entities["product_names"] == ("iON evo AS", "iON evo AS SUV")
+
+
+def test_overlapping_sfit_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("s fit as")
+    compare_frame = build_discovery_intent_frame("s fit랑 s fit as 비교")
+
+    assert single_frame.entities["product_names"] == ("S FIT AS",)
+    assert compare_frame.entities["product_names"] == ("S FIT", "S FIT AS")
+
+
+def test_overlapping_ventus_s1_evo_z_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("벤투스 s1 에보 z as")
+    compare_frame = build_discovery_intent_frame("벤투스 s1 에보 z랑 벤투스 s1 에보 z as 비교")
+
+    assert single_frame.entities["product_names"] == ("Ventus S1 evo Z AS",)
+    assert compare_frame.entities["product_names"] == ("Ventus S1 evo Z", "Ventus S1 evo Z AS")
+
+
+def test_overlapping_mileage_plus_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("마일리지 플러스 3")
+    compare_frame = build_discovery_intent_frame("마일리지 플러스랑 마일리지 플러스 2 비교")
+
+    assert single_frame.entities["product_names"] == ("Mileage Plus 3",)
+    assert compare_frame.entities["product_names"] == ("Mileage Plus", "Mileage Plus 2")
+
+
+def test_overlapping_ventus_s2_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("벤투스 s2 as")
+    compare_frame = build_discovery_intent_frame("벤투스 s2랑 벤투스 s2 as 비교")
+
+    assert single_frame.entities["product_names"] == ("Ventus S2 AS",)
+    assert compare_frame.entities["product_names"] == ("Ventus S2", "Ventus S2 AS")
+
+
 def test_standalone_two_product_names_ask_clarification_without_single_keyword_plan() -> None:
     user_text = "벤투스 에어S랑 키너지 ST AS"
     messages = [{"role": "user", "content": user_text}]
@@ -3056,6 +3119,16 @@ def test_product_row_picker_matches_partial_pattern_name_generically() -> None:
     assert row["goods_nm"] == "벤투스 프라임2"
 
 
+def test_product_row_picker_rejects_same_family_other_ion_variant() -> None:
+    row = _pick_product_row_from_search_result(
+        {"status": "success", "data": {"items": [{"goods_nm": "아이온 에보 AS SUV"}]}},
+        "iON evo AS",
+        "아이온 에보 AS",
+    )
+
+    assert row is None
+
+
 def test_product_row_picker_can_use_first_row_fallback_for_product_specific_search() -> None:
     row = _pick_product_row_from_search_result(
         {
@@ -3143,6 +3216,24 @@ def test_latest_comparison_search_results_can_fallback_to_first_row_for_alias_va
 
     assert event is not None
     assert "최신 상품은 벤투스 에어 에스입니다." in event["data"]["assistantResponse"]
+
+
+def test_product_comparison_event_does_not_build_when_both_targets_resolve_to_same_product() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "아이온 에보랑 아이온 에보 as 비교",
+        [
+            (
+                "아이온 에보",
+                {"status": "success", "data": {"items": [{"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}]}},
+            ),
+            (
+                "아이온 에보 AS",
+                {"status": "success", "data": {"items": [{"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}]}},
+            ),
+        ],
+    )
+
+    assert event is None
 
 
 def test_grade_comparison_partial_search_results_defer_to_code_resolver() -> None:

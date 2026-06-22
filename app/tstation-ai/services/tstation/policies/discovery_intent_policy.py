@@ -122,6 +122,14 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("벤투스 에어s", "Ventus air S", "HK"),
     ("ventus s2 as", "Ventus S2 AS", "HK"),
     ("벤투스 s2 as", "Ventus S2 AS", "HK"),
+    ("ventus s2", "Ventus S2", "HK"),
+    ("벤투스 s2", "Ventus S2", "HK"),
+    ("ventus s1 evo z as", "Ventus S1 evo Z AS", "HK"),
+    ("벤투스 s1 evo z as", "Ventus S1 evo Z AS", "HK"),
+    ("벤투스 s1 에보 z as", "Ventus S1 evo Z AS", "HK"),
+    ("ventus s1 evo z", "Ventus S1 evo Z", "HK"),
+    ("벤투스 s1 evo z", "Ventus S1 evo Z", "HK"),
+    ("벤투스 s1 에보 z", "Ventus S1 evo Z", "HK"),
     ("dynapro hpx", "Dynapro HPX", "HK"),
     ("다이나프로 hpx", "Dynapro HPX", "HK"),
     ("dynapro hp3", "Dynapro HP3", "HK"),
@@ -133,6 +141,9 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("ion evo as", "iON evo AS", "HK"),
     ("아이온 evo as", "iON evo AS", "HK"),
     ("아이온 에보 as", "iON evo AS", "HK"),
+    ("ion evo as suv", "iON evo AS SUV", "HK"),
+    ("아이온 evo as suv", "iON evo AS SUV", "HK"),
+    ("아이온 에보 as suv", "iON evo AS SUV", "HK"),
     ("ion evo", "iON evo", "HK"),
     ("아이온 evo", "iON evo", "HK"),
     ("아이온 에보", "iON evo", "HK"),
@@ -144,6 +155,8 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("마일리지 플러스2", "Mileage Plus 2", "HK"),
     ("마일리지 플러스 3", "Mileage Plus 3", "HK"),
     ("마일리지 플러스3", "Mileage Plus 3", "HK"),
+    ("마일리지 플러스", "Mileage Plus", "HK"),
+    ("mileage plus", "Mileage Plus", "HK"),
     ("마일리지 타이어", "Mileage Plus", "HK"),
     ("s fit as", "S FIT AS", "LF"),
     ("s fit", "S FIT", "LF"),
@@ -193,9 +206,30 @@ def normalize_tire_size(text: str) -> str | None:
 
 def extract_product_names(text: str) -> tuple[str, ...]:
     normalized = (text or "").casefold()
-    products: list[str] = []
+    matches: list[tuple[int, int, str]] = []
+    seen_spans: set[tuple[int, int, str]] = set()
     for needle, display_name, _brand_cd in _PRODUCT_ALIASES:
-        if needle.casefold() in normalized and display_name not in products:
+        needle_norm = needle.casefold()
+        start = normalized.find(needle_norm)
+        while start >= 0:
+            end = start + len(needle_norm)
+            key = (start, end, display_name)
+            if key not in seen_spans:
+                matches.append(key)
+                seen_spans.add(key)
+            start = normalized.find(needle_norm, start + 1)
+
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    selected_spans: list[tuple[int, int, str]] = []
+    for start, end, display_name in matches:
+        if any(not (end <= chosen_start or start >= chosen_end) for chosen_start, chosen_end, _ in selected_spans):
+            continue
+        selected_spans.append((start, end, display_name))
+
+    selected_spans.sort(key=lambda item: item[0])
+    products: list[str] = []
+    for _start, _end, display_name in selected_spans:
+        if display_name not in products:
             products.append(display_name)
     return tuple(products)
 

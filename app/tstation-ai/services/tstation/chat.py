@@ -47,6 +47,7 @@ from services.tstation.policies.reservation_template_policy import (
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_period_from_text,
     build_discovery_intent_frame,
+    extract_product_names,
     is_default_benefit_request,
     is_default_tire_shopping_request,
     is_best_seller_request,
@@ -5394,10 +5395,18 @@ _PRODUCT_MATCH_ALIAS_GROUPS = (
     {"dynaprohpx", "다이나프로hpx"},
     {"dynaprohp3", "다이나프로hp3"},
     {"ventusairs", "벤투스airs", "벤투스에어s"},
+    {"ventuss2", "벤투스s2"},
     {"ventuss2as", "벤투스s2as"},
+    {"ventuss1evozas", "벤투스s1evozas", "벤투스s1에보zas"},
     {"ventuss1evoz", "벤투스s1evoz", "벤투스s1에보z"},
+    {"sfitas", "에스핏as"},
+    {"sfit", "에스핏"},
+    {"ionevoassuv", "아이온에보assuv"},
     {"ionevoas", "아이온에보as"},
     {"ionevo", "아이온에보"},
+    {"mileageplus3", "마일리지플러스3"},
+    {"mileageplus2", "마일리지플러스2"},
+    {"mileageplus", "마일리지플러스"},
 )
 
 
@@ -8082,9 +8091,15 @@ _GRADE_RANK = {
 _PRODUCT_SEARCH_KEYWORD_OVERRIDES = {
     "kinergyex": "키너지 EX",
     "ventusairs": "벤투스 에어S",
+    "ventuss2": "벤투스 S2",
     "ventuss2as": "벤투스 S2 AS",
+    "ventuss1evozas": "벤투스 S1 evo Z AS",
+    "ventuss1evoz": "벤투스 S1 evo Z",
     "dynaprohpx": "다이나프로 HPX",
     "dynaprohp3": "다이나프로 HP3",
+    "sfitas": "S FIT AS",
+    "sfit": "S FIT",
+    "ionevoassuv": "아이온 에보 AS SUV",
     "ionevoas": "아이온 에보 AS",
     "ionevo": "아이온 에보",
     "optimo": "옵티모",
@@ -8118,6 +8133,9 @@ def _pick_product_row_from_search_result(
     target_terms: set[str] = set()
     for value in (product_name, *match_hints):
         target_terms.update(_coupon_product_match_keys(value))
+    target_canonical_names: set[str] = set()
+    for value in (product_name, *match_hints):
+        target_canonical_names.update(extract_product_names(str(value or "")))
     best_row: dict | None = None
     best_score = -1
     for row in rows:
@@ -8125,6 +8143,9 @@ def _pick_product_row_from_search_result(
             continue
         row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
         if not row_name:
+            continue
+        row_canonical_names = set(extract_product_names(row_name))
+        if target_canonical_names and row_canonical_names and not (target_canonical_names & row_canonical_names):
             continue
         row_terms = _coupon_product_match_keys(row_name)
         score = len(target_terms & row_terms)
@@ -8147,6 +8168,28 @@ def _pick_product_row_from_search_result(
                     return row
         return None
     return best_row
+
+
+def _resolved_comparison_rows_are_distinct(product_rows: list[tuple[str, dict | None]]) -> bool:
+    if len(product_rows) < 2:
+        return False
+    (left_name, left_row), (right_name, right_row) = product_rows[:2]
+    if not isinstance(left_row, dict) or not isinstance(right_row, dict):
+        return False
+
+    left_goods_no = str(left_row.get("goods_no") or left_row.get("goodsId") or "").strip()
+    right_goods_no = str(right_row.get("goods_no") or right_row.get("goodsId") or "").strip()
+    if left_goods_no and right_goods_no and left_goods_no == right_goods_no:
+        return False
+
+    left_canonical = set(extract_product_names(str(left_row.get("goods_nm") or left_name or "")))
+    right_canonical = set(extract_product_names(str(right_row.get("goods_nm") or right_name or "")))
+    if left_canonical and right_canonical and (left_canonical & right_canonical):
+        return False
+
+    left_norm = _normalize_coupon_match_text(left_row.get("goods_nm") or left_name or "")
+    right_norm = _normalize_coupon_match_text(right_row.get("goods_nm") or right_name or "")
+    return bool(left_norm and right_norm and left_norm != right_norm)
 
 
 def _unique_product_row_from_sized_search_result(tool_result: dict, product_name: str, tire_size: str) -> dict | None:
@@ -9573,6 +9616,8 @@ def _build_product_comparison_event_from_search_results(
         product_rows.append((product_name, best_row))
 
     if any(row is None for _, row in product_rows):
+        return None
+    if not _resolved_comparison_rows_are_distinct(product_rows):
         return None
 
     return _build_product_comparison_event(user_text, product_rows)
