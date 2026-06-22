@@ -114,6 +114,7 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("ventus air s", "Ventus air S", "HK"),
     ("벤투스 air s", "Ventus air S", "HK"),
     ("벤투스 에어 s", "Ventus air S", "HK"),
+    ("벤투스 에어s", "Ventus air S", "HK"),
     ("ventus s2 as", "Ventus S2 AS", "HK"),
     ("벤투스 s2 as", "Ventus S2 AS", "HK"),
     ("dynapro hpx", "Dynapro HPX", "HK"),
@@ -122,6 +123,8 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("다이나프로 hp3", "Dynapro HP3", "HK"),
     ("kinergy ex", "Kinergy EX", "HK"),
     ("키너지 ex", "Kinergy EX", "HK"),
+    ("kinergy st as", "Kinergy ST AS", "HK"),
+    ("키너지 st as", "Kinergy ST AS", "HK"),
     ("ion evo as", "iON evo AS", "HK"),
     ("아이온 evo as", "iON evo AS", "HK"),
     ("아이온 에보 as", "iON evo AS", "HK"),
@@ -376,6 +379,10 @@ def build_discovery_intent_frame(
     }
     if quantity_options:
         entities["quantity_options"] = quantity_options
+    if len(products) >= 2:
+        entities["multi_product_names"] = True
+        if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
+            entities["multi_product_detail_request"] = True
     if brand_cd:
         entities["brand_cd"] = brand_cd
     if brand_codes:
@@ -474,6 +481,9 @@ def build_discovery_intent_frame(
         intent = "product_comparison"
         sub_intent = "attribute_compare"
         entities["compare_metric"] = attribute_metrics[0]
+    elif len(products) >= 2 and _COMPARE_RE.search(text):
+        intent = "product_comparison"
+        sub_intent = "general_compare"
     elif _OCCUPATION_RE.search(text) and _MILEAGE_ATTRIBUTE_RE.search(text):
         intent = "product_description"
         sub_intent = "mileage_bias_guardrail"
@@ -592,6 +602,20 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_products_recommendations_tool",),
         )
     if frame.intent == "product_search":
+        product_names = entities.get("product_names") or ()
+        if (
+            len(product_names) >= 2
+            and not entities.get("multi_product_detail_request")
+            and frame.sub_intent == "product_name_search"
+        ):
+            return ToolPlan(
+                forbidden_tools=(
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_products_recommendations_tool",
+                ),
+                metadata={"response_intent": "multi_product_intent_clarification"},
+            )
         keyword = entities.get("product_keyword") or (entities.get("product_names") or ("",))[0]
         args = {"keyword": keyword}
         if entities.get("tire_size"):
@@ -613,6 +637,24 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
+        )
+    if frame.intent == "product_description":
+        product_names = entities.get("product_names") or ()
+        if len(product_names) >= 2:
+            return ToolPlan(
+                allowed_tools=("search_product_tool",),
+                preferred_tool="search_product_tool",
+                forbidden_tools=("get_products_recommendations_tool",),
+                metadata={"response_intent": "multi_product_detail"},
+            )
+        args = {"keyword": (product_names or ("",))[0]}
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
         )
     if frame.intent == "product_comparison":
         args: dict[str, Any] = {}

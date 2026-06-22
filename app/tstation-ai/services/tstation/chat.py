@@ -7341,6 +7341,115 @@ def _build_product_coupon_price_no_product_event(product_name: str, tire_size: s
     }
 
 
+_COUPON_PRICE_AMOUNT_QUERY_RE = re.compile(
+    r"할인\s*받|할인\s*금액|할인액|얼마\s*(?:할인|빠지|깎)|최종\s*(?:혜택가|금액|가격)|"
+    r"쿠폰\s*적용\s*(?:하면|시).*얼마|얼마야|얼마\s*나와",
+    re.IGNORECASE,
+)
+_COUPON_WORD_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
+
+
+def _is_product_coupon_price_amount_query(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    return bool(_COUPON_WORD_RE.search(text) and _COUPON_PRICE_AMOUNT_QUERY_RE.search(text))
+
+
+def _price_row_from_final_price_result(price_result: dict) -> dict | None:
+    data = _unwrap_tool_data(price_result)
+    if not isinstance(data, dict) or not data:
+        return None
+    rows = data.get("items")
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    if any(key in data for key in ("sale_prc", "cheapest_final_prc", "extra_fvr_sale_prc")):
+        return data
+    return None
+
+
+def _build_product_coupon_price_amount_event(
+    price_result: dict,
+    *,
+    product_name: str,
+    tire_size: str,
+    quantity: int,
+) -> dict | None:
+    row = _price_row_from_final_price_result(price_result)
+    if row is None:
+        return None
+
+    sale_unit = _to_int(row.get("sale_prc"))
+    final_unit = _to_int(row.get("cheapest_final_prc") or row.get("extra_fvr_sale_prc") or row.get("sale_prc"))
+    unit_discount = _to_int(row.get("cheapest_total_discount"))
+    if sale_unit is not None and final_unit is not None:
+        unit_discount = max(0, sale_unit - final_unit)
+    if sale_unit is None or final_unit is None:
+        return None
+
+    quantity = max(1, int(quantity or 1))
+    base_total = sale_unit * quantity
+    final_total = final_unit * quantity
+    discount_total = (unit_discount or 0) * quantity
+
+    coupons = row.get("cheapest_applied_coupons") or row.get("applied_coupons")
+    coupon_names: list[str] = []
+    if isinstance(coupons, list):
+        for coupon in coupons:
+            if not isinstance(coupon, dict):
+                continue
+            coupon_name = str(coupon.get("cpn_nm") or "").strip()
+            if coupon_name and coupon_name not in coupon_names:
+                coupon_names.append(coupon_name)
+
+    lines = [
+        f"{product_name} {tire_size} {quantity}개 기준으로 보유 쿠폰 적용 혜택가를 확인했어요.",
+        "",
+        f"- 정가 합계: {_format_krw(base_total)}",
+        f"- 쿠폰 적용 할인액: {_format_krw(discount_total) or '0원'}",
+        f"- 최종 혜택가: {_format_krw(final_total)}",
+    ]
+    if coupon_names:
+        lines.append(f"- 적용 기준 쿠폰: {', '.join(coupon_names[:3])}")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_product_coupon_price_resolver",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "장바구니 담기", "domain": "TRANSACTION"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def _build_product_coupon_price_no_product_event(product_name: str, tire_size: str) -> dict:
+    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
+    size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_coupon_price_no_product",
+        "data": {
+            "assistantResponse": (
+                f"{size_label}에 맞는 {product_label} 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
+                "다른 사이즈로 다시 확인하거나, 사이즈 없이 해당 상품 전체를 확인해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
+                {"label": "사이즈 없이 검색", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def _coupon_target_product_name_for_query(user_text: str) -> str | None:
     frame = build_price_intent_frame(user_text)
     if frame.intent != "product_coupon_eligibility":
@@ -7687,6 +7796,22 @@ _PRODUCT_COMPARE_FOLLOWUP_RE = re.compile(
     r"둘\s*중|두\s*개\s*중|이\s*2\s*개\s*중|이\s*두\s*개\s*중",
     re.IGNORECASE,
 )
+_PRODUCT_COMPARE_CONTEXT_RESET_RE = re.compile(
+    r"(?:두\s*개|둘|이\s*2\s*개|이\s*두\s*개)\s*말고|"
+    r"(?:이거|요거|그거|기존\s*상품|비교\s*상품)\s*말고|"
+    r"(?:아까|이전|기존)\s*(?:두\s*개|둘|상품|거)\s*말고|"
+    r"다른\s*(?:후보|거|걸|걸로)|"
+    r"다른\s*(?:추천\s*)?상품|다른\s*추천|추천\s*상품|"
+    r"다른\s*상품\s*비교",
+    re.IGNORECASE,
+)
+_PRODUCT_COMPARE_RECENT_TWO_FOLLOWUP_RE = re.compile(
+    r"둘\s*중|두\s*개\s*중|이\s*2\s*개\s*중|이\s*두\s*개\s*중|"
+    r"두\s*상품|두\s*개\s*(?:특징|설명|차이|비교)|"
+    r"(?:가격|금액|혜택가|최종가|할인가|저렴|비싸).*(?:둘|두\s*개|두\s*상품)|"
+    r"(?:둘|두\s*개|두\s*상품).*(?:가격|금액|혜택가|최종가|할인가|저렴|비싸)",
+    re.IGNORECASE,
+)
 _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
     r"(?:상품\s*)?(?:설명|특징|장점|후기|리뷰)\s*비교|비교.*(?:설명|특징|장점|후기|리뷰)",
     re.IGNORECASE,
@@ -7699,7 +7824,7 @@ def _product_comparison_names(user_text: str) -> tuple[str, ...]:
     product_names = tuple(frame.entities.get("product_names") or ())
     if len(product_names) < 2:
         return ()
-    if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
+    if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare", "general_compare"}:
         return product_names
     if frame.intent in {"product_search", "product_description"} and _PRODUCT_COMPARE_TEXT_RE.search(user_text):
         return product_names
@@ -7724,17 +7849,225 @@ def _recent_product_names_for_comparison(messages: list[dict]) -> tuple[str, ...
     return tuple(recent_names[-2:])
 
 
-def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) -> str:
+def _is_product_compare_context_reset_query(user_text: str) -> bool:
+    text = user_text or ""
+    if _product_names_in_text(text):
+        return False
+    return bool(_PRODUCT_COMPARE_CONTEXT_RESET_RE.search(text))
+
+
+def _is_compare_target_prompt_template(template_data: dict | None) -> bool:
+    if not isinstance(template_data, dict):
+        return False
+    source = str(template_data.get("assistant_response_source") or "").strip()
+    if source == "code_product_compare_target_prompt":
+        return True
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    assistant = str(data.get("assistantResponse") or "") if isinstance(data, dict) else ""
+    return "비교할 다른 상품명을 알려주시면" in assistant
+
+
+def _has_recent_compare_target_prompt(messages: list[dict], latest_quickreply_tmpl: dict | None = None) -> bool:
+    if _is_compare_target_prompt_template(latest_quickreply_tmpl):
+        return True
+    for message in reversed(messages[:-1]):
+        if message.get("role") != "assistant":
+            continue
+        template_data = message.get("template_data")
+        if _is_compare_target_prompt_template(template_data):
+            return True
+        content = str(message.get("content") or "")
+        if "비교할 다른 상품명을 알려주시면" in content:
+            return True
+        break
+    return False
+
+
+def _can_reuse_recent_products_for_comparison(user_text: str, *, is_description_compare: bool = False) -> bool:
+    text = user_text or ""
+    if _is_product_compare_context_reset_query(text):
+        return False
+    if is_description_compare:
+        return True
+    return bool(_PRODUCT_COMPARE_RECENT_TWO_FOLLOWUP_RE.search(text))
+
+
+def _should_prompt_for_new_product_compare_target(user_text: str, messages: list[dict]) -> bool:
+    return _is_product_compare_context_reset_query(user_text) and len(_recent_product_names_for_comparison(messages)) >= 2
+
+
+def _should_clarify_ambiguous_multi_product_query(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> bool:
+    product_names = _product_names_in_text(user_text)
+    if len(product_names) < 2:
+        return False
+    if _product_comparison_names(user_text):
+        return False
+    if _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+        return False
+    if _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text):
+        return False
+    if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", user_text or "", re.IGNORECASE):
+        return False
+    return True
+
+
+def _multi_product_clarification_metadata_product_names(template_data: dict | None) -> tuple[str, ...]:
+    if not isinstance(template_data, dict):
+        return ()
+    if str(template_data.get("assistant_response_source") or "").strip() != "code_multi_product_intent_clarification":
+        return ()
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    metadata = data.get("metadata") if isinstance(data, dict) else None
+    if not isinstance(metadata, dict):
+        return ()
+    names = metadata.get("pendingProductNames") or metadata.get("productNames")
+    if not isinstance(names, list):
+        return ()
+    return tuple(str(name).strip() for name in names if str(name or "").strip())[:2]
+
+
+def _is_multi_product_intent_clarification_template(template_data: dict | None) -> bool:
+    if not isinstance(template_data, dict):
+        return False
+    if _multi_product_clarification_metadata_product_names(template_data):
+        return True
+    source = str(template_data.get("assistant_response_source") or "").strip()
+    if source == "code_multi_product_intent_clarification":
+        return True
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    assistant = str(data.get("assistantResponse") or "") if isinstance(data, dict) else ""
+    return "두 상품을 비교해드릴까요" in assistant and "각각 상품을 찾아드릴까요" in assistant
+
+
+def _is_multi_product_intent_clarification_text(content: str) -> bool:
+    return "두 상품을 비교해드릴까요" in content and "각각 상품을 찾아드릴까요" in content
+
+
+def _recent_multi_product_clarification_names(
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> tuple[str, ...]:
+    names = _multi_product_clarification_metadata_product_names(latest_quickreply_tmpl)
+    if len(names) >= 2:
+        return names
+
+    for idx in range(len(messages) - 2, -1, -1):
+        message = messages[idx]
+        if message.get("role") != "assistant":
+            continue
+        template_data = message.get("template_data")
+        content = str(message.get("content") or "")
+        if not (
+            _is_multi_product_intent_clarification_template(template_data)
+            or _is_multi_product_intent_clarification_text(content)
+        ):
+            continue
+        names = _multi_product_clarification_metadata_product_names(template_data)
+        if len(names) >= 2:
+            return names
+        for prev_idx in range(idx - 1, -1, -1):
+            prev_message = messages[prev_idx]
+            if prev_message.get("role") != "user":
+                continue
+            names = _product_names_in_text(str(prev_message.get("content") or ""))
+            if len(names) >= 2:
+                return names[:2]
+            break
+        return ()
+
+    if _is_multi_product_intent_clarification_template(latest_quickreply_tmpl):
+        for message in reversed(messages[:-1]):
+            if message.get("role") != "user":
+                continue
+            names = _product_names_in_text(str(message.get("content") or ""))
+            if len(names) >= 2:
+                return names[:2]
+            break
+    return ()
+
+
+def _is_multi_product_detail_continuation(user_text: str) -> bool:
+    return bool(
+        re.search(
+            r"각각\s*(?:찾아|검색|설명|알려|보기)|각각|둘\s*다|둘\s*모두|"
+            r"(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개).*(?:정보|보여|찾아|검색|설명|알려)|"
+            r"(?:정보|보여|찾아|검색|설명|알려).*(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개)",
+            user_text or "",
+            re.IGNORECASE,
+        )
+    )
+
+
+def _is_multi_product_compare_continuation(user_text: str) -> bool:
+    return bool(re.search(r"두\s*상품\s*비교|비교", user_text or "", re.IGNORECASE))
+
+
+def _multi_product_detail_continuation_names(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> tuple[str, ...]:
+    if not _is_multi_product_detail_continuation(user_text):
+        return ()
+    names = _recent_multi_product_clarification_names(messages, latest_quickreply_tmpl)
+    if len(names) >= 2:
+        return names
+    return _recent_product_names_for_comparison(messages)
+
+
+def _multi_product_compare_continuation_query(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> str | None:
+    if not _is_multi_product_compare_continuation(user_text):
+        return None
+    names = _recent_multi_product_clarification_names(messages, latest_quickreply_tmpl)
+    if len(names) < 2:
+        return None
+    return f"{names[0]}랑 {names[1]} 비교"
+
+
+def _should_resolve_compare_target_product_pair(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> bool:
+    if _is_product_compare_context_reset_query(user_text):
+        return False
+    if not _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+        return False
+    comparison_query = _comparison_query_with_recent_context(user_text, messages, latest_quickreply_tmpl)
+    return len(_product_comparison_names(comparison_query)) >= 2
+
+
+def _comparison_query_with_recent_context(
+    user_text: str,
+    messages: list[dict],
+    latest_quickreply_tmpl: dict | None = None,
+) -> str:
     if _product_comparison_names(user_text):
         return user_text
     user_text = user_text or ""
+    if _is_product_compare_context_reset_query(user_text):
+        return user_text
     is_description_compare = bool(_PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text))
     if not (is_description_compare or _PRODUCT_COMPARE_FOLLOWUP_RE.search(user_text)):
+        current_names = _product_names_in_text(user_text)
+        if len(current_names) >= 2 and _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+            return f"{current_names[0]}랑 {current_names[1]} 비교"
         return user_text
 
     current_names = _product_names_in_text(user_text)
     recent_names = _recent_product_names_for_comparison(messages)
     suffix = "상품 설명 비교" if is_description_compare else "비교"
+
+    if len(current_names) >= 2 and _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
+        return f"{current_names[0]}랑 {current_names[1]} {suffix}"
 
     if len(current_names) == 1:
         current_name = current_names[0]
@@ -7742,9 +8075,105 @@ def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) 
             if recent_name != current_name:
                 return f"{recent_name}랑 {current_name} {suffix}"
 
-    if len(current_names) == 0 and len(recent_names) >= 2:
+    if (
+        len(current_names) == 0
+        and len(recent_names) >= 2
+        and _can_reuse_recent_products_for_comparison(user_text, is_description_compare=is_description_compare)
+    ):
         return f"{recent_names[0]}랑 {recent_names[1]} {suffix}"
     return user_text
+
+
+def _product_compare_target_prompt_event() -> dict:
+    assistant = (
+        "비교할 다른 상품명을 알려주시면 특징, 평점, 리뷰 중심으로 비교해드릴게요.\n\n"
+        "예: 벤투스 에어S랑 키너지 ST AS 비교해줘"
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_compare_target_prompt",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
+def _multi_product_intent_clarification_event(product_names: tuple[str, ...] = ()) -> dict:
+    assistant = "두 상품을 비교해드릴까요, 아니면 각각 상품을 찾아드릴까요?"
+    metadata: dict[str, list[str]] = {}
+    if len(product_names) >= 2:
+        metadata["pendingProductNames"] = [str(name) for name in product_names[:2]]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_multi_product_intent_clarification",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "두 상품 비교", "domain": "DISCOVERY"},
+                {"label": "각각 찾아보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": metadata,
+        },
+    }
+
+
+def _build_multi_product_detail_quickreply_event(product_rows: list[tuple[str, dict | None]]) -> dict:
+    lines = ["요청하신 두 상품을 각각 확인했어요."]
+    metadata_products: list[dict[str, str]] = []
+    found_count = 0
+    for requested_name, row in product_rows[:2]:
+        if not row:
+            lines.extend(["", f"- {requested_name}: 상품 정보를 찾지 못했어요."])
+            continue
+        found_count += 1
+        name = str(row.get("goods_nm") or row.get("big_goods_nm") or row.get("title") or requested_name).strip()
+        summary = _product_feature_summary(row)
+        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
+        detail_parts = [summary]
+        if tire_size:
+            detail_parts.append(f"규격 {tire_size}")
+        sale_price = _format_krw(row.get("sale_prc"))
+        if sale_price:
+            detail_parts.append(f"정가 {sale_price}")
+        lines.extend(["", f"- {name}: {' · '.join(part for part in detail_parts if part)}"])
+        product_metadata: dict[str, str] = {"productName": name}
+        goods_no = str(row.get("goods_no") or "").strip()
+        if goods_no:
+            product_metadata["goodsId"] = goods_no
+        if tire_size:
+            product_metadata["tireSize"] = tire_size
+        metadata_products.append(product_metadata)
+
+    if found_count < 2:
+        lines.extend(["", "찾지 못한 상품은 상품명을 다시 알려주시면 이어서 확인해드릴게요."])
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_multi_product_detail_resolver",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "두 상품 비교", "domain": "DISCOVERY"},
+                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {"products": metadata_products},
+        },
+    }
 
 
 def _build_product_comparison_fallback_event(product_rows: list[tuple[str, dict | None]]) -> dict:
@@ -8612,6 +9041,12 @@ def _build_product_attribute_event_from_search_results(
 
 def _is_product_comparison_query(user_text: str) -> bool:
     return len(_product_comparison_names(user_text)) >= 2
+
+
+def _should_skip_product_compare_override(user_text: str, called_tool_names: set[str]) -> bool:
+    return _is_product_compare_context_reset_query(user_text) and (
+        not called_tool_names or "get_products_recommendations_tool" in called_tool_names
+    )
 
 
 def _is_product_attribute_lookup_query(user_text: str) -> bool:
@@ -15092,8 +15527,14 @@ class TStationChatServiceV2:
                 target_brand=_coupon_target_brand_for_query(user_query),
             )
 
-        async def _resolve_product_comparison_with_code() -> tuple[list[dict], dict] | None:
-            comparison_query = _comparison_query_with_recent_context(user_query, messages)
+        async def _resolve_product_comparison_with_code(
+            comparison_query_override: str | None = None,
+        ) -> tuple[list[dict], dict] | None:
+            comparison_query = comparison_query_override or _comparison_query_with_recent_context(
+                user_query,
+                messages,
+                latest_quickreply_tmpl,
+            )
             product_names = _product_comparison_names(comparison_query)
             if len(product_names) < 2:
                 return None
@@ -15194,6 +15635,109 @@ class TStationChatServiceV2:
                 product_rows.append((product_name, row))
 
             return emitted_events, _build_product_comparison_event(comparison_query, product_rows)
+
+        async def _resolve_multi_product_detail_with_code(
+            product_names: tuple[str, ...],
+        ) -> tuple[list[dict], dict] | None:
+            if len(product_names) < 2:
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_product_description_tool as _get_product_description_tool,
+            )
+            from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+
+            emitted_events: list[dict] = []
+            product_rows: list[tuple[str, dict | None]] = []
+            for product_name in product_names[:2]:
+                preferred_keyword = _preferred_product_search_keyword(product_name)
+                tool_input = {"keyword": preferred_keyword, "limit": 10}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_search = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                    search_result = _tool_result_dict(raw_search)
+                except Exception as exc:
+                    logger.exception("[MULTI_PRODUCT_DETAIL] search_product_tool failed for %s", product_name)
+                    search_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result("search_product_tool", tool_input, search_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Compatibility AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": search_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": tool_input,
+                    "output": json.dumps(search_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "search_product_tool",
+                    "source_domain": "discovery",
+                })
+
+                row = _pick_product_row_from_search_result(
+                    search_result,
+                    product_name,
+                    preferred_keyword,
+                    allow_first_row_fallback=True,
+                )
+                if row and row.get("goods_no"):
+                    detail_input = {"goods_no": row["goods_no"]}
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "get_product_description_tool",
+                        "display_name": "상품 상세 정보 조회 중...",
+                        "source_domain": "discovery",
+                    })
+                    try:
+                        raw_detail = await asyncio.to_thread(_get_product_description_tool.invoke, detail_input)
+                        detail_result = _tool_result_dict(raw_detail)
+                    except Exception as exc:
+                        logger.exception(
+                            "[MULTI_PRODUCT_DETAIL] get_product_description_tool failed for %s",
+                            row["goods_no"],
+                        )
+                        detail_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": str(exc),
+                            "data": {},
+                        }
+                    _record_code_tool_result("get_product_description_tool", detail_input, detail_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Description AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": detail_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": detail_input,
+                        "output": json.dumps(detail_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "get_product_description_tool",
+                        "source_domain": "discovery",
+                    })
+                    detail_data = _unwrap_tool_data(detail_result)
+                    if isinstance(detail_data, dict) and detail_data:
+                        row = {**row, **detail_data}
+                product_rows.append((product_name, row))
+
+            return emitted_events, _build_multi_product_detail_quickreply_event(product_rows)
 
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
             if is_external_price_comparison_request(user_query):
@@ -16308,6 +16852,93 @@ class TStationChatServiceV2:
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
 
+        multi_product_detail_names = _multi_product_detail_continuation_names(
+            user_query,
+            messages,
+            latest_quickreply_tmpl,
+        )
+        if len(multi_product_detail_names) >= 2:
+            multi_product_detail_resolution = await _resolve_multi_product_detail_with_code(multi_product_detail_names)
+            if multi_product_detail_resolution is not None:
+                code_events, detail_event = multi_product_detail_resolution
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+                for code_event in code_events:
+                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(detail_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((detail_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+        multi_product_compare_query = _multi_product_compare_continuation_query(
+            user_query,
+            messages,
+            latest_quickreply_tmpl,
+        )
+        if multi_product_compare_query:
+            product_compare_resolution = await _resolve_product_comparison_with_code(multi_product_compare_query)
+            if product_compare_resolution is not None:
+                code_events, compare_event = product_compare_resolution
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+                for code_event in code_events:
+                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(compare_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((compare_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+        if _should_resolve_compare_target_product_pair(user_query, messages, latest_quickreply_tmpl):
+            product_compare_resolution = await _resolve_product_comparison_with_code()
+            if product_compare_resolution is not None:
+                code_events, compare_event = product_compare_resolution
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+                for code_event in code_events:
+                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(compare_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((compare_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+        if _should_prompt_for_new_product_compare_target(user_query, messages):
+            compare_prompt_event = _product_compare_target_prompt_event()
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(compare_prompt_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((compare_prompt_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        if _should_clarify_ambiguous_multi_product_query(user_query, messages, latest_quickreply_tmpl):
+            clarification_event = _multi_product_intent_clarification_event(_product_names_in_text(user_query))
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(clarification_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((clarification_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         if _REMINDING_ALARM_QUERY_RE.search(user_query or ""):
             alarm_event = _reminding_alarm_event()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
@@ -17060,10 +17691,13 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
-                    comparison_query = _comparison_query_with_recent_context(user_query, messages)
+                    comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
                     deterministic_compare_event = (
                         None
-                        if deterministic_external_price_event is not None
+                        if (
+                            deterministic_external_price_event is not None
+                            or _should_skip_product_compare_override(user_query, called_tool_names)
+                        )
                         else _build_product_comparison_event_from_search_results(
                             comparison_query,
                             search_product_tool_results,
@@ -17284,10 +17918,14 @@ class TStationChatServiceV2:
                 ):
                     source_domain = str(event.get("source_domain", "ui_template")).lower()
                     if source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
-                        comparison_query = _comparison_query_with_recent_context(user_query, messages)
-                        deterministic_compare_event = _build_product_comparison_event_from_search_results(
-                            comparison_query,
-                            search_product_tool_results,
+                        comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
+                        deterministic_compare_event = (
+                            None
+                            if _should_skip_product_compare_override(user_query, called_tool_names)
+                            else _build_product_comparison_event_from_search_results(
+                                comparison_query,
+                                search_product_tool_results,
+                            )
                         )
                         if (
                             _is_product_comparison_query(comparison_query)
