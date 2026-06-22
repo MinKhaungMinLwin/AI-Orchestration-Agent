@@ -2927,6 +2927,15 @@ def test_router_complaint_scope_overrides_broad_support_prediction_for_out_of_sc
     assert "1:1 문의" not in _labels(event["data"]["quickReplies"])
 
 
+def test_forced_routing_defaults_claim_check_type_without_relaxing_schema() -> None:
+    route = StreamingMultiAgentCoordinator._force_keyword_routing("고객센터 왜 전화가 안돼? 주문 취소 처리해줘")
+
+    assert route is not None
+    assert route.claim_check_type == "none"
+    assert route.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert route.agent_prompt_profile == "transaction_order"
+
+
 @pytest.mark.parametrize(
     "text",
     [

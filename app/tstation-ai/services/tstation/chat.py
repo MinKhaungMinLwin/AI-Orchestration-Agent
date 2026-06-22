@@ -12,7 +12,7 @@ import time
 from typing import Any, AsyncIterator, ClassVar, Iterator, Literal, Mapping
 from textwrap import dedent
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 
 from services.tstation.common.cta_urls import CTAUrls
@@ -297,6 +297,14 @@ class MultiAgentDomain(BaseModel):
         TRANSACTION = "transaction"
         SUPPORT = "support"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _default_claim_check_type_for_internal_routes(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "claim_check_type" not in data:
+            data = dict(data)
+            data["claim_check_type"] = "none"
+        return data
+
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
     execution_plan: list[str] = Field(
@@ -395,6 +403,14 @@ class _SlimMultiAgentDomain(BaseModel):
     be placeholders ("fresh start — no prior context"), so we skip
     generating them to save output tokens on every first message.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_claim_check_type_for_internal_routes(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "claim_check_type" not in data:
+            data = dict(data)
+            data["claim_check_type"] = "none"
+        return data
 
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[MultiAgentDomain.Domain] = Field(
