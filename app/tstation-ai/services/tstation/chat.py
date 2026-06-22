@@ -9765,7 +9765,8 @@ _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b
 _PRODUCT_QUERY_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
 _FOLLOWUP_PRODUCT_REFERENCE_RE = re.compile(
-    r"두\s*개\s*다|두개다|둘\s*다|둘다|둘\s*모두|두\s*상품|위\s*상품들?|이\s*상품들?|각각",
+    r"두\s*개\s*다|두개다|둘\s*다|둘다|둘\s*모두|세\s*개\s*다|세개다|셋\s*다|셋다|셋\s*모두|"
+    r"두\s*상품|세\s*상품|위\s*상품들?|이\s*상품들?|각각",
     re.IGNORECASE,
 )
 _SIZED_PRODUCT_AVAILABILITY_HINT_RE = re.compile(
@@ -9885,6 +9886,72 @@ def _recent_product_listing_context(prev_tool_data: list[dict] | None = None) ->
     return None
 
 
+def _recent_product_names_from_template_metadata(template_data: dict | None) -> tuple[str, ...]:
+    if not isinstance(template_data, dict):
+        return ()
+    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
+    metadata = data.get("metadata") if isinstance(data, dict) else None
+    if not isinstance(metadata, dict):
+        return ()
+    names = metadata.get("productNames") or metadata.get("pendingProductNames")
+    if not isinstance(names, list):
+        return ()
+    parsed: list[str] = []
+    for name in names:
+        normalized = str(name or "").strip()
+        if not normalized or normalized in parsed:
+            continue
+        parsed.append(normalized)
+    return tuple(parsed)
+
+
+_ASSISTANT_PRODUCT_BULLET_RE = re.compile(r"^\s*[-*]\s*([^:\n]+?)\s*:\s*", re.MULTILINE)
+
+
+def _recent_product_names_from_assistant_text(content: str) -> tuple[str, ...]:
+    text = str(content or "").strip()
+    if not text:
+        return ()
+    parsed: list[str] = []
+    for match in _ASSISTANT_PRODUCT_BULLET_RE.finditer(text):
+        candidate = str(match.group(1) or "").strip()
+        if not candidate:
+            continue
+        if candidate in parsed:
+            continue
+        parsed.append(candidate)
+    return tuple(parsed)
+
+
+def _recent_product_listing_context_from_messages(
+    messages: list[dict],
+    *,
+    latest_quickreply_tmpl: dict | None = None,
+) -> dict | None:
+    template_names = _recent_product_names_from_template_metadata(latest_quickreply_tmpl)
+    if len(template_names) >= 2:
+        return {"tool": "assistant_template_metadata", "rows": [], "product_names": list(template_names)}
+
+    if isinstance(latest_quickreply_tmpl, dict):
+        data = latest_quickreply_tmpl.get("data") if isinstance(latest_quickreply_tmpl.get("data"), dict) else latest_quickreply_tmpl
+        assistant = str(data.get("assistantResponse") or "") if isinstance(data, dict) else ""
+        text_names = _recent_product_names_from_assistant_text(assistant)
+        if len(text_names) >= 2:
+            return {"tool": "assistant_quickreply_text", "rows": [], "product_names": list(text_names)}
+
+    for message in reversed(messages[:-1]):
+        if str(message.get("role") or "") != "assistant":
+            continue
+        template_data = message.get("template_data")
+        template_names = _recent_product_names_from_template_metadata(template_data)
+        if len(template_names) >= 2:
+            return {"tool": "assistant_template_metadata", "rows": [], "product_names": list(template_names)}
+        text_names = _recent_product_names_from_assistant_text(str(message.get("content") or ""))
+        if len(text_names) >= 2:
+            return {"tool": "assistant_quickreply_text", "rows": [], "product_names": list(text_names)}
+    return None
+
+
 def _is_recent_product_size_availability_query(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text:
@@ -9930,6 +9997,8 @@ def _recent_product_set_size_availability_context(
     *,
     prev_tool_data: list[dict] | None = None,
     routing_result: Any | None = None,
+    messages: list[dict] | None = None,
+    latest_quickreply_tmpl: dict | None = None,
 ) -> dict | None:
     followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
     llm_marked_followup = followup_intent == "recent_product_set_size_availability"
@@ -9938,18 +10007,24 @@ def _recent_product_set_size_availability_context(
 
     listing_context = _recent_product_listing_context(prev_tool_data)
     if not listing_context:
+        listing_context = _recent_product_listing_context_from_messages(
+            messages or [],
+            latest_quickreply_tmpl=latest_quickreply_tmpl,
+        )
+    if not listing_context:
         return None
 
     fallback_keyword = _fallback_sized_product_keyword(user_text)
     if fallback_keyword:
         return None
 
-    product_names: list[str] = []
-    for row in listing_context["rows"]:
-        product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
-        if not product_name or product_name in product_names:
-            continue
-        product_names.append(product_name)
+    product_names: list[str] = list(listing_context.get("product_names") or [])
+    if not product_names:
+        for row in listing_context["rows"]:
+            product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+            if not product_name or product_name in product_names:
+                continue
+            product_names.append(product_name)
 
     if len(product_names) < 2:
         return None
@@ -10012,9 +10087,18 @@ def _build_recent_product_size_availability_event_from_rows(
     user_text: str,
     *,
     prev_tool_data: list[dict] | None = None,
+    messages: list[dict] | None = None,
+    latest_quickreply_tmpl: dict | None = None,
 ) -> dict | None:
-    context = _recent_product_set_size_availability_context(user_text, prev_tool_data=prev_tool_data)
+    context = _recent_product_set_size_availability_context(
+        user_text,
+        prev_tool_data=prev_tool_data,
+        messages=messages,
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+    )
     if not context:
+        return None
+    if not context["rows"]:
         return None
 
     size_map: dict[str, set[str]] = {}
@@ -18213,6 +18297,8 @@ class TStationChatServiceV2:
                 user_query,
                 prev_tool_data=prev_tool_data or [],
                 routing_result=routing_result,
+                messages=messages,
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
             )
             if context is None:
                 if (
@@ -18235,6 +18321,8 @@ class TStationChatServiceV2:
                 existing_event = _build_recent_product_size_availability_event_from_rows(
                     user_query,
                     prev_tool_data=prev_tool_data or [],
+                    messages=messages,
+                    latest_quickreply_tmpl=latest_quickreply_tmpl,
                 )
                 if existing_event is not None:
                     return emitted_events, existing_event

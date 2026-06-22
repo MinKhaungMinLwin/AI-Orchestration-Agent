@@ -69,7 +69,9 @@ from services.tstation.chat import (
     _build_product_size_list_not_found_event,
     _build_recent_product_size_availability_event,
     _build_recent_product_size_availability_event_from_rows,
+    _build_recent_product_size_availability_missing_context_event,
     _comparison_query_with_recent_context,
+    _recent_product_set_size_availability_context,
     _should_clarify_ambiguous_multi_product_query,
     _multi_product_detail_continuation_names,
     _multi_product_compare_continuation_query,
@@ -6237,6 +6239,87 @@ def test_recent_product_size_availability_event_prefers_followup_reference_over_
 
     assert event is not None
     assert size_list_event is None
+
+
+def test_recent_product_size_availability_context_recovers_product_names_from_assistant_text() -> None:
+    messages = [
+        {"role": "user", "content": "타이어 추천"},
+        {
+            "role": "assistant",
+            "content": (
+                "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n\n"
+                "- 아이온 에보 AS: 설명\n"
+                "- 아이온 에보 AS SUV: 설명\n"
+                "- 아이온 에보: 설명\n"
+            ),
+        },
+        {"role": "user", "content": "세개다 2355519 사이즈가 있을까?"},
+    ]
+
+    context = _recent_product_set_size_availability_context(
+        "세개다 2355519 사이즈가 있을까?",
+        messages=messages,
+    )
+
+    assert context is not None
+    assert context["tool"] == "assistant_quickreply_text"
+    assert context["product_names"] == ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"]
+
+
+def test_recent_product_size_availability_context_prefers_template_metadata_without_prev_tool_data() -> None:
+    latest_quickreply_tmpl = {
+        "assistant_response_source": "code_mapper",
+        "data": {
+            "assistantResponse": "추천 결과입니다.",
+            "metadata": {
+                "productNames": ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"],
+            },
+        },
+    }
+
+    context = _recent_product_set_size_availability_context(
+        "세개다 2355519 사이즈가 있을까?",
+        messages=[{"role": "user", "content": "세개다 2355519 사이즈가 있을까?"}],
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+    )
+
+    assert context is not None
+    assert context["tool"] == "assistant_template_metadata"
+    assert context["product_names"] == ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"]
+
+
+def test_recent_product_size_availability_event_from_rows_returns_none_when_only_assistant_text_exists() -> None:
+    messages = [
+        {"role": "user", "content": "타이어 추천"},
+        {
+            "role": "assistant",
+            "content": (
+                "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n\n"
+                "- 아이온 에보 AS: 설명\n"
+                "- 아이온 에보 AS SUV: 설명\n"
+                "- 아이온 에보: 설명\n"
+            ),
+        },
+        {"role": "user", "content": "세개다 2355519 사이즈가 있을까?"},
+    ]
+
+    event = _build_recent_product_size_availability_event_from_rows(
+        "세개다 2355519 사이즈가 있을까?",
+        messages=messages,
+    )
+
+    assert event is None
+
+
+def test_recent_product_size_availability_missing_context_prompt_keeps_clarification() -> None:
+    context = _recent_product_set_size_availability_context(
+        "2355519 규격 있어?",
+        messages=[{"role": "user", "content": "2355519 규격 있어?"}],
+    )
+    event = _build_recent_product_size_availability_missing_context_event("235/55R19")
+
+    assert context is None
+    assert "확인할 상품이 아직 정해지지 않았어요" in event["data"]["assistantResponse"]
 
 
 def test_recent_product_size_availability_query_skips_explicit_unknown_product_name() -> None:
