@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
@@ -59,11 +60,25 @@ from services.tstation.chat import (
     _build_store_availability_quantity_prompt_event,
     _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
+    _build_multi_product_detail_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _product_compare_target_prompt_event,
+    _multi_product_intent_clarification_event,
     _build_product_size_list_event_from_search_results,
     _build_product_size_list_not_found_event,
+    _build_recent_product_size_availability_event,
+    _build_recent_product_size_availability_event_from_rows,
+    _build_recent_product_size_availability_missing_context_event,
     _comparison_query_with_recent_context,
+    _recent_product_set_size_availability_context,
+    _should_clarify_ambiguous_multi_product_query,
+    _multi_product_detail_continuation_names,
+    _multi_product_compare_continuation_query,
+    _recent_multi_product_clarification_names,
+    _should_prompt_for_new_product_compare_target,
+    _should_resolve_compare_target_product_pair,
+    _should_skip_product_compare_override,
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
@@ -71,6 +86,7 @@ from services.tstation.chat import (
     _build_manual_tire_size_input_event,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
+    _build_order_history_reorder_event,
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
@@ -99,6 +115,7 @@ from services.tstation.chat import (
     _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
+    _is_recent_product_size_availability_query,
     _is_size_only_store_availability_continuation,
     _is_confirmed_product_store_scope_followup,
     _is_strong_product_name_match,
@@ -111,6 +128,7 @@ from services.tstation.chat import (
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
+    _build_complaint_scope_guard_event,
     _choose_quickreply_fallback,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
@@ -119,6 +137,7 @@ from services.tstation.chat import (
     _find_coupon_from_owned_coupons,
     _find_single_confident_coupon_from_owned_coupons,
     _is_order_arrival_status_query,
+    _is_order_history_reorder_query,
     _is_specific_owned_coupon_lookup_query,
     _infer_followup_recommendation_context,
     _ensure_discovery_transaction_recovery_chain,
@@ -135,6 +154,8 @@ from services.tstation.chat import (
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
+    _complaint_scope_for_turn,
+    _infer_complaint_scope,
     _normalize_existing_reservation_change_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
@@ -143,6 +164,8 @@ from services.tstation.chat import (
     _non_self_vehicle_plate_owner_lookup_plate,
     _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
+    _product_search_keyword_candidates,
+    _select_order_history_reorder_row,
     _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
     _past_event_page_event,
@@ -173,9 +196,11 @@ from services.tstation.chat import (
     _should_replace_discovery_dead_end_chips,
     _should_force_warranty_claim_support_route,
     _should_force_best_seller_code_route,
+    _enrich_best_selling_result_for_product_cards,
     _quickreply_cta_clarification_event,
     _sanitize_transaction_cta_contracts,
     _apply_cta_context_to_slots,
+    _is_current_location_store_search_confirmation,
     _merged_quickreply_cta_context,
     _cta_preview_input_from_slots,
     _support_fast_path,
@@ -759,6 +784,141 @@ def test_oe_replacement_query_is_detected() -> None:
     assert _is_oe_replacement_equivalent_query("RE 상품으로 교체하면 돼?")
     assert not _is_oe_replacement_equivalent_query("requesting tire recommendation following tire feature explanation")
     assert not _is_oe_replacement_equivalent_query("Current Time: Monday")
+
+
+def test_order_history_reorder_query_is_not_oe_replacement() -> None:
+    text = "205소4214 이전에 장착했던 타이어와 동일한 상품으로 교체하고 싶어"
+
+    assert _is_order_history_reorder_query(text)
+    assert not _is_oe_replacement_equivalent_query(text)
+
+    route = StreamingMultiAgentCoordinator._force_keyword_routing(text)
+
+    assert route is not None
+    assert route.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert route.agent_prompt_profile == "transaction_order"
+
+
+def test_order_history_reorder_does_not_hijack_strong_oe_query() -> None:
+    text = "차 살 때 출고 타이어랑 같은 상품으로 교체하고 싶어"
+
+    assert not _is_order_history_reorder_query(text)
+    assert _is_oe_replacement_equivalent_query(text)
+
+
+def test_order_history_reorder_prefers_car_no_over_same_tire_size() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {
+                    "ord_no": "O1",
+                    "goods_no": "G-WRONG",
+                    "goods_nm": "다른 차량 상품",
+                    "tire_size_1": "235/55R19",
+                    "sys_reg_dtime": "2026-06-22",
+                    "car_no": "33가3333",
+                    "car_nm": "다른 차량",
+                },
+                {
+                    "ord_no": "O2",
+                    "goods_no": "G-RIGHT",
+                    "goods_nm": "옵티모 H426",
+                    "tire_size_1": "205/65R16",
+                    "sys_reg_dtime": "2026-06-17",
+                    "car_no": "205소4214",
+                    "car_nm": "제네시스 GV70",
+                },
+            ],
+        },
+    }
+
+    row, reason = _select_order_history_reorder_row(
+        "205소4214 이전에 장착했던 타이어와 동일한 상품으로 교체하고 싶어",
+        orders_result,
+    )
+
+    assert reason == "car_no"
+    assert row is not None
+    assert row["goods_no"] == "G-RIGHT"
+
+
+def test_order_history_reorder_can_match_vehicle_name_before_size_fallback() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {
+                    "goods_no": "G-1",
+                    "goods_nm": "키너지 EX",
+                    "tire_size_1": "235/55R19",
+                    "sys_reg_dtime": "2026-06-22",
+                    "car_no": "11가1111",
+                    "car_nm": "아반떼",
+                },
+                {
+                    "goods_no": "G-2",
+                    "goods_nm": "옵티모 H426",
+                    "tire_size_1": "225/55R18",
+                    "sys_reg_dtime": "2026-06-17",
+                    "car_no": "205소4214",
+                    "car_nm": "제네시스 GV70",
+                    "car_model_det": "GV70 2.5T",
+                },
+            ],
+        },
+    }
+
+    row, reason = _select_order_history_reorder_row(
+        "GV70 전에 장착했던 타이어와 같은 상품으로 교체하고 싶어",
+        orders_result,
+    )
+
+    assert reason == "vehicle_name"
+    assert row is not None
+    assert row["goods_no"] == "G-2"
+
+
+def test_order_history_reorder_ambiguous_orders_ask_user_to_choose() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {"goods_no": "G-1", "goods_nm": "키너지 EX", "tire_size_1": "205/55R16"},
+                {"goods_no": "G-2", "goods_nm": "옵티모 H426", "tire_size_1": "225/55R18"},
+            ],
+        },
+    }
+
+    row, reason = _select_order_history_reorder_row(
+        "이전에 장착했던 타이어와 동일한 상품으로 교체하고 싶어",
+        orders_result,
+    )
+
+    assert row is None
+    assert reason == "ambiguous"
+
+
+def test_order_history_reorder_event_uses_matched_order_metadata() -> None:
+    event = _build_order_history_reorder_event(
+        {
+            "goods_no": "G0000001",
+            "goods_nm": "옵티모 H426",
+            "tire_size_1": "205/65R16",
+            "ord_qty": 4,
+            "car_no": "205소4214",
+        },
+        match_reason="car_no",
+    )
+
+    assert event["assistant_response_source"] == "code_order_history_reorder_resolver"
+    assert "205소4214" in event["data"]["assistantResponse"]
+    assert "옵티모 H426 205/65R16" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["goodsNo"] == "G0000001"
+
+
+def test_order_source_filter_keeps_vehicle_fields_for_reorder_matching_context() -> None:
+    assert {"car_no", "car_nm", "car_model_det", "car_maker"} <= _ORDER_FIELDS_BASE
 
 
 def test_owned_vehicle_selection_cta_does_not_retrigger_oe_guidance() -> None:
@@ -1450,9 +1610,10 @@ def test_grade_comparison_event_prefers_higher_price_grade() -> None:
         ]
     )
 
-    assert event["data"]["assistantResponse"] == (
-        "벤투스 에어S이 키너지 EX보다 상위 등급입니다. (벤투스 에어S: 프리미엄, 키너지 EX: 스탠다드)"
-    )
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 상품 등급 | 스탠다드 | 프리미엄 |" in assistant
+    assert "벤투스 에어S이 키너지 EX보다 상위 등급입니다." in assistant
     assert _labels(event["data"]["quickReplies"]) == ["구매하기", "다른 상품 비교", "내 차량 보기"]
 
 
@@ -1492,8 +1653,10 @@ def test_price_comparison_event_uses_same_final_price_priority_as_product_cards(
         ],
     )
 
-    assert "키너지 EX는 최종 85,000원" in event["data"]["assistantResponse"]
-    assert "벤투스 에어S는 최종 95,000원" in event["data"]["assistantResponse"]
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 최종 혜택가 | 85,000원 | 95,000원 |" in assistant
+    assert "키너지 EX이 10,000원 더 저렴해요." in assistant
 
 
 def test_mileage_comparison_event_prefers_higher_life_span() -> None:
@@ -1505,7 +1668,10 @@ def test_mileage_comparison_event_prefers_higher_life_span() -> None:
         ]
     )
 
-    assert event["data"]["assistantResponse"] == "마일리지/수명 기준으로는 키너지 EX이 벤투스 에어S보다 유리해요."
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 마일리지/수명 | 4.1 | 3.2 |" in assistant
+    assert "마일리지/수명 기준으로는 키너지 EX이 벤투스 에어S보다 유리해요." in assistant
 
 
 def test_product_comparison_uses_existing_search_results() -> None:
@@ -1539,8 +1705,12 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
                     "goods_nm": "다이나프로 HPX",
                     "slogan": "SUV용 사계절 컴포트 타이어",
                     "rating": {"rating_avg": 4.8, "review_count": 12},
-                    "reviews": [{"gdas_cont": "승차감이 좋고 조용해서 장거리 주행이 편해요."}],
+                    "reviews": [{"gdas_cont": "승차감이 좋고 조용해서 장거리 주행이 편해요.\n추천해요."}],
                     "sale_prc": 249700,
+                    "t_silence": "5",
+                    "t_comfort": "4.8",
+                    "rr": "3",
+                    "wet": "3",
                 },
             ),
             (
@@ -1549,8 +1719,12 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
                     "goods_nm": "윈터 아이셉트 에보3 X",
                     "slogan": "겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어",
                     "rating": {"rating_avg": 4.6, "review_count": 5},
-                    "reviews": [{"gdas_cont": "눈길 접지력이 안정적이라는 느낌이 있어요."}],
+                    "reviews": [{"gdas_cont": "눈길 접지력이 안정적이라는 | 느낌이 있어요."}],
                     "sale_prc": 256300,
+                    "t_silence": "4",
+                    "t_comfort": "4.2",
+                    "rr": "4",
+                    "wet": "2",
                 },
             ),
         ],
@@ -1558,12 +1732,87 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
 
     assistant = event["data"]["assistantResponse"]
 
-    assert "상품 특징과 리뷰 기준" in assistant
+    assert "상품 정보를 표로 비교해드릴게요." in assistant
+    assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" in assistant
+    assert "| 특징 | SUV용 사계절 컴포트 타이어 | 겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어 |" in assistant
+    assert "| 주요 성능 | 정숙성 5, 승차감 4.8, 회전저항 3, 젖은노면 3 | 정숙성 4, 승차감 4.2, 회전저항 4, 젖은노면 2 |" in assistant
+    assert "| 리뷰 | 평점 4.8, 리뷰 12건. 대표 리뷰는" in assistant
+    assert "추천해요." in assistant
+    assert "눈길 접지력이 안정적이라는 / 느낌" in assistant
     assert "SUV용 사계절 컴포트 타이어" in assistant
     assert "눈길과 빙판" in assistant
     assert "승차감이 좋고 조용" in assistant
+    assert "\n추천해요" not in assistant
+    assert "| 느낌" not in assistant
     assert "가격 기준" not in assistant
     assert "249,700" not in assistant
+
+
+def test_product_comparison_table_does_not_expose_goods_no() -> None:
+    event = _build_product_comparison_event(
+        "키너지 EX랑 벤투스 air S 비교해줘",
+        [
+            (
+                "키너지 EX",
+                {
+                    "goods_no": "G000000111111",
+                    "goods_nm": "키너지 EX",
+                    "slogan": "일상 주행용 컴포트 타이어",
+                    "sale_prc": 120000,
+                },
+            ),
+            (
+                "벤투스 에어S",
+                {
+                    "goods_no": "G000000222222",
+                    "goods_nm": "벤투스 에어S",
+                    "slogan": "정숙성과 승차감 중심 타이어",
+                    "sale_prc": 130000,
+                },
+            ),
+        ],
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "상품코드" not in assistant
+    assert "goods_no" not in assistant
+    assert "G000000111111" not in assistant
+    assert "G000000222222" not in assistant
+
+
+def test_product_comparison_feature_fallback_omits_pattern_group() -> None:
+    event = _build_product_comparison_event(
+        "벤투스 S2 AS랑 다이나프로 HP3 비교해줘",
+        [
+            (
+                "Ventus S2 AS",
+                {
+                    "goods_nm": "벤투스 S2 AS",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "승용차",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+                },
+            ),
+            (
+                "Dynapro HP3",
+                {
+                    "goods_nm": "다이나프로 HP3",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "SUV",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "다이나프로 컴포트",
+                },
+            ),
+        ],
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert "| 특징 | 사계절, 승용차용, COMFORT | 사계절, SUV용, COMFORT |" in assistant
+    assert "벤투스 슈퍼 컴포트" not in assistant
+    assert "다이나프로 컴포트" not in assistant
 
 
 def test_generic_compare_text_is_product_comparison_query() -> None:
@@ -1606,6 +1855,438 @@ def test_pronoun_compare_followup_reuses_two_recent_products() -> None:
     query = _comparison_query_with_recent_context("이 2개중에 어떤게 더 좋아?", messages)
 
     assert query == "Ventus air S랑 Ventus S2 AS 비교"
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "두개 말고 다른 추천 상품은 없어?",
+        "둘 말고 다른 상품은?",
+        "이거 말고 다른 추천 상품 없어?",
+        "아까 두 개 말고 다른 걸로 비교하고 싶어",
+        "다른 상품 비교",
+        "다른 추천 상품 보여줘",
+    ],
+)
+def test_other_recommendation_text_does_not_reuse_recent_compare_products(user_text: str) -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": user_text},
+    ]
+
+    query = _comparison_query_with_recent_context(user_text, messages)
+
+    assert query == user_text
+
+
+@pytest.mark.parametrize(
+    ("user_text", "expected"),
+    [
+        ("두 개 특징 비교해줘", "Ventus air S랑 Ventus S2 AS 상품 설명 비교"),
+        ("가격은 둘 중 뭐가 더 저렴해?", "Ventus air S랑 Ventus S2 AS 비교"),
+    ],
+)
+def test_clear_recent_two_compare_followup_still_reuses_recent_products(user_text: str, expected: str) -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": user_text},
+    ]
+
+    query = _comparison_query_with_recent_context(user_text, messages)
+
+    assert query == expected
+
+
+def test_other_recommendation_text_does_not_rebuild_compare_event_from_previous_results() -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": "두개 말고 다른 추천 상품은 없어?"},
+    ]
+    comparison_query = _comparison_query_with_recent_context("두개 말고 다른 추천 상품은 없어?", messages)
+
+    event = _build_product_comparison_event_from_search_results(
+        comparison_query,
+        [
+            ("Ventus air S", {"data": [{"goods_nm": "벤투스 에어S", "sale_prc": 180000}]}),
+            ("Ventus S2 AS", {"data": [{"goods_nm": "벤투스 S2 AS", "sale_prc": 170000}]}),
+        ],
+    )
+
+    assert event is None
+
+
+def test_other_product_compare_cta_prompts_for_new_target_without_compare_resolver_source() -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": "다른 상품 비교"},
+    ]
+
+    event = _product_compare_target_prompt_event()
+    assistant = event["data"]["assistantResponse"]
+
+    assert _should_prompt_for_new_product_compare_target("다른 상품 비교", messages) is True
+    assert _should_skip_product_compare_override("다른 상품 비교", {"get_products_recommendations_tool"}) is True
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_product_compare_target_prompt"
+    assert event["assistant_response_source"] != "code_product_compare_resolver"
+    assert "비교할 다른 상품명을 알려주시면" in assistant
+    assert "구매하기" not in _labels(event["data"]["quickReplies"])
+    assert _labels(event["data"]["quickReplies"])[0] == "상품명 다시 입력"
+
+
+def test_other_product_compare_cta_without_recent_products_does_not_trigger_compare_prompt() -> None:
+    messages = [
+        {"role": "user", "content": "다른 상품 비교"},
+    ]
+
+    assert _should_prompt_for_new_product_compare_target("다른 상품 비교", messages) is False
+
+
+def test_compare_target_prompt_next_two_product_names_become_comparison() -> None:
+    latest_prompt = _product_compare_target_prompt_event()
+    messages = [
+        {"role": "user", "content": "두개 말고 다른 상품은 없어?"},
+        {"role": "assistant", "content": latest_prompt["data"]["assistantResponse"], "template_data": latest_prompt},
+        {"role": "user", "content": "벤투스 에어S랑 키너지 ST AS"},
+    ]
+
+    query = _comparison_query_with_recent_context("벤투스 에어S랑 키너지 ST AS", messages, latest_prompt)
+
+    assert query == "Ventus air S랑 Kinergy ST AS 비교"
+    assert _should_resolve_compare_target_product_pair("벤투스 에어S랑 키너지 ST AS", messages, latest_prompt) is True
+    assert _build_product_comparison_event_from_search_results(
+        query,
+        [
+            ("Ventus air S", {"data": {"items": [{"goods_nm": "벤투스 에어S", "slogan": "프리미엄 컴포트"}]}}),
+            ("Kinergy ST AS", {"data": {"items": [{"goods_nm": "키너지 ST AS", "slogan": "사계절 밸런스"}]}}),
+        ],
+    )["assistant_response_source"] == "code_product_compare_resolver"
+
+
+def test_compare_target_prompt_text_without_template_data_promotes_next_product_pair() -> None:
+    prompt = _product_compare_target_prompt_event()["data"]["assistantResponse"]
+    messages = [
+        {"role": "user", "content": "두개 말고 다른 상품은 없어?"},
+        {"role": "assistant", "content": prompt},
+        {"role": "user", "content": "벤투스 에어S랑 키너지 ST AS"},
+    ]
+
+    query = _comparison_query_with_recent_context("벤투스 에어S랑 키너지 ST AS", messages)
+
+    assert query == "Ventus air S랑 Kinergy ST AS 비교"
+    assert _should_resolve_compare_target_product_pair("벤투스 에어S랑 키너지 ST AS", messages) is True
+
+
+def test_explicit_two_product_compare_with_korean_aliases_remains_comparison() -> None:
+    user_text = "벤투스 에어S랑 키너지 ST AS 비교"
+    query = _comparison_query_with_recent_context(user_text, [{"role": "user", "content": user_text}])
+
+    assert query == user_text
+    assert build_discovery_intent_frame(user_text).intent == "product_comparison"
+    event = _build_product_comparison_event_from_search_results(
+        query,
+        [
+            ("Ventus air S", {"data": {"items": [{"goods_nm": "벤투스 에어S", "slogan": "프리미엄 컴포트"}]}}),
+            ("Kinergy ST AS", {"data": {"items": [{"goods_nm": "키너지 ST AS", "slogan": "사계절 밸런스"}]}}),
+        ],
+    )
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+
+
+def test_overlapping_ion_alias_single_input_stays_single_product() -> None:
+    user_text = "아이온 에보 as"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.entities["product_names"] == ("iON evo AS",)
+    assert _should_clarify_ambiguous_multi_product_query(user_text, [{"role": "user", "content": user_text}]) is False
+
+
+def test_overlapping_ion_alias_suv_single_input_does_not_split() -> None:
+    user_text = "아이온 에보 as suv"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.entities["product_names"] == ("iON evo AS SUV",)
+
+
+def test_overlapping_ion_alias_explicit_compare_keeps_two_distinct_products() -> None:
+    user_text = "아이온 에보랑 아이온 에보 as 비교"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.intent == "product_comparison"
+    assert frame.entities["product_names"] == ("iON evo", "iON evo AS")
+
+
+def test_overlapping_ion_alias_explicit_compare_with_as_suv_keeps_two_distinct_products() -> None:
+    user_text = "아이온 에보 AS랑 아이온 에보 AS SUV 비교"
+    frame = build_discovery_intent_frame(user_text)
+
+    assert frame.intent == "product_comparison"
+    assert frame.entities["product_names"] == ("iON evo AS", "iON evo AS SUV")
+
+
+def test_overlapping_sfit_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("s fit as")
+    compare_frame = build_discovery_intent_frame("s fit랑 s fit as 비교")
+
+    assert single_frame.entities["product_names"] == ("S FIT AS",)
+    assert compare_frame.entities["product_names"] == ("S FIT", "S FIT AS")
+
+
+def test_overlapping_ventus_s1_evo_z_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("벤투스 s1 에보 z as")
+    compare_frame = build_discovery_intent_frame("벤투스 s1 에보 z랑 벤투스 s1 에보 z as 비교")
+
+    assert single_frame.entities["product_names"] == ("Ventus S1 evo Z AS",)
+    assert compare_frame.entities["product_names"] == ("Ventus S1 evo Z", "Ventus S1 evo Z AS")
+
+
+def test_overlapping_mileage_plus_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("마일리지 플러스 3")
+    compare_frame = build_discovery_intent_frame("마일리지 플러스랑 마일리지 플러스 2 비교")
+
+    assert single_frame.entities["product_names"] == ("Mileage Plus 3",)
+    assert compare_frame.entities["product_names"] == ("Mileage Plus", "Mileage Plus 2")
+
+
+def test_overlapping_ventus_s2_aliases_keep_single_or_distinct_products() -> None:
+    single_frame = build_discovery_intent_frame("벤투스 s2 as")
+    compare_frame = build_discovery_intent_frame("벤투스 s2랑 벤투스 s2 as 비교")
+
+    assert single_frame.entities["product_names"] == ("Ventus S2 AS",)
+    assert compare_frame.entities["product_names"] == ("Ventus S2", "Ventus S2 AS")
+
+
+def test_standalone_two_product_names_ask_clarification_without_single_keyword_plan() -> None:
+    user_text = "벤투스 에어S랑 키너지 ST AS"
+    messages = [{"role": "user", "content": user_text}]
+    event = _multi_product_intent_clarification_event(("Ventus air S", "Kinergy ST AS"))
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert _should_clarify_ambiguous_multi_product_query(user_text, messages) is True
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_multi_product_intent_clarification"
+    assert "두 상품을 비교해드릴까요" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["pendingProductNames"] == ["Ventus air S", "Kinergy ST AS"]
+    assert "search_product_tool" in plan.forbidden_tools
+    assert plan.tool_args_patch == {}
+
+
+def test_multi_product_clarification_detail_chip_restores_pending_products_from_metadata() -> None:
+    clarification_event = _multi_product_intent_clarification_event(("Ventus S2 AS", "Dynapro HP3"))
+    messages = [
+        {"role": "user", "content": "벤투스 s2 as 랑 다이나프로 hp3"},
+        {
+            "role": "assistant",
+            "content": clarification_event["data"]["assistantResponse"],
+            "template_data": clarification_event,
+        },
+        {"role": "user", "content": "각각 찾아보기"},
+    ]
+
+    assert _recent_multi_product_clarification_names(messages, clarification_event) == ("Ventus S2 AS", "Dynapro HP3")
+    assert _multi_product_detail_continuation_names("각각 찾아보기", messages, clarification_event) == (
+        "Ventus S2 AS",
+        "Dynapro HP3",
+    )
+    assert _multi_product_compare_continuation_query("두 상품 비교", messages, clarification_event) == (
+        "Ventus S2 AS랑 Dynapro HP3 비교"
+    )
+
+
+def test_multi_product_clarification_detail_chip_restores_products_from_previous_user_text() -> None:
+    clarification_event = _multi_product_intent_clarification_event()
+    messages = [
+        {"role": "user", "content": "벤투스 s2 as 랑 다이나프로 hp3"},
+        {
+            "role": "assistant",
+            "content": clarification_event["data"]["assistantResponse"],
+            "template_data": clarification_event,
+        },
+        {"role": "user", "content": "각각 찾아보기"},
+    ]
+
+    assert _multi_product_detail_continuation_names("각각 찾아보기", messages) == ("Ventus S2 AS", "Dynapro HP3")
+    assert _multi_product_compare_continuation_query("두 상품 비교", messages) == (
+        "Ventus S2 AS랑 Dynapro HP3 비교"
+    )
+
+
+def test_multi_product_clarification_detail_chip_restores_products_from_assistant_text_only_history() -> None:
+    clarification_event = _multi_product_intent_clarification_event()
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as"},
+        {
+            "role": "assistant",
+            "content": (
+                f"{clarification_event['data']['assistantResponse']}\n\n"
+                "[이전 선택된 상품 데이터]\n"
+                '{"type":"data","template":"quickReply","assistant_response_source":'
+                '"code_multi_product_intent_clarification"}'
+            ),
+        },
+        {"role": "user", "content": "각각 찾아보기"},
+    ]
+
+    assert _multi_product_detail_continuation_names("각각 찾아보기", messages) == (
+        "Ventus air S",
+        "Ventus S2 AS",
+    )
+    assert _multi_product_compare_continuation_query("두 상품 비교", messages) == (
+        "Ventus air S랑 Ventus S2 AS 비교"
+    )
+
+
+def test_multi_product_detail_followup_restores_recent_pair_without_clarification_prompt() -> None:
+    messages = [
+        {"role": "user", "content": "두개 말고 다른 추천 상품은 없어?"},
+        {"role": "assistant", "content": "비교할 다른 상품명을 알려주시면 특징, 평점, 리뷰 중심으로 비교해드릴게요."},
+        {"role": "user", "content": "ventus air s, dynapro hp3"},
+        {"role": "assistant", "content": "두 상품을 비교해드릴까요, 아니면 각각 상품을 찾아드릴까요?"},
+        {"role": "user", "content": "두 상품 정보 보여줘"},
+    ]
+
+    assert _multi_product_detail_continuation_names("두 상품 정보 보여줘", messages) == (
+        "Ventus air S",
+        "Dynapro HP3",
+    )
+
+
+def test_multi_product_detail_event_keeps_both_products_in_final_response() -> None:
+    event = _build_multi_product_detail_quickreply_event(
+        [
+            (
+                "Ventus S2 AS",
+                {
+                    "goods_no": "101",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "225/45R17",
+                    "slogan": "프리미엄 정숙성과 승차감을 갖춘 사계절 타이어",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "승용차",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+                    "sale_prc": 152500,
+                    "_available_tire_sizes": ["225/45R17", "245/40R18"],
+                },
+            ),
+            (
+                "Dynapro HP3",
+                {
+                    "goods_no": "202",
+                    "goods_nm": "다이나프로 HP3",
+                    "tire_size_1": "225/70R16",
+                    "slogan": "SUV를 위한 컴포트 주행 성능",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "SUV",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "다이나프로 컴포트",
+                    "sale_prc": 140800,
+                    "_available_tire_sizes": ["225/70R16", "235/60R18"],
+                },
+            ),
+        ]
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert event["assistant_response_source"] == "code_multi_product_detail_resolver"
+    assert event["assistant_response_source"] != "code_mapper"
+    assert "벤투스 S2 AS" in assistant
+    assert "다이나프로 HP3" in assistant
+    assert "벤투스 S2 AS는 프리미엄 정숙성과 승차감을 갖춘 사계절 타이어 상품이에요." in assistant
+    assert "다이나프로 HP3는 SUV를 위한 컴포트 주행 성능 상품이에요." in assistant
+    assert "확인 가능한 규격은 225/45R17, 245/40R18" in assistant
+    assert "확인 가능한 규격은 225/70R16, 235/60R18" in assistant
+    assert "상품 분류는 사계절 · 승용차 · COMFORT 기준으로 확인돼요." in assistant
+    assert "상품 분류는 사계절 · SUV · COMFORT 기준으로 확인돼요." in assistant
+    assert "벤투스 슈퍼 컴포트" not in assistant
+    assert "다이나프로 컴포트" not in assistant
+    assert "정가는 152,500원입니다." not in assistant
+    assert "정가는 140,800원입니다." not in assistant
+    assert [product["productName"] for product in event["data"]["metadata"]["products"]] == [
+        "벤투스 S2 AS",
+        "다이나프로 HP3",
+    ]
+
+
+def test_multi_product_detail_event_shows_price_when_size_is_specific() -> None:
+    event = _build_multi_product_detail_quickreply_event(
+        [
+            (
+                "Ventus S2 AS",
+                {
+                    "goods_no": "101",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "225/45R17",
+                    "slogan": "프리미엄 정숙성과 승차감을 갖춘 사계절 타이어",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "승용차",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "벤투스 슈퍼 컴포트",
+                    "sale_prc": 152500,
+                    "_available_tire_sizes": ["225/45R17", "245/40R18"],
+                },
+            ),
+            (
+                "Dynapro HP3",
+                {
+                    "goods_no": "202",
+                    "goods_nm": "다이나프로 HP3",
+                    "tire_size_1": "225/45R17",
+                    "slogan": "SUV를 위한 컴포트 주행 성능",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "SUV",
+                    "goods_pfm_nm": "COMFORT",
+                    "ptrn_d_nm": "다이나프로 컴포트",
+                    "sale_prc": 140800,
+                    "_available_tire_sizes": ["225/45R17", "235/60R18"],
+                },
+            ),
+        ],
+        size_specific=True,
+    )
+
+    assistant = event["data"]["assistantResponse"]
+
+    assert "선택한 규격은 225/45R17예요." in assistant
+    assert "상품 분류는 사계절 · 승용차 · COMFORT 기준으로 확인돼요." in assistant
+    assert "상품 분류는 사계절 · SUV · COMFORT 기준으로 확인돼요." in assistant
+    assert "벤투스 슈퍼 컴포트" not in assistant
+    assert "다이나프로 컴포트" not in assistant
+    assert "정가는 152,500원입니다." in assistant
+    assert "정가는 140,800원입니다." in assistant
+    assert "확인 가능한 규격은" not in assistant
+
+
+def test_multi_product_detail_request_keeps_search_plan_available() -> None:
+    frame = build_discovery_intent_frame("벤투스 에어S랑 키너지 ST AS 각각 설명해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["multi_product_detail_request"] is True
+    assert "search_product_tool" not in plan.forbidden_tools
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+    assert plan.tool_args_patch == {}
+    assert plan.metadata["response_intent"] == "multi_product_detail"
+
+
+def test_discovery_followup_intent_promotes_recent_product_set_size_availability() -> None:
+    frame = build_discovery_intent_frame(
+        "2355519 규격 있어?",
+        known_slots={"discovery_followup_intent": "recent_product_set_size_availability"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "recent_product_set_size_availability"
+    assert frame.entities["discovery_followup_intent"] == "recent_product_set_size_availability"
+    assert "search_product_tool" in plan.forbidden_tools
+    assert plan.metadata["response_intent"] == "recent_product_set_size_availability"
 
 
 def test_single_product_status_question_does_not_become_comparison() -> None:
@@ -2058,6 +2739,18 @@ def test_sized_product_name_search_rejects_size_only_text() -> None:
     assert _build_bare_product_search_tool_input("2356018") is None
 
 
+def test_sized_product_name_search_rejects_followup_reference_size_availability_text() -> None:
+    assert _is_sized_product_name_search_query("두개다 2355519 사이즈가 있을까?") is False
+    assert _build_bare_product_search_tool_input("두개다 2355519 사이즈가 있을까?") is None
+    assert _is_recent_product_size_availability_query("두개다 2355519 사이즈가 있을까?") is True
+
+
+def test_recent_product_size_availability_query_does_not_require_reference_keyword() -> None:
+    assert _is_sized_product_name_search_query("2355519 사이즈가 있을까?") is False
+    assert _build_bare_product_search_tool_input("2355519 사이즈가 있을까?") is None
+    assert _is_recent_product_size_availability_query("2355519 사이즈가 있을까?") is True
+
+
 def test_size_only_followup_search_reuses_recent_product_context() -> None:
     assert _build_size_only_product_search_tool_input(
         "2255517",
@@ -2217,6 +2910,166 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     }
 
 
+def test_product_description_claim_check_prefix_uses_policy_decision_only() -> None:
+    frame = build_discovery_intent_frame("벤투스 air S가 우주 항공국 인증 제품이라던데 사실이야?")
+    decision = decide_discovery_response(frame)
+    assert frame.intent == "product_description"
+    assert frame.entities["claim_check_type"] == "unverified_external_claim"
+    assert decision.metadata["claim_check_type"] == "unverified_external_claim"
+    decision_token = current_discovery_response_decision.set(decision)
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "slogan": "프리미엄이 제공하는 품격있는 정숙성과 승차감",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+            },
+        })
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert assistant_response.startswith("말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.")
+    assert "확인 가능한 상품 설명 기준으로 안내드릴게요." in assistant_response
+    assert "벤투스 에어S는 프리미엄이 제공하는 품격있는 정숙성과 승차감 상품이에요." in assistant_response
+
+
+def test_discovery_policy_context_uses_routing_claim_check_type() -> None:
+    _tool_patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="벤투스 air S가 외부 기관 인증 제품이라던데 사실이야?",
+        context_text="벤투스 air S가 외부 기관 인증 제품이라던데 사실이야?",
+        tire_size=None,
+        routing_result=SimpleNamespace(claim_check_type="unverified_external_claim"),
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "neutral_product_description"
+    assert decision.metadata["claim_check_type"] == "unverified_external_claim"
+
+
+def test_router_claim_check_type_is_required_for_strict_structured_output() -> None:
+    assert "claim_check_type" in MultiAgentDomain.model_json_schema()["required"]
+
+
+def test_router_complaint_scope_is_required_for_strict_structured_output() -> None:
+    assert "complaint_scope" in MultiAgentDomain.model_json_schema()["required"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "한국타이어 주식 사고 난 이후로 점점 떨어지기만 하고 되는 일이 없어..!!",
+        "요즘 취업도 안 되고 되는 일이 없어",
+    ],
+)
+def test_out_of_scope_complaint_gets_scope_guidance_without_support_handoff(text: str) -> None:
+    assert _infer_complaint_scope(text) == "out_of_scope_complaint"
+
+    event = _build_complaint_scope_guard_event(_complaint_scope_for_turn(text, None))
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_complaint_scope_guard"
+    assert event["source_domain"] == MultiAgentDomain.Domain.LEADING.value
+    assistant_response = event["data"]["assistantResponse"]
+    assert "직접 도와드리기 어려운 주제" in assistant_response
+    assert "타이어 추천, 가격 조회, 매장 검색, 주문/장착 관련 문의" in assistant_response
+    assert "상담" not in assistant_response
+    assert "1:1" not in assistant_response
+    assert _labels(event["data"]["quickReplies"]) == ["타이어 추천", "가격 조회", "매장 찾기"]
+
+
+def test_unclear_complaint_asks_target_before_support_handoff() -> None:
+    assert _infer_complaint_scope("되는 일이 없어 짜증나") == "unclear_complaint"
+
+    event = _build_complaint_scope_guard_event(_complaint_scope_for_turn("되는 일이 없어 짜증나", None))
+
+    assert event is not None
+    assert event["source_domain"] == MultiAgentDomain.Domain.LEADING.value
+    assistant_response = event["data"]["assistantResponse"]
+    assert "어떤 부분이 불편하셨는지" in assistant_response
+    assert "타이어 상품, 주문/결제, 장착 매장" in assistant_response
+    assert _labels(event["data"]["quickReplies"]) == ["주문 조회", "매장 찾기", "1:1 문의"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "타이어 주문했는데 계속 오류나고 되는 일이 없어",
+        "너 답변이 계속 틀려서 짜증나",
+    ],
+)
+def test_tstation_service_complaint_is_not_blocked_by_scope_guard(text: str) -> None:
+    assert _infer_complaint_scope(text) == "tstation_service_complaint"
+    assert _build_complaint_scope_guard_event(_complaint_scope_for_turn(text, None)) is None
+
+
+def test_router_complaint_scope_overrides_broad_support_prediction_for_out_of_scope() -> None:
+    routing_result = SimpleNamespace(complaint_scope="out_of_scope_complaint")
+
+    event = _build_complaint_scope_guard_event(
+        _complaint_scope_for_turn("한국타이어 주식 떨어져서 짜증나", routing_result)
+    )
+
+    assert event is not None
+    assert "1:1 문의" not in _labels(event["data"]["quickReplies"])
+
+
+def test_forced_routing_defaults_claim_check_type_without_relaxing_schema() -> None:
+    route = StreamingMultiAgentCoordinator._force_keyword_routing("고객센터 왜 전화가 안돼? 주문 취소 처리해줘")
+
+    assert route is not None
+    assert route.claim_check_type == "none"
+    assert route.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert route.agent_prompt_profile == "transaction_order"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "벤투스 air S 설명해줘",
+        "벤투스 air S 최저소음 라벨 맞아?",
+    ],
+)
+def test_product_description_prefix_not_added_for_general_or_verifiable_claim(text: str) -> None:
+    frame = build_discovery_intent_frame(text)
+    decision = decide_discovery_response(frame)
+    if "라벨" in text:
+        assert frame.entities["claim_check_type"] == "verifiable_product_attribute"
+        assert decision.metadata["claim_check_type"] == "verifiable_product_attribute"
+    else:
+        assert frame.entities["claim_check_type"] == "none"
+        assert "claim_check_type" not in decision.metadata
+    decision_token = current_discovery_response_decision.set(decision)
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "slogan": "프리미엄이 제공하는 품격있는 정숙성과 승차감",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+            },
+        })
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert not assistant_response.startswith("말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.")
+    assert "확인 가능한 상품 설명 기준으로 안내드릴게요." not in assistant_response
+
+
 def test_grade_comparison_uses_existing_search_results_for_korean_keywords() -> None:
     event = _build_product_comparison_event_from_search_results(
         "키너지 EX가 벤투스 air S 보다 프리미엄 등급 맞지?",
@@ -2257,6 +3110,11 @@ def test_product_row_picker_uses_actual_search_keyword_without_product_alias() -
     assert row["goods_nm"] == "다이나프로 HP3"
 
 
+def test_product_search_keyword_candidates_include_korean_and_english_dynapro_variants() -> None:
+    assert _product_search_keyword_candidates("Dynapro HPX") == ("다이나프로 HPX", "Dynapro HPX")
+    assert _product_search_keyword_candidates("다이나프로 HPX") == ("다이나프로 HPX", "Dynapro HPX")
+
+
 def test_product_row_picker_matches_partial_pattern_name_generically() -> None:
     row = _pick_product_row_from_search_result(
         {"status": "success", "data": {"items": [{"goods_nm": "벤투스 프라임2", "prc_grd_nm": "스탠다드"}]}},
@@ -2265,6 +3123,16 @@ def test_product_row_picker_matches_partial_pattern_name_generically() -> None:
 
     assert row is not None
     assert row["goods_nm"] == "벤투스 프라임2"
+
+
+def test_product_row_picker_rejects_same_family_other_ion_variant() -> None:
+    row = _pick_product_row_from_search_result(
+        {"status": "success", "data": {"items": [{"goods_nm": "아이온 에보 AS SUV"}]}},
+        "iON evo AS",
+        "아이온 에보 AS",
+    )
+
+    assert row is None
 
 
 def test_product_row_picker_can_use_first_row_fallback_for_product_specific_search() -> None:
@@ -2356,6 +3224,24 @@ def test_latest_comparison_search_results_can_fallback_to_first_row_for_alias_va
     assert "최신 상품은 벤투스 에어 에스입니다." in event["data"]["assistantResponse"]
 
 
+def test_product_comparison_event_does_not_build_when_both_targets_resolve_to_same_product() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "아이온 에보랑 아이온 에보 as 비교",
+        [
+            (
+                "아이온 에보",
+                {"status": "success", "data": {"items": [{"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}]}},
+            ),
+            (
+                "아이온 에보 AS",
+                {"status": "success", "data": {"items": [{"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}]}},
+            ),
+        ],
+    )
+
+    assert event is None
+
+
 def test_grade_comparison_partial_search_results_defer_to_code_resolver() -> None:
     event = _build_product_comparison_event_from_search_results(
         "키너지 EX가 벤투스 air S 보다 프리미엄 등급 맞지?",
@@ -2434,6 +3320,82 @@ def test_recommendation_tool_passes_strict_brand_flag(monkeypatch: pytest.Monkey
 
     assert result["status"] == "success"
     assert captured["allow_cross_brand_fill"] is False
+
+
+def test_best_selling_tool_enriches_price_and_description_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _Parsed:
+        def to_dict(self) -> dict:
+            return {
+                "items": [
+                    {
+                        "goods_no": "G000000317682",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "235/55R19",
+                        "extra_fvr_sale_prc": "179700",
+                    }
+                ]
+            }
+
+    def _fake_get_best_sellers(**_kwargs):
+        return SimpleNamespace(status_code=200, parsed=_Parsed(), content=b"")
+
+    def _fake_price_enrich(items: list[dict]) -> list[dict]:
+        calls.append("price")
+        enriched = [dict(item) for item in items]
+        enriched[0]["sale_prc"] = "220000"
+        return enriched
+
+    def _fake_description_enrich(items: list[dict]) -> list[dict]:
+        calls.append("description")
+        enriched = [dict(item) for item in items]
+        enriched[0]["rate"] = 4.8
+        enriched[0]["prc_grd_nm"] = "프리미엄"
+        return enriched
+
+    monkeypatch.setattr(discovery_tools, "get_best_sellers", _fake_get_best_sellers)
+    monkeypatch.setattr(discovery_tools, "_enrich_items_with_price_fields", _fake_price_enrich)
+    monkeypatch.setattr(discovery_tools, "_enrich_items_with_descriptions", _fake_description_enrich)
+
+    result = discovery_tools.get_best_selling_products_tool.invoke({"period": "3months", "limit": 5})
+
+    assert result["status"] == "success"
+    item = result["data"]["items"][0]
+    assert calls == ["price", "description"]
+    assert item["sale_prc"] == "220000"
+    assert item["rate"] == 4.8
+    assert item["prc_grd_nm"] == "프리미엄"
+
+
+def test_best_selling_cached_tool_result_is_enriched_before_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_product_card_enrich(items: list[dict]) -> list[dict]:
+        enriched = [dict(item) for item in items]
+        enriched[0]["sale_prc"] = "220000"
+        enriched[0]["rate"] = 4.8
+        enriched[0]["prc_grd_nm"] = "프리미엄"
+        return enriched
+
+    monkeypatch.setattr(discovery_tools, "enrich_product_card_items", _fake_product_card_enrich)
+
+    result = _enrich_best_selling_result_for_product_cards({
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "goods_no": "G000000317682",
+                    "goods_nm": "다이나프로 HPX",
+                    "tire_size_1": "235/55R19",
+                    "extra_fvr_sale_prc": "179700",
+                }
+            ]
+        },
+    })
+
+    item = result["data"]["items"][0]
+    assert item["sale_prc"] == "220000"
+    assert item["rate"] == 4.8
+    assert item["prc_grd_nm"] == "프리미엄"
 
 
 def test_tc005_family_coupon_matching_ignores_product_terms() -> None:
@@ -4652,6 +5614,90 @@ def test_store_scope_followup_preserves_confirmed_product_slots() -> None:
     assert patch["preserve_confirmed_product_slots"] is True
 
 
+def test_datepick_metadata_recovers_order_store_slots() -> None:
+    datepick = {
+        "template": "datepick",
+        "data": {
+            "assistantResponse": "예약하려는 날짜와 시간을 선택해 주세요.",
+            "dates": [
+                {
+                    "date": "2026년 6월 24일 (수)",
+                    "available": True,
+                    "availableTimes": [9, 13],
+                    "index": 0,
+                }
+            ],
+            "selectedDate": 0,
+            "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
+        },
+    }
+
+    values = TStationChatServiceV2._datepick_slot_values_from_data(datepick)
+
+    assert values == {"shop_id": "F00405", "shop_name": "티스테이션 경포점"}
+
+
+def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
+    datepick = {
+        "dates": [
+            {
+                "date": "2026년 6월 24일 (수)",
+                "available": True,
+                "availableTimes": [9, 13],
+                "index": 0,
+            }
+        ],
+        "selectedDate": 0,
+        "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
+    }
+
+    values = TStationChatServiceV2._datepick_slot_values_from_data(
+        datepick,
+        user_text="2026년 6월 24일 (수)\n13:00",
+    )
+
+    assert values["shop_id"] == "F00405"
+    assert values["requested_cal_day"] == "20260624"
+    assert values["rsv_hour"] == "13"
+
+
+def test_datepick_slots_fill_missing_order_state_without_overwriting_preorder_values() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317900",
+        ord_qty=4,
+        shop_id="F00001",
+        shop_name="기존 매장",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    values = {
+        "shop_id": "F00405",
+        "shop_name": "티스테이션 경포점",
+        "requested_cal_day": "20260624",
+        "rsv_hour": "13",
+    }
+
+    updated = slots.apply_runtime_values(values, source="datepick_recovery", fill_only=True)
+
+    assert updated.shop_id == "F00001"
+    assert updated.shop_name == "기존 매장"
+    assert updated.requested_cal_day == "20260624"
+    assert updated.rsv_hour == "13"
+
+
+def test_current_location_store_search_confirmation_is_narrow() -> None:
+    latest_quickreply = {
+        "assistantResponse": "현재 위치 기반으로 가까운 매장 검색을 진행할까요?",
+        "quickReplies": [{"label": "응", "domain": "TRANSACTION"}],
+    }
+
+    assert _is_current_location_store_search_confirmation("응", latest_quickreply)
+    assert not _is_current_location_store_search_confirmation(
+        "응",
+        {"assistantResponse": "예약 가능 시간 보기로 진행할까요?"},
+    )
+
+
 def test_store_preview_policy_patch_overrides_first_row_and_default_quantity_fallback() -> None:
     goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
         patch={
@@ -5228,6 +6274,181 @@ def test_product_size_list_intent_does_not_capture_product_search_or_size_select
     assert _is_product_size_list_intent("다른 규격 있어?") is True
     assert _is_product_size_list_intent("벤투스 에어S 보여줘") is False
     assert _is_product_size_list_intent("2454518") is False
+
+
+def test_recent_product_size_availability_event_uses_previous_recommendation_candidates() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "아이온 에보 AS", "tire_size_1": "255/45R19"},
+                {"goods_no": "G2", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "235/55R19"},
+                {"goods_no": "G3", "goods_nm": "아이온 에보", "tire_size_1": "235/55R19"},
+            ],
+        }
+    ]
+
+    event = _build_recent_product_size_availability_event(
+        "235/55R19",
+        ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"],
+        ["아이온 에보 AS SUV", "아이온 에보"],
+        ["아이온 에보 AS"],
+        source_tool="get_products_recommendations_tool",
+    )
+    context_event = _build_recent_product_size_availability_event_from_rows(
+        "두개다 2355519 사이즈가 있을까?",
+        prev_tool_data=prev_tool_data,
+    )
+
+    assert event is not None
+    assert context_event is not None
+    assert event["assistant_response_source"] == "code_recent_product_size_availability"
+    assistant = event["data"]["assistantResponse"]
+    assert "직전 추천 상품 기준으로 235/55R19 규격을 확인했어요." in assistant
+    assert "아이온 에보 AS SUV, 아이온 에보는 확인돼요." in assistant
+    assert "아이온 에보 AS는 해당 규격을 찾지 못했어요." in assistant
+    assert context_event["data"]["metadata"]["productNames"] == ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"]
+
+
+def test_recent_product_size_availability_event_prefers_followup_reference_over_single_pending_product() -> None:
+    slots = ConversationSlots(pending_product_name="아이온 에보 AS", tire_model="아이온 에보 AS")
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "아이온 에보 AS", "tire_size_1": "255/45R19"},
+                {"goods_no": "G2", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "235/55R19"},
+                {"goods_no": "G3", "goods_nm": "아이온 에보", "tire_size_1": "235/55R19"},
+            ],
+        }
+    ]
+
+    event = _build_recent_product_size_availability_event_from_rows(
+        "두개다 2355519 사이즈가 있을까?",
+        prev_tool_data=prev_tool_data,
+    )
+    size_list_event = _build_product_size_list_event_from_search_results(
+        "두개다 2355519 사이즈가 있을까?",
+        [],
+        prev_tool_data=prev_tool_data,
+        slots=slots,
+    )
+
+    assert event is not None
+    assert size_list_event is None
+
+
+def test_recent_product_size_availability_context_recovers_product_names_from_assistant_text() -> None:
+    messages = [
+        {"role": "user", "content": "타이어 추천"},
+        {
+            "role": "assistant",
+            "content": (
+                "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n\n"
+                "- 아이온 에보 AS: 설명\n"
+                "- 아이온 에보 AS SUV: 설명\n"
+                "- 아이온 에보: 설명\n"
+            ),
+        },
+        {"role": "user", "content": "세개다 2355519 사이즈가 있을까?"},
+    ]
+
+    context = _recent_product_set_size_availability_context(
+        "세개다 2355519 사이즈가 있을까?",
+        messages=messages,
+    )
+
+    assert context is not None
+    assert context["tool"] == "assistant_quickreply_text"
+    assert context["product_names"] == ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"]
+
+
+def test_recent_product_size_availability_context_prefers_template_metadata_without_prev_tool_data() -> None:
+    latest_quickreply_tmpl = {
+        "assistant_response_source": "code_mapper",
+        "data": {
+            "assistantResponse": "추천 결과입니다.",
+            "metadata": {
+                "productNames": ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"],
+            },
+        },
+    }
+
+    context = _recent_product_set_size_availability_context(
+        "세개다 2355519 사이즈가 있을까?",
+        messages=[{"role": "user", "content": "세개다 2355519 사이즈가 있을까?"}],
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+    )
+
+    assert context is not None
+    assert context["tool"] == "assistant_template_metadata"
+    assert context["product_names"] == ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"]
+
+
+def test_recent_product_size_availability_event_from_rows_returns_none_when_only_assistant_text_exists() -> None:
+    messages = [
+        {"role": "user", "content": "타이어 추천"},
+        {
+            "role": "assistant",
+            "content": (
+                "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요.\n\n"
+                "- 아이온 에보 AS: 설명\n"
+                "- 아이온 에보 AS SUV: 설명\n"
+                "- 아이온 에보: 설명\n"
+            ),
+        },
+        {"role": "user", "content": "세개다 2355519 사이즈가 있을까?"},
+    ]
+
+    event = _build_recent_product_size_availability_event_from_rows(
+        "세개다 2355519 사이즈가 있을까?",
+        messages=messages,
+    )
+
+    assert event is None
+
+
+def test_recent_product_size_availability_missing_context_prompt_keeps_clarification() -> None:
+    context = _recent_product_set_size_availability_context(
+        "2355519 규격 있어?",
+        messages=[{"role": "user", "content": "2355519 규격 있어?"}],
+    )
+    event = _build_recent_product_size_availability_missing_context_event("235/55R19")
+
+    assert context is None
+    assert "확인할 상품이 아직 정해지지 않았어요" in event["data"]["assistantResponse"]
+
+
+def test_recent_product_size_availability_query_skips_explicit_unknown_product_name() -> None:
+    assert _is_sized_product_name_search_query("새상품 ABC 2356018 있을까?") is True
+    assert _is_recent_product_size_availability_query("새상품 ABC 2356018 있을까?") is False
+
+
+def test_discovery_policy_context_carries_recent_product_set_followup_from_router() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:recent_product_set_size_availability"],
+        user_behavior="asking size availability for recent product set",
+        flow="follow-up size availability",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="recent_product_set_size_availability",
+        agent_prompt_profile="discovery_search",
+    )
+
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2355519 규격 있어?",
+        context_text="추천 상품 세 개 보여줌\n2355519 규격 있어?",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert tool_patch == {}
+    assert response_decision is not None
+    assert response_decision.template.value == "quickReply"
+    assert response_decision.metadata["response_shape_key"] == "product_search_summary"
 
 
 def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:
@@ -6464,6 +7685,8 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
         "ord_qty": 2,
         "payment_amount": 237600,
         "tire_size": "225/45R17",
+        "requested_cal_day": "20260609",
+        "rsv_hour": "17",
     }
 
 

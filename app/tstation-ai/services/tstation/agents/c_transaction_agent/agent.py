@@ -203,6 +203,12 @@ goods_no 미확보 시:
 ⚠️ 사용자 메시지에 상품명/모델명이 있으면 — 약어·부분 이름 포함 (예: "iON evo", "벤투스", "키너지", "아이셉트") — output EXACTLY: "상품을 검색하겠습니다." → coordinator 가 Discovery 로 routing, search_product_tool 호출 후 goods_no 확보. 사이즈나 전체 모델명을 먼저 묻는 것 절대 금지.
 ⚠️ 이 규칙은 모든 flow (Flow 2, Flow 3-Single, Flow 3-Region, 재고 확인, 가격 조회, 주문) 에 우선 적용된다. 매장명/지역명이 이미 확보된 경우에도 예외 없음.
 
+⚠️ CLARIFICATION GUARD — bare demonstrative reference ("이거 얼마", "그거 가격", "이거 재고 있어"):
+사용자 메시지에 상품명/모델명도 없고 타이어 규격(사이즈)도 없는 경우 (즉 위 두 규칙 모두 해당 없음):
+  - 최근 대화/도구 결과에서 단 하나의 상품만 명확히 언급/표시된 경우 → 그 goods_no 를 그대로 사용 (재확인 질문 금지).
+  - 그 외 (해당 상품 없음, 또는 2개 이상의 후보가 있어 모호함) → 도구 호출 금지. STOP. 임의로 goods_no 추측 금지.
+    quickReply 로 "어떤 상품에 대해 궁금하신가요? 상품명이나 규격을 알려주세요 😊" + chip `[{"label":"타이어 추천","domain":"DISCOVERY"},{"label":"상품 찾기","domain":"DISCOVERY"}]`.
+
 ## FAVORITE STORES — DIRECT-MENTION ONLY (모든 transaction profile 공통)
 
 ⚠️ 단골매장 도구(`get_favorite_stores_tool`) 호출 조건 — 사용자가 "단골", "단골매장", "단골 가게", "자주 가는 매장", "마이샵", "단골점" 등 단골 키워드를 **명시적으로 발화**한 경우.
@@ -566,7 +572,14 @@ If unavailable:
 ⚠️ If goods_no unavailable AND user message does NOT contain a product name BUT a tire size (규격, e.g., "245/45R19") is known in the current message OR confirmed context → output EXACTLY: "상품을 검색하겠습니다." — coordinator routes to Discovery which will search by size. NEVER respond with any "상품을 선택해 주세요" variant. The tire size alone is sufficient for Discovery to find matching products.
 ⚠️ This rule applies to ALL flows (price, stock, store check, order) — NEVER block any flow on goods_no when a product name OR tire size is present.
 ⚠️ PRECEDENCE: This GOODS_NO RESOLUTION block overrides ALL flow-specific routing (Flow 2, Flow 3-Single, Flow 3-Region, CHAINED STOCK CHECK, PURE STOCK CHECK INTENT GUARD, etc.) when goods_no is unavailable AND user message contains a product name. Even if a specific store name is known, do NOT ask for tire size — output "상품을 검색하겠습니다." IMMEDIATELY. Flow logic resumes AFTER Discovery handoff returns goods_no.
+⚠️ This override ALSO applies (CLARIFICATION GUARD wins over PURE STOCK CHECK INTENT GUARD) when goods_no is unavailable AND the message contains NEITHER a product name NOR a tire size NOR an unambiguous single-product context — i.e. PURE STOCK CHECK INTENT GUARD's "재고있어?" 류 trigger patterns do NOT bypass this: that gate assumes goods_no is already resolvable. If it is not, ask for the product per CLARIFICATION GUARD instead of proceeding to Flow 2/3.
 You have NO search tool — never attempt to search products yourself.
+
+⚠️ CLARIFICATION GUARD — bare demonstrative reference ("이거 얼마", "그거 가격", "이거 재고 있어", "이거 주문해줘"):
+When goods_no is unavailable AND the message contains NEITHER a product name/model NOR a tire size (so neither rule above fires):
+  - If recent conversation/tool context unambiguously shows exactly ONE product → use that goods_no directly, do NOT re-ask.
+  - Otherwise (no product in context, OR 2+ candidate products with no way to tell which one) → STOP. Do NOT call any tool. NEVER guess a goods_no.
+    Emit `quickReply`: assistantResponse "어떤 상품에 대해 궁금하신가요? 상품명이나 규격을 알려주세요 😊", quickReplies `[{"label":"타이어 추천","domain":"DISCOVERY"},{"label":"상품 찾기","domain":"DISCOVERY"}]`.
 
 ⚠️ CHAINED STOCK CHECK — After a fresh Discovery handoff resolves goods_no in this turn (goods_no IS already available):
 If the user's original message intent was a STOCK CHECK ("장착 가능?", "오늘 장착 돼?", "재고 있어?", "오늘 할 수 있어?", "장착 가능한지"):
@@ -595,7 +608,7 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 발동 조건 (다음 중 하나):
 - 이번 턴 사용자 발화가 stock-check 패턴: "재고있어?", "재고 있어?", "재고 있나?", "재고 확인", "N개 있어?", "N개 재고", "장착 가능?", "오늘 장착 돼?", "있나요?"
 - 또는 `pending_intent="재고 확인"` / `goal_type=store_with_stock` 슬롯이 active 인 상태에서 사용자가 매장명/지역명만 추가로 제공 (예: "판교점", "강남")
-- 위 두 조건은 goods_no 출처(슬롯/직전 Discovery handoff/사용자 직접 입력)와 무관하게 동일 적용.
+- 위 두 조건은 goods_no 출처(슬롯/직전 Discovery handoff/사용자 직접 입력)와 무관하게 동일 적용 — 단, goods_no 가 어디서든 확보 가능한 상태일 때만. goods_no 가 전혀 없고 메시지에 상품명/규격도 없으면 (즉 위 GOODS_NO RESOLUTION 의 CLARIFICATION GUARD 대상) 이 가드는 발동하지 않는다 — Flow 2/3 직행 금지, CLARIFICATION GUARD 대로 상품을 먼저 물어라.
 
 올바른 라우팅:
 - 단일 매장명 명시 (예: "판교점", "한남점") → **Flow 3-Single**: `get_store_list_tool(store_nm=...)` → `get_store_inventory_tool(goods_list=[{goodsNo, qty}], shop_id_list=[{shopId}])`
@@ -603,11 +616,13 @@ If the user's message (same turn or immediately preceding) contained BOTH a book
 - 전국/전체 매장 범위 명시 (예: "전국", "전국 단위", "어디어디", "모든 매장") → **Flow 3-Nationwide**: `get_store_list_tool(limit=100)` → `get_store_inventory_tool(goods_list, shop_id_list=<반환된 모든 매장>)`
 - 매장/지역 모두 미제공 → **Flow 2**: `get_logistics_inventory_tool(goods_no)`
 
-응답 문구는 Flow 3 STEP A/B 의 표준 양식 사용:
-- 재고 있음 (todayShopArray): "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
-- T바로배송 (tnaShopArray): "[shop_nm]은 T바로배송으로 장착 가능합니다."
+응답 문구는 Flow 3 STEP A/B 의 표준 양식 그대로 사용 (이 블록은 참조용 요약일 뿐 — 항상 Flow 3 STEP A/B 본문이 최신 기준):
+- 재고 있음 (todayShopArray): "[shop_nm]에 [qty]개 재고가 확인되었습니다. 오늘 장착 가능합니다."
+- T바로배송 (tnaShopArray): "[shop_nm]은 [qty]개 T바로배송으로 장착 가능합니다."
 - 매장재고 0 + 물류 있음: "[shop_nm]에는 현재 매장 재고가 없어... [rsv_install_date] 이후 장착 가능합니다."
-- 모두 없음: "해당 매장에 재고가 없습니다." 또는 "[rsv_install_date] 이후 예약 주문 가능합니다."
+- 매장재고 0 + 물류 0 + 예약 가능: "현재 재고가 없습니다. [rsv_install_date] 이후 예약 주문 가능합니다."
+- 모두 없음 (예약도 불가): "해당 매장에 재고가 없습니다."
+  ⚠️ [qty] = 사용자가 요청한 수량 (raw 재고 수치 노출 절대 금지). 재고 없음을 알릴 때는 항상 "재고가 없습니다" 류 표현을 먼저 명시할 것 — 예약 가능 안내로 바로 넘어가지 말 것.
 
 ❌ 금지 응답 (재고 의도에 대한 잘못된 응답):
 - "[매장] 예약 가능 일정을 확인했어요" / "원하시는 날짜와 시간을 선택해 주세요" 류 — datepick/schedule 호출 금지.
@@ -1211,8 +1226,9 @@ Action:
    Just ask what is needed and STOP.
 2. qty from context or user (if unavailable → ask ONLY: "몇 개를 확인하시겠습니까?" and STOP. No other text.)
 3. get_logistics_inventory_tool(goods_no)
-   → stock > 0: "재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
-   → stock = 0 + rsv_sale_yn = "Y": "[rsv_install_date] 이후 장착 가능합니다. 특정 매장 재고를 확인하시려면 지역이나 매장명을 알려주세요."
+   → stock > 0: "[qty]개 재고가 확인되었습니다. 특정 매장의 재고나 방문 가능 날짜를 확인하시려면 지역이나 매장명을 알려주세요 😊" → END
+     ⚠️ [qty] = the quantity confirmed in STEP 2 (user-requested count), NEVER the raw `logistics_qty` warehouse figure — that value stays internal (see get_logistics_inventory_tool docstring).
+   → stock = 0 + rsv_sale_yn = "Y": "현재 재고가 없습니다. [rsv_install_date] 이후 장착 가능합니다. 특정 매장 재고를 확인하시려면 지역이나 매장명을 알려주세요."
    → stock = 0 + rsv_sale_yn = "N": "현재 물류 재고가 없습니다. 매장에 재고가 있을 수 있으니, 확인하시려는 지역이나 매장을 알려주시겠어요?"
 
 ⚠️ Flow 2 STRICT RULES:
@@ -1252,7 +1268,8 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
 4. (선택) `get_logistics_inventory_tool(goods_no)`를 같은 턴에 parallel로 호출해서 매장재고 0 케이스의 물류 가용 여부 확인.
 5. 결과 분류 + 응답 템플릿:
    → **재고 있는 매장 ≥ 1** (todayShopArray ∪ tnaShopArray): emit `location` 템플릿
-     - assistantResponse: "전국에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+     - assistantResponse: "전국 매장 {N}곳의 재고를 비교했어요. 그중 {M}곳에서 재고가 확인됐어요. 원하시는 매장을 선택해 주세요."
+       ⚠️ {N} = STEP 2 get_store_list_tool 결과의 매장 수, {M} = todayShopArray ∪ tnaShopArray 매장 수. 실제 도구 결과 개수만 사용 — 임의 추측 금지.
      - location.stores: **재고 있는 매장만 필터링**해서 표시. 각 store description 끝에 라벨 추가 — 매장재고: "[매장재고]" / T바로배송: "[T바로배송]"
      → STOP. 사용자가 매장 선택 시 Flow 3-Single STEP A의 결과를 재사용해 응답 (이미 inventory 결과가 있으므로 inventory 재호출 금지).
    → **매장재고 0 + 물류재고 있음** (`logistics_qty > 0`): emit `location` 템플릿
@@ -1280,7 +1297,8 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
 4. (선택) `get_logistics_inventory_tool(goods_no)`를 같은 턴에 parallel로 호출해서 매장재고 0 케이스의 물류 가용 여부 확인.
 5. 결과 분류 + 응답 템플릿:
    → **재고 있는 매장 ≥ 1** (todayShopArray ∪ tnaShopArray): emit `location` 템플릿
-     - assistantResponse: "[지역]에서 재고가 확인된 매장입니다. 원하시는 매장을 선택해 주세요."
+     - assistantResponse: "[지역] 매장 {N}곳의 재고를 비교했어요. 그중 {M}곳에서 재고가 확인됐어요. 원하시는 매장을 선택해 주세요."
+       ⚠️ {N} = STEP 2 get_store_list_tool 결과의 매장 수, {M} = todayShopArray ∪ tnaShopArray 매장 수. 실제 도구 결과 개수만 사용 — 임의 추측 금지.
      - location.stores: **재고 있는 매장만 필터링**해서 표시. 각 store description 끝에 라벨 추가 — 매장재고: "[매장재고]" / T바로배송: "[T바로배송]"
      → STOP. 사용자가 매장 선택 시 Flow 3-Single STEP A의 결과를 재사용해 응답 (이미 inventory 결과가 있으므로 inventory 재호출 금지).
    → **매장재고 0 + 물류재고 있음** (`logistics_qty > 0`): emit `location` 템플릿
@@ -1308,13 +1326,16 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
    ```
    ⚠️ 빈 dict로 호출 금지. goods_no/qty/shop_id 가 슬롯/이전 tool 결과에 있으므로 반드시 채워서 보내라.
    → store in todayShopArray: emit `quickReply`
-     - assistantResponse: "[shop_nm]에 재고가 확인되었습니다. 오늘 장착 가능합니다."
+     - assistantResponse: "[shop_nm]에 [qty]개 재고가 확인되었습니다. 오늘 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
    → store in tnaShopArray: emit `quickReply`
-     - assistantResponse: "[shop_nm]은 T바로배송으로 장착 가능합니다."
+     - assistantResponse: "[shop_nm]은 [qty]개 T바로배송으로 장착 가능합니다."
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
+   ⚠️ [qty] = the quantity confirmed in STEP 1 (user-requested count). NEVER substitute a raw
+   per-store stock count — `get_store_inventory_tool` only returns today/tna eligibility buckets,
+   not a numeric quantity; do not invent one.
    → neither → go to STEP B
 
 ── STEP B: Logistics inventory (fallback) ──
@@ -1327,7 +1348,7 @@ Trigger: user says "전국", "전국 단위", "어디어디", "모든 매장" wi
      - quickReplies: ["주문하기", "방문 날짜 확인", "다른 매장 보기"]
      → STOP and wait
    → logistics_qty = 0 + rsv_sale_yn = "Y": emit `quickReply`
-     - assistantResponse: "[rsv_install_date] 이후 예약 주문 가능합니다."
+     - assistantResponse: "현재 재고가 없습니다. [rsv_install_date] 이후 예약 주문 가능합니다."
      - quickReplies: ["다른 매장 찾기", "예약 주문"]
      → END
    → logistics_qty = 0 + rsv_sale_yn = "N": emit `quickReply`

@@ -1526,6 +1526,95 @@ def test_discovery_policy_product_search_summary_does_not_reference_missing_card
     assert result["assistant_response_source"] == "discovery_policy"
 
 
+def test_unverified_claim_prefix_applies_to_neutral_product_summary_mapper() -> None:
+    text = "벤투스 air S가 우주 항공국 인증 제품이라던데 사실이야?"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 에어S", "brand_cd": "HK", "limit": 10},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "items": [
+                            {
+                                "goods_nm": "벤투스 에어S",
+                                "tire_size_1": "245/45R18",
+                                "car_knd_nm": "승용차",
+                                "season_nm": "사계절",
+                                "goods_pfm_nm": "COMFORT",
+                                "wet": "3",
+                                "rr": "3",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        "",
+    )
+
+    assert result is not None
+    assistant_response = result["data"]["assistantResponse"]
+    assert assistant_response.startswith("말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.")
+    assert "확인 가능한 상품 설명 기준으로 안내드릴게요." in assistant_response
+    assert "벤투스 에어S:" in assistant_response
+    assert "맞습니다" not in assistant_response
+
+
+def test_unverified_claim_prefix_applies_to_attribute_policy_mapper() -> None:
+    current_user_text.set("다이나프로 HP3가 NASA 인증 받은 타이어라던데 진짜야?")
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "product_attribute_summary",
+                "claim_check_type": "unverified_external_claim",
+            },
+        )
+    )
+
+    result = try_build_template(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "다이나프로 HP3", "brand_cd": "HK", "limit": 10},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "items": [
+                            {
+                                "goods_nm": "다이나프로 HP3",
+                                "tire_size_1": "225/70R16",
+                                "label_pnwave": "A",
+                                "label_pnwave_nm": "저소음",
+                                "label_pndb": "71",
+                                "wet": "4",
+                                "prc_grd_nm": "스탠다드",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        "",
+    )
+
+    assert result is not None
+    assert result["assistant_response_source"] == "discovery_policy"
+    assistant_response = result["data"]["assistantResponse"]
+    assert assistant_response.startswith("말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.")
+    assert "확인 가능한 상품 설명 기준으로 안내드릴게요." in assistant_response
+    assert "다이나프로 HP3" in assistant_response
+    assert "맞습니다" not in assistant_response
+
+
 def test_product_attribute_price_grade_uses_direct_grade_answer() -> None:
     current_user_text.set("키너지 EX 등급이 뭐야?")
     current_pending_intent.set(None)
@@ -2022,6 +2111,18 @@ def test_listcar_kept_for_vehicle_size_retry_request() -> None:
     current_user_text.set("내차 사이즈로 다시")
 
     result = try_build_template([_registered_vehicle_entry()], "등록된 차량을 확인했어요. 차량을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "listCar"
+
+
+def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
+    current_user_text.set("내 차에 맞는 타이어 사이즈는?")
+
+    result = try_build_template(
+        [_registered_vehicle_entry()],
+        "고객님 등록 차량을 확인했어요. 이 차량의 타이어 사이즈를 확인해 주세요 😊",
+    )
 
     assert result is not None
     assert result["template"] == "listCar"

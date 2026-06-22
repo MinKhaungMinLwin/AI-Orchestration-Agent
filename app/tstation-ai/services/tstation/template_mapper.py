@@ -90,6 +90,23 @@ current_transaction_response_decision: contextvars.ContextVar[ResponseDecision |
     "current_transaction_response_decision", default=None
 )
 
+_UNVERIFIED_EXTERNAL_CLAIM_PREFIX_LINES = (
+    "말씀하신 내용은 현재 상품 설명 데이터에서 직접 확인하기 어려워요.",
+    "확인 가능한 상품 설명 기준으로 안내드릴게요.",
+)
+
+
+def _with_discovery_claim_check_prefix(response: str) -> str:
+    decision = current_discovery_response_decision.get()
+    metadata = getattr(decision, "metadata", None) or {}
+    if str(metadata.get("claim_check_type") or "") != "unverified_external_claim":
+        return response
+    response = (response or "").strip()
+    prefix = "\n".join(_UNVERIFIED_EXTERNAL_CLAIM_PREFIX_LINES)
+    if response.startswith(_UNVERIFIED_EXTERNAL_CLAIM_PREFIX_LINES[0]):
+        return response
+    return f"{prefix}\n\n{response}" if response else prefix
+
 _STOCK_OR_INSTALL_REQUEST_RE = re.compile(
     r"재고|오늘\s*서비스|오늘서비스|오늘\s*장착|당일|지금|바로|당장|장착\s*가능|매장|근처|주변",
     re.IGNORECASE,
@@ -105,9 +122,19 @@ _POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
     "내",
     "내차",
     "차",
+    "차에",
+    "차에는",
+    "차로",
+    "차으로",
     "차량",
     "타이어",
     "상품",
+    "맞는",
+    "맞",
+    "추천",
+    "확인",
+    "사이즈",
+    "규격",
     "추천",
     "맞는",
     "하중",
@@ -2399,6 +2426,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     response = sanitize_user_facing_response(response)
     if not response:
         return None
+    response = _with_discovery_claim_check_prefix(response)
     if response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
         quick_replies = _DISCOVERY_SIZED_PRODUCT_CHIPS
         predicted_domains = ["TRANSACTION"]
@@ -2536,7 +2564,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         "type": "data",
         "template": "quickReply",
         "data": {
-            "assistantResponse": "\n".join(lines),
+            "assistantResponse": _with_discovery_claim_check_prefix("\n".join(lines)),
             "quickReplies": [
                 {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
                 {"label": "차량번호로 확인", "domain": "DISCOVERY"},
@@ -2802,8 +2830,11 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             "어떤 차량",
             "이 차량으로 진행",
             "차량을 확인해",
+            "등록 차량",
             "등록된 차량",
             "차량 목록",
+            "타이어 사이즈",
+            "타이어 규격",
         )
     ):
         return None

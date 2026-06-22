@@ -109,22 +109,41 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
     {"fuel_efficiency", "wet", "load", "speed"}
 )
+_CLAIM_CHECK_VERIFICATION_RE = re.compile(r"맞아|사실|진짜|확인|검증|이라던데|라던데", re.IGNORECASE)
+_UNVERIFIED_EXTERNAL_CLAIM_RE = re.compile(
+    r"우주|항공|nasa|나사|인증|공인|군용|전투기|특허|1\s*위|세계\s*최고|공식",
+    re.IGNORECASE,
+)
 
 _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("ventus air s", "Ventus air S", "HK"),
     ("벤투스 air s", "Ventus air S", "HK"),
     ("벤투스 에어 s", "Ventus air S", "HK"),
+    ("벤투스 에어s", "Ventus air S", "HK"),
     ("ventus s2 as", "Ventus S2 AS", "HK"),
     ("벤투스 s2 as", "Ventus S2 AS", "HK"),
+    ("ventus s2", "Ventus S2", "HK"),
+    ("벤투스 s2", "Ventus S2", "HK"),
+    ("ventus s1 evo z as", "Ventus S1 evo Z AS", "HK"),
+    ("벤투스 s1 evo z as", "Ventus S1 evo Z AS", "HK"),
+    ("벤투스 s1 에보 z as", "Ventus S1 evo Z AS", "HK"),
+    ("ventus s1 evo z", "Ventus S1 evo Z", "HK"),
+    ("벤투스 s1 evo z", "Ventus S1 evo Z", "HK"),
+    ("벤투스 s1 에보 z", "Ventus S1 evo Z", "HK"),
     ("dynapro hpx", "Dynapro HPX", "HK"),
     ("다이나프로 hpx", "Dynapro HPX", "HK"),
     ("dynapro hp3", "Dynapro HP3", "HK"),
     ("다이나프로 hp3", "Dynapro HP3", "HK"),
     ("kinergy ex", "Kinergy EX", "HK"),
     ("키너지 ex", "Kinergy EX", "HK"),
+    ("kinergy st as", "Kinergy ST AS", "HK"),
+    ("키너지 st as", "Kinergy ST AS", "HK"),
     ("ion evo as", "iON evo AS", "HK"),
     ("아이온 evo as", "iON evo AS", "HK"),
     ("아이온 에보 as", "iON evo AS", "HK"),
+    ("ion evo as suv", "iON evo AS SUV", "HK"),
+    ("아이온 evo as suv", "iON evo AS SUV", "HK"),
+    ("아이온 에보 as suv", "iON evo AS SUV", "HK"),
     ("ion evo", "iON evo", "HK"),
     ("아이온 evo", "iON evo", "HK"),
     ("아이온 에보", "iON evo", "HK"),
@@ -136,6 +155,8 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("마일리지 플러스2", "Mileage Plus 2", "HK"),
     ("마일리지 플러스 3", "Mileage Plus 3", "HK"),
     ("마일리지 플러스3", "Mileage Plus 3", "HK"),
+    ("마일리지 플러스", "Mileage Plus", "HK"),
+    ("mileage plus", "Mileage Plus", "HK"),
     ("마일리지 타이어", "Mileage Plus", "HK"),
     ("s fit as", "S FIT AS", "LF"),
     ("s fit", "S FIT", "LF"),
@@ -185,9 +206,30 @@ def normalize_tire_size(text: str) -> str | None:
 
 def extract_product_names(text: str) -> tuple[str, ...]:
     normalized = (text or "").casefold()
-    products: list[str] = []
+    matches: list[tuple[int, int, str]] = []
+    seen_spans: set[tuple[int, int, str]] = set()
     for needle, display_name, _brand_cd in _PRODUCT_ALIASES:
-        if needle.casefold() in normalized and display_name not in products:
+        needle_norm = needle.casefold()
+        start = normalized.find(needle_norm)
+        while start >= 0:
+            end = start + len(needle_norm)
+            key = (start, end, display_name)
+            if key not in seen_spans:
+                matches.append(key)
+                seen_spans.add(key)
+            start = normalized.find(needle_norm, start + 1)
+
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    selected_spans: list[tuple[int, int, str]] = []
+    for start, end, display_name in matches:
+        if any(not (end <= chosen_start or start >= chosen_end) for chosen_start, chosen_end, _ in selected_spans):
+            continue
+        selected_spans.append((start, end, display_name))
+
+    selected_spans.sort(key=lambda item: item[0])
+    products: list[str] = []
+    for _start, _end, display_name in selected_spans:
+        if display_name not in products:
             products.append(display_name)
     return tuple(products)
 
@@ -225,6 +267,22 @@ def extract_product_attribute_metrics(text: str) -> tuple[str, ...]:
         if pattern.search(text or "") and metric not in metrics:
             metrics.append(metric)
     return tuple(metrics)
+
+
+def classify_product_claim_check_type(text: str) -> str:
+    """Classify whether a product turn asks for claim verification.
+
+    Keep the classification in policy space so response formatters only consume
+    the structured result and never inspect individual claim words.
+    """
+    text = text or ""
+    if not extract_product_names(text) or not _CLAIM_CHECK_VERIFICATION_RE.search(text):
+        return "none"
+    if extract_product_attribute_metrics(text):
+        return "verifiable_product_attribute"
+    if _UNVERIFIED_EXTERNAL_CLAIM_RE.search(text):
+        return "unverified_external_claim"
+    return "none"
 
 
 def extract_variant_constraints(text: str) -> tuple[dict[str, Any], ...]:
@@ -366,6 +424,7 @@ def build_discovery_intent_frame(
     variant_constraints = extract_variant_constraints(text)
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
     quantity_options = extract_quantity_options(text)
+    discovery_followup_intent = str(slots.get("discovery_followup_intent") or "").strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -373,9 +432,16 @@ def build_discovery_intent_frame(
         "explicit_tire_size": explicit_tire_size,
         "purchase_intent": bool(_BUY_RE.search(text)),
         "attribute_metrics": attribute_metrics,
+        "claim_check_type": classify_product_claim_check_type(text),
     }
     if quantity_options:
         entities["quantity_options"] = quantity_options
+    if discovery_followup_intent == "recent_product_set_size_availability":
+        entities["discovery_followup_intent"] = discovery_followup_intent
+    if len(products) >= 2:
+        entities["multi_product_names"] = True
+        if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
+            entities["multi_product_detail_request"] = True
     if brand_cd:
         entities["brand_cd"] = brand_cd
     if brand_codes:
@@ -433,7 +499,14 @@ def build_discovery_intent_frame(
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if entities.get("external_price_comparison"):
+    if (
+        discovery_followup_intent == "recent_product_set_size_availability"
+        and tire_size
+        and not products
+    ):
+        intent = "product_search"
+        sub_intent = "recent_product_set_size_availability"
+    elif entities.get("external_price_comparison"):
         intent = "product_search"
         sub_intent = "external_price_comparison_request"
     elif entities.get("default_benefit"):
@@ -474,6 +547,9 @@ def build_discovery_intent_frame(
         intent = "product_comparison"
         sub_intent = "attribute_compare"
         entities["compare_metric"] = attribute_metrics[0]
+    elif len(products) >= 2 and _COMPARE_RE.search(text):
+        intent = "product_comparison"
+        sub_intent = "general_compare"
     elif _OCCUPATION_RE.search(text) and _MILEAGE_ATTRIBUTE_RE.search(text):
         intent = "product_description"
         sub_intent = "mileage_bias_guardrail"
@@ -502,6 +578,9 @@ def build_discovery_intent_frame(
     elif standalone_attribute_metrics:
         intent = "product_description"
         sub_intent = "product_attribute_explanation"
+    elif entities.get("claim_check_type") == "unverified_external_claim" and products:
+        intent = "product_description"
+        sub_intent = "product_claim_check"
     elif _SIMILAR_PRICE_RE.search(text):
         intent = "product_recommendation"
         sub_intent = "similar_price_recommendation"
@@ -549,6 +628,15 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "recent_product_set_size_availability":
+        return ToolPlan(
+            forbidden_tools=(
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_products_recommendations_tool",
+            ),
+            metadata={"response_intent": "recent_product_set_size_availability"},
+        )
     if frame.sub_intent == "external_price_comparison_request":
         product_names = entities.get("product_names") or ()
         args = {"limit": 5, "sort_by": "price_asc"}
@@ -592,6 +680,20 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_products_recommendations_tool",),
         )
     if frame.intent == "product_search":
+        product_names = entities.get("product_names") or ()
+        if (
+            len(product_names) >= 2
+            and not entities.get("multi_product_detail_request")
+            and frame.sub_intent == "product_name_search"
+        ):
+            return ToolPlan(
+                forbidden_tools=(
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_products_recommendations_tool",
+                ),
+                metadata={"response_intent": "multi_product_intent_clarification"},
+            )
         keyword = entities.get("product_keyword") or (entities.get("product_names") or ("",))[0]
         args = {"keyword": keyword}
         if entities.get("tire_size"):
@@ -613,6 +715,24 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
+        )
+    if frame.intent == "product_description":
+        product_names = entities.get("product_names") or ()
+        if len(product_names) >= 2:
+            return ToolPlan(
+                allowed_tools=("search_product_tool",),
+                preferred_tool="search_product_tool",
+                forbidden_tools=("get_products_recommendations_tool",),
+                metadata={"response_intent": "multi_product_detail"},
+            )
+        args = {"keyword": (product_names or ("",))[0]}
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
         )
     if frame.intent == "product_comparison":
         args: dict[str, Any] = {}

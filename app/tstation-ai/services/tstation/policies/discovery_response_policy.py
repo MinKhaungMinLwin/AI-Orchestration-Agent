@@ -6,6 +6,14 @@ from services.tstation.policies.discovery_intent_policy import IntentFrame
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 
 
+def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
+    metadata = dict(values)
+    claim_check_type = frame.entities.get("claim_check_type")
+    if claim_check_type and claim_check_type != "none":
+        metadata["claim_check_type"] = claim_check_type
+    return metadata
+
+
 def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
     entities = frame.entities
     tire_size = entities.get("tire_size")
@@ -121,7 +129,7 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=(),
             forbidden_behaviors=("generic_unsized_summary", "omit_requested_product_attribute_when_available"),
             assistant_guidance="사용자가 물은 상품 상세 항목을 DB 필드 기준으로 안내한다.",
-            metadata={"response_shape_key": "product_attribute_summary"},
+            metadata=_metadata(frame, response_shape_key="product_attribute_summary"),
         )
 
     if frame.sub_intent == "similar_price_recommendation":
@@ -252,7 +260,7 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=(),
             forbidden_behaviors=("generic_unsized_summary", "unrequested_size_missing_notice"),
             assistant_guidance="상품 설명 요청에는 상품 특성만 간결히 안내하고, 사용자가 묻지 않은 사이즈 미확정 안내를 덧붙이지 않는다.",
-            metadata={"response_shape_key": "neutral_product_description"},
+            metadata=_metadata(frame, response_shape_key="neutral_product_description"),
         )
 
     return ResponseDecision(
