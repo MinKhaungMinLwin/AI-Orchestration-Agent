@@ -123,6 +123,7 @@ from services.tstation.chat import (
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
+    _build_complaint_scope_guard_event,
     _choose_quickreply_fallback,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
@@ -148,6 +149,8 @@ from services.tstation.chat import (
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
+    _complaint_scope_for_turn,
+    _infer_complaint_scope,
     _normalize_existing_reservation_change_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
@@ -2858,6 +2861,70 @@ def test_discovery_policy_context_uses_routing_claim_check_type() -> None:
 
 def test_router_claim_check_type_is_required_for_strict_structured_output() -> None:
     assert "claim_check_type" in MultiAgentDomain.model_json_schema()["required"]
+
+
+def test_router_complaint_scope_is_required_for_strict_structured_output() -> None:
+    assert "complaint_scope" in MultiAgentDomain.model_json_schema()["required"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "한국타이어 주식 사고 난 이후로 점점 떨어지기만 하고 되는 일이 없어..!!",
+        "요즘 취업도 안 되고 되는 일이 없어",
+    ],
+)
+def test_out_of_scope_complaint_gets_scope_guidance_without_support_handoff(text: str) -> None:
+    assert _infer_complaint_scope(text) == "out_of_scope_complaint"
+
+    event = _build_complaint_scope_guard_event(_complaint_scope_for_turn(text, None))
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_complaint_scope_guard"
+    assert event["source_domain"] == MultiAgentDomain.Domain.LEADING.value
+    assistant_response = event["data"]["assistantResponse"]
+    assert "직접 도와드리기 어려운 주제" in assistant_response
+    assert "타이어 추천, 가격 조회, 매장 검색, 주문/장착 관련 문의" in assistant_response
+    assert "상담" not in assistant_response
+    assert "1:1" not in assistant_response
+    assert _labels(event["data"]["quickReplies"]) == ["타이어 추천", "가격 조회", "매장 찾기"]
+
+
+def test_unclear_complaint_asks_target_before_support_handoff() -> None:
+    assert _infer_complaint_scope("되는 일이 없어 짜증나") == "unclear_complaint"
+
+    event = _build_complaint_scope_guard_event(_complaint_scope_for_turn("되는 일이 없어 짜증나", None))
+
+    assert event is not None
+    assert event["source_domain"] == MultiAgentDomain.Domain.LEADING.value
+    assistant_response = event["data"]["assistantResponse"]
+    assert "어떤 부분이 불편하셨는지" in assistant_response
+    assert "타이어 상품, 주문/결제, 장착 매장" in assistant_response
+    assert _labels(event["data"]["quickReplies"]) == ["주문 조회", "매장 찾기", "1:1 문의"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "타이어 주문했는데 계속 오류나고 되는 일이 없어",
+        "너 답변이 계속 틀려서 짜증나",
+    ],
+)
+def test_tstation_service_complaint_is_not_blocked_by_scope_guard(text: str) -> None:
+    assert _infer_complaint_scope(text) == "tstation_service_complaint"
+    assert _build_complaint_scope_guard_event(_complaint_scope_for_turn(text, None)) is None
+
+
+def test_router_complaint_scope_overrides_broad_support_prediction_for_out_of_scope() -> None:
+    routing_result = SimpleNamespace(complaint_scope="out_of_scope_complaint")
+
+    event = _build_complaint_scope_guard_event(
+        _complaint_scope_for_turn("한국타이어 주식 떨어져서 짜증나", routing_result)
+    )
+
+    assert event is not None
+    assert "1:1 문의" not in _labels(event["data"]["quickReplies"])
 
 
 @pytest.mark.parametrize(

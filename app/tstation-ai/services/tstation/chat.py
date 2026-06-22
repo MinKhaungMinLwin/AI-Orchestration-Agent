@@ -9,7 +9,7 @@ import threading
 import logging
 import re
 import time
-from typing import Any, AsyncIterator, ClassVar, Iterator, Mapping
+from typing import Any, AsyncIterator, ClassVar, Iterator, Literal, Mapping
 from textwrap import dedent
 
 from pydantic import BaseModel, Field
@@ -337,6 +337,16 @@ class MultiAgentDomain(BaseModel):
             "award, marketing superlative, or other claim not directly verifiable from current product data."
         ),
     )
+    complaint_scope: Literal["none", "tstation_service_complaint", "out_of_scope_complaint", "unclear_complaint"] = Field(
+        description=(
+            "Classify complaint/frustration scope before routing. Use 'none' when the turn is not a complaint. "
+            "Use 'tstation_service_complaint' for complaints about T-Station tires, products, orders, payment, "
+            "delivery, installation, stores, coupons, vehicles, or chatbot answers. "
+            "Use 'out_of_scope_complaint' for complaints about topics T-Station cannot handle, such as stocks, "
+            "investment, daily life, politics, legal, medical, or other companies' services. "
+            "Use 'unclear_complaint' when anger/frustration is present but the complaint target is unclear."
+        ),
+    )
 
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
@@ -399,6 +409,12 @@ class _SlimMultiAgentDomain(BaseModel):
             "'verifiable_product_attribute', or 'unverified_external_claim'."
         ),
     )
+    complaint_scope: Literal["none", "tstation_service_complaint", "out_of_scope_complaint", "unclear_complaint"] = Field(
+        description=(
+            "Complaint/frustration scope: 'none', 'tstation_service_complaint', "
+            "'out_of_scope_complaint', or 'unclear_complaint'."
+        ),
+    )
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
@@ -428,7 +444,7 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 7 outputs:
+Produce 8 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
@@ -440,7 +456,23 @@ Produce 7 outputs:
    - "verifiable_product_attribute": asks whether a product data attribute is true/available, e.g. "벤투스 에어S 최저소음 라벨 맞아?"
    - "unverified_external_claim": asks about an external institution/certification/award/superlative/marketing claim not directly verifiable from current product data, e.g. "벤투스 에어S가 우주 항공국 인증 제품이라던데 사실이야?"
 
-7. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+7. complaint_scope — classify complaint/frustration scope before routing:
+   - "none": no complaint/frustration in the current user turn
+   - "tstation_service_complaint": complaint target is T-Station service scope: tires, products, orders, payment, delivery, installation, stores, coupons, vehicles, or chatbot answers
+   - "out_of_scope_complaint": complaint target is outside T-Station's support scope: stocks/investment, daily life, politics, legal, medical, other companies/services, or other non-tire commerce topics
+   - "unclear_complaint": angry/frustrated wording exists, but the target is not clear
+
+Complaint routing rule:
+- If complaint_scope="tstation_service_complaint" → SUPPORT may apologize and offer concrete help / 1:1 inquiry.
+- If complaint_scope="out_of_scope_complaint" → LEADING, not SUPPORT. Do not send to human 상담/불편 접수; answer with T-Station support scope.
+- If complaint_scope="unclear_complaint" → LEADING, not SUPPORT. Ask what T-Station-related issue was uncomfortable before offering 1:1.
+- Do not classify as SUPPORT solely because the user sounds angry. First identify the complaint target.
+- "한국타이어 주식 사고 난 이후로 점점 떨어지기만 하고 되는 일이 없어..!!" → complaint_scope="out_of_scope_complaint", domains=["leading"] because this is investment/stock frustration, not a tire/order/store issue.
+- "타이어 주문했는데 계속 오류나고 되는 일이 없어" → complaint_scope="tstation_service_complaint", domains=["support"].
+- "너 답변이 계속 틀려서 짜증나" → complaint_scope="tstation_service_complaint", domains=["support"].
+- "되는 일이 없어 짜증나" → complaint_scope="unclear_complaint", domains=["leading"].
+
+8. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -567,7 +599,7 @@ TRANSACTION when:
 ⚠️ "buy/order/purchase/reserve/예약" with product NAME (not goods_no) → DISCOVERY first to find goods_no. If the same message ALSO has a size that narrows to 1 result, return [DISCOVERY, TRANSACTION]. If NO size → DISCOVERY only (list shown, user selects size next turn).
 ⚠️ "buy/order/purchase" with goods_no already in context → TRANSACTION directly.
 
-SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry, smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의)
+SUPPORT when: warranty, returns, policy, human agent, 1:1 inquiry, smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의), or complaint_scope="tstation_service_complaint"
 LEADING when: greeting, unclear intent, OR bare ambiguous re-trigger (see below)
 
 ====================================================
@@ -650,7 +682,7 @@ Classify the user's FIRST message into EXACTLY ONE domain.
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, customer complaints (짜증/엉망/화나/뭐 이런), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 RULES:
@@ -673,7 +705,10 @@ RULES:
 - 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
 - 픽업서비스/스마트픽업/차 가지러 와/차 가지러 올 수 있어/차량 수거 후 인도/집앞까지 데려다 줘/픽업 신청 방법/픽업 가능 거리/기사 위치 문의 → SUPPORT
 - 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order
-- Complaint tone (짜증/엉망/화나/뭐 이런) → SUPPORT
+- Complaint tone alone is not enough for SUPPORT. First classify complaint_scope:
+  - tstation_service_complaint → SUPPORT
+  - out_of_scope_complaint → LEADING with support-scope guidance, no 상담/불편 접수
+  - unclear_complaint → LEADING with a clarification question, no immediate 상담 연결
 - Greeting only (안녕/hi/hello) → LEADING
 
 EXAMPLES (tricky cases):
@@ -705,6 +740,11 @@ EXAMPLES (tricky cases):
 - "차 가지러 올 수 있어?" → SUPPORT
 - "회사로 차 가지러 왔다가 교체하고 집앞까지 데려다 줄 수 있어?" → SUPPORT
 - "픽업 기사 어디까지 왔어?" → SUPPORT
+- "한국타이어 주식 사고 난 이후로 점점 떨어지기만 하고 되는 일이 없어..!!" → LEADING, complaint_scope=out_of_scope_complaint
+- "요즘 취업도 안 되고 되는 일이 없어" → LEADING, complaint_scope=out_of_scope_complaint
+- "타이어 주문했는데 계속 오류나고 되는 일이 없어" → SUPPORT, complaint_scope=tstation_service_complaint
+- "너 답변이 계속 틀려서 짜증나" → SUPPORT, complaint_scope=tstation_service_complaint
+- "되는 일이 없어 짜증나" → LEADING, complaint_scope=unclear_complaint
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
@@ -730,11 +770,16 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, and agent_prompt_profile.
+Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, complaint_scope, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
 - unverified_external_claim: external institution/certification/award/superlative/marketing claim not directly verifiable from current product data
+complaint_scope:
+- none: no complaint/frustration in current turn
+- tstation_service_complaint: T-Station service/product/order/store/coupon/vehicle/chatbot complaint
+- out_of_scope_complaint: complaint about stocks/investment/life/politics/legal/medical/other non-T-Station topics
+- unclear_complaint: complaint/frustration with unclear target
 agent_prompt_profile:
 - transaction_coupon: coupon/promotion -> transaction_coupon
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
@@ -1156,6 +1201,8 @@ class StreamingMultiAgentCoordinator:
                 execution_plan=["Run SUPPORT for Smart Pickup / pickup-service policy guidance"],
                 user_behavior="asking about Smart Pickup / pickup service",
                 agent_prompt_profile=AgentPromptProfile.FULL,
+                claim_check_type="none",
+                complaint_scope="none",
                 flow="pickup service intent gate — bypassed LLM router",
             )
         delivery_decision = decide_delivery_policy_gate(user_text=text)
@@ -1166,6 +1213,8 @@ class StreamingMultiAgentCoordinator:
                 execution_plan=["Run SUPPORT for delivery/shipping-fee policy guidance"],
                 user_behavior="asking about direct delivery, shipping fee, or online/store price policy",
                 agent_prompt_profile=AgentPromptProfile.FULL,
+                claim_check_type="none",
+                complaint_scope="none",
                 flow="delivery policy intent gate — bypassed LLM router",
             )
 
@@ -1176,6 +1225,8 @@ class StreamingMultiAgentCoordinator:
                 execution_plan=["Call get_orders_of_user_tool first, then match prior tire order by vehicle identity"],
                 user_behavior="asking to replace with the same tire previously installed or ordered",
                 agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
+                claim_check_type="none",
+                complaint_scope="none",
                 flow="order_history_reorder intent gate — bypassed LLM router",
             )
 
@@ -1190,6 +1241,8 @@ class StreamingMultiAgentCoordinator:
                 ],
                 user_behavior="providing vehicle number and owner name to identify the vehicle",
                 agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+                claim_check_type="none",
+                complaint_scope="none",
                 flow="hardcoded regex routing — bypassed LLM router",
             )
 
@@ -1200,6 +1253,8 @@ class StreamingMultiAgentCoordinator:
                 execution_plan=["Run TRANSACTION store-schedule flow for the matched store/date request"],
                 user_behavior="asking whether a named store has reservation or visit slots on a specific date/time",
                 agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+                claim_check_type="none",
+                complaint_scope="none",
                 flow="hardcoded regex routing — bypassed LLM router",
             )
 
@@ -1210,6 +1265,8 @@ class StreamingMultiAgentCoordinator:
                 execution_plan=["Run TRANSACTION order-management flow for the matched current-turn request"],
                 user_behavior="asking about own order, reservation, maintenance history, or cancellation handling",
                 agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
+                claim_check_type="none",
+                complaint_scope="none",
                 flow="hardcoded regex routing — bypassed LLM router",
             )
 
@@ -1245,6 +1302,8 @@ class StreamingMultiAgentCoordinator:
                             )
                             else AgentPromptProfile.FULL
                         ),
+                        claim_check_type="none",
+                        complaint_scope="none",
                         flow="hardcoded keyword routing — bypassed LLM router",
                     )
         return None
@@ -1333,6 +1392,8 @@ class StreamingMultiAgentCoordinator:
                     domains=raw_result.domains,
                     execution_plan=raw_result.execution_plan,
                     user_behavior="",
+                    claim_check_type=raw_result.claim_check_type,
+                    complaint_scope=raw_result.complaint_scope,
                     agent_prompt_profile=raw_result.agent_prompt_profile,
                     flow="",
                 )
@@ -3225,6 +3286,94 @@ _FALLBACK_LEADING_PROGRESS: list[dict] = [
     {"label": "상품 검색", "domain": "DISCOVERY"},
     {"label": "타이어 추천", "domain": "DISCOVERY"},
 ]
+_COMPLAINT_SCOPE_SUPPORT_CHIPS: list[dict] = [
+    {"label": "타이어 추천", "domain": "DISCOVERY"},
+    {"label": "가격 조회", "domain": "DISCOVERY"},
+    {"label": "매장 찾기", "domain": "TRANSACTION"},
+]
+_COMPLAINT_SCOPE_UNCLEAR_CHIPS: list[dict] = [
+    {"label": "주문 조회", "domain": "TRANSACTION"},
+    {"label": "매장 찾기", "domain": "TRANSACTION"},
+    {"label": "1:1 문의", "domain": "SUPPORT"},
+]
+
+_COMPLAINT_TONE_RE = re.compile(
+    r"짜증|화나|화가\s*나|열받|빡치|개빡|최악|엉망|이딴|드럽게|못해|못한다|되는\s*일이\s*없|"
+    r"불만|클레임|항의|뭐\s*이런|제대로\s*해|어이\s*없",
+    re.IGNORECASE,
+)
+_TSTATION_COMPLAINT_SCOPE_RE = re.compile(
+    r"타이어|상품|제품|주문|결제|배송|장착|예약|매장|지점|쿠폰|차량|차번호|챗봇|답변|상담|"
+    r"티스테이션|T[\s-]*Station|한국타이어|벤투스|키너지|다이나프로|아이온|라우펜|가격|재고|"
+    r"환불|반품|교환|취소|오류|에러",
+    re.IGNORECASE,
+)
+_OUT_OF_SCOPE_COMPLAINT_RE = re.compile(
+    r"주식|투자|증권|코스피|코스닥|나스닥|상장|주가|매수|매도|손실|수익률|취업|면접|회사\s*생활|"
+    r"연애|정치|선거|법률|소송|의료|병원|건강|타사|다른\s*회사|은행|보험|부동산|코인|비트코인",
+    re.IGNORECASE,
+)
+
+
+def _infer_complaint_scope(text: str | None) -> str:
+    """Low-cost safety fallback for complaint scope.
+
+    The router LLM provides the primary semantic decision. This helper only
+    prevents broad complaint tone from becoming support escalation when the
+    target is clearly outside T-Station scope or unclear.
+    """
+    value = str(text or "").strip()
+    if not value or not _COMPLAINT_TONE_RE.search(value):
+        return "none"
+    if _OUT_OF_SCOPE_COMPLAINT_RE.search(value):
+        return "out_of_scope_complaint"
+    if _TSTATION_COMPLAINT_SCOPE_RE.search(value):
+        return "tstation_service_complaint"
+    return "unclear_complaint"
+
+
+def _complaint_scope_for_turn(text: str | None, routing_result: Any | None = None) -> str:
+    scope = str(getattr(routing_result, "complaint_scope", "") or "").strip()
+    if scope in {"none", "tstation_service_complaint", "out_of_scope_complaint", "unclear_complaint"}:
+        if scope == "none":
+            inferred = _infer_complaint_scope(text)
+            return inferred if inferred != "none" else scope
+        return scope
+    return _infer_complaint_scope(text)
+
+
+def _build_complaint_scope_guard_event(scope: str) -> dict | None:
+    if scope == "out_of_scope_complaint":
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": (
+                    "말씀하신 내용은 제가 직접 도와드리기 어려운 주제예요. "
+                    "저는 타이어 추천, 가격 조회, 매장 검색, 주문/장착 관련 문의를 도와드릴 수 있어요."
+                ),
+                "quickReplies": list(_COMPLAINT_SCOPE_SUPPORT_CHIPS),
+                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            },
+            "source_domain": MultiAgentDomain.Domain.LEADING.value,
+            "assistant_response_source": "code_complaint_scope_guard",
+        }
+    if scope == "unclear_complaint":
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": (
+                    "어떤 부분이 불편하셨는지 조금만 더 알려주세요. "
+                    "타이어 상품, 주문/결제, 장착 매장 관련 문제라면 확인해드릴게요."
+                ),
+                "quickReplies": list(_COMPLAINT_SCOPE_UNCLEAR_CHIPS),
+                "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            },
+            "source_domain": MultiAgentDomain.Domain.LEADING.value,
+            "assistant_response_source": "code_complaint_scope_guard",
+        }
+    return None
 
 # Order matters: more specific tools first so the dispatch picks the most
 # relevant chip set when multiple tools ran in the same turn.
@@ -13853,6 +14002,8 @@ class TStationChatServiceV2:
                     execution_plan=[f"{task.domain.value}:{task.intent}" for task in policy_plan.subtasks],
                     user_behavior="product warranty or claim request must be handled by support",
                     flow=policy_plan.response_strategy,
+                    claim_check_type="none",
+                    complaint_scope="tstation_service_complaint",
                     agent_prompt_profile=AgentPromptProfile.FULL,
                 )
                 _classify_path = "policy_warranty_claim"
@@ -13873,6 +14024,8 @@ class TStationChatServiceV2:
                     execution_plan=[f"transaction:{route_coupon_gate_decision.intent.value}"],
                     user_behavior="coupon intent gate selected coupon tool flow",
                     flow="coupon_query_gate",
+                    claim_check_type="none",
+                    complaint_scope="none",
                     agent_prompt_profile=AgentPromptProfile.TRANSACTION_COUPON,
                 )
                 _classify_path = "coupon_query_gate"
@@ -13912,6 +14065,8 @@ class TStationChatServiceV2:
                         execution_plan=[f"{task.domain.value}:{task.intent}" for task in policy_plan.subtasks],
                         user_behavior="policy-engine deterministic product resolution route",
                         flow=policy_plan.response_strategy,
+                        claim_check_type="none",
+                        complaint_scope="none",
                         agent_prompt_profile=AgentPromptProfile.FULL,
                     )
                     policy_preclassified_skip_decision = (
@@ -13984,6 +14139,7 @@ class TStationChatServiceV2:
                     "path": _classify_path,
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
+                    "complaint_scope": getattr(routing_result, "complaint_scope", None) if routing_result else None,
                     "agent_prompt_profile": (
                         routing_result.agent_prompt_profile.value
                         if routing_result and isinstance(routing_result.agent_prompt_profile, AgentPromptProfile)
@@ -14002,6 +14158,8 @@ class TStationChatServiceV2:
                 execution_plan=["Run TRANSACTION store search with current user location context"],
                 user_behavior="confirming the previous current-location nearby-store search prompt",
                 flow="current_location_store_search_confirmation",
+                claim_check_type="none",
+                complaint_scope="none",
                 agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
             )
             skip_decision = False
@@ -14285,6 +14443,8 @@ class TStationChatServiceV2:
                 execution_plan=["discovery:resolve_product", "transaction:continue_purchase"],
                 user_behavior="providing a new tire product name and size with transactional intent",
                 flow="fresh product transaction",
+                claim_check_type="none",
+                complaint_scope="none",
                 agent_prompt_profile=AgentPromptProfile.DISCOVERY_SEARCH,
             )
             skip_decision = False
@@ -14419,6 +14579,8 @@ class TStationChatServiceV2:
                     execution_plan=["transaction:coupon_usage"],
                     user_behavior="asking whether or where a named coupon can be used",
                     flow="coupon_usage_policy",
+                    claim_check_type="none",
+                    complaint_scope="none",
                     agent_prompt_profile=AgentPromptProfile.TRANSACTION_COUPON,
                 )
             else:
@@ -14503,6 +14665,8 @@ class TStationChatServiceV2:
                         ],
                         user_behavior="policy-engine deterministic cross-domain plan",
                         flow=cross_domain_plan.response_strategy,
+                        claim_check_type="none",
+                        complaint_scope="none",
                         agent_prompt_profile=(
                             AgentPromptProfile.TRANSACTION_COUPON
                             if has_coupon_pattern_plan
@@ -14664,6 +14828,29 @@ class TStationChatServiceV2:
         )
 
         # STREAM MODE
+        complaint_scope = _complaint_scope_for_turn(last_user_text, routing_result)
+        complaint_guard_event = _build_complaint_scope_guard_event(complaint_scope)
+        if complaint_guard_event is not None:
+            logger.info(
+                "[COMPLAINT_SCOPE] guard response: scope=%s domains=%s text=%r session_id=%s",
+                complaint_scope,
+                [domain.value for domain in domains],
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(complaint_guard_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = complaint_guard_event.get("data") if isinstance(complaint_guard_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
         # Post-classifier intercept: 비-타이어 방문 예약 (와이퍼/배터리/얼라인먼트/
         # 경정비 등) 흐름에서 사용자가 datepick 시간 슬롯을 클릭한 turn은 결정적
         # redirect 으로 처리한다. LLM 의 SERVICE RESERVATION REDIRECT 규칙

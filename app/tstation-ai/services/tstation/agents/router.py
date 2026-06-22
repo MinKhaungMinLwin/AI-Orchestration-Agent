@@ -33,20 +33,20 @@ DECISION_LLM = _make_llm(settings.AI_MODEL_QC_AGENT, streaming=False, timeout=30
 
 ### Multi-Agent Router
 # Leading Agent
-from services.tstation.agents.a_leading_agent.agent import LeadingAgent
+from services.tstation.agents.a_leading_agent.agent import LeadingAgent  # noqa: E402
 
 leading_agent = LeadingAgent(LEADING_LLM)
 # Discovery Agent
-from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
+from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent  # noqa: E402
 
 discovery_subagent = DiscoverySubAgent(LLM)
 # Transaction Agent (merged PRICING + ORDER)
-from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
+from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent  # noqa: E402
 
 transaction_subagent = TransactionSubAgent(TRANSACTION_LLM)
 
 # Support Agent
-from services.tstation.agents.e_support_agent.agent import SupportSubAgent
+from services.tstation.agents.e_support_agent.agent import SupportSubAgent  # noqa: E402
 
 support_subagent = SupportSubAgent(LLM)
 
@@ -152,8 +152,9 @@ class AgentDomain(BaseModel):
         - Request for human agent / 1:1 inquiry
         - Write/save 1:1 inquiry with AI-summarized content
         - "1:1 문의 작성", "상담원 연결", "이 문제를 1:1로 저장하고 싶어요"
-        - **Customer complaints, frustration, anger** (e.g., "뭐 이런 서비스가", "제대로 해", "상담 이딴식으로", "엉망이야", aggressive/angry tone)
-        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "짜증나", "다른 상담원 연결해줘", "내 차 정비 일정 알려줘", "엔진오일 언제 갈아야 해?", "all my T 점검 언제까지야?"
+        - **T-Station service complaints, frustration, anger** where the target is tires, products, orders, payment, delivery, installation, stores, coupons, vehicles, or chatbot answers (e.g., "뭐 이런 서비스가", "주문 오류 때문에 짜증나", "너 상담 왜 이렇게 못해?")
+        - Do NOT route out-of-scope complaints to SUPPORT just because the tone is angry. Stock/investment, daily-life, politics, legal, medical, other-company/service complaints should stay LEADING with a support-scope 안내. Unclear frustration should stay LEADING and ask what T-Station-related issue was uncomfortable.
+        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "타이어 주문했는데 계속 오류나고 짜증나", "다른 상담원 연결해줘", "내 차 정비 일정 알려줘", "엔진오일 언제 갈아야 해?", "all my T 점검 언제까지야?"
 
         LEADING if:
         - Just greeting ("hello", "hi", "안녕하세요")
