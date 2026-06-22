@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
@@ -81,6 +82,7 @@ from services.tstation.chat import (
     _build_manual_tire_size_input_event,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
+    _build_order_history_reorder_event,
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
@@ -129,6 +131,7 @@ from services.tstation.chat import (
     _find_coupon_from_owned_coupons,
     _find_single_confident_coupon_from_owned_coupons,
     _is_order_arrival_status_query,
+    _is_order_history_reorder_query,
     _is_specific_owned_coupon_lookup_query,
     _infer_followup_recommendation_context,
     _ensure_discovery_transaction_recovery_chain,
@@ -153,6 +156,7 @@ from services.tstation.chat import (
     _non_self_vehicle_plate_owner_lookup_plate,
     _non_self_vehicle_plate_owner_lookup_prompt_event,
     _pick_product_row_from_search_result,
+    _select_order_history_reorder_row,
     _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
     _past_event_page_event,
@@ -770,6 +774,141 @@ def test_oe_replacement_query_is_detected() -> None:
     assert _is_oe_replacement_equivalent_query("RE 상품으로 교체하면 돼?")
     assert not _is_oe_replacement_equivalent_query("requesting tire recommendation following tire feature explanation")
     assert not _is_oe_replacement_equivalent_query("Current Time: Monday")
+
+
+def test_order_history_reorder_query_is_not_oe_replacement() -> None:
+    text = "205소4214 이전에 장착했던 타이어와 동일한 상품으로 교체하고 싶어"
+
+    assert _is_order_history_reorder_query(text)
+    assert not _is_oe_replacement_equivalent_query(text)
+
+    route = StreamingMultiAgentCoordinator._force_keyword_routing(text)
+
+    assert route is not None
+    assert route.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert route.agent_prompt_profile == "transaction_order"
+
+
+def test_order_history_reorder_does_not_hijack_strong_oe_query() -> None:
+    text = "차 살 때 출고 타이어랑 같은 상품으로 교체하고 싶어"
+
+    assert not _is_order_history_reorder_query(text)
+    assert _is_oe_replacement_equivalent_query(text)
+
+
+def test_order_history_reorder_prefers_car_no_over_same_tire_size() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {
+                    "ord_no": "O1",
+                    "goods_no": "G-WRONG",
+                    "goods_nm": "다른 차량 상품",
+                    "tire_size_1": "235/55R19",
+                    "sys_reg_dtime": "2026-06-22",
+                    "car_no": "33가3333",
+                    "car_nm": "다른 차량",
+                },
+                {
+                    "ord_no": "O2",
+                    "goods_no": "G-RIGHT",
+                    "goods_nm": "옵티모 H426",
+                    "tire_size_1": "205/65R16",
+                    "sys_reg_dtime": "2026-06-17",
+                    "car_no": "205소4214",
+                    "car_nm": "제네시스 GV70",
+                },
+            ],
+        },
+    }
+
+    row, reason = _select_order_history_reorder_row(
+        "205소4214 이전에 장착했던 타이어와 동일한 상품으로 교체하고 싶어",
+        orders_result,
+    )
+
+    assert reason == "car_no"
+    assert row is not None
+    assert row["goods_no"] == "G-RIGHT"
+
+
+def test_order_history_reorder_can_match_vehicle_name_before_size_fallback() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {
+                    "goods_no": "G-1",
+                    "goods_nm": "키너지 EX",
+                    "tire_size_1": "235/55R19",
+                    "sys_reg_dtime": "2026-06-22",
+                    "car_no": "11가1111",
+                    "car_nm": "아반떼",
+                },
+                {
+                    "goods_no": "G-2",
+                    "goods_nm": "옵티모 H426",
+                    "tire_size_1": "225/55R18",
+                    "sys_reg_dtime": "2026-06-17",
+                    "car_no": "205소4214",
+                    "car_nm": "제네시스 GV70",
+                    "car_model_det": "GV70 2.5T",
+                },
+            ],
+        },
+    }
+
+    row, reason = _select_order_history_reorder_row(
+        "GV70 전에 장착했던 타이어와 같은 상품으로 교체하고 싶어",
+        orders_result,
+    )
+
+    assert reason == "vehicle_name"
+    assert row is not None
+    assert row["goods_no"] == "G-2"
+
+
+def test_order_history_reorder_ambiguous_orders_ask_user_to_choose() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {"goods_no": "G-1", "goods_nm": "키너지 EX", "tire_size_1": "205/55R16"},
+                {"goods_no": "G-2", "goods_nm": "옵티모 H426", "tire_size_1": "225/55R18"},
+            ],
+        },
+    }
+
+    row, reason = _select_order_history_reorder_row(
+        "이전에 장착했던 타이어와 동일한 상품으로 교체하고 싶어",
+        orders_result,
+    )
+
+    assert row is None
+    assert reason == "ambiguous"
+
+
+def test_order_history_reorder_event_uses_matched_order_metadata() -> None:
+    event = _build_order_history_reorder_event(
+        {
+            "goods_no": "G0000001",
+            "goods_nm": "옵티모 H426",
+            "tire_size_1": "205/65R16",
+            "ord_qty": 4,
+            "car_no": "205소4214",
+        },
+        match_reason="car_no",
+    )
+
+    assert event["assistant_response_source"] == "code_order_history_reorder_resolver"
+    assert "205소4214" in event["data"]["assistantResponse"]
+    assert "옵티모 H426 205/65R16" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["goodsNo"] == "G0000001"
+
+
+def test_order_source_filter_keeps_vehicle_fields_for_reorder_matching_context() -> None:
+    assert {"car_no", "car_nm", "car_model_det", "car_maker"} <= _ORDER_FIELDS_BASE
 
 
 def test_owned_vehicle_selection_cta_does_not_retrigger_oe_guidance() -> None:

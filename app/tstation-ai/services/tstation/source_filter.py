@@ -49,6 +49,8 @@ _CARD_FIELDS: set[str] = {"iscm_cd", "iscm_nm", "tgt_amt", "months", "payment_ty
 # Orders: CTX adds ord_stat_nm (status label for follow-up turn references)
 _ORDER_FIELDS_BASE: set[str] = {
     "ord_no", "goods_no", "goods_nm", "tire_size_1", "tire_size_2", "ord_qty", "sys_reg_dtime",
+    "ispt_car_seq", "car_no", "mbr_car_unif_no", "car_lnc_cd", "car_maker", "car_model_det", "car_nm",
+    "car_tire_size_fr", "car_tire_size_re",
 }
 _RESERVATION_FIELDS: set[str] = {
     "ord_no",

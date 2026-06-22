@@ -1144,6 +1144,16 @@ class StreamingMultiAgentCoordinator:
                 flow="delivery policy intent gate — bypassed LLM router",
             )
 
+        if _is_order_history_reorder_query(text):
+            return MultiAgentDomain(
+                reason="regex routing matched order-history reorder intent",
+                domains=[MultiAgentDomain.Domain.TRANSACTION],
+                execution_plan=["Call get_orders_of_user_tool first, then match prior tire order by vehicle identity"],
+                user_behavior="asking to replace with the same tire previously installed or ordered",
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
+                flow="order_history_reorder intent gate — bypassed LLM router",
+            )
+
         # Regex force — license plate + owner name → DISCOVERY_RECOMMENDATION profile.
         if cls._CAR_NO_OWNER_RE.match(text):
             return MultiAgentDomain(
@@ -3336,6 +3346,24 @@ _OE_REPLACEMENT_EQUIVALENT_RE = re.compile(
     r"(?<![A-Za-z])(?:OE|RE)(?![A-Za-z])",
     re.IGNORECASE,
 )
+_ORDER_HISTORY_REORDER_PREVIOUS_RE = re.compile(
+    r"이전(?:에|의)?|전에|지난\s*번|지난번|예전(?:에)?|과거(?:에)?|기존(?:에)?",
+    re.IGNORECASE,
+)
+_ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
+    r"장착(?:했|한|했던|하던)?|구매(?:했|한|했던)?|주문(?:했|한|했던)?|교체(?:했|한|했던|하고|하려|싶)|"
+    r"샀던|산\s*타이어",
+    re.IGNORECASE,
+)
+_ORDER_HISTORY_REORDER_SAME_RE = re.compile(
+    r"동일(?:한)?\s*(?:상품|타이어|걸|것)?|같은\s*(?:상품|타이어|걸|것)?|똑같(?:은|이)?|그\s*타이어|"
+    r"동일한걸로|같은걸로|그걸로",
+    re.IGNORECASE,
+)
+_OE_REPLACEMENT_STRONG_ANCHOR_RE = re.compile(
+    r"순정|출고|처음\s*끼|살\s*때\s*끼|(?<![A-Za-z])OE(?![A-Za-z])|(?<![A-Za-z])RE(?![A-Za-z])",
+    re.IGNORECASE,
+)
 _OWNED_VEHICLE_SELECTION_CTA_RE = re.compile(
     r"^\s*(보유\s*차량\s*중\s*선택|내\s*차량\s*보기|내\s*차\s*보기|내\s*차(?:량)?로\s*찾기|"
     r"차량\s*(?:정보로\s*)?찾기|차량\s*선택해서\s*찾기)\s*$",
@@ -4629,7 +4657,29 @@ def _brand_label_for_code(brand_cd: str) -> str:
     }.get(str(brand_cd or "").strip().upper(), "해당 브랜드")
 
 
+def _is_order_history_reorder_query(user_text: str | None) -> bool:
+    text = user_text or ""
+    if not text:
+        return False
+    if _OE_REPLACEMENT_STRONG_ANCHOR_RE.search(text):
+        return False
+    return bool(
+        _ORDER_HISTORY_REORDER_PREVIOUS_RE.search(text)
+        and _ORDER_HISTORY_REORDER_ACTION_RE.search(text)
+        and _ORDER_HISTORY_REORDER_SAME_RE.search(text)
+    )
+
+
+def _extract_vehicle_plate_from_text(user_text: str | None) -> str | None:
+    match = _VEHICLE_PLATE_RE.search(user_text or "")
+    if not match:
+        return None
+    return re.sub(r"[^0-9가-힣]", "", match.group(0))
+
+
 def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
+    if _is_order_history_reorder_query(user_text):
+        return False
     return bool(_OE_REPLACEMENT_EQUIVALENT_RE.search(user_text or ""))
 
 
@@ -6189,6 +6239,165 @@ def _order_rows_from_orders_result(tool_result: dict) -> list[dict]:
     data = _unwrap_tool_data(tool_result)
     rows = data.get("orders") if isinstance(data, dict) else None
     return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _order_row_value(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, "") and isinstance(row.get("detail"), dict):
+            value = row["detail"].get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _order_history_tire_rows(orders_result: dict) -> list[dict]:
+    rows = []
+    for row in _order_rows_from_orders_result(orders_result):
+        if not _order_row_value(row, "tire_size_1", "tireSize1"):
+            continue
+        if not (_order_row_value(row, "goods_no", "goodsNo") or _order_row_value(row, "goods_nm", "goodsName")):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _order_history_sort_key(row: dict) -> str:
+    return _order_row_value(row, "sys_reg_dtime", "ord_dtime", "ordDtime", "orderDate")
+
+
+def _order_history_vehicle_text(row: dict) -> str:
+    return " ".join(
+        value
+        for value in (
+            _order_row_value(row, "car_nm", "carName"),
+            _order_row_value(row, "car_model_det", "carModelDet"),
+            _order_row_value(row, "car_maker", "carMaker"),
+        )
+        if value
+    )
+
+
+def _select_order_history_reorder_row(user_text: str, orders_result: dict) -> tuple[dict | None, str]:
+    rows = sorted(_order_history_tire_rows(orders_result), key=_order_history_sort_key, reverse=True)
+    if not rows:
+        return None, "no_tire_order"
+
+    requested_plate = _extract_vehicle_plate_from_text(user_text)
+    if requested_plate:
+        plate_matches = [
+            row
+            for row in rows
+            if _normalize_vehicle_match_text(_order_row_value(row, "car_no", "carNo")) == _normalize_vehicle_match_text(requested_plate)
+        ]
+        if plate_matches:
+            return plate_matches[0], "car_no"
+        return None, "car_no_not_found"
+
+    query_tokens = set(_vehicle_match_tokens(user_text))
+    vehicle_scored: list[tuple[int, dict]] = []
+    if query_tokens:
+        for row in rows:
+            vehicle_tokens = set(_vehicle_match_tokens(_order_history_vehicle_text(row)))
+            score = len(query_tokens & vehicle_tokens)
+            if score > 0:
+                vehicle_scored.append((score, row))
+    if vehicle_scored:
+        best_score = max(score for score, _ in vehicle_scored)
+        best_rows = [row for score, row in vehicle_scored if score == best_score]
+        if len(best_rows) == 1:
+            return best_rows[0], "vehicle_name"
+
+    requested_size = normalize_tire_size(user_text)
+    if requested_size:
+        size_matches = [
+            row
+            for row in rows
+            if normalize_tire_size(_order_row_value(row, "tire_size_1", "tireSize1")) == requested_size
+        ]
+        if len(size_matches) == 1:
+            return size_matches[0], "tire_size"
+        if len(size_matches) > 1:
+            return size_matches[0], "tire_size_latest"
+
+    if len(rows) == 1:
+        return rows[0], "single_order"
+    return None, "ambiguous"
+
+
+def _order_history_reorder_choice_event(orders_result: dict, reason: str) -> dict:
+    rows = sorted(_order_history_tire_rows(orders_result), key=_order_history_sort_key, reverse=True)
+    if reason == "car_no_not_found":
+        response = "입력하신 차량번호와 일치하는 이전 타이어 주문을 찾지 못했어요.\n\n이전 주문 중 재구매할 타이어를 선택해 주세요."
+    elif not rows:
+        response = "이전 타이어 주문 내역을 찾지 못했어요.\n\n원하시는 상품명이나 타이어 사이즈를 알려주시면 찾아드릴게요."
+    else:
+        response = "이전 타이어 주문이 여러 건 있어요. 어떤 타이어를 다시 장착하시겠어요?"
+
+    quick_replies: list[dict[str, str]] = []
+    for row in rows[:3]:
+        goods_nm = _order_row_value(row, "goods_nm", "goodsName")
+        tire_size = normalize_tire_size(_order_row_value(row, "tire_size_1", "tireSize1"))
+        if goods_nm and tire_size:
+            quick_replies.append({"label": f"{goods_nm} {tire_size}", "domain": "TRANSACTION"})
+    quick_replies.append({"label": "다른 타이어 보기", "domain": "DISCOVERY"})
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_history_reorder_choice",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {"matchReason": reason},
+        },
+    }
+
+
+def _build_order_history_reorder_event(order_row: dict, *, match_reason: str, requested_plate: str | None = None) -> dict:
+    goods_no = _order_row_value(order_row, "goods_no", "goodsNo")
+    goods_nm = _order_row_value(order_row, "goods_nm", "goodsName") or "이전 장착 상품"
+    tire_size = normalize_tire_size(_order_row_value(order_row, "tire_size_1", "tireSize1"))
+    ord_qty = _order_row_value(order_row, "ord_qty", "ordQty")
+    car_no = _order_row_value(order_row, "car_no", "carNo") or requested_plate or ""
+    car_name = _order_history_vehicle_text(order_row)
+
+    vehicle_label = car_no or car_name
+    vehicle_prefix = f"{vehicle_label} 차량에는 " if vehicle_label else "이전 장착 주문 기준으로 "
+    product_label = f"{goods_nm} {tire_size}".strip()
+    qty_text = f" 이전 주문 수량은 {ord_qty}개로 확인돼요." if ord_qty else ""
+    response = (
+        f"이전 장착 주문 기준으로 {vehicle_prefix}**{product_label}** 상품이 장착된 것으로 확인돼요.{qty_text}\n\n"
+        "동일 상품으로 교체를 이어가려면 장착 매장을 선택해야 해요. 원하시는 지역이나 매장명을 알려주시면 "
+        "주문 가능 여부 확인으로 이어갈게요."
+    )
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_history_reorder_resolver",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": [
+                {"label": "장착 매장 선택", "domain": "TRANSACTION"},
+                {"label": "다른 타이어 보기", "domain": "DISCOVERY"},
+                {"label": "주문내역 보기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "matchReason": match_reason,
+                "goodsNo": goods_no,
+                "goodsName": goods_nm,
+                "tireSize": tire_size,
+                "ordQty": ord_qty,
+                "carNo": car_no,
+            },
+        },
+    }
 
 
 def _order_rows_from_messages(messages: list[dict]) -> list[dict]:
@@ -14800,6 +15009,55 @@ class TStationChatServiceV2:
             })
             return emitted_events, _build_order_arrival_status_event(status_result, order_row)
 
+        async def _resolve_order_history_reorder_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_order_history_reorder_query(user_query):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_orders_of_user_tool as _orders_tool,
+            )
+
+            emitted_events: list[dict] = []
+            orders_input: dict[str, Any] = {}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_orders_of_user_tool",
+                "display_name": "주문 내역 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
+                orders_result = _tool_result_dict(raw_orders)
+            except Exception as exc:
+                logger.exception("[ORDER_HISTORY_REORDER] orders tool failed")
+                orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": orders_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": orders_input,
+                "output": json.dumps(orders_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_orders_of_user_tool",
+                "source_domain": "transaction",
+            })
+
+            order_row, match_reason = _select_order_history_reorder_row(user_query, orders_result)
+            if order_row is None:
+                return emitted_events, _order_history_reorder_choice_event(orders_result, match_reason)
+            return emitted_events, _build_order_history_reorder_event(
+                order_row,
+                match_reason=match_reason,
+                requested_plate=_extract_vehicle_plate_from_text(user_query),
+            )
+
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
                 return None
@@ -17153,6 +17411,22 @@ class TStationChatServiceV2:
             assistant_response = str((benefit_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        order_history_reorder_resolution = await _resolve_order_history_reorder_with_code()
+        if order_history_reorder_resolution is not None:
+            code_events, reorder_event = order_history_reorder_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(reorder_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((reorder_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
