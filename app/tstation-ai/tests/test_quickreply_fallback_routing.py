@@ -2890,6 +2890,52 @@ def test_recommendation_tool_passes_strict_brand_flag(monkeypatch: pytest.Monkey
     assert captured["allow_cross_brand_fill"] is False
 
 
+def test_best_selling_tool_enriches_price_and_description_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _Parsed:
+        def to_dict(self) -> dict:
+            return {
+                "items": [
+                    {
+                        "goods_no": "G000000317682",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "235/55R19",
+                        "extra_fvr_sale_prc": "179700",
+                    }
+                ]
+            }
+
+    def _fake_get_best_sellers(**_kwargs):
+        return SimpleNamespace(status_code=200, parsed=_Parsed(), content=b"")
+
+    def _fake_price_enrich(items: list[dict]) -> list[dict]:
+        calls.append("price")
+        enriched = [dict(item) for item in items]
+        enriched[0]["sale_prc"] = "220000"
+        return enriched
+
+    def _fake_description_enrich(items: list[dict]) -> list[dict]:
+        calls.append("description")
+        enriched = [dict(item) for item in items]
+        enriched[0]["rate"] = 4.8
+        enriched[0]["prc_grd_nm"] = "프리미엄"
+        return enriched
+
+    monkeypatch.setattr(discovery_tools, "get_best_sellers", _fake_get_best_sellers)
+    monkeypatch.setattr(discovery_tools, "_enrich_items_with_price_fields", _fake_price_enrich)
+    monkeypatch.setattr(discovery_tools, "_enrich_items_with_descriptions", _fake_description_enrich)
+
+    result = discovery_tools.get_best_selling_products_tool.invoke({"period": "3months", "limit": 5})
+
+    assert result["status"] == "success"
+    item = result["data"]["items"][0]
+    assert calls == ["price", "description"]
+    assert item["sale_prc"] == "220000"
+    assert item["rate"] == 4.8
+    assert item["prc_grd_nm"] == "프리미엄"
+
+
 def test_tc005_family_coupon_matching_ignores_product_terms() -> None:
     result = _find_coupon_from_owned_coupons(
         "키너지 EX 패밀리 할인쿠폰 적용받고 싶어",

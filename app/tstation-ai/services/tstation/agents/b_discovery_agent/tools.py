@@ -361,6 +361,7 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
       - `image_url` ← first image's full URL (img_path_nm > thnl_path_nm fallback)
       - `rating_avg` / `rate` ← rating.rating_avg (rate is the FE alias)
       - `review_count` ← rating.review_count (used for sort_by="review_desc")
+      - card display fields such as `prc_grd_nm`, when available from detail
     """
     try:
         response = get_product_description(client=client, goods_no=goods_no)
@@ -373,12 +374,23 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
         rating = desc.get("rating") or {}
         rating_avg = rating.get("rating_avg") or 0
         review_count = rating.get("review_count") or 0
-        return {
+        flattened = {
             "image_url": image_url,
             "rating_avg": rating_avg,
             "rate": rating_avg,
             "review_count": review_count,
         }
+        for key in (
+            "prc_grd_nm",
+            "goods_pfm_nm",
+            "brand_nm",
+            "oe_badge_yn",
+            "t_oe_maker_1",
+            "smrt_pay_yn",
+        ):
+            if desc.get(key) not in (None, ""):
+                flattened[key] = desc[key]
+        return flattened
     except Exception:
         logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)
         return {}
@@ -1672,6 +1684,9 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
             }
         # logger.debug("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = _enrich_items_with_price_fields(data["items"])
+            data["items"] = _enrich_items_with_descriptions(data["items"])
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:
         logger.exception("[TOOL][get_best_selling_products_tool] Failed")
