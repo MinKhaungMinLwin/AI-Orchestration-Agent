@@ -2856,6 +2856,10 @@ def test_discovery_policy_context_uses_routing_claim_check_type() -> None:
     assert decision.metadata["claim_check_type"] == "unverified_external_claim"
 
 
+def test_router_claim_check_type_is_required_for_strict_structured_output() -> None:
+    assert "claim_check_type" in MultiAgentDomain.model_json_schema()["required"]
+
+
 @pytest.mark.parametrize(
     "text",
     [

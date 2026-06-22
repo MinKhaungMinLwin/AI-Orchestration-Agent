@@ -328,7 +328,6 @@ class MultiAgentDomain(BaseModel):
         ),
     )
     claim_check_type: str = Field(
-        default="none",
         description=(
             "For Discovery product turns, classify product-related claim verification. "
             "Use 'none' for normal product description/search/recommendation, "
@@ -395,7 +394,6 @@ class _SlimMultiAgentDomain(BaseModel):
         description="Short ordered plan for the selected domains, without tool names or parameters"
     )
     claim_check_type: str = Field(
-        default="none",
         description=(
             "For Discovery product turns, classify product-related claim verification: 'none', "
             "'verifiable_product_attribute', or 'unverified_external_claim'."
