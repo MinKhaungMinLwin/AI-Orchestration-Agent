@@ -1863,7 +1863,12 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
                 {
                     "goods_no": "101",
                     "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "225/45R17",
                     "slogan": "프리미엄 정숙성과 승차감을 갖춘 사계절 타이어",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "승용차",
+                    "goods_pfm_nm": "COMFORT",
+                    "sale_prc": 152500,
                 },
             ),
             (
@@ -1871,7 +1876,12 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
                 {
                     "goods_no": "202",
                     "goods_nm": "다이나프로 HP3",
+                    "tire_size_1": "225/70R16",
                     "slogan": "SUV를 위한 컴포트 주행 성능",
+                    "season_nm": "사계절",
+                    "car_knd_nm": "SUV",
+                    "goods_pfm_nm": "COMFORT",
+                    "sale_prc": 140800,
                 },
             ),
         ]
@@ -1883,7 +1893,12 @@ def test_multi_product_detail_event_keeps_both_products_in_final_response() -> N
     assert event["assistant_response_source"] != "code_mapper"
     assert "벤투스 S2 AS" in assistant
     assert "다이나프로 HP3" in assistant
-    assert "키너지 ST AS" not in assistant
+    assert "벤투스 S2 AS는 프리미엄 정숙성과 승차감을 갖춘 사계절 타이어 상품이에요." in assistant
+    assert "다이나프로 HP3는 SUV를 위한 컴포트 주행 성능 상품이에요." in assistant
+    assert "규격/분류는 225/45R17" in assistant
+    assert "규격/분류는 225/70R16" in assistant
+    assert "정가는 152,500원입니다." in assistant
+    assert "정가는 140,800원입니다." in assistant
     assert [product["productName"] for product in event["data"]["metadata"]["products"]] == [
         "벤투스 S2 AS",
         "다이나프로 HP3",

@@ -7676,11 +7676,7 @@ def _format_krw(value: Any) -> str:
     return f"{amount:,}원"
 
 
-def _build_product_description_quickreply_event(detail_result: dict) -> dict | None:
-    row = _unwrap_tool_data(detail_result)
-    if not isinstance(row, dict) or not row:
-        return None
-
+def _product_description_lines_and_metadata(row: dict) -> tuple[list[str], dict[str, str]]:
     goods_no = str(row.get("goods_no") or "").strip()
     name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
     tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
@@ -7772,6 +7768,16 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
         metadata["tireSize"] = tire_size
     if name:
         metadata["productName"] = name
+
+    return lines, metadata
+
+
+def _build_product_description_quickreply_event(detail_result: dict) -> dict | None:
+    row = _unwrap_tool_data(detail_result)
+    if not isinstance(row, dict) or not row:
+        return None
+
+    lines, metadata = _product_description_lines_and_metadata(row)
 
     return {
         "type": "data",
@@ -8137,22 +8143,11 @@ def _build_multi_product_detail_quickreply_event(product_rows: list[tuple[str, d
             lines.extend(["", f"- {requested_name}: 상품 정보를 찾지 못했어요."])
             continue
         found_count += 1
-        name = str(row.get("goods_nm") or row.get("big_goods_nm") or row.get("title") or requested_name).strip()
-        summary = _product_feature_summary(row)
-        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
-        detail_parts = [summary]
-        if tire_size:
-            detail_parts.append(f"규격 {tire_size}")
-        sale_price = _format_krw(row.get("sale_prc"))
-        if sale_price:
-            detail_parts.append(f"정가 {sale_price}")
-        lines.extend(["", f"- {name}: {' · '.join(part for part in detail_parts if part)}"])
-        product_metadata: dict[str, str] = {"productName": name}
-        goods_no = str(row.get("goods_no") or "").strip()
-        if goods_no:
-            product_metadata["goodsId"] = goods_no
-        if tire_size:
-            product_metadata["tireSize"] = tire_size
+        detail_lines, product_metadata = _product_description_lines_and_metadata(row)
+        name = product_metadata.get("productName") or str(
+            row.get("goods_nm") or row.get("big_goods_nm") or row.get("title") or requested_name
+        ).strip()
+        lines.extend(["", f"## {name}", *detail_lines])
         metadata_products.append(product_metadata)
 
     if found_count < 2:
