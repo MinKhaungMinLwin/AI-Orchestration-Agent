@@ -7686,7 +7686,6 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
     big_goods_name = str(row.get("big_goods_nm") or "").strip()
     slogan = _clean_product_sentence(row.get("slogan"))
-    remark = _clean_product_sentence(row.get("pc_prod_remark_desc"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
     pattern = str(row.get("ptrn_d_nm") or row.get("goods_pfm_nm") or "").strip()
     season = str(row.get("season_nm") or "").strip()
@@ -7797,6 +7796,13 @@ _PRODUCT_COMPARE_FOLLOWUP_RE = re.compile(
     r"둘\s*중|두\s*개\s*중|이\s*2\s*개\s*중|이\s*두\s*개\s*중",
     re.IGNORECASE,
 )
+_PRODUCT_COMPARE_CONTEXT_RESET_RE = re.compile(
+    r"(?:두\s*개|둘|이\s*2\s*개|이\s*두\s*개)\s*말고|"
+    r"(?:이거|요거|그거|기존\s*상품|비교\s*상품)\s*말고|"
+    r"다른\s*(?:추천\s*)?상품|다른\s*추천|추천\s*상품|"
+    r"다른\s*상품\s*비교",
+    re.IGNORECASE,
+)
 _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
     r"(?:상품\s*)?(?:설명|특징|장점|후기|리뷰)\s*비교|비교.*(?:설명|특징|장점|후기|리뷰)",
     re.IGNORECASE,
@@ -7838,6 +7844,8 @@ def _comparison_query_with_recent_context(user_text: str, messages: list[dict]) 
     if _product_comparison_names(user_text):
         return user_text
     user_text = user_text or ""
+    if _PRODUCT_COMPARE_CONTEXT_RESET_RE.search(user_text):
+        return user_text
     is_description_compare = bool(_PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text))
     if not (is_description_compare or _PRODUCT_COMPARE_FOLLOWUP_RE.search(user_text)):
         return user_text

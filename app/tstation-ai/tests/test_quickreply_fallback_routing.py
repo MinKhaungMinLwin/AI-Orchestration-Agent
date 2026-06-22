@@ -1608,6 +1608,26 @@ def test_pronoun_compare_followup_reuses_two_recent_products() -> None:
     assert query == "Ventus air S랑 Ventus S2 AS 비교"
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "두개 말고 다른 추천 상품은 없어?",
+        "다른 상품 비교",
+        "다른 추천 상품 보여줘",
+    ],
+)
+def test_other_recommendation_text_does_not_reuse_recent_compare_products(user_text: str) -> None:
+    messages = [
+        {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
+        {"role": "assistant", "content": "벤투스 에어S와 벤투스 S2 AS를 비교했어요."},
+        {"role": "user", "content": user_text},
+    ]
+
+    query = _comparison_query_with_recent_context(user_text, messages)
+
+    assert query == user_text
+
+
 def test_single_product_status_question_does_not_become_comparison() -> None:
     messages = [
         {"role": "user", "content": "벤투스 에어 S 알려줘"},
