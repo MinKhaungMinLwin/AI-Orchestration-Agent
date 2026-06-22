@@ -67,6 +67,8 @@ from services.tstation.chat import (
     _multi_product_intent_clarification_event,
     _build_product_size_list_event_from_search_results,
     _build_product_size_list_not_found_event,
+    _build_recent_product_size_availability_event,
+    _build_recent_product_size_availability_event_from_rows,
     _comparison_query_with_recent_context,
     _should_clarify_ambiguous_multi_product_query,
     _multi_product_detail_continuation_names,
@@ -111,6 +113,7 @@ from services.tstation.chat import (
     _should_replace_listcar_with_product_attribute_lookup,
     _is_store_holiday_period_info_query,
     _is_sized_product_name_search_query,
+    _is_recent_product_size_availability_query,
     _is_size_only_store_availability_continuation,
     _is_confirmed_product_store_scope_followup,
     _is_strong_product_name_match,
@@ -2206,6 +2209,20 @@ def test_multi_product_detail_request_keeps_search_plan_available() -> None:
     assert plan.metadata["response_intent"] == "multi_product_detail"
 
 
+def test_discovery_followup_intent_promotes_recent_product_set_size_availability() -> None:
+    frame = build_discovery_intent_frame(
+        "2355519 규격 있어?",
+        known_slots={"discovery_followup_intent": "recent_product_set_size_availability"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "recent_product_set_size_availability"
+    assert frame.entities["discovery_followup_intent"] == "recent_product_set_size_availability"
+    assert "search_product_tool" in plan.forbidden_tools
+    assert plan.metadata["response_intent"] == "recent_product_set_size_availability"
+
+
 def test_single_product_status_question_does_not_become_comparison() -> None:
     messages = [
         {"role": "user", "content": "벤투스 에어 S 알려줘"},
@@ -2654,6 +2671,18 @@ def test_sized_product_name_search_accepts_unknown_model_name() -> None:
 def test_sized_product_name_search_rejects_size_only_text() -> None:
     assert _is_sized_product_name_search_query("2356018") is False
     assert _build_bare_product_search_tool_input("2356018") is None
+
+
+def test_sized_product_name_search_rejects_followup_reference_size_availability_text() -> None:
+    assert _is_sized_product_name_search_query("두개다 2355519 사이즈가 있을까?") is False
+    assert _build_bare_product_search_tool_input("두개다 2355519 사이즈가 있을까?") is None
+    assert _is_recent_product_size_availability_query("두개다 2355519 사이즈가 있을까?") is True
+
+
+def test_recent_product_size_availability_query_does_not_require_reference_keyword() -> None:
+    assert _is_sized_product_name_search_query("2355519 사이즈가 있을까?") is False
+    assert _build_bare_product_search_tool_input("2355519 사이즈가 있을까?") is None
+    assert _is_recent_product_size_availability_query("2355519 사이즈가 있을까?") is True
 
 
 def test_size_only_followup_search_reuses_recent_product_context() -> None:
@@ -6146,6 +6175,100 @@ def test_product_size_list_intent_does_not_capture_product_search_or_size_select
     assert _is_product_size_list_intent("다른 규격 있어?") is True
     assert _is_product_size_list_intent("벤투스 에어S 보여줘") is False
     assert _is_product_size_list_intent("2454518") is False
+
+
+def test_recent_product_size_availability_event_uses_previous_recommendation_candidates() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "아이온 에보 AS", "tire_size_1": "255/45R19"},
+                {"goods_no": "G2", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "235/55R19"},
+                {"goods_no": "G3", "goods_nm": "아이온 에보", "tire_size_1": "235/55R19"},
+            ],
+        }
+    ]
+
+    event = _build_recent_product_size_availability_event(
+        "235/55R19",
+        ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"],
+        ["아이온 에보 AS SUV", "아이온 에보"],
+        ["아이온 에보 AS"],
+        source_tool="get_products_recommendations_tool",
+    )
+    context_event = _build_recent_product_size_availability_event_from_rows(
+        "두개다 2355519 사이즈가 있을까?",
+        prev_tool_data=prev_tool_data,
+    )
+
+    assert event is not None
+    assert context_event is not None
+    assert event["assistant_response_source"] == "code_recent_product_size_availability"
+    assistant = event["data"]["assistantResponse"]
+    assert "직전 추천 상품 기준으로 235/55R19 규격을 확인했어요." in assistant
+    assert "아이온 에보 AS SUV, 아이온 에보는 확인돼요." in assistant
+    assert "아이온 에보 AS는 해당 규격을 찾지 못했어요." in assistant
+    assert context_event["data"]["metadata"]["productNames"] == ["아이온 에보 AS", "아이온 에보 AS SUV", "아이온 에보"]
+
+
+def test_recent_product_size_availability_event_prefers_followup_reference_over_single_pending_product() -> None:
+    slots = ConversationSlots(pending_product_name="아이온 에보 AS", tire_model="아이온 에보 AS")
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "아이온 에보 AS", "tire_size_1": "255/45R19"},
+                {"goods_no": "G2", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "235/55R19"},
+                {"goods_no": "G3", "goods_nm": "아이온 에보", "tire_size_1": "235/55R19"},
+            ],
+        }
+    ]
+
+    event = _build_recent_product_size_availability_event_from_rows(
+        "두개다 2355519 사이즈가 있을까?",
+        prev_tool_data=prev_tool_data,
+    )
+    size_list_event = _build_product_size_list_event_from_search_results(
+        "두개다 2355519 사이즈가 있을까?",
+        [],
+        prev_tool_data=prev_tool_data,
+        slots=slots,
+    )
+
+    assert event is not None
+    assert size_list_event is None
+
+
+def test_recent_product_size_availability_query_skips_explicit_unknown_product_name() -> None:
+    assert _is_sized_product_name_search_query("새상품 ABC 2356018 있을까?") is True
+    assert _is_recent_product_size_availability_query("새상품 ABC 2356018 있을까?") is False
+
+
+def test_discovery_policy_context_carries_recent_product_set_followup_from_router() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:recent_product_set_size_availability"],
+        user_behavior="asking size availability for recent product set",
+        flow="follow-up size availability",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="recent_product_set_size_availability",
+        agent_prompt_profile="discovery_search",
+    )
+
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2355519 규격 있어?",
+        context_text="추천 상품 세 개 보여줌\n2355519 규격 있어?",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert tool_patch == {}
+    assert response_decision is not None
+    assert response_decision.template.value == "quickReply"
+    assert response_decision.metadata["response_shape_key"] == "product_search_summary"
 
 
 def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:

@@ -300,9 +300,12 @@ class MultiAgentDomain(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _default_claim_check_type_for_internal_routes(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "claim_check_type" not in data:
+        if isinstance(data, dict):
             data = dict(data)
-            data["claim_check_type"] = "none"
+            if "claim_check_type" not in data:
+                data["claim_check_type"] = "none"
+            if "discovery_followup_intent" not in data:
+                data["discovery_followup_intent"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -353,6 +356,14 @@ class MultiAgentDomain(BaseModel):
             "Use 'out_of_scope_complaint' for complaints about topics T-Station cannot handle, such as stocks, "
             "investment, daily life, politics, legal, medical, or other companies' services. "
             "Use 'unclear_complaint' when anger/frustration is present but the complaint target is unclear."
+        ),
+    )
+    discovery_followup_intent: Literal["none", "recent_product_set_size_availability"] = Field(
+        description=(
+            "For Discovery follow-up turns only. Use 'recent_product_set_size_availability' when the user is not "
+            "naming a new product but asking whether a tire size exists for the recent recommendation/search product set. "
+            "Examples: after showing multiple products, '두개다 2355519 사이즈가 있을까?', '2355519 규격 있어?', "
+            "'위 상품들 235/55R19 돼?'. Use 'none' otherwise."
         ),
     )
 
@@ -407,9 +418,12 @@ class _SlimMultiAgentDomain(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _default_claim_check_type_for_internal_routes(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "claim_check_type" not in data:
+        if isinstance(data, dict):
             data = dict(data)
-            data["claim_check_type"] = "none"
+            if "claim_check_type" not in data:
+                data["claim_check_type"] = "none"
+            if "discovery_followup_intent" not in data:
+                data["discovery_followup_intent"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -429,6 +443,11 @@ class _SlimMultiAgentDomain(BaseModel):
         description=(
             "Complaint/frustration scope: 'none', 'tstation_service_complaint', "
             "'out_of_scope_complaint', or 'unclear_complaint'."
+        ),
+    )
+    discovery_followup_intent: Literal["none", "recent_product_set_size_availability"] = Field(
+        description=(
+            "Discovery follow-up intent: 'none' or 'recent_product_set_size_availability'."
         ),
     )
     agent_prompt_profile: AgentPromptProfile = Field(
@@ -460,7 +479,7 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 8 outputs:
+Produce 9 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
@@ -488,7 +507,13 @@ Complaint routing rule:
 - "너 답변이 계속 틀려서 짜증나" → complaint_scope="tstation_service_complaint", domains=["support"].
 - "되는 일이 없어 짜증나" → complaint_scope="unclear_complaint", domains=["leading"].
 
-8. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+8. discovery_followup_intent — for Discovery follow-up turns:
+   - "none": normal case
+   - "recent_product_set_size_availability": the user is asking whether a tire size exists for the recent recommendation/search product set, not naming a new product
+   - Use this when the current turn has a tire size and an existence/availability question, recent conversation already showed multiple products, and the current wording is referential/pronominal or otherwise not a new product name search.
+   - Example after a recommendation list: "두개다 2355519 사이즈가 있을까?", "2355519 규격 있어?", "위 상품들 235/55R19 돼?"
+
+9. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -725,6 +750,7 @@ RULES:
   - tstation_service_complaint → SUPPORT
   - out_of_scope_complaint → LEADING with support-scope guidance, no 상담/불편 접수
   - unclear_complaint → LEADING with a clarification question, no immediate 상담 연결
+- After a recent recommendation/search list, "두개다 2355519 사이즈가 있을까?" / "2355519 규격 있어?" → DISCOVERY with discovery_followup_intent=recent_product_set_size_availability, not a new product search
 - Greeting only (안녕/hi/hello) → LEADING
 
 EXAMPLES (tricky cases):
@@ -761,6 +787,8 @@ EXAMPLES (tricky cases):
 - "타이어 주문했는데 계속 오류나고 되는 일이 없어" → SUPPORT, complaint_scope=tstation_service_complaint
 - "너 답변이 계속 틀려서 짜증나" → SUPPORT, complaint_scope=tstation_service_complaint
 - "되는 일이 없어 짜증나" → LEADING, complaint_scope=unclear_complaint
+- [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
+- [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
@@ -786,7 +814,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, complaint_scope, and agent_prompt_profile.
+Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -796,6 +824,9 @@ complaint_scope:
 - tstation_service_complaint: T-Station service/product/order/store/coupon/vehicle/chatbot complaint
 - out_of_scope_complaint: complaint about stocks/investment/life/politics/legal/medical/other non-T-Station topics
 - unclear_complaint: complaint/frustration with unclear target
+discovery_followup_intent:
+- none: default
+- recent_product_set_size_availability: asking size existence for the recent product set, not a new product search
 agent_prompt_profile:
 - transaction_coupon: coupon/promotion -> transaction_coupon
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
@@ -1410,6 +1441,7 @@ class StreamingMultiAgentCoordinator:
                     user_behavior="",
                     claim_check_type=raw_result.claim_check_type,
                     complaint_scope=raw_result.complaint_scope,
+                    discovery_followup_intent=raw_result.discovery_followup_intent,
                     agent_prompt_profile=raw_result.agent_prompt_profile,
                     flow="",
                 )
@@ -9732,9 +9764,21 @@ _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾�
 _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_QUERY_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+_FOLLOWUP_PRODUCT_REFERENCE_RE = re.compile(
+    r"두\s*개\s*다|두개다|둘\s*다|둘다|둘\s*모두|두\s*상품|위\s*상품들?|이\s*상품들?|각각",
+    re.IGNORECASE,
+)
+_SIZED_PRODUCT_AVAILABILITY_HINT_RE = re.compile(
+    r"사이즈|규격|있을까|있나요|있는지|있어|확인|될까|되나요",
+    re.IGNORECASE,
+)
 _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE = re.compile(
     r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
     r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|\d+\s*개",
+    re.IGNORECASE,
+)
+_RECENT_PRODUCT_SIZE_AVAILABILITY_RE = re.compile(
+    r"(?:사이즈|규격).*(?:있|가능|확인)|(?:있|가능|확인).*(?:사이즈|규격)|있을까|있나요|있어\??",
     re.IGNORECASE,
 )
 _STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
@@ -9748,6 +9792,8 @@ def _fallback_sized_product_keyword(user_text: str) -> str:
     if not normalize_tire_size(text):
         return ""
     keyword = _SIZED_PRODUCT_SEARCH_SIZE_RE.sub(" ", text)
+    keyword = _FOLLOWUP_PRODUCT_REFERENCE_RE.sub(" ", keyword)
+    keyword = _SIZED_PRODUCT_AVAILABILITY_HINT_RE.sub(" ", keyword)
     keyword = re.sub(r"\s+", " ", keyword).strip(" ,./")
     keyword_tokens = [tok for tok in re.findall(r"[0-9A-Za-z가-힣*+.-]+", keyword) if tok]
     meaningful_tokens = [tok for tok in keyword_tokens if tok not in _SIZED_PRODUCT_KEYWORD_STOPWORDS]
@@ -9820,9 +9866,178 @@ def _is_sized_product_name_search_query(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text or _BARE_PRODUCT_SEARCH_BLOCK_RE.search(text):
         return False
+    if _FOLLOWUP_PRODUCT_REFERENCE_RE.search(text):
+        return False
     frame = build_discovery_intent_frame(text)
     product_names = tuple(frame.entities.get("product_names") or ())
     return bool((product_names or _fallback_sized_product_keyword(text)) and (frame.entities.get("tire_size") or normalize_tire_size(text)))
+
+
+def _recent_product_listing_context(prev_tool_data: list[dict] | None = None) -> dict | None:
+    PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
+    for entry in prev_tool_data or []:
+        tool_name = str(entry.get("tool") or "")
+        if tool_name not in PRODUCT_LIST_TOOLS:
+            continue
+        rows = _search_product_rows_from_payload(entry.get("data"))
+        if rows:
+            return {"tool": tool_name, "rows": rows}
+    return None
+
+
+def _is_recent_product_size_availability_query(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if not normalize_tire_size(text):
+        return False
+    if not _RECENT_PRODUCT_SIZE_AVAILABILITY_RE.search(text):
+        return False
+    frame = build_discovery_intent_frame(text)
+    if tuple(frame.entities.get("product_names") or ()):
+        return False
+    return not _fallback_sized_product_keyword(text)
+
+
+def _build_recent_product_size_availability_missing_context_event(target_size: str | None) -> dict:
+    size_text = target_size or "원하시는 규격"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_recent_product_size_availability_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{size_text} 기준으로 확인할 상품이 아직 정해지지 않았어요. "
+                "어떤 상품들 기준인지 알려주시면 규격 보유 여부를 바로 확인해드릴게요."
+            ),
+            "quickReplies": [
+                {"label": "추천 상품 다시 보기", "domain": "DISCOVERY"},
+                {"label": "상품명 입력", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "recent_product_listing_missing_context",
+                "tireSize": target_size,
+            },
+        },
+    }
+
+
+def _recent_product_set_size_availability_context(
+    user_text: str,
+    *,
+    prev_tool_data: list[dict] | None = None,
+    routing_result: Any | None = None,
+) -> dict | None:
+    followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+    llm_marked_followup = followup_intent == "recent_product_set_size_availability"
+    if not llm_marked_followup and not _is_recent_product_size_availability_query(user_text):
+        return None
+
+    listing_context = _recent_product_listing_context(prev_tool_data)
+    if not listing_context:
+        return None
+
+    fallback_keyword = _fallback_sized_product_keyword(user_text)
+    if fallback_keyword:
+        return None
+
+    product_names: list[str] = []
+    for row in listing_context["rows"]:
+        product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+        if not product_name or product_name in product_names:
+            continue
+        product_names.append(product_name)
+
+    if len(product_names) < 2:
+        return None
+
+    return {
+        "tool": listing_context["tool"],
+        "rows": listing_context["rows"],
+        "tire_size": normalize_tire_size(user_text),
+        "product_names": product_names,
+        "has_reference_signal": bool(_FOLLOWUP_PRODUCT_REFERENCE_RE.search(user_text)),
+        "llm_marked_followup": llm_marked_followup,
+    }
+
+
+def _build_recent_product_size_availability_event(
+    target_size: str,
+    product_names: list[str],
+    available_names: list[str],
+    missing_names: list[str],
+    *,
+    source_tool: str | None = None,
+) -> dict | None:
+    if not target_size or len(product_names) < 2:
+        return None
+    if not available_names and not missing_names:
+        return None
+
+    lines = [f"직전 추천 상품 기준으로 {target_size} 규격을 확인했어요."]
+    if available_names:
+        lines.append(f"{', '.join(available_names)}는 확인돼요.")
+    if missing_names:
+        lines.append(f"{', '.join(missing_names)}는 해당 규격을 찾지 못했어요.")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_recent_product_size_availability",
+        "data": {
+            "assistantResponse": " ".join(lines),
+            "quickReplies": [
+                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
+                {"label": "가격 조회", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "recent_product_listing",
+                "sourceTool": source_tool,
+                "tireSize": target_size,
+                "productNames": product_names,
+                "availableProductNames": available_names,
+                "missingProductNames": missing_names,
+            },
+        },
+    }
+
+
+def _build_recent_product_size_availability_event_from_rows(
+    user_text: str,
+    *,
+    prev_tool_data: list[dict] | None = None,
+) -> dict | None:
+    context = _recent_product_set_size_availability_context(user_text, prev_tool_data=prev_tool_data)
+    if not context:
+        return None
+
+    size_map: dict[str, set[str]] = {}
+    for row in context["rows"]:
+        product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+        if not product_name:
+            continue
+        tire_size = normalize_tire_size(
+            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
+        )
+        size_map.setdefault(product_name, set())
+        if tire_size:
+            size_map[product_name].add(tire_size)
+
+    available_names = [name for name in context["product_names"] if context["tire_size"] in size_map.get(name, set())]
+    missing_names = [name for name in context["product_names"] if context["tire_size"] not in size_map.get(name, set())]
+    return _build_recent_product_size_availability_event(
+        context["tire_size"],
+        context["product_names"],
+        available_names,
+        missing_names,
+        source_tool=context["tool"],
+    )
 
 
 def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
@@ -10749,6 +10964,9 @@ def _build_discovery_policy_context(
         known_slots = {"tire_size": tire_size} if tire_size else {}
         if vehicle_type:
             known_slots["vehicle_type"] = vehicle_type
+        routing_followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+        if routing_followup_intent == "recent_product_set_size_availability":
+            known_slots["discovery_followup_intent"] = routing_followup_intent
         discovery_frame = build_discovery_intent_frame(
             last_user_text,
             known_slots=known_slots,
@@ -14156,6 +14374,9 @@ class TStationChatServiceV2:
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
                     "complaint_scope": getattr(routing_result, "complaint_scope", None) if routing_result else None,
+                    "discovery_followup_intent": (
+                        getattr(routing_result, "discovery_followup_intent", None) if routing_result else None
+                    ),
                     "agent_prompt_profile": (
                         routing_result.agent_prompt_profile.value
                         if routing_result and isinstance(routing_result.agent_prompt_profile, AgentPromptProfile)
@@ -17981,6 +18202,110 @@ class TStationChatServiceV2:
             assistant_response = str((quantity_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': agent_label}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        async def _resolve_recent_product_size_availability_with_code() -> tuple[list[dict], dict] | None:
+            requested_size = normalize_tire_size(user_query)
+            context = _recent_product_set_size_availability_context(
+                user_query,
+                prev_tool_data=prev_tool_data or [],
+                routing_result=routing_result,
+            )
+            if context is None:
+                if (
+                    str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+                    == "recent_product_set_size_availability"
+                    or _is_recent_product_size_availability_query(user_query)
+                ):
+                    return [], _build_recent_product_size_availability_missing_context_event(requested_size)
+                return None
+
+            emitted_events: list[dict] = []
+            available_names: list[str] = []
+            missing_names: list[str] = []
+            resolved_by_existing_rows = (
+                context["tool"] == "search_product_tool" and bool(_FOLLOWUP_PRODUCT_REFERENCE_RE.search(user_query))
+            )
+            search_results_by_name: dict[str, dict] = {}
+
+            if resolved_by_existing_rows:
+                existing_event = _build_recent_product_size_availability_event_from_rows(
+                    user_query,
+                    prev_tool_data=prev_tool_data or [],
+                )
+                if existing_event is not None:
+                    return emitted_events, existing_event
+
+            from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+
+            for product_name in context["product_names"]:
+                tool_input = {"keyword": product_name, "size": context["tire_size"], "limit": 10}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "규격 확인 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                    search_result = _tool_result_dict(raw_result)
+                except Exception as exc:
+                    logger.exception("[RECENT_PRODUCT_SIZE_AVAILABILITY] search_product_tool failed for %s", product_name)
+                    search_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                search_results_by_name[product_name] = search_result
+                _record_code_tool_result("search_product_tool", tool_input, search_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Compatibility AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": search_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": tool_input,
+                    "output": json.dumps(search_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "search_product_tool",
+                    "source_domain": "discovery",
+                })
+
+                matched_row = _unique_product_row_from_sized_search_result(
+                    search_result,
+                    product_name,
+                    context["tire_size"],
+                )
+                if matched_row is not None:
+                    available_names.append(product_name)
+                else:
+                    missing_names.append(product_name)
+
+            event = _build_recent_product_size_availability_event(
+                context["tire_size"],
+                context["product_names"],
+                available_names,
+                missing_names,
+                source_tool=context["tool"],
+            )
+            if event is None:
+                return None
+            return emitted_events, event
+
+        recent_product_size_availability_resolution = await _resolve_recent_product_size_availability_with_code()
+        if recent_product_size_availability_resolution is not None:
+            code_events, recent_product_size_availability_event = recent_product_size_availability_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(recent_product_size_availability_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((recent_product_size_availability_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

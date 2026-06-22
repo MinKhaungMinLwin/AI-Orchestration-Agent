@@ -390,6 +390,7 @@ def build_discovery_intent_frame(
     variant_constraints = extract_variant_constraints(text)
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
     quantity_options = extract_quantity_options(text)
+    discovery_followup_intent = str(slots.get("discovery_followup_intent") or "").strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -401,6 +402,8 @@ def build_discovery_intent_frame(
     }
     if quantity_options:
         entities["quantity_options"] = quantity_options
+    if discovery_followup_intent == "recent_product_set_size_availability":
+        entities["discovery_followup_intent"] = discovery_followup_intent
     if len(products) >= 2:
         entities["multi_product_names"] = True
         if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
@@ -462,7 +465,14 @@ def build_discovery_intent_frame(
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if entities.get("external_price_comparison"):
+    if (
+        discovery_followup_intent == "recent_product_set_size_availability"
+        and tire_size
+        and not products
+    ):
+        intent = "product_search"
+        sub_intent = "recent_product_set_size_availability"
+    elif entities.get("external_price_comparison"):
         intent = "product_search"
         sub_intent = "external_price_comparison_request"
     elif entities.get("default_benefit"):
@@ -584,6 +594,15 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "recent_product_set_size_availability":
+        return ToolPlan(
+            forbidden_tools=(
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_products_recommendations_tool",
+            ),
+            metadata={"response_intent": "recent_product_set_size_availability"},
+        )
     if frame.sub_intent == "external_price_comparison_request":
         product_names = entities.get("product_names") or ()
         args = {"limit": 5, "sort_by": "price_asc"}
