@@ -138,6 +138,7 @@ from services.tstation.chat import (
     _is_owned_vehicle_selection_cta,
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
+    _is_coupon_applicable_products_decision,
     _is_product_coupon_price_amount_query,
     _is_coupon_discount_amount_context,
     _is_coupon_discount_amount_size_list_followup,
@@ -284,7 +285,11 @@ from services.tstation.chat import (
 from schemas.tstation.chat_message import ChatMessageRequest
 from services.tstation.agents.c_transaction_agent.tools import _apply_store_preview_policy_patch
 from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
-from services.tstation.policies.coupon_query_gate import should_consider_coupon_gate
+from services.tstation.policies.coupon_query_gate import (
+    CouponQueryGateDecision,
+    CouponQueryIntent,
+    should_consider_coupon_gate,
+)
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
@@ -4951,7 +4956,48 @@ def test_product_coupon_price_amount_query_is_detected() -> None:
     assert _is_product_coupon_price_amount_query(
         "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
     )
+    assert _is_product_coupon_price_amount_query("벤투스 에어S 쿠폰 적용하면 얼마야?")
     assert not _is_product_coupon_price_amount_query("벤투스 에어S에 적용 가능한 쿠폰 뭐 있어?")
+
+
+def test_coupon_discount_amount_does_not_route_to_applicable_products() -> None:
+    text = "벤투스 에어S 2255517 4개 구매하면 쿠폰 적용 할인 금액 얼마야?"
+    frame = build_price_intent_frame(text)
+    decision = CouponQueryGateDecision(
+        intent=CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
+        confidence=0.95,
+        product_name="벤투스 에어S",
+        coupon_hint="쿠폰",
+        reason="Simulated wrong gate output.",
+    )
+
+    assert frame.intent == "product_coupon_discount_amount"
+    assert _is_strong_coupon_applicability_query(text) is False
+    assert _is_coupon_applicable_products_decision(decision, user_text=text) is False
+
+
+def test_coupon_applicable_products_decision_is_blocked_by_pending_discount_amount_context() -> None:
+    decision = CouponQueryGateDecision(
+        intent=CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
+        confidence=0.95,
+        product_name="벤투스 에어S",
+        coupon_hint="쿠폰",
+        reason="Simulated wrong gate output.",
+    )
+
+    assert (
+        _is_coupon_applicable_products_decision(
+            decision,
+            user_text="2454518",
+            slots=ConversationSlots(
+                pending_intent="price",
+                goal_type="coupon_discount_amount",
+                pending_product_name="벤투스 에어S",
+                ord_qty=4,
+            ),
+        )
+        is False
+    )
 
 
 def test_size_only_followup_recovers_coupon_price_target_from_recent_context() -> None:

@@ -11022,6 +11022,8 @@ def _unsupported_brand_policy_guard_event(user_text: str, recent_context: str = 
 
 
 def _is_strong_coupon_applicability_query(user_text: str) -> bool:
+    if _is_product_coupon_price_amount_query(user_text):
+        return False
     frame = build_price_intent_frame(user_text)
     if _COUPON_ISSUE_INTENT_RE.search(user_text):
         return False
@@ -11048,7 +11050,14 @@ def _is_product_coupon_eligibility_decision(decision: CouponQueryGateDecision | 
     )
 
 
-def _is_coupon_applicable_products_decision(decision: CouponQueryGateDecision | None) -> bool:
+def _is_coupon_applicable_products_decision(
+    decision: CouponQueryGateDecision | None,
+    *,
+    user_text: str | None = None,
+    slots: Any | None = None,
+) -> bool:
+    if _is_product_coupon_price_amount_query(user_text) or _is_coupon_discount_amount_context(slots):
+        return False
     return (
         decision is not None
         and decision.is_actionable
@@ -23347,7 +23356,11 @@ class TStationChatServiceV2:
             if (
                 target_tire_size
                 and target_quantity
-                and _is_product_coupon_price_amount_query(user_query)
+                and (
+                    _is_product_coupon_price_amount_query(user_query)
+                    or _is_coupon_discount_amount_context(initial_slots)
+                    or _recent_product_coupon_price_target(user_query, recent_user_context_text)
+                )
             ):
                 from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
                 from services.tstation.agents.c_transaction_agent.tools import get_final_price_tool as _final_price_tool
@@ -25361,7 +25374,11 @@ class TStationChatServiceV2:
                     target_product_name=coupon_decision.product_name
                 )
                 coupon_gate_resolution = product_coupon_resolution or await _resolve_owned_coupon_best_discount_with_code()
-            elif coupon_decision.intent == CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS:
+            elif _is_coupon_applicable_products_decision(
+                coupon_decision,
+                user_text=user_query,
+                slots=initial_slots,
+            ):
                 coupon_gate_resolution = await _resolve_coupon_applicability_with_code()
 
         if coupon_gate_resolution is not None:
@@ -26512,7 +26529,11 @@ class TStationChatServiceV2:
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
                         and (
-                            _is_coupon_applicable_products_decision(coupon_decision)
+                            _is_coupon_applicable_products_decision(
+                                coupon_decision,
+                                user_text=user_query,
+                                slots=pending_slots or initial_slots,
+                            )
                             or (
                                 coupon_decision is None
                                 and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)
@@ -27214,7 +27235,11 @@ class TStationChatServiceV2:
                             MultiAgentDomain.Domain.DISCOVERY.value,
                         }
                         and (
-                            _is_coupon_applicable_products_decision(coupon_decision)
+                            _is_coupon_applicable_products_decision(
+                                coupon_decision,
+                                user_text=user_query,
+                                slots=pending_slots or initial_slots,
+                            )
                             or (coupon_decision is None and _is_strong_coupon_applicability_query(user_query))
                         )
                     ):
@@ -27229,7 +27254,11 @@ class TStationChatServiceV2:
                         and not coupon_resolver_ran
                         and source_domain == MultiAgentDomain.Domain.TRANSACTION.value
                         and (
-                            _is_coupon_applicable_products_decision(coupon_decision)
+                            _is_coupon_applicable_products_decision(
+                                coupon_decision,
+                                user_text=user_query,
+                                slots=pending_slots or initial_slots,
+                            )
                             or (
                                 coupon_decision is None
                                 and _COUPON_APPLICABILITY_INTENT_RE.search(user_query)

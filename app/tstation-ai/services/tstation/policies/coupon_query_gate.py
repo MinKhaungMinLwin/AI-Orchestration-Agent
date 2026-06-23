@@ -43,7 +43,7 @@ class CouponQueryGateDecision(BaseModel):
         return self.intent not in {CouponQueryIntent.NONE, CouponQueryIntent.POLICY_INFO} and self.confidence >= 0.55
 
 
-_COUPON_GATE_TRIGGER_RE = re.compile(r"쿠폰|할인권|혜택|할인\s*상품|적용\s*상품", re.IGNORECASE)
+_COUPON_GATE_TRIGGER_RE = re.compile(r"쿠폰|할인\s*쿠폰|할인권|혜택|할인\s*상품|적용\s*상품", re.IGNORECASE)
 _DEFAULT_BENEFIT_RE = re.compile(
     r"지금\s*받을\s*수\s*있는\s*혜택|현재\s*받을\s*수\s*있는\s*혜택|"
     r"진행\s*중인\s*(?:이벤트|기획전|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전",
@@ -58,13 +58,17 @@ _PRICE_OR_BENEFIT_ALERT_RE = re.compile(
     r"(?:저렴해지|싸지).{0,30}(?:알림|알람|알려|문자|SMS|sms)",
     re.IGNORECASE,
 )
+_COUPON_APPLICABLE_PRODUCT_ANCHOR_RE = re.compile(
+    r"적용\s*가능|적용가능|대상\s*상품|적용\s*상품|사용\s*가능|사용가능",
+    re.IGNORECASE,
+)
 
 
 def should_consider_coupon_gate(user_text: str | None) -> bool:
     text = user_text or ""
     if _DEFAULT_BENEFIT_RE.search(text):
         return False
-    if _PRICE_OR_BENEFIT_ALERT_RE.search(text):
+    if _PRICE_OR_BENEFIT_ALERT_RE.search(text) and not _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE.search(text):
         return False
     return bool(_COUPON_GATE_TRIGGER_RE.search(text))
 

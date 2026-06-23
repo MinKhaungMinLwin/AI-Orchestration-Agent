@@ -26,7 +26,7 @@ _PERCENT_COUPON_RE = re.compile(r"(\d{1,2})\s*%")
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _PRODUCT_RE = re.compile(
-    r"키너지\s*EX|kinergy\s*EX|벤투스\s*(?:air\s*S|S2\s*AS)|ventus\s*(?:air\s*S|S2\s*AS)|"
+    r"키너지\s*EX|kinergy\s*EX|벤투스\s*(?:에어\s*S|air\s*S|S2\s*AS)|ventus\s*(?:air\s*S|S2\s*AS)|"
     r"다이나프로\s*HPX|dynapro\s*HPX|아이온|iON",
     re.IGNORECASE,
 )
@@ -71,6 +71,17 @@ def build_price_intent_frame(
     if quantity_match:
         entities["quantity"] = int(quantity_match.group(1))
 
+    is_coupon_discount_amount_query = bool(
+        _COUPON_RE.search(text)
+        and (entities.get("product_name") or slots.get("goods_no") or slots.get("pending_product_name"))
+        and re.search(
+            r"할인\s*받|할인\s*금액|할인액|최종\s*(?:혜택가|금액|가격)|"
+            r"쿠폰\s*적용\s*(?:하면|시).*얼마|얼마\s*나와|얼마야",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
     if _NONEXISTENT_BENEFIT_RE.search(text) and (_ISSUE_RE.search(text) or _COUPON_RE.search(text)):
         intent = "nonexistent_benefit"
         sub_intent = "deny_unverified_benefit"
@@ -87,16 +98,12 @@ def build_price_intent_frame(
     elif (_COUPON_RE.search(text) or _PROMOTION_RE.search(text)) and _STACKING_RE.search(text):
         intent = "coupon_stacking_check"
         sub_intent = "coupon_or_promotion_stacking"
+    elif is_coupon_discount_amount_query:
+        intent = "product_coupon_discount_amount"
+        sub_intent = "coupon_discount_amount"
     elif _COUPON_RE.search(text) and percent_match and re.search(r"적용\s*가능|대상|상품", text):
         intent = "coupon_applicable_products"
         sub_intent = "discount_rate_coupon_targets"
-    elif (
-        _COUPON_RE.search(text)
-        and (entities.get("product_name") or slots.get("goods_no"))
-        and re.search(r"할인\s*받|할인\s*금액|할인액|최종\s*(?:혜택가|금액|가격)|얼마", text, re.IGNORECASE)
-    ):
-        intent = "product_coupon_discount_amount"
-        sub_intent = "coupon_discount_amount"
     elif _COUPON_RE.search(text) and (entities.get("product_name") or slots.get("goods_no")):
         intent = "product_coupon_eligibility"
         sub_intent = "product_or_pattern_coupon"
@@ -257,6 +264,7 @@ def _normalize_product_name(value: str) -> str:
         "다이나프로 hpx": "Dynapro HPX",
         "ventus air s": "Ventus air S",
         "벤투스 air s": "Ventus air S",
+        "벤투스 에어 s": "Ventus air S",
         "ventus s2 as": "Ventus S2 AS",
         "벤투스 s2 as": "Ventus S2 AS",
     }
