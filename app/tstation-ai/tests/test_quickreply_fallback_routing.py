@@ -8919,6 +8919,110 @@ def test_turn_contract_blocks_price_template_on_price_tool_error() -> None:
     assert "금액을 단정할 수 없" in event["data"]["assistantResponse"]
 
 
+@pytest.mark.parametrize("forbidden_behavior", ["product_card_without_size", "price_without_size", "answer_without_price_tool"])
+def test_turn_contract_blocks_product_template_for_price_without_confirmed_size(
+    forbidden_behavior: str,
+) -> None:
+    contract = build_turn_contract(
+        user_text="가격은?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(forbidden_behavior,),
+        ),
+        routing_result=_routing_result(execution_plan=["transaction:price_or_coupon_check"]),
+    )
+
+    assert violates_response_template_contract(
+        {
+            "template": "product",
+            "source_domain": "discovery",
+            "assistant_response_source": "code_product_description",
+            "response_shape_key": "product_search_summary",
+            "called_tools": [],
+        },
+        contract,
+    )
+    fallback_event = build_response_policy_guard_event(contract)
+    assert fallback_event["template"] == "quickReply"
+
+
+def test_turn_contract_keeps_product_template_when_current_turn_has_product_source_tool() -> None:
+    contract = build_turn_contract(
+        user_text="벤투스 에어S 추천해줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_recommendation"],
+        ),
+    )
+
+    assert not violates_response_template_contract(
+        {
+            "template": "product",
+            "source_domain": "discovery",
+            "assistant_response_source": "code_bare_product_search",
+            "response_shape_key": "product_search_summary",
+            "called_tools": ["search_product_tool"],
+        },
+        contract,
+    )
+
+
+def test_turn_contract_reports_product_template_without_current_source_even_without_called_tools() -> None:
+    contract = build_turn_contract(
+        user_text="그럼 가격은?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("price_without_size",),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:price_or_coupon_check"],
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_source="code_product_description",
+        response_shape_key="product_search_summary",
+        called_tools=[],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert violations == [{
+        "type": "unsupported_product_template_without_current_source",
+        "template": "product",
+        "fallback_reason": "missing_required_slots:product",
+        "response_shape_key": "product_search_summary",
+        "assistant_response_source": "code_product_description",
+    }]
+
+
+@pytest.mark.parametrize("template", ["product", "cheapestProduct", "billProduct"])
+def test_turn_contract_blocks_price_without_size_templates(template: str) -> None:
+    contract = build_turn_contract(
+        user_text="최종가는?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("price_without_size",),
+        ),
+        routing_result=_routing_result(execution_plan=["transaction:price_or_coupon_check"]),
+    )
+
+    assert violates_response_template_contract({"template": template}, contract)
+
+
 def test_turn_contract_accumulates_post_tool_forbidden_behaviors_across_tools() -> None:
     price_error_decision = _tool_error_response_decision("get_final_price_tool")
     accumulated_behaviors = list(price_error_decision.forbidden_behaviors)

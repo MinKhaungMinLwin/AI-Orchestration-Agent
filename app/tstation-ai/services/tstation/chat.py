@@ -20909,8 +20909,40 @@ class TStationChatServiceV2:
                     last_template_source,
                     last_assistant_response_source,
                 )
+                current_contract_response_shape_key = str(
+                    getattr(
+                        (
+                            _current_discovery_response_decision.get()
+                            if last_template_source in {"code_mapper", "turn_contract"}
+                            and last_assistant_response_source
+                            in {
+                                "code_product_attribute_resolver",
+                                "code_product_description",
+                                "discovery_policy",
+                                "code_bare_product_search",
+                                "code_multi_variant_recommendation",
+                                "code_vehicle_auto_select",
+                            }
+                            else _current_transaction_response_decision.get()
+                        ),
+                        "metadata",
+                        {},
+                    ).get("response_shape_key")
+                    or ""
+                )
+                current_contract_source_domain = str(
+                    ((buffered_data_events[-1] if buffered_data_events else {}) or {}).get("source_domain") or ""
+                ).lower()
+                contract_violations = response_contract_violations(
+                    template=last_template,
+                    assistant_response_source=last_assistant_response_source,
+                    response_shape_key=current_contract_response_shape_key,
+                    called_tools=sorted(called_tool_names),
+                    source_domain=current_contract_source_domain,
+                    contract=turn_contract,
+                )
 
-                if called_tool_names and qc_skip_reason is None:
+                if (called_tool_names and qc_skip_reason is None) or (contract_violations and not _parallel_qc):
                     qc_executed = True
                     try:
                         with _trace_span(
@@ -20924,30 +20956,10 @@ class TStationChatServiceV2:
                                 "turn_contract": turn_contract.to_dict() if turn_contract else None,
                             },
                         ) as _qc_span:
-                            mismatches = qc_verifier.verify_draft(draft_for_qc, structured_sources)
-                            contract_violations = response_contract_violations(
-                                template=last_template,
-                                assistant_response_source=last_assistant_response_source,
-                                response_shape_key=str(
-                                    getattr(
-                                        (
-                                            _current_discovery_response_decision.get()
-                                            if last_template_source in {"code_mapper", "turn_contract"}
-                                            and last_assistant_response_source
-                                            in {
-                                                "code_product_attribute_resolver",
-                                                "code_product_description",
-                                                "discovery_policy",
-                                            }
-                                            else _current_transaction_response_decision.get()
-                                        ),
-                                        "metadata",
-                                        {},
-                                    ).get("response_shape_key")
-                                    or ""
-                                ),
-                                called_tools=sorted(called_tool_names),
-                                contract=turn_contract,
+                            mismatches = (
+                                qc_verifier.verify_draft(draft_for_qc, structured_sources)
+                                if called_tool_names and qc_skip_reason is None
+                                else []
                             )
                             if (
                                 mismatches
