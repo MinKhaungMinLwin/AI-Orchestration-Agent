@@ -61,7 +61,7 @@ _KOREAN_RESULT_LIMIT_RE = re.compile(
 )
 _KNOWN_UNVERIFIED_STORE_NAMES = frozenset({"강남점", "티스테이션 강남점"})
 _REGION_HINT_RE = re.compile(
-    r"(서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
+    r"(서울|서초|강남|판교|분당|파주|강릉|부산|해운대|광교|성남|오목천|동광주|송파|한남|"
     r"청량리|인천|하남|청주|제주|서귀포)"
 )
 _PRODUCT_HINT_RE = re.compile(
@@ -211,6 +211,10 @@ def _is_stock_flow_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
 
 
+def _is_order_or_reservation_context(slots: dict[str, Any]) -> bool:
+    return bool(slots.get("pending_intent") in {"order", "reservation"} or slots.get("goal_type") == "place_order")
+
+
 def _is_today_install_context(slots: dict[str, Any], requested_cal_day: str | None = None) -> bool:
     return bool(
         slots.get("availability_intent") == "today_install"
@@ -352,6 +356,7 @@ def build_transaction_intent_frame(
         and not current_purchase
         and not current_reservation
     )
+    region_scope_product_continuation = bool(store_scope_product_continuation and current_region and not current_store_name)
     quantity_slot_fill_stock_continuation = (
         _is_stock_flow_context(slots)
         and bool(slots.get("goods_no") and (slots.get("tire_size") or slots.get("product_name")))
@@ -433,7 +438,9 @@ def build_transaction_intent_frame(
     )
     store_name = current_store_name or (
         None
-        if (plain_store_search and not preserve_transaction_product_context) or store_candidate_search
+        if (plain_store_search and not preserve_transaction_product_context)
+        or store_candidate_search
+        or region_scope_product_continuation
         else slots.get("store_name") or slots.get("shop_name")
     )
     region = current_region or slots.get("region") or slots.get("place")
@@ -487,8 +494,13 @@ def build_transaction_intent_frame(
         entities["stock_check_mode"] = "preview" if sub_intent == "today_install" else "inventory_only"
     elif store_scope_product_continuation:
         intent = "stock_store_search"
-        sub_intent = "stock"
-        entities["stock_check_mode"] = "inventory_only"
+        use_preview_scope = bool(
+            _is_order_or_reservation_context(slots)
+            or _is_today_install_context(slots, requested_cal_day)
+            or region_scope_product_continuation
+        )
+        sub_intent = "today_install" if use_preview_scope else "stock"
+        entities["stock_check_mode"] = "preview" if use_preview_scope else "inventory_only"
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
@@ -555,7 +567,7 @@ def build_transaction_intent_frame(
             **({"store_name": store_name} if store_name else {}),
             **({"shop_name": store_name} if store_name else {}),
         })
-    if store_candidate_search:
+    if store_candidate_search or region_scope_product_continuation:
         for key in ("shop_id", "shop_name", "store_name"):
             known.pop(key, None)
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:

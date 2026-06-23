@@ -217,6 +217,16 @@ def _decide_inventory_availability(
             metadata={"stock_check_mode": "inventory_only"},
         )
 
+    if _is_region_preview_scope(slots) and _has_preview_candidate_rows(tool_result):
+        return _decision(
+            response_shape_key="stock_store_candidates",
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            forbidden_behaviors=("datepick_before_store_selection", "empty_select_only_response"),
+            assistant_guidance="지역 단위 조회는 단일 매장을 임의 확정하지 말고 장착 가능 매장 후보를 location 카드로 먼저 제시한다.",
+            metadata={"stock_check_mode": "preview"},
+        )
+
     if _has_preview_schedule_slots(tool_result):
         return _decision(
             response_shape_key="reservation_slots",
@@ -396,6 +406,18 @@ def _has_installable_preview_store(tool_result: dict[str, Any]) -> bool:
         if any(isinstance(store, dict) and bool(store.get("is_installable")) for store in stores):
             return True
     return False
+
+
+def _is_region_preview_scope(slots: dict[str, Any]) -> bool:
+    return bool((slots.get("region") or slots.get("place")) and not (slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name")))
+
+
+def _has_preview_candidate_rows(tool_result: dict[str, Any]) -> bool:
+    return bool(
+        _has_inventory_rows(tool_result, "todayShopArray")
+        or _has_inventory_rows(tool_result, "tnaShopArray")
+        or any(stores for stores in _preview_store_lists(tool_result))
+    )
 
 
 def _has_preview_schedule_slots(tool_result: dict[str, Any]) -> bool:

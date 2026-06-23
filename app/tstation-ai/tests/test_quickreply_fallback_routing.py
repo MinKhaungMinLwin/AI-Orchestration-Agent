@@ -9808,7 +9808,8 @@ def test_transaction_followup_other_store_does_not_misclassify_as_favorite_store
     )
 
     assert frame.intent == "stock_store_search"
-    assert frame.sub_intent == "stock"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["stock_check_mode"] == "preview"
 
 
 def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() -> None:
@@ -9894,6 +9895,57 @@ def test_transaction_intent_policy_switches_today_install_to_candidate_store_sea
     assert tool_plan.tool_args_patch["quantity"] == 4
     assert "shop_id" not in tool_plan.tool_args_patch
     assert "shop_name" not in tool_plan.tool_args_patch
+
+
+def test_transaction_intent_policy_keeps_order_region_followup_on_preview_scope() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+
+    frame = build_transaction_intent_frame("해운대", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="해운대",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert frame.known_slots["region"] == "해운대"
+    assert "shop_id" not in frame.known_slots
+    assert "shop_name" not in frame.known_slots
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["region"] == "해운대"
+    assert "shop_id" not in tool_plan.tool_args_patch
+    assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
+    assert response_decision.metadata["stock_check_mode"] == "preview"
+
+
+def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "ord_qty": 4,
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+    }
+
+    frame = build_transaction_intent_frame("키너지 EX 재고 있는 분당 매장 알려줘", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "stock"
+    assert frame.known_slots["stock_check_mode"] == "inventory_only"
+    assert tool_plan.preferred_tool in {"get_store_inventory_tool", "get_store_list_tool"}
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
 
 
 def test_transaction_intent_policy_keeps_specific_store_recheck_scope() -> None:
@@ -10710,6 +10762,73 @@ def test_transaction_preview_tool_result_with_schedule_slots_is_not_treated_as_s
     assert response_decision.template == TemplateName.DATE_PICK
     assert "datepick_for_unavailable_stock" not in response_decision.forbidden_behaviors
     assert "preorder" not in response_decision.forbidden_behaviors
+
+
+def test_region_preview_tool_result_with_schedule_slots_returns_location_candidates() -> None:
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots={
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "region": "해운대",
+            "stock_check_mode": "preview",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "inventory": {
+                    "todayShopArray": [{"shopId": "F10001"}],
+                    "tnaShopArray": [],
+                },
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F10001",
+                        "shop_nm": "티스테이션 해운대점",
+                        "is_installable": True,
+                        "slots": [{"cal_day": "20260623", "tm": "17"}],
+                    }],
+                },
+                "stores": [{
+                    "shop_id": "F10001",
+                    "shop_nm": "티스테이션 해운대점",
+                    "is_installable": True,
+                }],
+            },
+        },
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
+    assert response_decision.metadata["stock_check_mode"] == "preview"
+    assert response_decision.template == TemplateName.LOCATION
+    assert "datepick_before_store_selection" in response_decision.forbidden_behaviors
+    assert "datepick_for_unavailable_stock" not in response_decision.forbidden_behaviors
+
+
+def test_preview_tool_nested_inventory_rows_are_not_treated_as_stock_unavailable() -> None:
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots={
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "region": "해운대",
+            "stock_check_mode": "preview",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "inventory": {
+                    "todayShopArray": [{"shopId": "F10001"}],
+                    "tnaShopArray": [],
+                },
+            },
+        },
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
+    assert response_decision.template == TemplateName.LOCATION
+    assert "say_available_when_stock_zero" not in response_decision.forbidden_behaviors
 
 
 def test_inventory_availability_pure_stock_path_ignores_preview_slots() -> None:
