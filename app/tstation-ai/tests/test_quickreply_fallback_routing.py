@@ -88,6 +88,7 @@ from services.tstation.chat import (
     _build_turn_contract_required_slot_guard_event,
     _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
+    _apply_pending_object_check_slots,
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
     _datepick_template_recovery_candidate_from_messages,
@@ -9390,6 +9391,95 @@ def test_discovery_policy_context_carries_safe_service_objective_into_bare_produ
     assert (
         response_decision.metadata["response_shape_key"]
         == "safe_service_explanation_then_unsized_recommendation_summary"
+    )
+
+
+def test_pending_object_check_stores_topic_then_product_object_followup() -> None:
+    slots = ConversationSlots()
+
+    stored = _apply_pending_object_check_slots(slots, user_text="안심서비스 대상 타이어는?")
+    assert stored.pending_check_topic == "safe_service"
+    assert stored.pending_check_object_type is None
+    assert stored.pending_check_turns_remaining == 2
+
+    followed = _apply_pending_object_check_slots(stored, user_text="dynapro hp3")
+    assert followed.pending_check_topic == "safe_service"
+    assert followed.pending_check_object_type == "product_name"
+    assert followed.pending_check_object_value == "다이나프로 HP3"
+    assert followed.pending_check_turns_remaining == 1
+
+
+def test_pending_object_check_carries_safe_service_topic_into_product_object() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:object_eligibility_check"],
+        user_behavior="providing a product name for the pending safe-service eligibility check",
+        flow="safe service eligibility then product object",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        pending_check_topic="safe_service",
+        pending_check_object_type="product_name",
+        pending_check_object_value="dynapro hp3",
+        agent_prompt_profile="discovery_search",
+    )
+
+    _tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hp3",
+        context_text="안심서비스 대상 타이어는?\ndynapro hp3",
+        tire_size=None,
+        routing_result=routing_result,
+        pending_check_topic="safe_service",
+        pending_check_object_type="product_name",
+        pending_check_object_value="dynapro hp3",
+    )
+
+    assert _tool_patch == {"rcmd_type": "safe_kids", "brand_cd": "HK"}
+    assert response_decision is not None
+    assert (
+        response_decision.metadata["response_shape_key"]
+        == "safe_service_explanation_then_unsized_recommendation_summary"
+    )
+
+
+def test_pending_object_check_ignores_explicit_product_description_intent() -> None:
+    stored = ConversationSlots(pending_check_topic="safe_service", pending_check_turns_remaining=2)
+    cleared = _apply_pending_object_check_slots(stored, user_text="dynapro hp3 설명해줘")
+    assert cleared.pending_check_topic is None
+
+    patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hp3 설명해줘",
+        context_text="안심서비스 대상 타이어는?\ndynapro hp3 설명해줘",
+        tire_size=None,
+        routing_result=MultiAgentDomain(
+            reason="test",
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_description"],
+            user_behavior="asking explicit product description",
+            flow="explicit description overrides pending check",
+            claim_check_type="none",
+            complaint_scope="none",
+            discovery_followup_intent="none",
+            carried_discovery_objective="none",
+            pending_check_topic="none",
+            pending_check_object_type="none",
+            pending_check_object_value="",
+            agent_prompt_profile="discovery_search",
+        ),
+        pending_check_topic=cleared.pending_check_topic,
+        pending_check_object_type=cleared.pending_check_object_type,
+        pending_check_object_value=cleared.pending_check_object_value,
+    )
+
+    assert patch == {}
+    assert response_decision is not None
+    assert (
+        response_decision.metadata.get("response_shape_key")
+        != "safe_service_explanation_then_unsized_recommendation_summary"
     )
 
 

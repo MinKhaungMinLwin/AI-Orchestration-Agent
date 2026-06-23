@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 # 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
 PendingIntent = Literal["price", "stock", "order", "reservation", "quantity_benefit_comparison"]
 AvailabilityIntent = Literal["today_install"]
+PendingCheckTopic = Literal[
+    "safe_service",
+    "safe_plus",
+    "coupon_applicability",
+    "today_install",
+    "store_inventory",
+    "warranty",
+    "event_applicability",
+]
+PendingCheckObjectType = Literal["product_name", "tire_size", "store", "vehicle", "none"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -141,6 +151,10 @@ class ConversationSlots(BaseModel):
     quantity_comparison_context: Optional[dict[str, Any]] = None
     price_facts: Optional[dict[str, Any]] = None
     coupon_facts: Optional[dict[str, Any]] = None
+    pending_check_topic: Optional[PendingCheckTopic] = None
+    pending_check_object_type: Optional[PendingCheckObjectType] = None
+    pending_check_object_value: Optional[str] = None
+    pending_check_turns_remaining: Optional[int] = None
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
@@ -915,6 +929,9 @@ class ConversationSlots(BaseModel):
             "requested_cal_day": "요청 장착일",
             "rsv_hour": "요청 예약시간",
             "payment_amount": "결제금액",
+            "pending_check_topic": "확인 대기 주제",
+            "pending_check_object_type": "확인 대상 유형",
+            "pending_check_object_value": "확인 대상 값",
         }
 
         # Map pending_intent enum value → Korean label displayed in the prompt.

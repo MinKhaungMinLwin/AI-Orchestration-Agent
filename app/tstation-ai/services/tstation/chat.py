@@ -397,6 +397,12 @@ class MultiAgentDomain(BaseModel):
                 data["discovery_followup_intent"] = "none"
             if "carried_discovery_objective" not in data:
                 data["carried_discovery_objective"] = "none"
+            if "pending_check_topic" not in data:
+                data["pending_check_topic"] = "none"
+            if "pending_check_object_type" not in data:
+                data["pending_check_object_type"] = "none"
+            if "pending_check_object_value" not in data:
+                data["pending_check_object_value"] = ""
             if "referred_object_status" not in data:
                 data["referred_object_status"] = "resolved"
             if "referred_object_type" not in data:
@@ -520,6 +526,28 @@ class MultiAgentDomain(BaseModel):
             "'recommendation_filter' (a recommendation condition like 계절/차종/가성비/퍼포먼스). Use 'none' when "
             "discovery_followup_intent is not 'product_objective_followup'."
         ),
+    )
+    pending_check_topic: Literal[
+        "none",
+        "safe_service",
+        "safe_plus",
+        "coupon_applicability",
+        "today_install",
+        "store_inventory",
+        "warranty",
+        "event_applicability",
+    ] = Field(
+        description=(
+            "Pending object eligibility/check topic carried from the prior turn. Use a non-'none' value when the "
+            "previous assistant/user turn was about whether a condition/service/benefit applies and the current turn "
+            "only supplies an object slot for that check."
+        )
+    )
+    pending_check_object_type: Literal["none", "product_name", "tire_size", "store", "vehicle"] = Field(
+        description="Object type supplied in the current turn for pending_check_topic, or 'none'."
+    )
+    pending_check_object_value: str = Field(
+        description="Object value supplied in the current turn for pending_check_topic, or empty string."
     )
     comparison_followup_intent: Literal[
         "none",
@@ -1003,6 +1031,12 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["discovery_followup_intent"] = "none"
             if "carried_discovery_objective" not in data:
                 data["carried_discovery_objective"] = "none"
+            if "pending_check_topic" not in data:
+                data["pending_check_topic"] = "none"
+            if "pending_check_object_type" not in data:
+                data["pending_check_object_type"] = "none"
+            if "pending_check_object_value" not in data:
+                data["pending_check_object_value"] = ""
             if "referred_object_status" not in data:
                 data["referred_object_status"] = "resolved"
             if "referred_object_type" not in data:
@@ -1082,6 +1116,26 @@ class _SlimMultiAgentDomain(BaseModel):
             "Set ONLY when discovery_followup_intent='product_objective_followup'. This is a first-turn "
             "classification with no prior context, so this should almost always be 'none'."
         ),
+    )
+    pending_check_topic: Literal[
+        "none",
+        "safe_service",
+        "safe_plus",
+        "coupon_applicability",
+        "today_install",
+        "store_inventory",
+        "warranty",
+        "event_applicability",
+    ] = Field(
+        description=(
+            "Pending object eligibility/check topic. First-turn classification should usually return 'none'."
+        )
+    )
+    pending_check_object_type: Literal["none", "product_name", "tire_size", "store", "vehicle"] = Field(
+        description="Object type for pending_check_topic, or 'none'. First-turn classification should usually return 'none'."
+    )
+    pending_check_object_value: str = Field(
+        description="Object value for pending_check_topic, or empty string."
     )
     comparison_followup_intent: Literal[
         "none",
@@ -1253,25 +1307,35 @@ Complaint routing rule:
    - Example size_for_recommendation_continuation: after "승용차용 조용한 타이어 추천" returned an unsized summary, "2454518" means recommend quiet passenger tires in 245/45R18.
    - Example recent_product_set_size_availability after a recommendation list: "두개다 2355519 사이즈가 있을까?", "2355519 규격 있어?", "위 상품들 235/55R19 돼?"
 
-9. comparison_followup_intent — for Discovery product comparison turns:
+9. pending_check_topic / pending_check_object_type / pending_check_object_value — generic object eligibility/check follow-up:
+   - pending_check_topic enum: none, safe_service, safe_plus, coupon_applicability, today_install, store_inventory, warranty, event_applicability.
+   - Use this when the prior turn was checking whether a condition/service/benefit applies, and the current turn supplies only an object such as a product name, tire size, store, or vehicle.
+   - Frame intent conceptually as object_eligibility_check(topic, object_type, object_value), not as a new product description/search.
+   - Examples:
+     * Prior: "안심서비스 대상 타이어는?" → current: "dynapro hp3" => pending_check_topic=safe_service, pending_check_object_type=product_name, pending_check_object_value="dynapro hp3".
+     * Prior: "쿠폰 적용돼?" → current: "벤투스 에어S" => pending_check_topic=coupon_applicability, pending_check_object_type=product_name.
+     * Prior: "오늘 장착 가능해?" → current: "2454518" => pending_check_topic=today_install, pending_check_object_type=tire_size.
+   - If the current turn explicitly asks a new question such as description, price, stock, order, comparison, or a different attribute, set pending_check_topic=none and do not inherit the prior topic.
+
+10. comparison_followup_intent — for Discovery product comparison turns:
    - "none": default
    - "continue_previous_compare_metric": the current turn continues the previous compare axis from context. Example: after "A, B 중에 뭐가 더 신상품?" the current "C, D 중에서는?" should continue release comparison.
    - "new_compare_metric": the current turn explicitly switches compare axis. Example: after a release compare, "C, D 가격은?" means price.
    - "generic_compare": compare request exists but no stable metric was resolved. Use for "A, B 중에서는?" without prior compare context.
    - Do not infer car_type just because product names contain suffixes like SUV, AS, HPX. Use car_type only when the user explicitly asks for 차종 기준, SUV용, 승용/SUV 차이, 전기차용 여부, etc.
 
-10. comparison_metric — the compare axis for Discovery product comparison turns:
+11. comparison_metric — the compare axis for Discovery product comparison turns:
    - "none", "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"
    - If comparison_followup_intent=continue_previous_compare_metric, keep the prior compare axis unless the current turn explicitly introduces a new one.
    - If the current turn explicitly says 가격/연비/마일리지/소음/차종/등급/출시일, prefer that current-turn metric and set comparison_followup_intent=new_compare_metric.
 
-11. recent_product_set_followup_type — for Discovery follow-ups that rank/select from a recent product list:
+12. recent_product_set_followup_type — for Discovery follow-ups that rank/select from a recent product list:
    - "none": default
    - "rank_recent_product_set": the user refers to the recent product set and asks which one is cheapest, quietest, best for snow/wet, newest, most reviewed, highest-rated, premium, SUV-compatible, best mileage, or generally best.
    - Examples after product cards/recommendation/search results: "이중에 가장 저렴한건", "제일 조용한 건", "눈길에 제일 좋은 건", "리뷰 많은 건", "출시일 제일 최근인 건", "SUV에 맞는 건", "가성비 좋은 건".
    - Do NOT use this for "그거 가격 알려줘" or "가격 알려줘" when the user asks a transaction price for an ambiguous item; those remain referred_object_type=product_set and needs_clarification=true.
 
-12. recent_product_set_metric — metric for rank_recent_product_set:
+13. recent_product_set_metric — metric for rank_recent_product_set:
    - "none", "price", "noise", "wet", "snow", "release", "review", "rating", "grade", "vehicle_type", "mileage", "detail"
    - Field basis available in tool context:
      price → cheapest_final_prc, extra_fvr_sale_prc, sale_prc
@@ -1286,13 +1350,13 @@ Complaint routing rule:
      mileage → t_life_span, t_tray_ware
    - If a metric's source fields are absent in recent tool context, the agent must say it is hard to confirm from available data.
 
-13. recent_product_set_direction — "none", "min", "max", "match", or "compare":
+14. recent_product_set_direction — "none", "min", "max", "match", or "compare":
    - price cheapest and noise dB quietest usually use "min"; review/rating/release/grade/mileage usually use "max"; vehicle_type/SUV-compatible uses "match".
 
-14. recent_product_set_price_basis — "none", "cheapest_final_prc", "extra_fvr_sale_prc", or "sale_prc":
+15. recent_product_set_price_basis — "none", "cheapest_final_prc", "extra_fvr_sale_prc", or "sale_prc":
    - For "가장 저렴한/최저가/가성비" use "cheapest_final_prc" when available and make the answer state that basis.
 
-15. requested_product_attribute — structured requested product detail field for Discovery product-detail turns:
+16. requested_product_attribute — structured requested product detail field for Discovery product-detail turns:
    - "none": default
    - "brand": asks brand/브랜드
    - "manufacturer": asks 제조사/어디꺼/누가 만드는지
@@ -1301,7 +1365,7 @@ Complaint routing rule:
    - When the user asks a product's brand/manufacturer/origin, set requested_product_attribute accordingly even if the turn still needs product search/resolve first.
    - Do NOT use requested_product_attribute for brand-filter shopping requests such as "브리지스톤 타이어 보여줘". That is a product search, so keep requested_product_attribute="none".
 
-16. policy_intent — structured non-transaction policy intent:
+17. policy_intent — structured non-transaction policy intent:
    - "none": default
    - "shipping_fee_policy": 제주/서귀포/도서산간 배송비/추가 비용 정책
    - "online_store_price_policy": 온라인 vs 매장 가격/구매 방식/주문 방식 정책
@@ -1314,7 +1378,7 @@ Complaint routing rule:
    - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
    - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
 
-17. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+18. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -1587,6 +1651,7 @@ RULES:
 - Without prior compare context, "다이나프로 HPX, 다이나프로 HP3 중에서는?" → DISCOVERY, comparison_followup_intent=generic_compare, comparison_metric=detail
 - After a recent recommendation/search list with multiple products, a bare price/stock/buy follow-up like "그거 가격 알려줘", "가격 알려줘", "그거 재고 있어?", or "구매할래" is ambiguous unless one product was explicitly selected. Keep DISCOVERY, set referred_object_status=ambiguous, referred_object_type=product_set, and needs_clarification=true.
 - After the assistant's previous turn asked for missing info (vehicle/size) to answer a 안심서비스/흡음재/attribute/recommendation-condition question, and the current turn names ONLY a product with no new explicit intent → DISCOVERY with discovery_followup_intent=product_objective_followup and carried_discovery_objective set to the matching objective, NOT a fresh bare product search.
+- More generally, after a prior condition/service/benefit eligibility question, a current object-only answer (product/size/store/vehicle) should set pending_check_topic + pending_check_object_* and continue the same check instead of starting a fresh generic search.
 - If the current turn instead states a new explicit intent ("설명해줘", price/stock ask, comparison, a different attribute) → discovery_followup_intent=none even if a prior objective exists in the conversation.
 - Greeting only (안녕/hi/hello) → LEADING
 
@@ -1643,6 +1708,7 @@ EXAMPLES (tricky cases):
 - [After showing multiple recommendation/search products] "그거 가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
 - [After showing multiple recommendation/search products] "가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=safe_service (NOT a fresh bare product description)
+- [Prior turn: "안심서비스 대상인지 확인하려면 상품명을 알려주세요"] "dynapro hp3" → DISCOVERY, pending_check_topic=safe_service, pending_check_object_type=product_name, pending_check_object_value="dynapro hp3"
 - [Prior turn: "흡음재 들어간 타이어 알려줘" → agent asked for car/size] "벤투스 에어S" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=sound_absorber
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3 설명해줘" → DISCOVERY, discovery_followup_intent=none (explicit description intent overrides the carried objective)
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
@@ -1670,7 +1736,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -1691,6 +1757,11 @@ carried_discovery_objective:
 - sound_absorber: continuing a 흡음재 question
 - attribute_lookup: continuing a specific product attribute question (소음/연비/내구성 등)
 - recommendation_filter: continuing a recommendation condition/filter question (계절/차종/가성비/퍼포먼스 등)
+pending_check_topic:
+- none: default
+- safe_service, safe_plus, coupon_applicability, today_install, store_inventory, warranty, event_applicability
+pending_check_object_type:
+- none, product_name, tire_size, store, vehicle
 comparison_followup_intent:
 - none: default
 - continue_previous_compare_metric: continue the prior compare axis from conversation context
@@ -2341,6 +2412,9 @@ class StreamingMultiAgentCoordinator:
                     complaint_scope=raw_result.complaint_scope,
                     discovery_followup_intent=raw_result.discovery_followup_intent,
                     carried_discovery_objective=raw_result.carried_discovery_objective,
+                    pending_check_topic=raw_result.pending_check_topic,
+                    pending_check_object_type=raw_result.pending_check_object_type,
+                    pending_check_object_value=raw_result.pending_check_object_value,
                     comparison_followup_intent=raw_result.comparison_followup_intent,
                     comparison_metric=raw_result.comparison_metric,
                     recent_product_set_followup_type=raw_result.recent_product_set_followup_type,
@@ -15146,6 +15220,21 @@ _CARRIED_OBJECTIVE_ENTITY_PATCH: dict[str, dict[str, str]] = {
 }
 _SUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset(_CARRIED_OBJECTIVE_ENTITY_PATCH)
 _UNSUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset({"attribute_lookup", "recommendation_filter"})
+_PENDING_CHECK_TOPIC_ENTITY_PATCH: dict[str, dict[str, str]] = {
+    "safe_service": {"service_program": "safe_service", "rcmd_type": "safe_kids"},
+    "safe_plus": {"service_program": "safe_service", "rcmd_type": "safe_kids"},
+}
+_PENDING_CHECK_TOPICS = frozenset(
+    {
+        "safe_service",
+        "safe_plus",
+        "coupon_applicability",
+        "today_install",
+        "store_inventory",
+        "warranty",
+        "event_applicability",
+    }
+)
 _DISCOVERY_OBJECTIVE_BLOCKING_PENDING_INTENTS = frozenset({"price", "stock", "order"})
 _DISCOVERY_OBJECTIVE_BLOCKING_GOAL_TYPES = frozenset({"price_inquiry", "store_with_stock", "place_order"})
 _EXPLICIT_PRODUCT_ATTRIBUTE_QUERY_RE = re.compile(
@@ -15154,6 +15243,106 @@ _EXPLICIT_PRODUCT_ATTRIBUTE_QUERY_RE = re.compile(
     r"성능|특징|속성|사양|스펙|흡음재|안심서비스|안심플러스|전기차용|차종",
     re.IGNORECASE,
 )
+_PENDING_CHECK_TOPIC_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"안심\s*플러스|안심플러스", re.IGNORECASE), "safe_plus"),
+    (re.compile(r"안심\s*서비스|안심서비스", re.IGNORECASE), "safe_service"),
+    (re.compile(r"쿠폰|할인\s*쿠폰|적용\s*쿠폰", re.IGNORECASE), "coupon_applicability"),
+    (re.compile(r"오늘\s*장착|오늘\s*서비스|오늘서비스|당일\s*장착", re.IGNORECASE), "today_install"),
+    (re.compile(r"매장\s*재고|재고\s*(?:있|확인|가능)", re.IGNORECASE), "store_inventory"),
+    (re.compile(r"보증|워런티|warranty", re.IGNORECASE), "warranty"),
+    (re.compile(r"이벤트|행사|기획전|혜택", re.IGNORECASE), "event_applicability"),
+)
+_PENDING_CHECK_EXPLICIT_NEW_INTENT_RE = re.compile(
+    r"설명|알려줘|가격|얼마|최종가|쿠폰|재고|장착|예약|구매|주문|비교|차이|추천|"
+    r"등급|성능|특징|브랜드|제조사|원산지|출시|리뷰|영상",
+    re.IGNORECASE,
+)
+_PENDING_CHECK_ELIGIBILITY_ANCHOR_RE = re.compile(
+    r"대상|가능|적용|되는|돼|되나|되나요|있어|확인|해당|쓸\s*수|사용",
+    re.IGNORECASE,
+)
+
+
+def _pending_check_topic_from_text(text: str | None) -> str | None:
+    text = str(text or "").strip()
+    if not text or not _PENDING_CHECK_ELIGIBILITY_ANCHOR_RE.search(text):
+        return None
+    for pattern, topic in _PENDING_CHECK_TOPIC_PATTERNS:
+        if pattern.search(text):
+            return topic
+    return None
+
+
+def _pending_check_object_from_text(text: str | None) -> tuple[str | None, str | None]:
+    text = str(text or "").strip()
+    if not text:
+        return None, None
+    normalized_size = normalize_tire_size(text)
+    if normalized_size and len(text) <= 24:
+        return "tire_size", normalized_size
+    regex_slots = ConversationSlots.extract_from_user_text(text)
+    if regex_slots.shop_name and len(text) <= 30:
+        return "store", regex_slots.shop_name
+    if regex_slots.car_model and len(text) <= 40:
+        return "vehicle", regex_slots.car_model
+    if _is_bare_product_name_search_query(text):
+        tool_input = _build_bare_product_search_tool_input(text)
+        keyword = str((tool_input or {}).get("keyword") or text).strip()
+        return "product_name", keyword
+    return None, None
+
+
+def _clear_pending_object_check_slots(slots: ConversationSlots) -> ConversationSlots:
+    updated = slots.model_copy()
+    updated.pending_check_topic = None
+    updated.pending_check_object_type = None
+    updated.pending_check_object_value = None
+    updated.pending_check_turns_remaining = None
+    return updated
+
+
+def _apply_pending_object_check_slots(slots: ConversationSlots, *, user_text: str) -> ConversationSlots:
+    """Carry a short-lived eligibility topic across object-only follow-up turns."""
+    text = str(user_text or "").strip()
+    if not text:
+        return slots
+
+    explicit_topic = _pending_check_topic_from_text(text)
+    if explicit_topic:
+        updated = slots.model_copy()
+        updated.pending_check_topic = explicit_topic
+        updated.pending_check_object_type = None
+        updated.pending_check_object_value = None
+        updated.pending_check_turns_remaining = 2
+        return updated
+
+    object_type, object_value = _pending_check_object_from_text(text)
+    has_pending_topic = str(getattr(slots, "pending_check_topic", "") or "").strip() in _PENDING_CHECK_TOPICS
+    remaining = getattr(slots, "pending_check_turns_remaining", None)
+    if (
+        has_pending_topic
+        and object_type
+        and object_value
+        and remaining is not None
+        and remaining > 0
+        and not _PENDING_CHECK_EXPLICIT_NEW_INTENT_RE.search(text)
+    ):
+        updated = slots.model_copy()
+        updated.pending_check_object_type = object_type
+        updated.pending_check_object_value = object_value
+        updated.pending_check_turns_remaining = max(1, int(remaining) - 1)
+        return updated
+
+    if has_pending_topic and (_PENDING_CHECK_EXPLICIT_NEW_INTENT_RE.search(text) or remaining in (None, 0)):
+        return _clear_pending_object_check_slots(slots)
+    if has_pending_topic and remaining is not None:
+        updated = slots.model_copy()
+        next_remaining = int(remaining) - 1
+        if next_remaining <= 0:
+            return _clear_pending_object_check_slots(updated)
+        updated.pending_check_turns_remaining = next_remaining
+        return updated
+    return slots
 
 
 def _prior_context_text_without_current_turn(context_text: str, current_user_text: str) -> str:
@@ -15252,11 +15441,18 @@ def _bare_product_search_followup_override(
     routing_result: Any | None = None,
     pending_intent: str | None = None,
     goal_type: str | None = None,
+    pending_check_topic: str | None = None,
+    pending_check_object_type: str | None = None,
 ) -> dict[str, str] | None:
     if not _is_bare_product_name_search_query(user_text):
         return None
     if _is_discovery_objective_blocked_by_transaction_state(pending_intent, goal_type):
         return None
+    if (
+        str(pending_check_topic or "").strip() in _PENDING_CHECK_TOPIC_ENTITY_PATCH
+        and str(pending_check_object_type or "").strip() == "product_name"
+    ):
+        return {"action": "agent", "objective": str(pending_check_topic).strip()}
     followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
     carried_objective = str(getattr(routing_result, "carried_discovery_objective", "") or "").strip()
     if followup_intent == "product_objective_followup":
@@ -15312,6 +15508,9 @@ def _build_discovery_policy_context(
     routing_result: Any | None = None,
     pending_intent: str | None = None,
     goal_type: str | None = None,
+    pending_check_topic: str | None = None,
+    pending_check_object_type: str | None = None,
+    pending_check_object_value: str | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Discovery policy context for tool/mapper integration.
 
@@ -15404,6 +15603,32 @@ def _build_discovery_policy_context(
         ).strip()
         if routing_recommendation_scenario and routing_recommendation_scenario != "none":
             known_slots["recommendation_scenario"] = routing_recommendation_scenario
+        routing_pending_check_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
+        routing_pending_check_object_type = str(
+            getattr(routing_result, "pending_check_object_type", "") or ""
+        ).strip()
+        routing_pending_check_object_value = str(
+            getattr(routing_result, "pending_check_object_value", "") or ""
+        ).strip()
+        effective_pending_check_topic = (
+            routing_pending_check_topic
+            if routing_pending_check_topic in _PENDING_CHECK_TOPICS and routing_pending_check_topic != "none"
+            else str(pending_check_topic or "").strip()
+        )
+        effective_pending_check_object_type = (
+            routing_pending_check_object_type
+            if routing_pending_check_object_type in {"product_name", "tire_size", "store", "vehicle"}
+            else str(pending_check_object_type or "").strip()
+        )
+        effective_pending_check_object_value = (
+            routing_pending_check_object_value or str(pending_check_object_value or "").strip()
+        )
+        if effective_pending_check_topic in _PENDING_CHECK_TOPICS:
+            known_slots["pending_check_topic"] = effective_pending_check_topic
+        if effective_pending_check_object_type in {"product_name", "tire_size", "store", "vehicle"}:
+            known_slots["pending_check_object_type"] = effective_pending_check_object_type
+        if effective_pending_check_object_value:
+            known_slots["pending_check_object_value"] = effective_pending_check_object_value
         explicit_requested_product_attribute = str(extract_requested_product_attribute(last_user_text) or "").strip()
         effective_requested_product_attribute = (
             explicit_requested_product_attribute or routing_requested_product_attribute
@@ -15443,6 +15668,8 @@ def _build_discovery_policy_context(
             routing_result=routing_result,
             pending_intent=pending_intent,
             goal_type=goal_type,
+            pending_check_topic=effective_pending_check_topic,
+            pending_check_object_type=effective_pending_check_object_type,
         )
         effective_supported_objective = (
             supported_followup_override["objective"]
@@ -15508,9 +15735,22 @@ def _build_discovery_policy_context(
                     sub_intent="product_attribute_lookup",
                     entities=entities,
                 )
-        if effective_supported_objective in _CARRIED_OBJECTIVE_ENTITY_PATCH:
+        if effective_supported_objective in _CARRIED_OBJECTIVE_ENTITY_PATCH or (
+            effective_supported_objective in _PENDING_CHECK_TOPIC_ENTITY_PATCH
+            and effective_pending_check_object_type == "product_name"
+        ):
             entities = dict(discovery_frame.entities)
-            entities.update(_CARRIED_OBJECTIVE_ENTITY_PATCH[effective_supported_objective])
+            entity_patch = (
+                _CARRIED_OBJECTIVE_ENTITY_PATCH.get(effective_supported_objective)
+                or _PENDING_CHECK_TOPIC_ENTITY_PATCH[effective_supported_objective]
+            )
+            entities.update(entity_patch)
+            if effective_pending_check_topic:
+                entities["pending_check_topic"] = effective_pending_check_topic
+            if effective_pending_check_object_type:
+                entities["pending_check_object_type"] = effective_pending_check_object_type
+            if effective_pending_check_object_value:
+                entities["pending_check_object_value"] = effective_pending_check_object_value
             if (
                 entities != discovery_frame.entities
                 or discovery_frame.intent != "product_recommendation"
@@ -18550,6 +18790,7 @@ class TStationChatServiceV2:
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
+            merged_slots = _apply_pending_object_check_slots(merged_slots, user_text=last_user_text)
             if _is_product_coupon_price_amount_query(last_user_text):
                 coupon_product_name = _coupon_target_product_name_for_query(last_user_text)
                 parsed_coupon_target = _split_product_size_quantity_from_text(coupon_product_name, last_user_text)
@@ -20864,6 +21105,9 @@ class TStationChatServiceV2:
                 "region": merged_slots.region,
                 "shop_id": merged_slots.shop_id,
                 "store_name": merged_slots.shop_name,
+                "pending_check_topic": merged_slots.pending_check_topic,
+                "pending_check_object_type": merged_slots.pending_check_object_type,
+                "pending_check_object_value": merged_slots.pending_check_object_value,
             }
             if preserve_router_policy_contract or preserve_router_event_contract:
                 planned_domains = []
@@ -21077,6 +21321,9 @@ class TStationChatServiceV2:
             routing_result=routing_result,
             pending_intent=merged_slots.pending_intent,
             goal_type=merged_slots.goal_type,
+            pending_check_topic=merged_slots.pending_check_topic,
+            pending_check_object_type=merged_slots.pending_check_object_type,
+            pending_check_object_value=merged_slots.pending_check_object_value,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_search_tool_patch.set(discovery_tool_patch)
@@ -21131,6 +21378,9 @@ class TStationChatServiceV2:
                     "vehicle_type": merged_slots.vehicle_type,
                     "brand_cd": discovery_tool_patch.get("brand_cd"),
                     "discovery_followup_action": discovery_tool_patch.get("discovery_followup_action"),
+                    "pending_check_topic": merged_slots.pending_check_topic,
+                    "pending_check_object_type": merged_slots.pending_check_object_type,
+                    "pending_check_object_value": merged_slots.pending_check_object_value,
                 }
                 contract_frame = build_discovery_intent_frame(
                     last_user_text,
@@ -23932,6 +24182,10 @@ class TStationChatServiceV2:
                 routing_result=routing_result,
                 pending_intent=getattr(initial_slots, "pending_intent", None) if initial_slots is not None else None,
                 goal_type=getattr(initial_slots, "goal_type", None) if initial_slots is not None else None,
+                pending_check_topic=getattr(initial_slots, "pending_check_topic", None) if initial_slots is not None else None,
+                pending_check_object_type=(
+                    getattr(initial_slots, "pending_check_object_type", None) if initial_slots is not None else None
+                ),
             )
             if followup_override is not None:
                 if followup_override["action"] == "agent":
