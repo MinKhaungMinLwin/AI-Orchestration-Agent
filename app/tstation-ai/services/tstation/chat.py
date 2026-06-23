@@ -23815,7 +23815,14 @@ class TStationChatServiceV2:
                     event = _build_turn_contract_fallback_event(
                         turn_contract=turn_contract,
                         user_text=user_query,
-                        tool_data_list=tool_context_items,
+                        tool_data_list=[
+                            *tool_context_items,
+                            *mapper_tool_items,
+                            *[
+                                {"tool": tool_name, "data": tool_output}
+                                for tool_name, tool_output in structured_sources
+                            ],
+                        ],
                     ) or build_response_policy_guard_event(turn_contract)
                     last_template = "quickReply"
                     last_template_source = "turn_contract"

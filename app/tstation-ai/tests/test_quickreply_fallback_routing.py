@@ -6681,6 +6681,42 @@ def test_transaction_unresolved_product_resolution_event_filters_size_candidates
     assert event["data"]["metadata"]["availabilityIntent"] == "today_install"
 
 
+def test_transaction_unresolved_product_resolution_event_accepts_mapper_tool_entries() -> None:
+    slots = {
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "ord_qty": 2,
+        "shop_name": "판교점",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260624",
+    }
+
+    event = _build_transaction_unresolved_product_resolution_event(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        slots=slots,
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "다이나프로 HPX", "limit": 10, "brand_cd": "HK"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {"goods_nm": "다이나프로 HPX", "tire_size_1": "255/45R20"},
+                            {"goods_nm": "다이나프로 HPX", "tire_size_1": "255/55R18"},
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert "다이나프로 HPX 오늘서비스 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["255/45R20", "255/55R18", "사이즈 직접 입력"]
+
+
 def test_transaction_unresolved_product_resolution_event_skips_explicit_size_turn() -> None:
     slots = ConversationSlots(
         pending_intent="order",
