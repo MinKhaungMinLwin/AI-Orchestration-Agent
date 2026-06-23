@@ -71,6 +71,16 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
     "get_best_selling_products_tool",
 })
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
+_HIGH_RISK_TRANSACTION_TOOLS = frozenset({
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "quick_order_tool",
+    "add_to_cart_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+})
 _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "unexpected_tool_for_contract",
     "requested_product_attribute_contract_drift",
@@ -535,7 +545,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
 
 
 def violates_response_template_contract(event: Mapping[str, Any], contract: TurnContract | None) -> bool:
-    """Block only templates that clearly contradict missing-slot policy."""
+    """Return true only for hard template violations that must be replaced before emit."""
 
     if contract is None:
         return False
@@ -543,8 +553,6 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
     if should_guard_required_slots(contract) and template in _REQUIRED_SLOT_BLOCK_TEMPLATES:
         return True
     if _is_unsupported_discovery_product_template_without_current_source(event, contract):
-        return True
-    if _is_discovery_first_leg_transaction_violation(event, contract):
         return True
     response_decision = contract.response_decision or {}
     forbidden_behaviors = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
@@ -593,14 +601,18 @@ def response_contract_violations(
             "response_shape_key": str(event.get("response_shape_key") or ""),
             "assistant_response_source": str(event.get("assistant_response_source") or ""),
         })
-    if violates_response_template_contract(event, contract) and not unsupported_product_template:
-        violation_type = (
-            "forbidden_discovery_first_leg_response"
-            if _is_discovery_first_leg_transaction_violation(event, contract)
-            else "forbidden_template"
-        )
+    discovery_first_leg_violation = _is_discovery_first_leg_transaction_violation(event, contract)
+    if discovery_first_leg_violation:
         violations.append({
-            "type": violation_type,
+            "type": "forbidden_discovery_first_leg_response",
+            "template": template,
+            "fallback_reason": contract.fallback_reason,
+            "response_shape_key": str(event.get("response_shape_key") or ""),
+            "assistant_response_source": str(event.get("assistant_response_source") or ""),
+        })
+    if violates_response_template_contract(event, contract) and not unsupported_product_template:
+        violations.append({
+            "type": "forbidden_template",
             "template": template,
             "fallback_reason": contract.fallback_reason,
             "response_shape_key": str(event.get("response_shape_key") or ""),
@@ -921,11 +933,17 @@ def _tool_contract_violation(
         if str(tool) and str(tool) in contract.forbidden_tools
     ]
     if forbidden:
+        severity = (
+            "error"
+            if contract.domain in {"transaction", "support"}
+            or any(tool in _HIGH_RISK_TRANSACTION_TOOLS for tool in forbidden)
+            else "warning"
+        )
         return {
             "type": "forbidden_tool_for_contract",
             "called_tools": forbidden,
             "forbidden_tools": list(contract.forbidden_tools),
-            "severity": "error",
+            "severity": severity,
         }
     unexpected = [
         str(tool)

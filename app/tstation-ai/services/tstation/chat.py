@@ -716,6 +716,19 @@ _ROUTER_COMPARISON_METRICS = frozenset({
     "car_type",
     "detail",
 })
+_ROUTER_PROTECTED_ACTIONS = frozenset({
+    "product_comparison",
+    "discovery_recommendation",
+    "recent_product_set_ranking",
+    "price_or_coupon_check",
+    "stock_store_or_reservation",
+    "quick_order_execute",
+    "quick_order_reservation",
+    "order",
+    "cancel",
+    "order_history",
+    "store_schedule",
+})
 _RECENT_PRODUCT_SET_RANKING_TEXT_RE = re.compile(
     r"(?:이\s*중|이중|중에|목록|추천(?:해준|된)?|보여준|위\s*상품).{0,30}"
     r"(?:가장|제일|최저|저렴|싼|조용|소음|눈길|빗길|리뷰|평점|최근|신상|출시|suv|차종|가성비|프리미엄)|"
@@ -760,6 +773,25 @@ def _router_contract_is_high_confidence_comparison(routing_result: MultiAgentDom
     return referred_object_type == "product_set" and comparison_metric in _ROUTER_COMPARISON_METRICS
 
 
+def _router_contract_is_high_confidence_protected_action(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE:
+        return False
+    plan_items = tuple(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    action_tokens: set[str] = set()
+    for item in plan_items:
+        if ":" in item:
+            action_tokens.add(item.rsplit(":", 1)[-1])
+        action_tokens.update(action for action in _ROUTER_PROTECTED_ACTIONS if action in item)
+    if action_tokens & _ROUTER_PROTECTED_ACTIONS:
+        return True
+    profile = str(getattr(getattr(routing_result, "agent_prompt_profile", None), "value", "") or "").lower()
+    return bool(profile and any(action in profile for action in ("discovery_recommendation", "transaction_order")))
+
+
 def _explicit_current_turn_override_reason(
     *,
     user_text: str,
@@ -794,9 +826,21 @@ def _should_preserve_router_contract(
     if routing_result is None:
         return False
     is_high_confidence_comparison = _router_contract_is_high_confidence_comparison(routing_result)
-    if not (is_high_confidence_comparison or _router_contract_is_high_confidence_policy(routing_result)):
+    is_high_confidence_protected_action = _router_contract_is_high_confidence_protected_action(routing_result)
+    if not (
+        is_high_confidence_comparison
+        or is_high_confidence_protected_action
+        or _router_contract_is_high_confidence_policy(routing_result)
+    ):
         return False
     if is_high_confidence_comparison and override_reason in {
+        "explicit_current_turn_stock_or_booking",
+        "explicit_current_turn_purchase",
+    }:
+        return False
+    if is_high_confidence_protected_action and not is_high_confidence_comparison and override_reason in {
+        "missing_goods_no_for_explicit_transaction",
+        "explicit_current_turn_price_lookup",
         "explicit_current_turn_stock_or_booking",
         "explicit_current_turn_purchase",
     }:

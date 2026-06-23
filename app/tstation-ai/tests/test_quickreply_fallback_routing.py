@@ -962,6 +962,27 @@ def test_high_confidence_support_router_contract_allows_explicit_price_lookup_ov
     )
 
 
+def test_high_confidence_discovery_recommendation_router_contract_blocks_generic_override() -> None:
+    routing = MultiAgentDomain(
+        reason="recommendation intent",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:discovery_recommendation"],
+        user_behavior="asking for a tire recommendation",
+        flow="single domain recommendation",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.92,
+        needs_clarification=False,
+        agent_prompt_profile="discovery_recommendation",
+    )
+
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="cross_domain_policy_route",
+        override_reason="router_low_confidence_or_ambiguous",
+    )
+
+
 def test_delivery_policy_gate_handles_regional_product_price_policy() -> None:
     text = "벤투스 에어 S 상품 제주도에서 사는거랑, 서울에서 사는거랑 가격 똑같을까?"
     decision = decide_delivery_policy_gate(user_text=text)
@@ -11330,6 +11351,41 @@ def test_turn_contract_keeps_forbidden_tool_drift_as_hard_safety_error() -> None
     ]
 
 
+def test_turn_contract_keeps_discovery_tool_drift_as_warning() -> None:
+    contract = build_turn_contract(
+        user_text="연비 좋은 타이어가 뭐야",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_products_recommendations_tool",),
+            forbidden_tools=("search_product_tool",),
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            metadata={"response_shape_key": "sized_product_recommendation"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:discovery_recommendation"],
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="product",
+        called_tools=["search_product_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert {
+        "type": "forbidden_tool_for_contract",
+        "severity": "warning",
+        "called_tools": ["search_product_tool"],
+        "forbidden_tools": ["search_product_tool"],
+    } in violations
+    assert hard_contract_violations(violations) == []
+
+
 def test_turn_contract_does_not_block_missing_reference_for_favorite_store_lookup() -> None:
     frame = build_transaction_intent_frame("내 단골매장 어디지?", known_slots={})
     contract = build_turn_contract(
@@ -12508,7 +12564,7 @@ def test_turn_contract_blocks_general_schedule_datepick_for_preview_stock_contra
     } in violations
 
 
-def test_turn_contract_blocks_discovery_summary_before_transaction_resolution() -> None:
+def test_turn_contract_warns_discovery_summary_before_transaction_resolution() -> None:
     contract = build_turn_contract(
         user_text="옵티모 가격 얼마야?",
         intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
@@ -12527,10 +12583,17 @@ def test_turn_contract_blocks_discovery_summary_before_transaction_resolution() 
         "called_tools": ["search_product_tool"],
     }
 
-    assert violates_response_template_contract(event, contract)
-    fallback_event = build_response_policy_guard_event(contract)
-    assert "어떤 상품 기준인지" in fallback_event["data"]["assistantResponse"]
-    assert "상품명 입력" in _labels(fallback_event["data"]["quickReplies"])
+    assert not violates_response_template_contract(event, contract)
+    violations = response_contract_violations(contract=contract, **event)
+    assert violations == [{
+        "type": "forbidden_discovery_first_leg_response",
+        "severity": "warning",
+        "template": "quickReply",
+        "fallback_reason": "missing_required_slots:product",
+        "response_shape_key": "product_attribute_summary",
+        "assistant_response_source": "code_product_attribute_resolver",
+    }]
+    assert hard_contract_violations(violations) == []
 
 
 def test_discovery_first_leg_order_guard_does_not_use_price_clarification() -> None:
