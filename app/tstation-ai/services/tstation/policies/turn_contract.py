@@ -86,6 +86,19 @@ _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_orders_of_user_tool",
     "get_order_status_tool",
 })
+_DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
+    "search_product_tool",
+    "get_product_applicable_events_tool",
+    "get_product_promotions_tool",
+    "get_events_tool",
+    "get_deals_tool",
+})
+_DISCOVERY_EVENT_CONTENT_FORBIDDEN_TOOLS = frozenset({
+    "quick_order_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+})
 _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "unexpected_tool_for_contract",
     "requested_product_attribute_contract_drift",
@@ -291,6 +304,20 @@ def build_turn_contract(
     if code_intent == "reservation_store_info_lookup":
         domain = "transaction"
         intent = "reservation_store_info_lookup"
+    if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
+        domain = "discovery"
+        intent = planner_intent if planner_intent in {
+            "product_event_lookup",
+            "product_promotion_lookup",
+            "product_coupon_lookup",
+            "product_deal_lookup",
+        } else code_intent if code_intent in {
+            "product_event_lookup",
+            "product_promotion_lookup",
+            "product_coupon_lookup",
+            "product_deal_lookup",
+        } else "product_event_lookup"
+        known_slots["goal_type"] = "product_event_lookup"
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
@@ -342,6 +369,14 @@ def build_turn_contract(
             forbidden_tools,
             ("search_product_tool", "get_final_price_tool"),
         )
+    if intent in {
+        "product_event_lookup",
+        "product_promotion_lookup",
+        "product_coupon_lookup",
+        "product_deal_lookup",
+    }:
+        allowed_tools = _merge_tuple(allowed_tools, tuple(_DISCOVERY_EVENT_CONTENT_TOOLS))
+        forbidden_tools = _merge_tuple(forbidden_tools, tuple(_DISCOVERY_EVENT_CONTENT_FORBIDDEN_TOOLS))
 
     drift = _contract_drift(
         code_domain=code_domain,
@@ -1342,8 +1377,49 @@ def _normalize_plan_intent(value: str) -> str:
         "quick_order_confirmed": "quick_order_execute",
         "transaction_price_stock": "price_or_coupon_check",
         "discovery_search": "resolve_or_describe_product",
+        "promotion_lookup": "product_promotion_lookup",
+        "promotions_lookup": "product_promotion_lookup",
+        "product_promotion": "product_promotion_lookup",
+        "product_promotions": "product_promotion_lookup",
+        "product_coupon": "product_coupon_lookup",
+        "product_coupons": "product_coupon_lookup",
+        "coupon_lookup": "product_coupon_lookup",
+        "deal_lookup": "product_deal_lookup",
+        "product_deal": "product_deal_lookup",
+        "event_lookup": "product_event_lookup",
+        "product_event": "product_event_lookup",
+        "discovery_event_content": "product_event_lookup",
     }
     return aliases.get(normalized, normalized or "unknown")
+
+
+def _is_discovery_event_content_contract(
+    routing_result: Any | None,
+    planner_intent: str | None,
+    code_intent: str | None,
+) -> bool:
+    event_intents = {
+        "product_event_lookup",
+        "product_promotion_lookup",
+        "product_coupon_lookup",
+        "product_deal_lookup",
+    }
+    if planner_intent in event_intents or code_intent in event_intents:
+        return True
+    profile = str(getattr(getattr(routing_result, "agent_prompt_profile", None), "value", "") or "").lower()
+    if profile == "discovery_event_content":
+        return True
+    plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    return any(
+        token in plan_text
+        for token in (
+            "product_event_lookup",
+            "product_promotion_lookup",
+            "product_coupon_lookup",
+            "product_deal_lookup",
+            "discovery_event_content",
+        )
+    )
 
 
 def _planner_confidence(routing_result: Any | None) -> float | None:

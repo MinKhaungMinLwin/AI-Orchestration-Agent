@@ -11902,6 +11902,80 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
 
 
 @pytest.mark.parametrize(
+    ("user_text", "sub_intent", "allowed_tool"),
+    [
+        ("ventus air S 지금 행사 함?", "product_event_lookup", "get_product_applicable_events_tool"),
+        ("벤투스 에어S 쿠폰 있어?", "product_coupon_lookup", "get_product_promotions_tool"),
+        ("벤투스 에어S 기획전 적용돼?", "product_deal_lookup", "get_product_promotions_tool"),
+    ],
+)
+def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, sub_intent: str, allowed_tool: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    assert cross_domain_plan.primary_domain == PolicyDomain.DISCOVERY
+    assert [task.intent for task in cross_domain_plan.subtasks] == ["product_event_lookup"]
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == sub_intent
+    assert tool_plan.preferred_tool == "search_product_tool"
+    assert "search_product_tool" in tool_plan.allowed_tools
+    assert allowed_tool in tool_plan.allowed_tools
+    assert "get_product_description_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == sub_intent
+    assert "ask_size_for_product_benefit_lookup" in response_decision.forbidden_behaviors
+
+
+def test_router_discovery_event_content_blocks_product_price_override() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_event_lookup"],
+        agent_prompt_profile="discovery_event_content",
+    )
+
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0_auto_chain",
+        override_reason="explicit_current_turn_price_lookup",
+    )
+
+
+def test_turn_contract_preserves_product_event_lookup_tools_and_blocks_transaction_tools() -> None:
+    frame = build_discovery_intent_frame("ventus air S 지금 행사 함?")
+    contract = build_turn_contract(
+        user_text="ventus air S 지금 행사 함?",
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decide_discovery_response(frame),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_event_lookup"],
+            agent_prompt_profile="discovery_event_content",
+        ),
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_event_lookup"
+    assert contract.known_slots["goal_type"] == "product_event_lookup"
+    assert "search_product_tool" in contract.allowed_tools
+    assert "get_product_applicable_events_tool" in contract.allowed_tools
+    assert "get_product_promotions_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+
+
+def test_product_benefit_stacking_stays_out_of_discovery_event_lookup() -> None:
+    frame = build_discovery_intent_frame("벤투스 에어S 이벤트랑 쿠폰 같이 돼?")
+    cross_domain_plan = plan_cross_domain_turn("벤투스 에어S 이벤트랑 쿠폰 같이 돼?", known_slots={})
+
+    assert frame.sub_intent != "product_event_lookup"
+    assert [task.intent for task in cross_domain_plan.subtasks] != ["product_event_lookup"]
+
+
+@pytest.mark.parametrize(
     "user_text",
     [
         "리뷰 어디다 써?",
@@ -11967,6 +12041,7 @@ def _routing_result(
     *,
     domains=None,
     execution_plan=None,
+    agent_prompt_profile="full",
     comparison_followup_intent: str = "none",
     comparison_metric: str = "none",
     requested_product_attribute: str = "none",
@@ -11993,7 +12068,7 @@ def _routing_result(
         referred_object_type=referred_object_type,
         needs_clarification=needs_clarification,
         planner_confidence=0.91,
-        agent_prompt_profile="full",
+        agent_prompt_profile=agent_prompt_profile,
     )
 
 

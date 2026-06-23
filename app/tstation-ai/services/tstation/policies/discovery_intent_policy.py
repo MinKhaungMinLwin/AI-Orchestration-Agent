@@ -126,6 +126,11 @@ _DEAL_LIST_RE = re.compile(
     r"진행\s*중인\s*기획전|기획전\s*(?:목록|리스트|검색|조회|보여|알려|내용)?",
     re.IGNORECASE,
 )
+_PRODUCT_EVENT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션", re.IGNORECASE)
+_PRODUCT_DEAL_LOOKUP_RE = re.compile(r"기획전|딜|deal", re.IGNORECASE)
+_PRODUCT_COUPON_LOOKUP_RE = re.compile(r"쿠폰|할인권", re.IGNORECASE)
+_PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
+_BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
@@ -645,6 +650,15 @@ def build_discovery_intent_frame(
         entities["default_benefit"] = True
     elif is_deal_list_request(text):
         entities["deal_list_only"] = True
+    if products and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
+        if _PRODUCT_EVENT_LOOKUP_RE.search(text):
+            entities["product_benefit_lookup_type"] = "event"
+        elif _PRODUCT_DEAL_LOOKUP_RE.search(text):
+            entities["product_benefit_lookup_type"] = "deal"
+        elif _PRODUCT_COUPON_LOOKUP_RE.search(text):
+            entities["product_benefit_lookup_type"] = "coupon"
+        else:
+            entities["product_benefit_lookup_type"] = "benefit"
 
     concept = bool(_CONCEPT_RE.search(text))
     standalone_attribute_metrics = tuple(
@@ -719,6 +733,18 @@ def build_discovery_intent_frame(
     elif entities.get("external_price_comparison"):
         intent = "product_search"
         sub_intent = "external_price_comparison_request"
+    elif entities.get("product_benefit_lookup_type") == "event":
+        intent = "product_search"
+        sub_intent = "product_event_lookup"
+    elif entities.get("product_benefit_lookup_type") == "deal":
+        intent = "product_search"
+        sub_intent = "product_deal_lookup"
+    elif entities.get("product_benefit_lookup_type") == "coupon":
+        intent = "product_search"
+        sub_intent = "product_coupon_lookup"
+    elif entities.get("product_benefit_lookup_type") == "benefit":
+        intent = "product_search"
+        sub_intent = "product_benefit_lookup"
     elif entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
@@ -922,6 +948,43 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_deals_tool",
             tool_args_patch={},
             forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
+        )
+    if frame.sub_intent in {
+        "product_event_lookup",
+        "product_deal_lookup",
+        "product_coupon_lookup",
+        "product_benefit_lookup",
+    }:
+        product_names = entities.get("product_names") or ()
+        args: dict[str, Any] = {}
+        if product_names:
+            args["keyword"] = product_names[0]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        return ToolPlan(
+            allowed_tools=(
+                "search_product_tool",
+                "get_product_applicable_events_tool",
+                "get_product_promotions_tool",
+                "get_events_tool",
+                "get_deals_tool",
+            ),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=(
+                "get_products_recommendations_tool",
+                "get_product_description_tool",
+                "quick_order_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+            ),
+            metadata={
+                "response_intent": frame.sub_intent,
+                "goal_type": "product_event_lookup",
+                "benefit_lookup_type": entities.get("product_benefit_lookup_type"),
+            },
         )
     if frame.sub_intent == "best_seller_search":
         args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}

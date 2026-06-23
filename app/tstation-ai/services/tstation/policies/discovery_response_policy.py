@@ -354,6 +354,32 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_search":
+        if frame.sub_intent in {
+            "product_event_lookup",
+            "product_deal_lookup",
+            "product_coupon_lookup",
+            "product_benefit_lookup",
+        }:
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=(
+                    "product_description_answer",
+                    "ask_size_for_product_benefit_lookup",
+                    "route_product_benefit_to_order_flow",
+                    "datepick_or_preorder_for_product_benefit_lookup",
+                ),
+                assistant_guidance=(
+                    "상품명+행사/이벤트/기획전/쿠폰/혜택 질의는 상품 설명이나 규격 선택으로 끝내지 않는다. "
+                    "사이즈 없이 search_product_tool로 상품을 resolve한 뒤 적용 가능한 이벤트/기획전/쿠폰 tool 결과만 요약한다. "
+                    "가격/주문/예약/장착 가능 여부로 확장하지 않는다."
+                ),
+                metadata={
+                    "response_shape_key": frame.sub_intent,
+                    "goal_type": "product_event_lookup",
+                },
+            )
         if frame.sub_intent == "restock_inquiry":
             return ResponseDecision(
                 response_shape=ResponseShape.SUMMARY,

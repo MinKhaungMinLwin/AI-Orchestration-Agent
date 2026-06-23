@@ -723,6 +723,10 @@ _ROUTER_COMPARISON_METRICS = frozenset({
 _ROUTER_PROTECTED_ACTIONS = frozenset({
     "product_comparison",
     "discovery_recommendation",
+    "product_event_lookup",
+    "product_promotion_lookup",
+    "product_coupon_lookup",
+    "product_deal_lookup",
     "recent_product_set_ranking",
     "price_or_coupon_check",
     "stock_store_or_reservation",
@@ -794,7 +798,41 @@ def _router_contract_is_high_confidence_protected_action(routing_result: MultiAg
     if action_tokens & _ROUTER_PROTECTED_ACTIONS:
         return True
     profile = str(getattr(getattr(routing_result, "agent_prompt_profile", None), "value", "") or "").lower()
-    return bool(profile and any(action in profile for action in ("discovery_recommendation", "transaction_order")))
+    return bool(
+        profile
+        and any(action in profile for action in ("discovery_recommendation", "discovery_event_content", "transaction_order"))
+    )
+
+
+def _router_contract_is_high_confidence_event_content(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE:
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if domains and domains != [MultiAgentDomain.Domain.DISCOVERY]:
+        return False
+    profile = str(getattr(getattr(routing_result, "agent_prompt_profile", None), "value", "") or "").lower()
+    plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    return bool(
+        profile == "discovery_event_content"
+        or any(
+            token in plan_text
+            for token in (
+                "product_event_lookup",
+                "product_promotion_lookup",
+                "product_coupon_lookup",
+                "product_deal_lookup",
+                "event",
+                "promotion",
+                "deal",
+                "기획전",
+                "이벤트",
+            )
+        )
+    )
 
 
 def _explicit_current_turn_override_reason(
@@ -831,13 +869,22 @@ def _should_preserve_router_contract(
     if routing_result is None:
         return False
     is_high_confidence_comparison = _router_contract_is_high_confidence_comparison(routing_result)
+    is_high_confidence_event_content = _router_contract_is_high_confidence_event_content(routing_result)
     is_high_confidence_protected_action = _router_contract_is_high_confidence_protected_action(routing_result)
     if not (
         is_high_confidence_comparison
+        or is_high_confidence_event_content
         or is_high_confidence_protected_action
         or _router_contract_is_high_confidence_policy(routing_result)
     ):
         return False
+    if is_high_confidence_event_content and override_reason in {
+        "missing_goods_no_for_explicit_transaction",
+        "explicit_current_turn_price_lookup",
+        "explicit_current_turn_stock_or_booking",
+        "explicit_current_turn_purchase",
+    }:
+        return True
     if is_high_confidence_comparison and override_reason in {
         "explicit_current_turn_stock_or_booking",
         "explicit_current_turn_purchase",
@@ -19667,6 +19714,7 @@ class TStationChatServiceV2:
                     cleared_stale_store_context,
                 )
             preserve_router_policy_contract = _router_contract_is_high_confidence_policy(routing_result)
+            preserve_router_event_contract = _router_contract_is_high_confidence_event_content(routing_result)
             router_requires_reference_clarification = bool(
                 routing_result is not None
                 and getattr(routing_result, "needs_clarification", False)
@@ -19680,14 +19728,15 @@ class TStationChatServiceV2:
                 "shop_id": merged_slots.shop_id,
                 "store_name": merged_slots.shop_name,
             }
-            if preserve_router_policy_contract:
+            if preserve_router_policy_contract or preserve_router_event_contract:
                 planned_domains = []
                 has_coupon_pattern_plan = False
                 logger.info(
-                    "[POLICY][cross-domain] skipped heuristic plan for high-confidence router policy contract: "
-                    "domains=%s policy_intent=%s",
+                    "[POLICY][cross-domain] skipped heuristic plan for high-confidence router contract: "
+                    "domains=%s policy_intent=%s profile=%s",
                     [domain.value for domain in list(getattr(routing_result, "domains", []) or [])],
                     getattr(routing_result, "policy_intent", None),
+                    getattr(routing_result, "agent_prompt_profile", None),
                 )
             else:
                 cross_domain_plan = plan_cross_domain_turn(last_user_text, known_slots=known_slots)
@@ -22537,6 +22586,8 @@ class TStationChatServiceV2:
             return emitted_events, comparison_event
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
+            if _router_contract_is_high_confidence_event_content(routing_result):
+                return None
             followup_override = _bare_product_search_followup_override(
                 user_query,
                 context_text=recent_user_context_text,

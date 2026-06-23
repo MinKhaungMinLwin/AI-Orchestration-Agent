@@ -51,6 +51,8 @@ _REGION_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
+_BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
 _REGIONAL_PRICE_POLICY_RE = re.compile(
     r"(?=.*(?:가격|판매가|최종가))"
     r"(?=.*(?:똑같|같(?:아|은|나요|을까)?|동일|다르|차이|왜))"
@@ -228,6 +230,11 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
+    needs_product_benefit_lookup = bool(
+        has_product_hint
+        and _PRODUCT_BENEFIT_LOOKUP_RE.search(text)
+        and not _BENEFIT_STACKING_RE.search(text)
+    )
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
     needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
@@ -317,6 +324,20 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="policy_notice_or_escalation",
                     reason="정책 안내 또는 1:1 문의 연결이 필요함",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if needs_product_benefit_lookup and not needs_stock_or_booking:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="product_event_lookup",
+                    reason="상품명+행사/이벤트/기획전/쿠폰/혜택 질의는 상품 설명/가격 거래가 아니라 Discovery event content 조회임",
+                    required_slots=(),
                 ),
             ),
             response_strategy="single_domain_response",
