@@ -58,6 +58,8 @@ def decide_transaction_response(
         return _decide_favorite_store_lookup()
     if intent == "reservation_store_info_lookup":
         return _decide_reservation_store_info_lookup()
+    if intent == "price_or_benefit_alert_request":
+        return _decide_price_or_benefit_alert_request(slots=slots)
     if intent == "inventory_availability":
         return _decide_inventory_availability(slots=slots, tool_result=tool_result or {})
     if intent == "quick_order_reservation":
@@ -132,6 +134,40 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
         forbidden_behaviors=("datepick_before_store_selection", "empty_select_only_response"),
         assistant_guidance="재고와 장착 조건을 만족하는 매장 후보를 location 카드로 먼저 제시한다.",
         metadata={"stock_check_mode": "preview"},
+    )
+
+
+def _decide_price_or_benefit_alert_request(*, slots: dict[str, Any]) -> ResponseDecision:
+    has_product_context = bool(
+        slots.get("goods_no")
+        or slots.get("product_name")
+        or slots.get("pattern_name")
+        or slots.get("tire_model")
+        or slots.get("pending_product_name")
+    )
+    if not has_product_context:
+        return _decision(
+            response_shape_key="price_or_benefit_alert_needs_product",
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("product",),
+            forbidden_behaviors=("promise_price_alert_registration", "issue_coupon_tool"),
+            assistant_guidance=(
+                "가격이나 쿠폰·이벤트 알림 요청이지만 대상 상품이 확정되지 않았다. "
+                "알림 등록 완료처럼 말하지 말고, 어떤 상품 기준인지 먼저 짧게 확인한다."
+            ),
+            metadata={"alert_scope": "price_or_benefit"},
+        )
+    return _decision(
+        response_shape_key="price_or_benefit_alert_guidance",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=("promise_price_alert_registration", "promise_coupon_issue", "invent_discount"),
+        assistant_guidance=(
+            "확정 상품의 가격·혜택 알림 요청이다. 채팅에서는 알림을 바로 등록할 수 없다고 밝히고, "
+            "관심상품 또는 알림 설정에서 가격·쿠폰·이벤트 알림을 확인하도록 안내한다."
+        ),
+        metadata={"alert_scope": "price_or_benefit"},
     )
 
 

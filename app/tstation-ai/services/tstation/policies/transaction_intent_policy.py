@@ -112,6 +112,15 @@ _PRODUCT_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_PRICE_OR_BENEFIT_ALERT_RE = re.compile(
+    r"(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)"
+    r".{0,40}(?:알림|알람|문자|SMS|sms|알려|연락|통지)|"
+    r"(?:알림|알람|문자|SMS|sms|알려|연락|통지)"
+    r".{0,40}(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)|"
+    r"(?:가격|금액|최종가).{0,20}(?:떨어지|내려가|낮아지)|"
+    r"(?:저렴해지|싸지).{0,30}(?:알림|알람|알려|문자|SMS|sms)",
+    re.IGNORECASE,
+)
 _TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
     r"오늘\s*장착|오늘장착|오늘\s*서비스|오늘서비스|당일|"
     r"예약|방문|장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정)|"
@@ -353,6 +362,7 @@ def build_transaction_intent_frame(
     )
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
+    current_price_or_benefit_alert = bool(_PRICE_OR_BENEFIT_ALERT_RE.search(text))
     current_purchase = bool(_PURCHASE_RE.search(text))
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
@@ -553,7 +563,14 @@ def build_transaction_intent_frame(
         "today_install_candidate_scope": today_install_candidate_scope,
     }
 
-    if current_reservation_store_info_lookup:
+    if current_price_or_benefit_alert:
+        intent = "price_or_benefit_alert_request"
+        sub_intent = "alert_request"
+        entities["alert_request"] = True
+        entities["alert_scope"] = "price_or_benefit"
+        if current_product_name or slots.get("goods_no") or slots.get("tire_model") or slots.get("product_name"):
+            entities["product_context_available"] = True
+    elif current_reservation_store_info_lookup:
         intent = "reservation_store_info_lookup"
         sub_intent = "reservation_store_reference"
         entities["reservation_store_reference"] = True
@@ -913,6 +930,15 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             tool_args_patch=_slot_args(frame, "goods_no", "tire_size", "quantity"),
             required_slots=action_required_slots,
             metadata={"response_intent": "price_or_coupon_check", "action": action},
+        )
+
+    if frame.intent == "price_or_benefit_alert_request":
+        return ToolPlan(
+            allowed_tools=(),
+            preferred_tool=None,
+            forbidden_tools=("issue_coupon_tool", "create_price_alert_tool", "create_benefit_alert_tool"),
+            required_slots=(),
+            metadata={"response_intent": "price_or_benefit_alert_request", "action": action},
         )
 
     return ToolPlan(required_slots=action_required_slots, metadata={"response_intent": frame.intent, "action": action})

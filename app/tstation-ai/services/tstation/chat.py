@@ -4212,6 +4212,15 @@ _ORDER_CANCEL_CTA_TEXT_RE = re.compile(
     r"취소|반품|배송중|출고|택배비|왕복\s*배송비|취소\s*가능\s*여부|최종\s*비용",
     re.IGNORECASE,
 )
+_PRICE_OR_BENEFIT_ALERT_QUERY_RE = re.compile(
+    r"(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)"
+    r".{0,40}(?:알림|알람|문자|SMS|sms|알려|연락|통지)|"
+    r"(?:알림|알람|문자|SMS|sms|알려|연락|통지)"
+    r".{0,40}(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)|"
+    r"(?:가격|금액|최종가).{0,20}(?:떨어지|내려가|낮아지)|"
+    r"(?:저렴해지|싸지).{0,30}(?:알림|알람|알려|문자|SMS|sms)",
+    re.IGNORECASE,
+)
 _ORDER_DESTINATION_GUIDANCE_RE = re.compile(
     r"주문\s*내역|주문\s*상세|결제\s*(?:정보|수단|내역)|입금\s*기한|무통장|가상\s*계좌|"
     r"영수증|현금\s*영수증|배송\s*(?:현황|조회)|택배사|도착\s*예정|"
@@ -8677,6 +8686,54 @@ def _reminding_alarm_event() -> dict:
                 {"label": "1:1 문의하기", "domain": "SUPPORT"},
             ],
             "predictedDomains": ["SUPPORT"],
+        },
+    }
+
+
+def _price_or_benefit_alert_event(*, product_context_available: bool = True) -> dict:
+    if not product_context_available:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_price_or_benefit_alert_guidance",
+            "data": {
+                "assistantResponse": (
+                    "가격이나 쿠폰·이벤트 알림을 확인할 상품이 먼저 필요해요. "
+                    "어떤 상품 기준으로 안내해드릴까요?"
+                ),
+                "quickReplies": [
+                    {"label": "상품명 입력", "domain": "DISCOVERY"},
+                    {"label": "타이어 추천", "domain": "DISCOVERY"},
+                    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                ],
+                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+                "metadata": {
+                    "response_shape_key": "price_or_benefit_alert_needs_product",
+                    "intent": "price_or_benefit_alert_request",
+                },
+            },
+        }
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_price_or_benefit_alert_guidance",
+        "data": {
+            "assistantResponse": (
+                "채팅에서는 상품 가격이나 쿠폰·이벤트 알림을 바로 등록할 수는 없어요. "
+                "관심상품이나 알림 설정에서 가격·혜택 알림을 확인하거나 관리해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "알림 설정", "url": CTAUrls.REMINDING_ALARM, "domain": "SUPPORT"},
+                {"label": "관심상품 보기", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "response_shape_key": "price_or_benefit_alert_guidance",
+                "intent": "price_or_benefit_alert_request",
+            },
         },
     }
 
@@ -19129,6 +19186,18 @@ class TStationChatServiceV2:
             )
 
             if (
+                route_coupon_gate_decision is not None
+                and route_coupon_gate_decision.is_actionable
+                and not coupon_gate_can_override_route
+            ):
+                logger.info(
+                    "[COUPON_QUERY_GATE][route] advisory_only active_transaction_context=%s intent=%s confidence=%.2f",
+                    active_transaction_action_context,
+                    route_coupon_gate_decision.intent.value,
+                    route_coupon_gate_decision.confidence,
+                )
+
+            if (
                 _should_force_warranty_claim_support_route(policy_plan)
             ):
                 domains = [MultiAgentDomain.Domain.SUPPORT]
@@ -19164,13 +19233,6 @@ class TStationChatServiceV2:
                 classify_future = None
                 logger.info(
                     "[COUPON_QUERY_GATE][route] transaction_coupon override: intent=%s confidence=%.2f",
-                    route_coupon_gate_decision.intent.value,
-                    route_coupon_gate_decision.confidence,
-                )
-            elif route_coupon_gate_decision is not None and route_coupon_gate_decision.is_actionable:
-                logger.info(
-                    "[COUPON_QUERY_GATE][route] advisory_only active_transaction_context=%s intent=%s confidence=%.2f",
-                    active_transaction_action_context,
                     route_coupon_gate_decision.intent.value,
                     route_coupon_gate_decision.confidence,
                 )
@@ -23858,6 +23920,25 @@ class TStationChatServiceV2:
             assistant_response = str((clarification_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        if _PRICE_OR_BENEFIT_ALERT_QUERY_RE.search(user_query or ""):
+            alert_slots = pending_slots or initial_slots
+            has_alert_product_context = bool(
+                getattr(alert_slots, "goods_no", None)
+                or getattr(alert_slots, "tire_model", None)
+                or getattr(alert_slots, "pending_product_name", None)
+            )
+            alert_event = _price_or_benefit_alert_event(product_context_available=has_alert_product_context)
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(alert_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((alert_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

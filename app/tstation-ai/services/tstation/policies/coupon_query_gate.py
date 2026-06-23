@@ -49,11 +49,22 @@ _DEFAULT_BENEFIT_RE = re.compile(
     r"진행\s*중인\s*(?:이벤트|기획전|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전",
     re.IGNORECASE,
 )
+_PRICE_OR_BENEFIT_ALERT_RE = re.compile(
+    r"(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)"
+    r".{0,40}(?:알림|알람|문자|SMS|sms|알려|연락|통지)|"
+    r"(?:알림|알람|문자|SMS|sms|알려|연락|통지)"
+    r".{0,40}(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)|"
+    r"(?:가격|금액|최종가).{0,20}(?:떨어지|내려가|낮아지)|"
+    r"(?:저렴해지|싸지).{0,30}(?:알림|알람|알려|문자|SMS|sms)",
+    re.IGNORECASE,
+)
 
 
 def should_consider_coupon_gate(user_text: str | None) -> bool:
     text = user_text or ""
     if _DEFAULT_BENEFIT_RE.search(text):
+        return False
+    if _PRICE_OR_BENEFIT_ALERT_RE.search(text):
         return False
     return bool(_COUPON_GATE_TRIGGER_RE.search(text))
 

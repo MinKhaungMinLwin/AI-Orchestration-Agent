@@ -53,6 +53,7 @@ from services.tstation.chat import (
     _build_product_coupon_price_amount_event,
     _build_product_coupon_price_no_product_event,
     _build_quantity_benefit_missing_event,
+    _price_or_benefit_alert_event,
     _reminding_alarm_event,
     _build_store_holiday_period_event,
     _build_transaction_policy_context,
@@ -6621,6 +6622,60 @@ def test_reminding_alarm_event_links_to_cta() -> None:
         "url": CTAUrls.REMINDING_ALARM,
         "domain": "SUPPORT",
     }
+
+
+def test_price_or_benefit_alert_request_is_not_coupon_gate_or_support_reminder() -> None:
+    user_text = "이거 151,200보다 저렴해지거나 쿠폰 이벤트 생기면 알림 줘"
+
+    assert should_consider_coupon_gate(user_text) is False
+    assert _support_fast_path(user_text) is None
+
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000319573",
+            "tire_model": "벤투스 에어S",
+            "payment_amount": 151200,
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "price_or_benefit_alert_request"
+    assert frame.sub_intent == "alert_request"
+    assert tool_plan.allowed_tools == ()
+    assert "issue_coupon_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "price_or_benefit_alert_guidance"
+    assert "promise_price_alert_registration" in response_decision.forbidden_behaviors
+
+
+def test_price_or_benefit_alert_event_guides_without_registration_claim() -> None:
+    event = _price_or_benefit_alert_event(product_context_available=True)
+    data = event["data"]
+
+    assert event["source_domain"] == MultiAgentDomain.Domain.TRANSACTION.value
+    assert data["metadata"]["intent"] == "price_or_benefit_alert_request"
+    assert "바로 등록할 수는 없어요" in data["assistantResponse"]
+    assert "등록됐" not in data["assistantResponse"]
+    assert data["quickReplies"][0] == {
+        "label": "알림 설정",
+        "url": CTAUrls.REMINDING_ALARM,
+        "domain": "SUPPORT",
+    }
+
+
+def test_price_or_benefit_alert_event_asks_product_when_context_is_missing() -> None:
+    event = _price_or_benefit_alert_event(product_context_available=False)
+    data = event["data"]
+
+    assert data["metadata"]["response_shape_key"] == "price_or_benefit_alert_needs_product"
+    assert "어떤 상품 기준" in data["assistantResponse"]
+    assert data["quickReplies"][0]["label"] == "상품명 입력"
+    assert "등록됐" not in data["assistantResponse"]
 
 
 def test_support_fast_path_routes_product_warranty_claims() -> None:
