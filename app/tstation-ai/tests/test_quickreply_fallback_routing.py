@@ -13170,14 +13170,66 @@ def test_pure_inventory_stock_event_without_logistics_prompts_other_store_search
         tire_size="235/45R18",
         ord_qty=4,
         logistics_result={"status": "success", "data": {"logistics_qty": 0, "rsv_sale_yn": "N"}},
+        store_context={
+            "shopId": "F00721",
+            "shopName": "티스테이션 판교점",
+            "xpos": 127.1101,
+            "ypos": 37.3947,
+        },
+        goods_no="G000000317735",
     )
 
     assistant = event["data"]["assistantResponse"]
     labels = _labels(event["data"]["quickReplies"])
+    metadata = event["data"]["metadata"]
+    cta_context = metadata["ctaContext"]
     assert event["data"]["metadata"]["response_shape_key"] == "no_stock_anywhere"
     assert "물류 재고도 확인되지 않아요" in assistant
     assert "다른 매장 오늘장착 재고를 검색해볼까요" in assistant
     assert labels[0] == "다른 매장 검색"
+    assert metadata["currentStoreContext"]["shopId"] == "F00721"
+    assert metadata["currentStoreContext"]["xpos"] == 127.1101
+    assert cta_context["goodsNo"] == "G000000317735"
+    assert cta_context["currentStoreContext"]["shopId"] == "F00721"
+
+
+def test_other_store_cta_preview_uses_previous_store_radius_and_excludes_current_store() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317735",
+        tire_size="235/45R18",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_intent="today_install",
+    )
+
+    preview_input, missing_slot = _cta_preview_input_from_slots(
+        slots,
+        cta_context={
+            "goodsNo": "G000000317735",
+            "ordQty": 4,
+            "intentKey": "today_install",
+            "currentStoreContext": {
+                "shopId": "F00721",
+                "shopName": "티스테이션 판교점",
+                "xpos": 127.1101,
+                "ypos": 37.3947,
+            },
+        },
+        other_store_search=True,
+    )
+
+    assert missing_slot is None
+    assert preview_input is not None
+    assert preview_input["goods_no"] == "G000000317735"
+    assert preview_input["ord_qty"] == 4
+    assert preview_input["user_xpos"] == 127.1101
+    assert preview_input["user_ypos"] == 37.3947
+    assert preview_input["radius_km"] == 20.0
+    assert preview_input["exclude_shop_ids"] == ["F00721"]
+    assert preview_input["stock_check_mode"] == "inventory_only"
+    assert "region_code" not in preview_input
+    assert "store_nm" not in preview_input
 
 
 def test_pure_inventory_store_stock_available_event_does_not_emit_reservation_ui() -> None:

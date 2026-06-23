@@ -4675,6 +4675,78 @@ def _merged_quickreply_cta_context(
     return context
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        return {}
+    context = data.get("currentStoreContext")
+    if isinstance(context, Mapping):
+        data = context
+    shop_id = str(
+        data.get("shopId")
+        or data.get("shop_id")
+        or data.get("storeId")
+        or data.get("store_id")
+        or ""
+    ).strip()
+    shop_name = str(
+        data.get("shopName")
+        or data.get("shop_name")
+        or data.get("storeName")
+        or data.get("store_nm")
+        or data.get("shop_nm")
+        or ""
+    ).strip()
+    xpos = _float_or_none(
+        data.get("xpos")
+        or data.get("x_pos")
+        or data.get("lng")
+        or data.get("longitude")
+        or data.get("user_xpos")
+    )
+    ypos = _float_or_none(
+        data.get("ypos")
+        or data.get("y_pos")
+        or data.get("lat")
+        or data.get("latitude")
+        or data.get("user_ypos")
+    )
+    address = str(
+        data.get("address")
+        or data.get("addr")
+        or data.get("roadAddress")
+        or data.get("road_address")
+        or ""
+    ).strip()
+    result: dict[str, Any] = {}
+    if shop_id:
+        result["shopId"] = shop_id
+    if shop_name:
+        result["shopName"] = shop_name
+    if xpos is not None:
+        result["xpos"] = xpos
+    if ypos is not None:
+        result["ypos"] = ypos
+    if address:
+        result["address"] = address
+    return result
+
+
+def _store_area_hint_from_name(store_name: str | None) -> str:
+    text = str(store_name or "").strip()
+    text = re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text)
+    text = re.sub(r"(?:점|센터|지점)\s*$", "", text)
+    return text.strip()
+
+
 _AFFIRMATIVE_REPLY_RE = re.compile(r"^\s*(?:응|네|예|좋아|ㅇㅇ|그래|진행해|검색해줘)\s*$", re.IGNORECASE)
 _CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE = re.compile(
     r"현재\s*위치\s*기반.*(?:가까운|주변)\s*매장\s*검색.*(?:진행|해드릴까요|할까요)|"
@@ -4762,29 +4834,109 @@ def _cta_missing_slot_event(missing_slot: str) -> dict:
     }
 
 
-def _cta_preview_input_from_slots(slots: Any) -> tuple[dict[str, Any] | None, str | None]:
-    if not getattr(slots, "goods_no", None):
+def _cta_preview_input_from_slots(
+    slots: Any,
+    *,
+    cta_context: dict[str, Any] | None = None,
+    other_store_search: bool = False,
+) -> tuple[dict[str, Any] | None, str | None]:
+    context = cta_context or {}
+    goods_no = getattr(slots, "goods_no", None) or context.get("goodsNo") or context.get("goods_no")
+    ord_qty_value = getattr(slots, "ord_qty", None) or context.get("ordQty") or context.get("ord_qty")
+    if not goods_no:
         return None, "product"
-    if not getattr(slots, "ord_qty", None):
+    if not ord_qty_value:
         return None, "quantity"
-    if not (
+    store_context = _store_context_from_mapping(context)
+    has_location = (
         getattr(slots, "region", None)
         or getattr(slots, "shop_name", None)
         or getattr(slots, "shop_id", None)
-    ):
+        or store_context.get("shopName")
+        or (store_context.get("xpos") is not None and store_context.get("ypos") is not None)
+    )
+    if not has_location:
         return None, "location"
+    try:
+        ord_qty = int(ord_qty_value)
+    except (TypeError, ValueError):
+        return None, "quantity"
     preview_input: dict[str, Any] = {
-        "goods_no": slots.goods_no,
-        "ord_qty": int(slots.ord_qty),
+        "goods_no": str(goods_no),
+        "ord_qty": ord_qty,
         "include_price": True,
     }
-    if getattr(slots, "region", None):
+    if other_store_search:
+        excluded_shop_ids: list[str] = []
+        if store_context.get("shopId"):
+            excluded_shop_ids.append(str(store_context["shopId"]))
+        elif getattr(slots, "shop_id", None):
+            excluded_shop_ids.append(str(slots.shop_id))
+        if store_context.get("xpos") is not None and store_context.get("ypos") is not None:
+            preview_input["user_xpos"] = float(store_context["xpos"])
+            preview_input["user_ypos"] = float(store_context["ypos"])
+            preview_input["radius_km"] = 20.0
+        else:
+            area_hint = _store_area_hint_from_name(str(store_context.get("shopName") or getattr(slots, "shop_name", "") or ""))
+            if area_hint:
+                preview_input["region_code"] = area_hint
+            elif getattr(slots, "region", None):
+                preview_input["region_code"] = slots.region
+            else:
+                return None, "location"
+        if excluded_shop_ids:
+            preview_input["exclude_shop_ids"] = excluded_shop_ids
+        preview_input["stock_check_mode"] = "inventory_only"
+    elif getattr(slots, "region", None):
         preview_input["region_code"] = slots.region
     elif getattr(slots, "shop_name", None):
         preview_input["store_nm"] = slots.shop_name
     if getattr(slots, "requested_cal_day", None):
         preview_input["requested_cal_day"] = slots.requested_cal_day
     return preview_input, None
+
+
+def _preview_today_shop_ids(tool_result: dict[str, Any]) -> set[str]:
+    data = _unwrap_tool_data(tool_result)
+    inventory = data.get("inventory") if isinstance(data, dict) else None
+    if not isinstance(inventory, dict):
+        return set()
+    rows = inventory.get("todayShopArray")
+    if not isinstance(rows, list):
+        return set()
+    result: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        shop_id = str(row.get("shopId") or row.get("shop_id") or "").strip()
+        if shop_id:
+            result.add(shop_id)
+    return result
+
+
+def _other_store_no_today_stock_event(store_name: str, *, searched_by_radius: bool) -> dict:
+    store_label = store_name or "직전 매장"
+    scope = f"{store_label} 기준 반경 20km 내 다른 매장" if searched_by_radius else f"{store_label} 주변 다른 매장"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_other_store_stock_search",
+        "data": {
+            "assistantResponse": f"{scope}에서도 오늘 장착 가능한 재고는 확인되지 않아요.",
+            "quickReplies": [
+                {"label": "다른 지역 입력", "domain": "TRANSACTION", "actionId": "enter_region", "intentKey": "today_install"},
+                {"label": "다른 날짜 확인", "domain": "TRANSACTION", "actionId": "enter_date", "intentKey": "today_install"},
+                {"label": "대체상품 찾기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "other_store_stock_unavailable",
+                "stock_check_mode": "inventory_only",
+                "radiusKm": 20 if searched_by_radius else None,
+            },
+        },
+    }
 
 
 def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
@@ -7992,6 +8144,8 @@ def _build_pure_inventory_stock_event(
     tire_size: str,
     ord_qty: int,
     logistics_result: dict | None = None,
+    store_context: Mapping[str, Any] | None = None,
+    goods_no: str | None = None,
 ) -> dict:
     logistics = _logistics_stock_summary(logistics_result or {})
     install_date = _format_yyyymmdd_korean(str(logistics.get("rsv_install_date") or ""))
@@ -8013,11 +8167,38 @@ def _build_pure_inventory_stock_event(
     else:
         response = f"{base} 물류 재고도 확인되지 않아요. 다른 매장 오늘장착 재고를 검색해볼까요?"
         quick_replies = [
-            {"label": "다른 매장 검색", "domain": "TRANSACTION"},
+            {
+                "label": "다른 매장 검색",
+                "domain": "TRANSACTION",
+                "actionId": "search_other_store",
+                "intentKey": "today_install",
+            },
             {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
             {"label": "대체상품 찾기", "domain": "DISCOVERY"},
         ]
         response_shape_key = "no_stock_anywhere"
+    current_store_context = _store_context_from_mapping(store_context)
+    metadata = {
+        "response_shape_key": response_shape_key,
+        "stock_check_mode": "inventory_only",
+        "logisticsStockAvailable": has_logistics,
+        "reservationSaleAvailable": reservation_sale,
+        "rsvInstallDate": logistics.get("rsv_install_date") or "",
+    }
+    cta_context = {
+        "ordQty": ord_qty,
+        "tireSize": tire_size,
+        "intentKey": "today_install",
+        "currentStoreContext": current_store_context,
+    }
+    if goods_no:
+        cta_context["goodsNo"] = goods_no
+    if current_store_context:
+        metadata["currentStoreContext"] = current_store_context
+        metadata["ctaContext"] = cta_context
+        for reply in quick_replies:
+            if isinstance(reply, dict) and str(reply.get("actionId") or "") == "search_other_store":
+                reply["metadata"] = cta_context
     return {
         "type": "data",
         "template": "quickReply",
@@ -8027,13 +8208,7 @@ def _build_pure_inventory_stock_event(
             "assistantResponse": response,
             "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
-            "metadata": {
-                "response_shape_key": response_shape_key,
-                "stock_check_mode": "inventory_only",
-                "logisticsStockAvailable": has_logistics,
-                "reservationSaleAvailable": reservation_sale,
-                "rsvInstallDate": logistics.get("rsv_install_date") or "",
-            },
+            "metadata": metadata,
         },
     }
 
@@ -8043,9 +8218,28 @@ def _build_pure_inventory_store_stock_available_event(
     store_name: str,
     tire_size: str,
     ord_qty: int,
+    store_context: Mapping[str, Any] | None = None,
+    goods_no: str | None = None,
 ) -> dict:
     store_label = store_name or "선택한 매장"
     response = f"{store_label}에서 {tire_size} {ord_qty}개 기준으로 오늘 바로 장착 가능한 매장 재고가 확인돼요."
+    current_store_context = _store_context_from_mapping(store_context)
+    metadata = {
+        "response_shape_key": "stock_available",
+        "stock_check_mode": "inventory_only",
+        "storeStockAvailable": True,
+        "reservationUiEmitted": False,
+    }
+    if current_store_context:
+        metadata["currentStoreContext"] = current_store_context
+        metadata["ctaContext"] = {
+            "ordQty": ord_qty,
+            "tireSize": tire_size,
+            "intentKey": "today_install",
+            "currentStoreContext": current_store_context,
+        }
+        if goods_no:
+            metadata["ctaContext"]["goodsNo"] = goods_no
     return {
         "type": "data",
         "template": "quickReply",
@@ -8055,16 +8249,17 @@ def _build_pure_inventory_store_stock_available_event(
             "assistantResponse": response,
             "quickReplies": [
                 {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
-                {"label": "다른 매장 검색", "domain": "TRANSACTION"},
+                {
+                    "label": "다른 매장 검색",
+                    "domain": "TRANSACTION",
+                    "actionId": "search_other_store",
+                    "intentKey": "today_install",
+                    "metadata": metadata.get("ctaContext", {}),
+                },
                 {"label": "다른 상품 추천", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
-            "metadata": {
-                "response_shape_key": "stock_available",
-                "stock_check_mode": "inventory_only",
-                "storeStockAvailable": True,
-                "reservationUiEmitted": False,
-            },
+            "metadata": metadata,
         },
     }
 
@@ -17745,6 +17940,138 @@ class TStationChatServiceV2:
                             },
                         )
                     return TStationChatResponse(content=guard_text)
+            elif chip_action_id == "search_other_store" or (
+                not chip_action_id and _is_stock_store_candidate_search_followup(last_user_text, merged_slots)
+            ):
+                enriched_cta_context = dict(cta_context)
+                store_context = _store_context_from_mapping(enriched_cta_context)
+                if (
+                    store_context
+                    and (store_context.get("xpos") is None or store_context.get("ypos") is None)
+                    and store_context.get("shopName")
+                ):
+                    from services.tstation.agents.c_transaction_agent.tools import (
+                        get_store_list_tool as _cta_get_store_list_tool,
+                    )
+
+                    list_input = {"store_nm": str(store_context["shopName"]), "limit": 10}
+                    try:
+                        raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, list_input)
+                        list_result = raw_list if isinstance(raw_list, dict) else qc_verifier.parse_tool_output(raw_list)
+                        list_data = _unwrap_tool_data(list_result if isinstance(list_result, dict) else {})
+                        stores = list_data.get("stores") if isinstance(list_data, dict) else None
+                        if isinstance(stores, list):
+                            matched_store = _store_name_exact_match_row(
+                                str(store_context["shopName"]),
+                                [store for store in stores if isinstance(store, dict)],
+                            )
+                            if matched_store is not None:
+                                store_context = _store_context_from_mapping(
+                                    {**matched_store, **store_context},
+                                )
+                                enriched_cta_context["currentStoreContext"] = store_context
+                    except Exception:
+                        logger.exception(
+                            "[CTA_ACTION] failed to enrich previous store coordinates context=%s",
+                            store_context,
+                        )
+
+                preview_input, missing_slot = _cta_preview_input_from_slots(
+                    merged_slots,
+                    cta_context=enriched_cta_context,
+                    other_store_search=True,
+                )
+                if missing_slot is not None:
+                    missing_event = _cta_missing_slot_event(missing_slot)
+                    guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(missing_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=guard_text)
+
+                assert preview_input is not None
+                store_context = _store_context_from_mapping(enriched_cta_context)
+                searched_by_radius = preview_input.get("user_xpos") is not None and preview_input.get("user_ypos") is not None
+                previous_store_name = str(
+                    store_context.get("shopName") or cta_context.get("shopName") or cta_context.get("storeName") or ""
+                ).strip()
+                excluded_ids = {str(shop_id) for shop_id in preview_input.get("exclude_shop_ids", []) if shop_id}
+
+                from services.tstation.agents.c_transaction_agent.tools import (
+                    transaction_store_preview_tool as _transaction_store_preview_tool,
+                )
+                from services.tstation.template_mapper import (
+                    current_excluded_store_ids as _cta_current_excluded_store_ids,
+                    current_goal_type as _cta_current_goal_type,
+                    current_pending_intent as _cta_current_pending_intent,
+                    current_user_text as _cta_current_user_text,
+                    try_build_template as _try_build_template,
+                )
+
+                _cta_current_user_text.set(last_user_text)
+                _cta_current_pending_intent.set("stock")
+                _cta_current_goal_type.set("store_with_stock")
+                _cta_current_excluded_store_ids.set(excluded_ids)
+                try:
+                    raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
+                    preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
+                    if not isinstance(preview_result, dict):
+                        preview_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+                except Exception as exc:
+                    logger.exception("[CTA_ACTION] other-store preview failed input=%s", preview_input)
+                    preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+
+                today_shop_ids = _preview_today_shop_ids(preview_result) - excluded_ids
+                if not today_shop_ids:
+                    mapped_event = _other_store_no_today_stock_event(
+                        previous_store_name,
+                        searched_by_radius=searched_by_radius,
+                    )
+                else:
+                    intro_scope = (
+                        f"{previous_store_name} 기준 반경 20km 내 다른 매장의 오늘 장착 재고를 확인했어요."
+                        if searched_by_radius and previous_store_name
+                        else "다른 매장의 오늘 장착 재고를 확인했어요."
+                    )
+                    mapped_event = _try_build_template(
+                        [{"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result}],
+                        intro_scope,
+                    )
+                    if mapped_event is None:
+                        mapped_event = _other_store_no_today_stock_event(
+                            previous_store_name,
+                            searched_by_radius=searched_by_radius,
+                        )
+                    else:
+                        mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                        mapped_event["assistant_response_source"] = "code_other_store_stock_search"
+
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_cta_tool_response(preview_input, preview_result, mapped_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                return TStationChatResponse(
+                    content=str((mapped_event.get("data") or {}).get("assistantResponse") or "")
+                )
             elif chip_action_id in {"change_region", "change_date"}:
                 before_cta_slots = merged_slots.model_dump()
                 merged_slots = _apply_cta_context_to_slots(merged_slots, cta_context)
@@ -20062,6 +20389,15 @@ class TStationChatServiceV2:
         tire_size = str(slot_values.get("tire_size") or "").strip()
         store_name = str(slot_values.get("shop_name") or slot_values.get("store_name") or "").strip()
         shop_id = str(slot_values.get("shop_id") or "").strip()
+        store_context: dict[str, Any] = _store_context_from_mapping(
+            {
+                "shopId": shop_id,
+                "shopName": store_name,
+                "xpos": slot_values.get("xpos") or slot_values.get("user_xpos"),
+                "ypos": slot_values.get("ypos") or slot_values.get("user_ypos"),
+                "address": slot_values.get("address"),
+            }
+        )
         try:
             ord_qty = int(slot_values.get("ord_qty") or slot_values.get("quantity") or 0)
         except (TypeError, ValueError):
@@ -20155,6 +20491,7 @@ class TStationChatServiceV2:
             resolved_store_name = str(matched_store.get("shop_nm") or matched_store.get("shop_name") or "").strip()
             if resolved_store_name:
                 store_name = resolved_store_name
+            store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
 
         inventory_input = {
             "goods_list": [{"goodsNo": goods_no, "qty": str(ord_qty)}],
@@ -20179,6 +20516,8 @@ class TStationChatServiceV2:
                 store_name=store_name,
                 tire_size=tire_size,
                 ord_qty=ord_qty,
+                store_context=store_context,
+                goods_no=goods_no,
             )
             async for chunk in _finish(event):
                 yield chunk
@@ -20199,6 +20538,8 @@ class TStationChatServiceV2:
             tire_size=tire_size,
             ord_qty=ord_qty,
             logistics_result=logistics_result,
+            store_context=store_context,
+            goods_no=goods_no,
         )
         async for chunk in _finish(event):
             yield chunk
@@ -23514,6 +23855,15 @@ class TStationChatServiceV2:
                 or ""
             ).strip()
             shop_id = str(frame.known_slots.get("shop_id") or "").strip()
+            store_context: dict[str, Any] = _store_context_from_mapping(
+                {
+                    "shopId": shop_id,
+                    "shopName": store_name,
+                    "xpos": frame.known_slots.get("xpos") or frame.known_slots.get("user_xpos"),
+                    "ypos": frame.known_slots.get("ypos") or frame.known_slots.get("user_ypos"),
+                    "address": frame.known_slots.get("address"),
+                }
+            )
             try:
                 ord_qty = int(frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity") or 0)
             except (TypeError, ValueError):
@@ -23598,6 +23948,7 @@ class TStationChatServiceV2:
                 resolved_store_name = str(matched_store.get("shop_nm") or matched_store.get("shop_name") or "").strip()
                 if resolved_store_name:
                     store_name = resolved_store_name
+                store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
                 if not shop_id:
                     return emitted_events, {
                         "type": "data",
@@ -23700,6 +24051,8 @@ class TStationChatServiceV2:
                     tire_size=tire_size,
                     ord_qty=ord_qty,
                     logistics_result=logistics_result,
+                    store_context=store_context,
+                    goods_no=goods_no,
                 )
 
             intro = f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요."
@@ -23714,6 +24067,8 @@ class TStationChatServiceV2:
                 tire_size=tire_size,
                 ord_qty=ord_qty,
                 logistics_result=logistics_result,
+                store_context=store_context,
+                goods_no=goods_no,
             )
 
         pure_inventory_stock_resolution = await _resolve_pure_inventory_stock_with_code()
