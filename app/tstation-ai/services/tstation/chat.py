@@ -9934,6 +9934,10 @@ def _is_coupon_discount_amount_context(slots: Any | None) -> bool:
     return pending_intent == "price" and goal_type in _COUPON_DISCOUNT_AMOUNT_GOAL_TYPES
 
 
+def _is_coupon_discount_amount_size_list_followup(user_text: str | None, slots: Any | None) -> bool:
+    return _is_coupon_discount_amount_context(slots) and _is_product_size_list_intent(str(user_text or ""))
+
+
 def _price_row_from_final_price_result(price_result: dict) -> dict | None:
     data = _unwrap_tool_data(price_result)
     if not isinstance(data, dict) or not data:
@@ -23830,6 +23834,72 @@ class TStationChatServiceV2:
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+
+        coupon_size_list_slots = pending_slots or initial_slots
+        if _is_coupon_discount_amount_size_list_followup(user_query, coupon_size_list_slots):
+            size_list_keyword = _product_size_list_keyword_from_context(
+                user_query,
+                [],
+                prev_tool_data=[],
+                recent_context=recent_user_context_text,
+                slots=coupon_size_list_slots,
+            )
+            if size_list_keyword:
+                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+
+                emitted_events: list[dict] = [{
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "다른 규격 확인 중...",
+                    "source_domain": "discovery",
+                }]
+                size_list_input = {"keyword": size_list_keyword, "limit": 10}
+                try:
+                    raw_size_list = await asyncio.to_thread(_search_product_tool.invoke, size_list_input)
+                    size_list_result = _tool_result_dict(raw_size_list)
+                except Exception as exc:
+                    logger.exception("[COUPON_SIZE_LIST] search_product_tool failed for %s", size_list_keyword)
+                    size_list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("search_product_tool", size_list_input, size_list_result)
+                emitted_events.extend([
+                    {
+                        "type": "agent_flow",
+                        "agent": "[Product Search AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": size_list_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    },
+                    {
+                        "type": "tool",
+                        "input": size_list_input,
+                        "output": json.dumps(size_list_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "search_product_tool",
+                        "source_domain": "discovery",
+                    },
+                ])
+                size_list_event = _build_product_size_list_event_from_search_results(
+                    user_query,
+                    [(size_list_keyword, size_list_result)],
+                    prev_tool_data=[],
+                    recent_context=recent_user_context_text,
+                    slots=coupon_size_list_slots,
+                )
+                if size_list_event is None:
+                    size_list_event = _build_product_size_list_not_found_event(size_list_keyword)
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+                for code_event in emitted_events:
+                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(size_list_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((size_list_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
         multi_product_detail_names = _multi_product_detail_continuation_names(
             user_query,

@@ -132,6 +132,7 @@ from services.tstation.chat import (
     _is_product_coupon_eligibility_query,
     _is_product_coupon_price_amount_query,
     _is_coupon_discount_amount_context,
+    _is_coupon_discount_amount_size_list_followup,
     _is_specific_coupon_usage_query,
     _is_product_comparison_query,
     _tool_error_response_decision,
@@ -4811,6 +4812,22 @@ def test_coupon_discount_amount_other_size_cta_uses_pending_product_keyword() ->
     assert metadata["goalType"] == "coupon_discount_amount"
     assert metadata["productName"] == "Ventus air S"
     assert metadata["ordQty"] == 4
+
+
+def test_coupon_discount_amount_size_list_followup_requires_coupon_goal() -> None:
+    assert _is_coupon_discount_amount_size_list_followup(
+        "다른 사이즈 확인",
+        ConversationSlots(
+            pending_intent="price",
+            goal_type="coupon_discount_amount",
+            pending_product_name="Ventus air S",
+            ord_qty=4,
+        ),
+    )
+    assert not _is_coupon_discount_amount_size_list_followup(
+        "다른 사이즈 확인",
+        ConversationSlots(pending_intent="order", goal_type="place_order", pending_product_name="Ventus air S"),
+    )
 
 
 def test_product_size_list_not_found_event_uses_pending_product_cta_contract() -> None:
