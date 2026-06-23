@@ -517,6 +517,7 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
 @router.post("/actions/quick-order", dependencies=[Depends(get_api_key)])
 async def quick_order_action(
     action_body: QuickOrderActionRequest,
+    http_request: Request,
     user: dict = Security(get_api_key),
 ):
     """Execute a ready preOrder CTA as a structured action without LLM/router."""
@@ -549,6 +550,11 @@ async def quick_order_action(
         assistant_response = ""
         template_data = None
         try:
+            from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
+
+            set_tstation_be_token(user.get("token"))
+            set_tstation_origin_host(_origin_host_from_request(http_request))
+
             initial_response = {
                 "session_id": action_body.session_id,
                 "message_id": user_msg_id,
