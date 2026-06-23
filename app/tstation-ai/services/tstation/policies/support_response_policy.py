@@ -115,9 +115,21 @@ def decide_support_response(
             ),
         )
 
-    if intent == "store_review_write":
+    if intent == "my_goods_review_lookup":
         return _decision(
-            response_shape_key="store_review_write",
+            response_shape_key="my_goods_review_lookup",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("omit_goods_review_cta", "route_goods_review_to_store_service_history"),
+            assistant_guidance=(
+                "내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로는 마이페이지 > 리뷰관리만 안내한다. "
+                "GOODS_REVIEW CTA가 첫 번째 quickReply가 아니면 보정 대상이다."
+            ),
+        )
+
+    if intent in {"store_service_review_write", "store_review_write"}:
+        return _decision(
+            response_shape_key="store_service_review_write",
             response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("omit_store_service_history_cta", "invent_external_review_path"),

@@ -41,6 +41,7 @@ class CTAUrls:
     CART: Final[str] = f"{_PC}/cart"
     ORDER_HISTORY: Final[str] = f"{_PC}/mypage/tstation/order-history"
     STORE_SERVICE_HISTORY: Final[str] = f"{_PC}/mypage/tstation/custservice/carservice-hist"
+    GOODS_REVIEW: Final[str] = f"{_PC}/mypage/activity/goods-review"
     KEEP_SERVICE_HIST: Final[str] = f"{_PC}/mypage/tstation/custservice/keepservice-hist"
     PROMOTION_EVENT_LIST: Final[str] = f"{_PC}/promotion/event-list"
     PROMOTION_PAST_EVENT_LIST: Final[str] = f"{_PC}/promotion/past-event-list"
@@ -67,6 +68,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_ORDER_HISTORY_DETAIL__": CTAUrls.ORDER_HISTORY_DETAIL,
     "__URL_STORE_DETAIL__": CTAUrls.STORE_DETAIL,
     "__URL_STORE_SERVICE_HISTORY__": CTAUrls.STORE_SERVICE_HISTORY,
+    "__URL_GOODS_REVIEW__": CTAUrls.GOODS_REVIEW,
     "__URL_KEEP_SERVICE_HIST__": CTAUrls.KEEP_SERVICE_HIST,
     "__URL_PROMOTION_EVENT_LIST__": CTAUrls.PROMOTION_EVENT_LIST,
     "__URL_PROMOTION_PAST_EVENT_LIST__": CTAUrls.PROMOTION_PAST_EVENT_LIST,

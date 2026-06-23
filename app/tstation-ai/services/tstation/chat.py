@@ -608,12 +608,14 @@ class MultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "store_service_availability",
+        "my_goods_review_lookup",
+        "store_service_review_write",
         "store_review_write",
     ] = Field(
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
-            "online-vs-store price policy, regional price policy, store service availability, store review write CTA, "
-            "or generic price policy FAQ. Use 'none' otherwise."
+            "online-vs-store price policy, regional price policy, store service availability, goods review lookup, "
+            "store service review write CTA, or generic price policy FAQ. Use 'none' otherwise."
         ),
     )
     recommendation_scenario: str = Field(
@@ -1154,6 +1156,8 @@ class _SlimMultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "store_service_availability",
+        "my_goods_review_lookup",
+        "store_service_review_write",
         "store_review_write",
     ] = Field(
         description="Structured support/policy intent, or 'none'."
@@ -1303,7 +1307,9 @@ Complaint routing rule:
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "store_service_availability": 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
-   - "store_review_write": 리뷰/후기/칭찬/별점/평가를 작성하거나 남기는 공식 경로 안내
+   - "my_goods_review_lookup": 내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로 안내
+   - "store_service_review_write": 매장/지점/매장서비스/장착서비스 리뷰·후기·칭찬·별점 작성 경로 안내
+   - "store_review_write": legacy alias for store_service_review_write only
    - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
    - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
 
@@ -1538,7 +1544,8 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - store-specific service availability (보관서비스/타이어 보관/질소충전/얼라인먼트 잘 봐?) → `store_service_availability`
-- store review/write path (리뷰 어디다 써?, 후기 남기고 싶어, 남양주점 별점 5점 남기고 싶어, 칭찬 리뷰 작성하고 싶어) → `store_review_write`
+- goods review lookup path (내가 쓴 리뷰 어디서 봐?, 내가 작성한 리뷰 확인, 베스트리뷰 확인 어디서 해?, 상품 리뷰/구매후기 확인) → `my_goods_review_lookup`
+- store/service review write path (매장 리뷰 어디다 써?, 매장서비스 후기 작성, 남양주점 별점 5점 남기고 싶어, 지점 칭찬 리뷰 작성하고 싶어) → `store_service_review_write`
 - otherwise `none`
 
 RULES:
@@ -7827,12 +7834,44 @@ def _inject_store_detail_chip_for_contact_guidance(
     return True
 
 
-_STORE_REVIEW_WRITE_METADATA_RE = re.compile(
-    r"store_review_write|support_review_write|review_write|리뷰\s*작성|후기\s*작성|후기\s*남기|"
-    r"리뷰\s*남기|칭찬\s*(?:리뷰|후기|남기)|별점.{0,12}(?:남기|주|줄|작성)|"
-    r"평점.{0,12}(?:남기|주|줄|작성)|매장\s*평가.{0,12}(?:남기|주|작성)",
+_GOODS_REVIEW_LOOKUP_METADATA_RE = re.compile(
+    r"my_goods_review_lookup|goods_review_lookup|상품\s*리뷰|구매\s*후기|구매후기|베스트\s*리뷰|베스트리뷰|"
+    r"내가\s*(?:쓴|작성한)\s*(?:리뷰|후기)|작성한\s*(?:리뷰|후기).{0,12}(?:확인|조회|어디서|봐)",
     re.IGNORECASE,
 )
+_STORE_REVIEW_WRITE_METADATA_RE = re.compile(
+    r"store_service_review_write|store_review_write|support_review_write|"
+    r"(?:매장|지점|매장\s*서비스|장착\s*서비스|장착|서비스).{0,16}(?:리뷰|후기|별점|평점|평가|칭찬)"
+    r".{0,16}(?:작성|쓰기|써|남기|등록|수정|삭제|주|줄)|"
+    r"(?:리뷰|후기|별점|평점|평가|칭찬).{0,16}(?:매장|지점|매장\s*서비스|장착\s*서비스|장착|서비스)"
+    r".{0,16}(?:작성|쓰기|써|남기|등록|수정|삭제|주|줄)",
+    re.IGNORECASE,
+)
+
+
+def _my_goods_review_lookup_cta_required(
+    *,
+    routing_result: Any | None = None,
+    turn_contract: Any | None = None,
+) -> bool:
+    if str(getattr(routing_result, "policy_intent", "") or "") == "my_goods_review_lookup":
+        return True
+    if str(getattr(turn_contract, "intent", "") or "") == "my_goods_review_lookup":
+        return True
+    metadata_text = " ".join(
+        str(value)
+        for value in (
+            getattr(routing_result, "policy_intent", ""),
+            getattr(routing_result, "reason", ""),
+            getattr(routing_result, "user_behavior", ""),
+            getattr(routing_result, "flow", ""),
+            " ".join(str(item) for item in (getattr(routing_result, "execution_plan", None) or ())),
+            getattr(turn_contract, "planner_intent", ""),
+            " ".join(str(item) for item in (getattr(turn_contract, "execution_plan", None) or ())),
+        )
+        if value
+    )
+    return bool(_GOODS_REVIEW_LOOKUP_METADATA_RE.search(metadata_text))
 
 
 def _store_review_write_cta_required(
@@ -7840,9 +7879,9 @@ def _store_review_write_cta_required(
     routing_result: Any | None = None,
     turn_contract: Any | None = None,
 ) -> bool:
-    if str(getattr(routing_result, "policy_intent", "") or "") == "store_review_write":
+    if str(getattr(routing_result, "policy_intent", "") or "") in {"store_service_review_write", "store_review_write"}:
         return True
-    if str(getattr(turn_contract, "intent", "") or "") == "store_review_write":
+    if str(getattr(turn_contract, "intent", "") or "") in {"store_service_review_write", "store_review_write"}:
         return True
     metadata_text = " ".join(
         str(value)
@@ -7858,6 +7897,49 @@ def _store_review_write_cta_required(
         if value
     )
     return bool(_STORE_REVIEW_WRITE_METADATA_RE.search(metadata_text))
+
+
+def _ensure_my_goods_review_lookup_cta(event_data: dict[str, Any], *, cta_required: bool) -> bool:
+    if not cta_required:
+        return False
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        chips = []
+    review_chip = {
+        "label": "리뷰관리 바로가기",
+        "url": CTAUrls.GOODS_REVIEW,
+        "domain": "SUPPORT",
+    }
+    filtered = [
+        chip for chip in chips
+        if not (
+            isinstance(chip, dict)
+            and (
+                str(chip.get("url") or "").strip() in {CTAUrls.GOODS_REVIEW, CTAUrls.STORE_SERVICE_HISTORY}
+                or str(chip.get("label") or "").strip() in {"리뷰관리 바로가기", "바로가기"}
+            )
+        )
+    ]
+    if not any(isinstance(chip, dict) and str(chip.get("label") or "").strip() == "처음으로" for chip in filtered):
+        filtered.append({"label": "처음으로", "domain": "LEADING"})
+    event_data["quickReplies"] = [review_chip, *filtered]
+    assistant_text = str(event_data.get("assistantResponse") or "").strip()
+    required_text = (
+        "고객님이 작성한 상품 리뷰와 베스트리뷰 선정 여부는 마이페이지 > 리뷰관리에서 확인할 수 있어요.\n"
+        "아래 버튼을 눌러 바로 이동해 주세요."
+    )
+    if "마이페이지 > 리뷰관리" not in assistant_text:
+        event_data["assistantResponse"] = f"{assistant_text}\n\n{required_text}".strip()
+    predicted = event_data.get("predictedDomains")
+    if isinstance(predicted, list):
+        event_data["predictedDomains"] = _dedupe_domain_values(["SUPPORT", *predicted])
+    else:
+        event_data["predictedDomains"] = ["SUPPORT"]
+    metadata = event_data.setdefault("metadata", {})
+    if isinstance(metadata, dict):
+        metadata["policyIntent"] = "my_goods_review_lookup"
+        metadata["goodsReviewLookupCtaEnforced"] = True
+    return True
 
 
 def _ensure_store_review_write_cta(event_data: dict[str, Any], *, cta_required: bool) -> bool:
@@ -7902,7 +7984,7 @@ def _ensure_store_review_write_cta(event_data: dict[str, Any], *, cta_required: 
         event_data["predictedDomains"] = ["SUPPORT"]
     metadata = event_data.setdefault("metadata", {})
     if isinstance(metadata, dict):
-        metadata["policyIntent"] = "store_review_write"
+        metadata["policyIntent"] = "store_service_review_write"
         metadata["storeReviewWriteCtaEnforced"] = True
     return True
 
@@ -26246,7 +26328,23 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
-                    if _ensure_store_review_write_cta(
+                    if _ensure_my_goods_review_lookup_cta(
+                        event_data,
+                        cta_required=_my_goods_review_lookup_cta_required(
+                            routing_result=routing_result,
+                            turn_contract=turn_contract,
+                        ),
+                    ):
+                        logger.info("[POLICY][support] goods review lookup CTA enforced")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[SUPPORT AGENT]",
+                        }]
+                    elif _ensure_store_review_write_cta(
                         event_data,
                         cta_required=_store_review_write_cta_required(
                             routing_result=routing_result,

@@ -193,6 +193,7 @@ from services.tstation.chat import (
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
     _inject_destination_cta_for_guidance,
+    _ensure_my_goods_review_lookup_cta,
     _ensure_store_review_write_cta,
     _is_ev_suitability_turn,
     _extract_plain_store_info_store_name,
@@ -12279,20 +12280,20 @@ def test_product_benefit_stacking_stays_out_of_discovery_event_lookup() -> None:
 @pytest.mark.parametrize(
     "user_text",
     [
-        "리뷰 어디다 써?",
-        "후기 남기고 싶어",
+        "매장 리뷰 어디다 써?",
+        "매장서비스 후기 남기고 싶어",
         "남양주점 별점 5점 남기고 싶어",
-        "칭찬 리뷰 작성하고 싶어",
+        "지점 칭찬 리뷰 작성하고 싶어",
     ],
 )
 def test_store_review_write_policy_contract_requires_service_history_cta(user_text: str) -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.SUPPORT],
-        execution_plan=["support:store_review_write"],
-        policy_intent="store_review_write",
+        execution_plan=["support:store_service_review_write"],
+        policy_intent="store_service_review_write",
     )
     response_decision = decide_support_response(
-        intent="store_review_write",
+        intent="store_service_review_write",
         user_text=user_text,
         known_slots={},
     )
@@ -12307,11 +12308,11 @@ def test_store_review_write_policy_contract_requires_service_history_cta(user_te
         "predictedDomains": ["SUPPORT"],
     }
 
-    assert response_decision.metadata["response_shape_key"] == "store_review_write"
+    assert response_decision.metadata["response_shape_key"] == "store_service_review_write"
     assert response_decision.template == TemplateName.QUICK_REPLY
     assert "omit_store_service_history_cta" in response_decision.forbidden_behaviors
     assert contract.domain == "support"
-    assert contract.intent == "store_review_write"
+    assert contract.intent == "store_service_review_write"
     assert _ensure_store_review_write_cta(event_data, cta_required=True) is True
     assert event_data["quickReplies"][0] == {
         "label": "바로가기",
@@ -12320,6 +12321,56 @@ def test_store_review_write_policy_contract_requires_service_history_cta(user_te
     }
     assert "마이페이지 > 매장서비스 내역" in event_data["assistantResponse"]
     assert event_data["metadata"]["storeReviewWriteCtaEnforced"] is True
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내가 쓴 리뷰 어디서 봐?",
+        "내가 쓴 리뷰가 베스트리뷰가 되었대. 어디서 확인해?",
+        "상품 리뷰 확인 어디서 해?",
+        "구매후기 확인하고 싶어",
+    ],
+)
+def test_my_goods_review_lookup_policy_contract_requires_goods_review_cta(user_text: str) -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:my_goods_review_lookup"],
+        policy_intent="my_goods_review_lookup",
+    )
+    response_decision = decide_support_response(
+        intent="my_goods_review_lookup",
+        user_text=user_text,
+        known_slots={},
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=routing_result,
+        response_decision=response_decision,
+    )
+    event_data = {
+        "assistantResponse": "리뷰는 마이페이지에서 확인할 수 있어요.",
+        "quickReplies": [{"label": "바로가기", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"}],
+        "predictedDomains": ["SUPPORT"],
+    }
+
+    assert response_decision.metadata["response_shape_key"] == "my_goods_review_lookup"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "omit_goods_review_cta" in response_decision.forbidden_behaviors
+    assert contract.domain == "support"
+    assert contract.intent == "my_goods_review_lookup"
+    assert _ensure_my_goods_review_lookup_cta(event_data, cta_required=True) is True
+    assert event_data["quickReplies"][0] == {
+        "label": "리뷰관리 바로가기",
+        "url": CTAUrls.GOODS_REVIEW,
+        "domain": "SUPPORT",
+    }
+    assert all(
+        not (isinstance(chip, dict) and chip.get("url") == CTAUrls.STORE_SERVICE_HISTORY)
+        for chip in event_data["quickReplies"]
+    )
+    assert "마이페이지 > 리뷰관리" in event_data["assistantResponse"]
+    assert event_data["metadata"]["goodsReviewLookupCtaEnforced"] is True
 
 
 def test_store_review_write_cta_policy_does_not_affect_review_detail_or_store_rating_search() -> None:
