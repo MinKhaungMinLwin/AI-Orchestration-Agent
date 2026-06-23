@@ -105,6 +105,7 @@ from services.tstation.chat import (
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
     _build_order_history_reorder_event,
+    _is_preorder_confirmation_reply,
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
@@ -10251,10 +10252,109 @@ def test_quick_order_reservation_treats_selected_datepick_as_resolved_booking_da
         },
     )
 
-    assert contract.intent == "quick_order_reservation"
-    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_confirmation_ready"
+    assert contract.intent == "quick_order_execute"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "quick_order_execute"
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+@pytest.mark.parametrize("user_text", ["주문 확정", "구매하기", "ㅇㅇ"])
+def test_quick_order_execute_promotes_ready_preorder_confirmation(user_text: str) -> None:
+    known_slots = {
+        "goods_no": "G000000317682",
+        "tire_size": "235/55R19",
+        "ord_qty": 2,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "requested_cal_day": "20260623",
+        "rsv_hour": "17",
+        "payment_amount": 237600,
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+
+    frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "quick_order_execute"
+    assert frame.sub_intent == "confirm"
+    assert frame.missing_slots == ()
+    assert tool_plan.allowed_tools == ("quick_order_tool",)
+    assert tool_plan.preferred_tool == "quick_order_tool"
+    assert response_decision.metadata["response_shape_key"] == "quick_order_execute"
+    assert contract.intent == "quick_order_execute"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_quick_order_execute_blocks_tool_when_required_slots_missing() -> None:
+    known_slots = {
+        "goods_no": "G000000317682",
+        "ord_qty": 2,
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+
+    frame = build_transaction_intent_frame("주문 확정", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(intent=frame.intent, user_text="주문 확정", known_slots=dict(frame.known_slots))
+    contract = build_turn_contract(
+        user_text="주문 확정",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "quick_order_execute"
+    assert frame.missing_slots == ("store", "booking_datetime")
+    assert tool_plan.allowed_tools == ()
+    assert tool_plan.preferred_tool is None
+    assert response_decision.metadata["response_shape_key"] == "missing_order_execution_slots"
+    assert contract.blocking_required_slots == ("store", "booking_datetime")
+    assert should_guard_required_slots(contract)
+
+
+def test_turn_contract_reports_preorder_confirmation_without_quick_order_tool() -> None:
+    contract = _transaction_turn_contract(
+        "주문 확정",
+        {
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="주문 확정 단계로 이어갑니다 😊",
+        assistant_response_source="transaction_agent",
+        response_shape_key="transaction_fallback",
+        called_tools=[],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert contract.intent == "quick_order_execute"
+    assert {
+        "type": "quick_order_execute_without_tool",
+        "assistant_response_source": "transaction_agent",
+        "response_shape_key": "transaction_fallback",
+        "template": "quickReply",
+        "assistant_response_text": "주문 확정 단계로 이어갑니다 😊",
+    } in violations
 
 
 def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime() -> None:
@@ -10271,10 +10371,34 @@ def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime(
         },
     )
 
-    assert contract.intent == "quick_order_reservation"
-    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+    assert contract.intent == "quick_order_execute"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "missing_order_execution_slots"
     assert contract.blocking_required_slots == ("booking_datetime",)
     assert should_guard_required_slots(contract)
+
+
+def test_preorder_confirmation_reply_requires_ready_card() -> None:
+    ready_preorder = {
+        "template": "preOrder",
+        "data": {
+            "isReadyToOrder": True,
+            "orderInfo": {"product": "벤투스 S2 AS 225/45R17"},
+            "metadata": {"goodsId": "G000000309783", "shopId": "F07782"},
+        },
+    }
+    not_ready_preorder = {
+        "template": "preOrder",
+        "data": {
+            "isReadyToOrder": False,
+            "orderInfo": {"product": "벤투스 S2 AS 225/45R17"},
+            "metadata": {"goodsId": "G000000309783", "shopId": "F07782"},
+        },
+    }
+
+    assert _is_preorder_confirmation_reply("구매하기", ready_preorder) is True
+    assert _is_preorder_confirmation_reply("ㅇㅇ", ready_preorder) is True
+    assert _is_preorder_confirmation_reply("구매하기", not_ready_preorder) is False
+    assert _is_preorder_confirmation_reply("구매하기", None) is False
 
 
 def test_turn_contract_blocks_templates_that_conflict_with_missing_required_slots() -> None:

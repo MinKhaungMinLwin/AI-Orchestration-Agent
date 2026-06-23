@@ -18,6 +18,12 @@ _PURE_INVENTORY_FLOW_FORBIDDEN = (
     "datepick_for_pure_inventory_flow",
     "preorder_for_pure_inventory_flow",
 )
+_QUICK_ORDER_EXECUTE_FORBIDDEN = (
+    "preorder_again_after_user_confirmed",
+    "confirm_text_without_quick_order_tool",
+    "order_complete_without_quick_order_tool",
+    "quick_order_with_null_required_fields",
+)
 
 
 def decide_transaction_response(
@@ -46,6 +52,8 @@ def decide_transaction_response(
         return _decide_inventory_availability(slots=slots, tool_result=tool_result or {})
     if intent == "quick_order_reservation":
         return _decide_quick_order_reservation(slots=slots)
+    if intent == "quick_order_execute":
+        return _decide_quick_order_execute(slots=slots)
 
     return _decision(
         response_shape_key="transaction_fallback",
@@ -282,6 +290,36 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
         required_slots=("booking_datetime",),
         forbidden_behaviors=_NO_ORDER_NULL_FORBIDDEN + ("store_hours_instead_of_slots",),
         assistant_guidance="상품/수량/매장이 확정됐으면 예약 가능한 날짜와 시간을 먼저 선택하게 한다.",
+    )
+
+
+def _decide_quick_order_execute(*, slots: dict[str, Any]) -> ResponseDecision:
+    missing: list[str] = []
+    if not slots.get("goods_no"):
+        missing.append("product")
+    if not slots.get("ord_qty") and not slots.get("quantity"):
+        missing.append("quantity")
+    if not slots.get("shop_id"):
+        missing.append("store")
+    if not (slots.get("requested_cal_day") and slots.get("rsv_hour")):
+        missing.append("booking_datetime")
+
+    if missing:
+        return _decision(
+            response_shape_key="missing_order_execution_slots",
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=tuple(missing),
+            forbidden_behaviors=_QUICK_ORDER_EXECUTE_FORBIDDEN,
+            assistant_guidance="preOrder 확인 이후 주문 실행에 필요한 상품/수량/매장/예약일시가 비면 quick_order_tool을 호출하지 않는다.",
+        )
+
+    return _decision(
+        response_shape_key="quick_order_execute",
+        response_shape=ResponseShape.ACTION_CONFIRM,
+        template=TemplateName.ORDER_COMPLETE,
+        forbidden_behaviors=_QUICK_ORDER_EXECUTE_FORBIDDEN,
+        assistant_guidance="사용자가 preOrder를 확인한 뒤 확정 의사를 밝히면 quick_order_tool로 실제 주문서 생성을 실행하고 orderComplete 또는 실패 안내로 종료한다.",
     )
 
 

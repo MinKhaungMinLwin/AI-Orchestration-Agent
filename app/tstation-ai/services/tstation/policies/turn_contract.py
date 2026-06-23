@@ -20,6 +20,7 @@ _HIGH_RISK_INTENTS = frozenset({
     "stock_store_search",
     "store_schedule",
     "quick_order_reservation",
+    "quick_order_execute",
     "inventory_availability",
     "recent_product_set_size_availability",
 })
@@ -356,6 +357,13 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 {"label": "구매 진행", "domain": "TRANSACTION"},
                 {"label": "상품 추천", "domain": "DISCOVERY"},
             ]
+        elif intent == "quick_order_execute":
+            message = "주문을 이어가려면 상품, 매장, 예약 정보가 모두 확인되어야 해요. 필요한 정보를 다시 확인해 주세요."
+            quick_replies = [
+                {"label": "상품 다시 선택", "domain": "DISCOVERY"},
+                {"label": "매장 다시 선택", "domain": "TRANSACTION"},
+                {"label": "예약 시간 다시 선택", "domain": "TRANSACTION"},
+            ]
         else:
             message = "가격을 확인하려면 어떤 상품 기준인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
             quick_replies = [
@@ -526,6 +534,16 @@ def response_contract_violations(
     )
     if stock_violation is not None:
         violations.append(stock_violation)
+    quick_order_violation = _quick_order_execute_contract_violation(
+        template=template,
+        assistant_response_text=assistant_response_text,
+        assistant_response_source=assistant_response_source,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if quick_order_violation is not None:
+        violations.append(quick_order_violation)
     return violations
 
 
@@ -693,6 +711,40 @@ def _stock_contract_violation(
     return None
 
 
+def _quick_order_execute_contract_violation(
+    *,
+    template: str | None,
+    assistant_response_text: str | None,
+    assistant_response_source: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "quick_order_execute":
+        return None
+    called_tools = tuple(str(tool) for tool in tuple(called_tools or ()) if str(tool).strip())
+    if "quick_order_tool" not in called_tools:
+        if str(template or "") == "orderComplete":
+            return {
+                "type": "order_complete_without_quick_order_tool",
+                "assistant_response_source": str(assistant_response_source or ""),
+                "response_shape_key": str(response_shape_key or ""),
+            }
+        return {
+            "type": "quick_order_execute_without_tool",
+            "assistant_response_source": str(assistant_response_source or ""),
+            "response_shape_key": str(response_shape_key or ""),
+            "template": str(template or ""),
+            "assistant_response_text": str(assistant_response_text or "")[:160],
+        }
+    if str(response_shape_key or "") == "transaction_fallback":
+        return {
+            "type": "quick_order_execute_fell_back_without_resolution",
+            "assistant_response_source": str(assistant_response_source or ""),
+        }
+    return None
+
+
 def _comparison_metric_row_label(metric: str) -> str:
     return {
         "release": "출시 시점",
@@ -812,6 +864,7 @@ def _normalize_plan_intent(value: str) -> str:
     aliases = {
         "resolve_product": "resolve_or_describe_product",
         "continue_purchase": "quick_order_reservation",
+        "quick_order_confirmed": "quick_order_execute",
         "transaction_price_stock": "price_or_coupon_check",
         "discovery_search": "resolve_or_describe_product",
     }

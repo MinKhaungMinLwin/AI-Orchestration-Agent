@@ -36,6 +36,13 @@ _STORE_SCOPE_FOLLOWUP_RE = re.compile(
     r"(?:매장|지점)\s*(?:더|또|추가)|다른\s*지역|예약\s*가능\s*시간|가능\s*시간|가능\s*일정",
     re.IGNORECASE,
 )
+_STORE_CANDIDATE_SEARCH_RE = re.compile(
+    r"(?:오늘\s*)?(?:장착\s*)?가능\s*(?:한\s*)?(?:매장|지점|곳)|"
+    r"재고\s*(?:있는|있는\s*곳|확인\s*된)\s*(?:매장|지점|곳)|"
+    r"다른\s*(?:매장|지점|곳)|(?:매장|지점)\s*(?:찾아|검색|보여)",
+    re.IGNORECASE,
+)
+_SPECIFIC_STORE_RECHECK_RE = re.compile(r"다시\s*확인|재확인|한\s*번\s*더|한번\s*더", re.IGNORECASE)
 _RESULT_LIMIT_RE = re.compile(r"(\d+)\s*(?:개|곳|군데)\s*(?:만|까지)?")
 _KOREAN_RESULT_LIMITS = {
     "한": 1,
@@ -67,6 +74,15 @@ _TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
     r"오늘\s*장착|오늘장착|오늘\s*서비스|오늘서비스|당일|"
     r"예약|방문|장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정)|"
     r"몇\s*시|시간|스케줄",
+    re.IGNORECASE,
+)
+_QUICK_ORDER_CONFIRM_RE = re.compile(
+    r"^\s*(?:"
+    r"주문\s*확정|구매하기|주문하기|결제하기|"
+    r"주문해줘|구매해줘|결제해줘|"
+    r"주문\s*진행|결제\s*진행|진행해(?:줘)?|바로\s*주문|"
+    r"네|넵|넹|예|응|그래|좋아|ㅇㅇ|ㅇㅋ|ok|okay"
+    r")\s*$",
     re.IGNORECASE,
 )
 _PRODUCT_ALIASES: tuple[tuple[str, str], ...] = (
@@ -178,12 +194,63 @@ def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
 
+def _normalized_quantity(slots: dict[str, Any], text: str = "") -> int | None:
+    value = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _has_confirmed_store_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
 
 
 def _is_stock_flow_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
+
+
+def _is_today_install_context(slots: dict[str, Any], requested_cal_day: str | None = None) -> bool:
+    return bool(
+        slots.get("availability_intent") == "today_install"
+        or requested_cal_day
+        or slots.get("requested_cal_day")
+    )
+
+
+def _is_store_candidate_search_turn(text: str, slots: dict[str, Any]) -> bool:
+    if not _STORE_CANDIDATE_SEARCH_RE.search(text or ""):
+        return False
+    if not (_is_stock_flow_context(slots) or _is_today_install_context(slots)):
+        return False
+    return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
+
+
+def _is_specific_store_recheck_turn(text: str, current_store_name: str | None, slots: dict[str, Any]) -> bool:
+    if not _SPECIFIC_STORE_RECHECK_RE.search(text or ""):
+        return False
+    return bool(current_store_name or slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
+
+
+def _is_preorder_ready_context(slots: dict[str, Any]) -> bool:
+    if not slots:
+        return False
+    return bool(
+        (slots.get("pending_intent") == "order" or slots.get("goal_type") == "place_order")
+        and (
+            slots.get("goods_no")
+            or slots.get("tire_size")
+            or slots.get("quantity")
+            or slots.get("ord_qty")
+            or slots.get("shop_id")
+            or slots.get("shop_name")
+            or slots.get("store_name")
+        )
+    )
+
+
+def _is_preorder_confirmation_text(text: str) -> bool:
+    return bool(_QUICK_ORDER_CONFIRM_RE.match(text or ""))
 
 
 def _is_quantity_only_followup(
@@ -298,7 +365,11 @@ def build_transaction_intent_frame(
             current_store_search=current_store_search,
         )
     )
-    quantity = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
+    preorder_confirmation = bool(
+        _is_preorder_ready_context(slots)
+        and _is_preorder_confirmation_text(text)
+    )
+    quantity = _normalized_quantity(slots, text)
     result_limit = extract_result_limit(text) or slots.get("limit")
     requested_cal_day = extract_requested_cal_day(text)
     today_requested = bool(_TODAY_RE.search(text))
@@ -312,10 +383,15 @@ def build_transaction_intent_frame(
     tire_size = explicit_tire_size or slots.get("tire_size")
     if pending_today_install and not requested_cal_day:
         requested_cal_day = slots.get("requested_cal_day")
+    store_candidate_search = (
+        _is_store_candidate_search_turn(text, slots)
+        and not _is_specific_store_recheck_turn(text, current_store_name, slots)
+    )
     preserve_pending_today_install = (
         region_only_today_install_continuation
         or date_only_today_install_continuation
         or other_store_today_install_continuation
+        or store_candidate_search
     )
     preserve_transaction_product_context = preserve_pending_today_install or store_scope_product_continuation
     goods_no = (
@@ -332,7 +408,9 @@ def build_transaction_intent_frame(
         )
     )
     store_name = current_store_name or (
-        None if plain_store_search and not preserve_transaction_product_context else slots.get("store_name") or slots.get("shop_name")
+        None
+        if (plain_store_search and not preserve_transaction_product_context) or store_candidate_search
+        else slots.get("store_name") or slots.get("shop_name")
     )
     region = current_region or slots.get("region") or slots.get("place")
 
@@ -359,6 +437,9 @@ def build_transaction_intent_frame(
         intent = "stock_store_search"
         sub_intent = "today_install"
         entities["stock_check_mode"] = "preview"
+    elif preorder_confirmation:
+        intent = "quick_order_execute"
+        sub_intent = "confirm"
     elif quantity_only_stock_continuation:
         intent = "stock_store_search"
         sub_intent = "today_install" if explicit_preview_request else "stock"
@@ -404,6 +485,9 @@ def build_transaction_intent_frame(
         quantity=quantity,
         has_location=has_location,
         has_store=bool(store_name or slots.get("shop_id")),
+        shop_id=slots.get("shop_id"),
+        requested_cal_day=requested_cal_day or slots.get("requested_cal_day"),
+        rsv_hour=slots.get("rsv_hour"),
     )
 
     known = {
@@ -416,13 +500,16 @@ def build_transaction_intent_frame(
         known["availability_intent"] = "today_install"
     if intent == "stock_store_search":
         known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
+        if quantity:
+            known["quantity"] = quantity
+            known["ord_qty"] = quantity
     if plain_store_search and not current_has_product and not preserve_transaction_product_context:
         for key in ("goods_no", "product_name", "pattern_name", "tire_size", "quantity", "ord_qty", "store_name"):
             known.pop(key, None)
     else:
         known.update({
             **({"tire_size": tire_size} if tire_size else {}),
-            **({"quantity": quantity} if quantity else {}),
+            **({"quantity": quantity, "ord_qty": quantity} if quantity else {}),
             **({"product_name": product_name} if product_name else {}),
             **({"store_name": store_name} if store_name else {}),
             **({"shop_name": store_name} if store_name else {}),
@@ -544,6 +631,36 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "quick_order_reservation"},
         )
 
+    if frame.intent == "quick_order_execute":
+        args = _slot_args(
+            frame,
+            "goods_no",
+            "ord_qty",
+            "quantity",
+            "shop_id",
+            "requested_cal_day",
+            "rsv_hour",
+            "car_lnc_cd",
+            "payment_amount",
+        )
+        if frame.missing_slots:
+            return ToolPlan(
+                allowed_tools=(),
+                preferred_tool=None,
+                tool_args_patch=args,
+                forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+                required_slots=frame.missing_slots,
+                metadata={"response_intent": "quick_order_execute"},
+            )
+        return ToolPlan(
+            allowed_tools=("quick_order_tool",),
+            preferred_tool="quick_order_tool",
+            tool_args_patch=args,
+            forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+            required_slots=frame.missing_slots,
+            metadata={"response_intent": "quick_order_execute"},
+        )
+
     if frame.intent == "price_or_coupon_check":
         return ToolPlan(
             allowed_tools=("get_final_price_tool", "get_my_coupons_tool", "get_coupon_applicable_products_tool"),
@@ -565,6 +682,9 @@ def _missing_slots_for_intent(
     quantity: Any,
     has_location: bool,
     has_store: bool,
+    shop_id: Any = None,
+    requested_cal_day: Any = None,
+    rsv_hour: Any = None,
 ) -> tuple[str, ...]:
     missing: list[str] = []
     if intent == "stock_store_search":
@@ -583,6 +703,15 @@ def _missing_slots_for_intent(
             missing.append("quantity")
         if not has_store:
             missing.append("store")
+    elif intent == "quick_order_execute":
+        if not goods_no:
+            missing.append("product")
+        if not quantity:
+            missing.append("quantity")
+        if not shop_id:
+            missing.append("store")
+        if not requested_cal_day or not rsv_hour:
+            missing.append("booking_datetime")
     elif intent in ("store_schedule", "store_search"):
         if not has_location:
             missing.append("store")

@@ -5199,6 +5199,15 @@ _QUANTITYLESS_CART_ORDER_CTA_RE = re.compile(
     r"^\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘|구매하기|주문하기|바로\s*주문|결제하기)\s*$",
     re.IGNORECASE,
 )
+_PREORDER_CONFIRMATION_RE = re.compile(
+    r"^\s*(?:"
+    r"주문\s*확정|구매하기|주문하기|결제하기|"
+    r"주문해줘|구매해줘|결제해줘|"
+    r"주문\s*진행|결제\s*진행|진행해(?:줘)?|바로\s*주문|"
+    r"네|넵|넹|예|응|그래|좋아|ㅇㅇ|ㅇㅋ|ok|okay"
+    r")\s*$",
+    re.IGNORECASE,
+)
 
 
 def _normalize_vehicle_tire_size_pair(selected_meta: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -5209,6 +5218,25 @@ def _normalize_vehicle_tire_size_pair(selected_meta: dict[str, Any]) -> tuple[st
 
 def _has_staggered_vehicle_tire_sizes(front_size: str | None, rear_size: str | None) -> bool:
     return bool(front_size and rear_size and front_size != rear_size)
+
+
+def _preorder_payload(template_data: dict | None) -> dict[str, Any] | None:
+    if not isinstance(template_data, dict):
+        return None
+    if template_data.get("template") == "preOrder" and isinstance(template_data.get("data"), dict):
+        return template_data["data"]
+    return template_data if isinstance(template_data.get("orderInfo"), dict) else None
+
+
+def _is_ready_preorder_template(template_data: dict | None) -> bool:
+    payload = _preorder_payload(template_data)
+    return bool(isinstance(payload, dict) and payload.get("isReadyToOrder"))
+
+
+def _is_preorder_confirmation_reply(user_text: str | None, latest_preorder_tmpl: dict | None) -> bool:
+    if not _is_ready_preorder_template(latest_preorder_tmpl):
+        return False
+    return bool(_PREORDER_CONFIRMATION_RE.match(str(user_text or "").strip()))
 
 
 def _is_staggered_selected_tire_size_context(slots: Any) -> bool:
@@ -13570,7 +13598,7 @@ def _post_tool_policy_intent(tool_name: str) -> str:
         "compare_discount_tool": "price_or_coupon_check",
         "get_my_coupons_tool": "price_or_coupon_check",
         "get_coupon_applicable_products_tool": "price_or_coupon_check",
-        "quick_order_tool": "quick_order_reservation",
+        "quick_order_tool": "quick_order_execute",
         "get_store_schedule_tool": "store_schedule",
     }.get(tool_name, "transaction_fallback")
 
@@ -15406,9 +15434,12 @@ class TStationChatServiceV2:
                     stale_payment_amount,
                 )
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
+            preorder_confirmation_turn = _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl)
             missing_preorder_context = any(
                 getattr(merged_slots, field, None) is None
                 for field in (
+                    "goods_no",
+                    "ord_qty",
                     "shop_id",
                     "shop_name",
                     "payment_amount",
@@ -15418,7 +15449,11 @@ class TStationChatServiceV2:
             )
             if (
                 preorder_slot_values
-                and merged_slots.goal_type == "place_order"
+                and (
+                    merged_slots.goal_type == "place_order"
+                    or merged_slots.pending_intent == "order"
+                    or preorder_confirmation_turn
+                )
                 and missing_preorder_context
                 and (
                     merged_slots.goods_no is None
@@ -15441,6 +15476,15 @@ class TStationChatServiceV2:
                         "[SLOTS] Recovered order slots from latest preOrder template: %s",
                         missing_preorder_values,
                     )
+            if preorder_confirmation_turn:
+                merged_slots = merged_slots.apply_runtime_values(
+                    {
+                        "pending_intent": "order",
+                        "goal_type": "place_order",
+                    },
+                    source="preorder_confirmation",
+                    fill_only=False,
+                )
             datepick_template_for_recovery = latest_datepick_tmpl
             datepick_slot_values = TStationChatServiceV2._datepick_slot_values_from_data(
                 datepick_template_for_recovery,
@@ -16566,6 +16610,26 @@ class TStationChatServiceV2:
                 messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
         _t_classify = time.perf_counter()
 
+        if _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl):
+            previous_domains = list(domains)
+            domains = [MultiAgentDomain.Domain.TRANSACTION]
+            routing_result = MultiAgentDomain(
+                reason="preorder_confirmation_execute",
+                domains=domains,
+                execution_plan=["transaction:quick_order_execute"],
+                user_behavior="confirming a ready preorder card to execute quick order",
+                flow="preorder_confirmation_execute",
+                claim_check_type="none",
+                complaint_scope="none",
+                agent_prompt_profile=AgentPromptProfile.FULL,
+            )
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[COORDINATOR] preOrder confirmation route override: %s -> [transaction/full]",
+                [domain.value for domain in previous_domains],
+            )
+
         if current_location_store_confirmation:
             previous_domains = list(domains)
             domains = [MultiAgentDomain.Domain.TRANSACTION]
@@ -17592,6 +17656,7 @@ class TStationChatServiceV2:
                     request_started_at=_t0,
                     latest_datepick_tmpl=latest_datepick_tmpl,
                     latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    latest_preorder_tmpl=latest_preorder_tmpl,
                     latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
                     intent_group=intent_group,
@@ -17628,6 +17693,7 @@ class TStationChatServiceV2:
                 request_started_at=_t0,
                 latest_datepick_tmpl=latest_datepick_tmpl,
                 latest_quickreply_tmpl=latest_quickreply_tmpl,
+                latest_preorder_tmpl=latest_preorder_tmpl,
                 latest_product_tmpl=latest_product_tmpl,
                 prev_tool_data=prev_tool_data,
                 intent_group=intent_group,
@@ -17769,6 +17835,7 @@ class TStationChatServiceV2:
         request_started_at: float | None = None,
         latest_datepick_tmpl: dict | None = None,
         latest_quickreply_tmpl: dict | None = None,
+        latest_preorder_tmpl: dict | None = None,
         latest_product_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
         intent_group: str | None = None,
@@ -20692,6 +20759,172 @@ class TStationChatServiceV2:
             assistant_response = str((quantity_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': agent_label}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        async def _resolve_quick_order_execute_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_preorder_confirmation_reply(user_query, latest_preorder_tmpl):
+                return None
+
+            slot_values = (
+                initial_slots.model_dump()
+                if initial_slots is not None and hasattr(initial_slots, "model_dump")
+                else dict(initial_slots or {})
+            )
+            frame = build_transaction_intent_frame(user_query, known_slots=slot_values)
+            if frame.intent != "quick_order_execute":
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import quick_order_tool as _quick_order_tool
+            from services.tstation.template_mapper import try_build_template
+
+            preorder_payload = _preorder_payload(latest_preorder_tmpl) or {}
+            preorder_order_info = preorder_payload.get("orderInfo") if isinstance(preorder_payload.get("orderInfo"), dict) else {}
+
+            goods_no = str(frame.known_slots.get("goods_no") or "").strip()
+            shop_id = str(frame.known_slots.get("shop_id") or "").strip()
+            requested_cal_day = str(frame.known_slots.get("requested_cal_day") or "").strip()
+            rsv_hour = str(frame.known_slots.get("rsv_hour") or "").strip()
+            car_lnc_cd = str(frame.known_slots.get("car_lnc_cd") or "").strip() or None
+            try:
+                ord_qty = int(frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity") or 0)
+            except (TypeError, ValueError):
+                ord_qty = 0
+            if frame.missing_slots or not (goods_no and shop_id and requested_cal_day and rsv_hour and ord_qty > 0):
+                return None
+
+            tool_input: dict[str, Any] = {
+                "goods_no": goods_no,
+                "ord_qty": ord_qty,
+                "shop_id": shop_id,
+                "rsv_date": requested_cal_day,
+                "rsv_hour": rsv_hour,
+            }
+            if car_lnc_cd:
+                tool_input["car_lnc_cd"] = car_lnc_cd
+
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": "quick_order_tool",
+                "display_name": "주문서 생성 중...",
+                "source_domain": "transaction",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_quick_order_tool.invoke, tool_input)
+                quick_order_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception(
+                    "[QUICK_ORDER_EXECUTE] quick_order_tool failed goods_no=%s shop_id=%s",
+                    goods_no,
+                    shop_id,
+                )
+                quick_order_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("quick_order_tool", tool_input, quick_order_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Quick Shopping AF]",
+                "agent_class": "Transaction Agent",
+                "status": quick_order_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(quick_order_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "quick_order_tool",
+                "source_domain": "transaction",
+            })
+
+            mapped_event = try_build_template(
+                [{"tool": "quick_order_tool", "args": tool_input, "data": quick_order_result}],
+                str(preorder_payload.get("assistantResponse") or ""),
+            )
+            if mapped_event is None:
+                status = str(quick_order_result.get("status") or "").lower()
+                unwrapped_quick_order = _unwrap_tool_data(quick_order_result)
+                quick_order_flag = (
+                    str(unwrapped_quick_order.get("result") or "").lower()
+                    if isinstance(unwrapped_quick_order, dict)
+                    else ""
+                )
+                is_success = status == "success" and quick_order_flag not in {"", "false", "0"}
+                return emitted_events, {
+                    "type": "data",
+                    "template": "quickReply",
+                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                    "assistant_response_source": "code_quick_order_execute_resolver",
+                    "data": {
+                        "assistantResponse": (
+                            "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."
+                            if is_success
+                            else "주문서 생성 중 문제가 생겼어요. 주문 정보를 다시 확인한 뒤 재시도해 주세요."
+                        ),
+                        "quickReplies": (
+                            [
+                                {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+                                {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+                            ]
+                            if is_success
+                            else [
+                                {"label": "주문 다시 확인", "domain": "TRANSACTION"},
+                                {"label": "예약 시간 다시 선택", "domain": "TRANSACTION"},
+                            ]
+                        ),
+                        "predictedDomains": ["TRANSACTION"],
+                        "metadata": {
+                            "response_shape_key": "quick_order_execute",
+                        },
+                    },
+                }
+
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+            mapped_event["assistant_response_source"] = "code_quick_order_execute_resolver"
+            event_data = mapped_event.get("data") if isinstance(mapped_event.get("data"), dict) else {}
+            order_info = event_data.get("orderInfo") if isinstance(event_data.get("orderInfo"), dict) else {}
+            if isinstance(order_info, dict):
+                for key in ("carInfo", "product", "quantity", "storeName", "bookingDateTime", "paymentAmount"):
+                    if order_info.get(key) in (None, "", 0):
+                        replacement = preorder_order_info.get(key)
+                        if replacement not in (None, "", 0):
+                            order_info[key] = replacement
+                if order_info.get("bookingDateTime") in (None, "") and requested_cal_day and rsv_hour:
+                    try:
+                        order_day = datetime.datetime.strptime(requested_cal_day, "%Y%m%d")
+                        order_info["bookingDateTime"] = (
+                            f"{order_day.year}년 {order_day.month}월 {order_day.day}일 "
+                            f"({_WEEKDAY_KO[order_day.weekday()]}) {int(rsv_hour):02d}:00"
+                        )
+                    except ValueError:
+                        order_info["bookingDateTime"] = str(preorder_order_info.get("bookingDateTime") or "")
+            metadata = event_data.get("metadata") if isinstance(event_data.get("metadata"), dict) else {}
+            if isinstance(metadata, dict):
+                metadata.setdefault("goodsId", goods_no)
+                metadata.setdefault("shopId", shop_id)
+            if not event_data.get("quickReplies"):
+                event_data["quickReplies"] = [
+                    {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+                    {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+                ] if event_data.get("isSuccess") else [
+                    {"label": "주문 다시 확인", "domain": "TRANSACTION"},
+                    {"label": "예약 시간 다시 선택", "domain": "TRANSACTION"},
+                ]
+            return emitted_events, mapped_event
+
+        quick_order_execute_resolution = await _resolve_quick_order_execute_with_code()
+        if quick_order_execute_resolution is not None:
+            code_events, order_event = quick_order_execute_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(order_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((order_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
