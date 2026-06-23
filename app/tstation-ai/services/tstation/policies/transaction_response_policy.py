@@ -14,6 +14,10 @@ _NO_ORDER_NULL_FORBIDDEN = (
     "preorder_with_null_required_fields",
     "order_summary_with_null_required_fields",
 )
+_PURE_INVENTORY_FLOW_FORBIDDEN = (
+    "datepick_for_pure_inventory_flow",
+    "preorder_for_pure_inventory_flow",
+)
 
 
 def decide_transaction_response(
@@ -57,6 +61,7 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
     has_product = bool(slots.get("product_name") or slots.get("pattern_name") or has_goods)
     has_location = bool(slots.get("region") or slots.get("place") or slots.get("lat") or slots.get("lng"))
     has_quantity = bool(slots.get("quantity") or slots.get("ord_qty"))
+    stock_check_mode = str(slots.get("stock_check_mode") or "inventory_only")
 
     required_slots: list[str] = []
     if not has_product:
@@ -78,12 +83,26 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
             assistant_guidance="상품은 확정된 것으로 보고 재확인하지 말고, 재고 조회에 필요한 누락 정보만 짧게 요청한다.",
         )
 
+    if stock_check_mode == "inventory_only":
+        return _decision(
+            response_shape_key="stock_inventory_lookup",
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            forbidden_behaviors=_PURE_INVENTORY_FLOW_FORBIDDEN + ("empty_select_only_response",),
+            assistant_guidance=(
+                "순수 재고 확인 흐름은 매장 ID를 해소한 뒤 get_store_inventory_tool만 사용한다. "
+                "datepick이나 예약 유도 없이 재고 가능/불가만 결과 기반으로 안내한다."
+            ),
+            metadata={"stock_check_mode": "inventory_only"},
+        )
+
     return _decision(
         response_shape_key="stock_store_candidates",
         response_shape=ResponseShape.LOCATION,
         template=TemplateName.LOCATION,
         forbidden_behaviors=("datepick_before_store_selection", "empty_select_only_response"),
         assistant_guidance="재고와 장착 조건을 만족하는 매장 후보를 location 카드로 먼저 제시한다.",
+        metadata={"stock_check_mode": "preview"},
     )
 
 
@@ -145,6 +164,42 @@ def _decide_inventory_availability(
     slots: dict[str, Any],
     tool_result: dict[str, Any],
 ) -> ResponseDecision:
+    stock_check_mode = str(
+        slots.get("stock_check_mode")
+        or ("preview" if slots.get("requested_cal_day") or slots.get("availability_intent") == "today_install" else "inventory_only")
+    )
+    if stock_check_mode == "inventory_only":
+        requested_qty = _int_or_none(slots.get("quantity") or slots.get("ord_qty")) or 1
+        available_qty = _available_quantity(tool_result)
+        has_inventory = bool(
+            _has_inventory_rows(tool_result, "todayShopArray")
+            or _has_inventory_rows(tool_result, "tnaShopArray")
+            or available_qty > 0
+        )
+        if not has_inventory or available_qty < requested_qty:
+            return _decision(
+                response_shape_key="stock_unavailable",
+                response_shape=ResponseShape.NO_RESULT,
+                template=TemplateName.QUICK_REPLY,
+                forbidden_behaviors=("say_available_when_stock_zero",) + _PURE_INVENTORY_FLOW_FORBIDDEN,
+                assistant_guidance=(
+                    "순수 재고 확인 흐름에서는 예약 슬롯이나 주문서로 확장하지 말고, "
+                    "재고 불가 사실과 대체 확인 액션만 짧게 안내한다."
+                ),
+                metadata={"stock_check_mode": "inventory_only"},
+            )
+        return _decision(
+            response_shape_key="stock_available",
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            forbidden_behaviors=_PURE_INVENTORY_FLOW_FORBIDDEN,
+            assistant_guidance=(
+                "순수 재고 확인 흐름에서는 get_store_inventory_tool 결과만 사용해 "
+                "매장재고/T바로배송 가능 여부를 안내한다."
+            ),
+            metadata={"stock_check_mode": "inventory_only"},
+        )
+
     if _has_preview_schedule_slots(tool_result):
         return _decision(
             response_shape_key="reservation_slots",
@@ -152,6 +207,7 @@ def _decide_inventory_availability(
             template=TemplateName.DATE_PICK,
             forbidden_behaviors=("hide_available_stock",),
             assistant_guidance="예약 가능한 슬롯이 있으면 재고 없음으로 보지 말고 datepick으로 이어간다.",
+            metadata={"stock_check_mode": "preview"},
         )
 
     requested_qty = _int_or_none(slots.get("quantity") or slots.get("ord_qty")) or 1
@@ -175,6 +231,7 @@ def _decide_inventory_availability(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("say_available_when_stock_zero", "datepick_for_unavailable_stock", "preorder"),
             assistant_guidance="재고/오늘서비스/T바로배송이 불가하면 가능하다고 안내하지 말고 대체 매장 또는 조건 변경을 제안한다.",
+            metadata={"stock_check_mode": "preview"},
         )
 
     return _decision(
@@ -183,6 +240,7 @@ def _decide_inventory_availability(
         template=TemplateName.LOCATION,
         forbidden_behaviors=("hide_available_stock",),
         assistant_guidance="요청 수량을 충족하는 재고 또는 배송 가능 경로를 안내한다.",
+        metadata={"stock_check_mode": "preview"},
     )
 
 
@@ -235,6 +293,7 @@ def _decision(
     required_slots: tuple[str, ...] = (),
     forbidden_behaviors: tuple[str, ...] = (),
     assistant_guidance: str = "",
+    metadata: dict[str, Any] | None = None,
 ) -> ResponseDecision:
     return ResponseDecision(
         response_shape=response_shape,
@@ -242,7 +301,7 @@ def _decision(
         required_slots=required_slots,
         forbidden_behaviors=forbidden_behaviors,
         assistant_guidance=assistant_guidance,
-        metadata={"response_shape_key": response_shape_key},
+        metadata={"response_shape_key": response_shape_key, **(metadata or {})},
     )
 
 

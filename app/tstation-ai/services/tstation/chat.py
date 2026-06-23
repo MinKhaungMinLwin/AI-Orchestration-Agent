@@ -754,6 +754,37 @@ def _mark_router_override_blocked(
     routing_result.blocked_override_reason = "conflicts_with_high_confidence_router_contract"
 
 
+def _promote_completed_speculative_router_contract(
+    *,
+    classify_future: concurrent.futures.Future | None,
+    domains: list[MultiAgentDomain.Domain] | None,
+    routing_result: MultiAgentDomain | None,
+) -> tuple[list[MultiAgentDomain.Domain] | None, MultiAgentDomain | None, bool]:
+    """Use the completed router result when speculative routing only guessed a broad domain.
+
+    Speculative classification intentionally avoids blocking the hot path, but if the
+    background router has already completed and produced a high-confidence support
+    policy contract, that structured contract must win over keyword/policy heuristics.
+    """
+
+    if routing_result is not None or classify_future is None or not classify_future.done():
+        return domains, routing_result, False
+    try:
+        verified_domains, verified_routing = classify_future.result(timeout=0)
+    except Exception:
+        logger.exception("[ROUTER_CONTRACT] failed to read completed speculative classifier result")
+        return domains, routing_result, False
+    if not _router_contract_is_high_confidence_policy(verified_routing):
+        return domains, routing_result, False
+    logger.info(
+        "[ROUTER_CONTRACT] promoted completed speculative router contract: previous=%s verified=%s policy_intent=%s",
+        [getattr(domain, "value", domain) for domain in list(domains or [])],
+        [getattr(domain, "value", domain) for domain in list(verified_domains or [])],
+        getattr(verified_routing, "policy_intent", None),
+    )
+    return list(verified_domains or []), verified_routing, True
+
+
 class _SlimMultiAgentDomain(BaseModel):
     """First-turn slim classification schema.
 
@@ -11584,6 +11615,59 @@ def _requested_day_label_from_availability_context(user_text: str, recent_contex
     return "오늘"
 
 
+def _is_quantity_only_stock_followup_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    parsed = ConversationSlots.extract_from_user_text(normalized)
+    return bool(
+        parsed.ord_qty is not None
+        and normalize_tire_size(normalized) is None
+        and parsed.shop_name is None
+        and parsed.region is None
+        and not ConversationSlots.has_product_keyword(normalized)
+        and not re.search(r"예약|장착|오늘\s*서비스|오늘서비스|당일|방문|가능\s*시간|스케줄", normalized, re.IGNORECASE)
+    )
+
+
+def _is_pure_inventory_stock_ready(slots: Any | None) -> bool:
+    if slots is None:
+        return False
+
+    def _slot_value(name: str) -> Any:
+        if isinstance(slots, Mapping):
+            return slots.get(name)
+        return getattr(slots, name, None)
+
+    try:
+        qty = int(_slot_value("ord_qty") or _slot_value("quantity") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    return bool(
+        (_slot_value("pending_intent") == "stock" or _slot_value("goal_type") == "store_with_stock")
+        and _slot_value("goods_no")
+        and _slot_value("tire_size")
+        and qty > 0
+        and (_slot_value("shop_id") or _slot_value("shop_name") or _slot_value("store_name"))
+    )
+
+
+def _store_name_exact_match_row(store_name: str, stores: list[dict[str, Any]]) -> dict[str, Any] | None:
+    target = re.sub(r"\s+", "", str(store_name or "")).lower()
+    target = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", target, flags=re.IGNORECASE)
+    matches: list[dict[str, Any]] = []
+    for store in stores:
+        if not isinstance(store, dict):
+            continue
+        shop_name = re.sub(r"\s+", "", str(store.get("shop_nm") or store.get("shop_name") or "")).lower()
+        shop_name = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", shop_name, flags=re.IGNORECASE)
+        if shop_name == target:
+            matches.append(store)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 _PREVIOUS_SELECTION_DATA_MARKER = "[이전 선택된 상품 데이터]"
 
 
@@ -16449,6 +16533,21 @@ class TStationChatServiceV2:
                     ),
                 }),
             )
+        promoted_domains, promoted_routing_result, promoted_router_contract = (
+            _promote_completed_speculative_router_contract(
+                classify_future=speculative_classify_future,
+                domains=domains,
+                routing_result=routing_result,
+            )
+        )
+        if promoted_router_contract:
+            domains = promoted_domains or domains
+            routing_result = promoted_routing_result
+            speculative_classify_future = None
+            skip_decision = False
+            if routing_result is not None:
+                messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
         _t_classify = time.perf_counter()
 
         if current_location_store_confirmation:
@@ -17030,6 +17129,7 @@ class TStationChatServiceV2:
                     "[SLOTS] Cleared stale store-search context for general turn: %s",
                     cleared_stale_store_context,
                 )
+            preserve_router_policy_contract = _router_contract_is_high_confidence_policy(routing_result)
             router_requires_reference_clarification = bool(
                 routing_result is not None
                 and getattr(routing_result, "needs_clarification", False)
@@ -17043,21 +17143,32 @@ class TStationChatServiceV2:
                 "shop_id": merged_slots.shop_id,
                 "store_name": merged_slots.shop_name,
             }
-            cross_domain_plan = plan_cross_domain_turn(last_user_text, known_slots=known_slots)
-            planned_domains = _agent_domains_from_cross_domain_values(
-                agent_domain_values_for_initial_route(cross_domain_plan, known_slots=known_slots)
-            )
-            has_coupon_pattern_plan = any(
-                task.intent == "coupon_pattern_applicability" for task in cross_domain_plan.subtasks
-            )
+            if preserve_router_policy_contract:
+                planned_domains = []
+                has_coupon_pattern_plan = False
+                logger.info(
+                    "[POLICY][cross-domain] skipped heuristic plan for high-confidence router policy contract: "
+                    "domains=%s policy_intent=%s",
+                    [domain.value for domain in list(getattr(routing_result, "domains", []) or [])],
+                    getattr(routing_result, "policy_intent", None),
+                )
+            else:
+                cross_domain_plan = plan_cross_domain_turn(last_user_text, known_slots=known_slots)
+                planned_domains = _agent_domains_from_cross_domain_values(
+                    agent_domain_values_for_initial_route(cross_domain_plan, known_slots=known_slots)
+                )
+                has_coupon_pattern_plan = any(
+                    task.intent == "coupon_pattern_applicability" for task in cross_domain_plan.subtasks
+                )
             logger.debug(
                 "[POLICY][cross-domain] evaluated current=%s planned=%s plan=%s",
                 [domain.value for domain in domains],
                 [domain.value for domain in planned_domains],
-                cross_domain_plan.to_dict(),
+                cross_domain_plan.to_dict() if cross_domain_plan is not None else None,
             )
             should_apply_cross_domain_route = (
                 bool(planned_domains)
+                and cross_domain_plan is not None
                 and not router_requires_reference_clarification
                 and (
                     cross_domain_plan.is_cross_domain
@@ -20565,6 +20676,222 @@ class TStationChatServiceV2:
             assistant_response = str((quantity_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': agent_label}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        async def _resolve_pure_inventory_stock_with_code() -> tuple[list[dict], dict] | None:
+            slot_state = initial_slots
+            if not _is_pure_inventory_stock_ready(slot_state):
+                return None
+
+            slot_values = (
+                slot_state.model_dump()
+                if slot_state is not None and hasattr(slot_state, "model_dump")
+                else dict(slot_state or {})
+            )
+            frame = build_transaction_intent_frame(user_query, known_slots=slot_values)
+            if frame.intent != "stock_store_search" or frame.sub_intent != "stock":
+                if not _is_quantity_only_stock_followup_text(user_query):
+                    return None
+                frame = build_transaction_intent_frame(
+                    "재고 있어?",
+                    known_slots=slot_values,
+                )
+                if frame.intent != "stock_store_search" or frame.sub_intent != "stock":
+                    return None
+            if str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only":
+                return None
+
+            goods_no = str(frame.known_slots.get("goods_no") or "").strip()
+            tire_size = str(frame.known_slots.get("tire_size") or "").strip()
+            store_name = str(
+                frame.known_slots.get("shop_name")
+                or frame.known_slots.get("store_name")
+                or ""
+            ).strip()
+            shop_id = str(frame.known_slots.get("shop_id") or "").strip()
+            try:
+                ord_qty = int(frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity") or 0)
+            except (TypeError, ValueError):
+                ord_qty = 0
+            if not (goods_no and tire_size and ord_qty > 0):
+                return None
+            if not (shop_id or store_name):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_store_inventory_tool as _get_store_inventory_tool,
+                get_store_list_tool as _get_store_list_tool,
+            )
+            from services.tstation.template_mapper import try_build_template
+
+            emitted_events: list[dict] = []
+            tool_entries: list[dict[str, Any]] = []
+
+            if not shop_id:
+                list_input = {"store_nm": store_name, "limit": 10}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_store_list_tool",
+                    "display_name": "매장 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_list = await asyncio.to_thread(_get_store_list_tool.invoke, list_input)
+                    list_result = _tool_result_dict(raw_list)
+                except Exception as exc:
+                    logger.exception("[PURE_INVENTORY_STOCK] get_store_list_tool failed store=%s", store_name)
+                    list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("get_store_list_tool", list_input, list_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Store AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": list_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": list_input,
+                    "output": json.dumps(list_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_store_list_tool",
+                    "source_domain": "transaction",
+                })
+                tool_entries.append({"tool": "get_store_list_tool", "args": list_input, "data": list_result})
+
+                list_data = _unwrap_tool_data(list_result)
+                stores = list_data.get("stores") if isinstance(list_data, dict) else None
+                if not isinstance(stores, list):
+                    stores = []
+                matched_store = _store_name_exact_match_row(store_name, [store for store in stores if isinstance(store, dict)])
+                if matched_store is None:
+                    mapped_event = try_build_template(
+                        tool_entries,
+                        f"{store_name} 매장 확인 결과예요.",
+                    )
+                    if mapped_event is not None:
+                        mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                        mapped_event["assistant_response_source"] = "code_pure_inventory_stock_store_resolution"
+                        return emitted_events, mapped_event
+                    return emitted_events, {
+                        "type": "data",
+                        "template": "quickReply",
+                        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                        "assistant_response_source": "code_pure_inventory_stock_store_resolution",
+                        "data": {
+                            "assistantResponse": "확인할 매장을 먼저 정해야 재고를 조회할 수 있어요. 매장명을 다시 확인해 주세요.",
+                            "quickReplies": [
+                                {"label": "매장명 다시 입력", "domain": "TRANSACTION"},
+                                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                            ],
+                            "predictedDomains": ["TRANSACTION"],
+                        },
+                    }
+                shop_id = str(matched_store.get("shop_id") or "").strip()
+                resolved_store_name = str(matched_store.get("shop_nm") or matched_store.get("shop_name") or "").strip()
+                if resolved_store_name:
+                    store_name = resolved_store_name
+                if not shop_id:
+                    return emitted_events, {
+                        "type": "data",
+                        "template": "quickReply",
+                        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                        "assistant_response_source": "code_pure_inventory_stock_store_resolution",
+                        "data": {
+                            "assistantResponse": "매장 정보를 정확히 확인하지 못해 재고 조회를 진행하지 않았어요. 매장을 다시 선택해 주세요.",
+                            "quickReplies": [
+                                {"label": "매장명 다시 입력", "domain": "TRANSACTION"},
+                                {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                            ],
+                            "predictedDomains": ["TRANSACTION"],
+                        },
+                    }
+                if initial_slots is not None:
+                    initial_slots.shop_id = shop_id
+                    if store_name:
+                        initial_slots.shop_name = store_name
+
+            inventory_input = {
+                "goods_list": [{"goodsNo": goods_no, "qty": str(ord_qty)}],
+                "shop_id_list": [{"shopId": shop_id}],
+            }
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_inventory_tool",
+                "display_name": "매장 재고 확인 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_inventory = await asyncio.to_thread(_get_store_inventory_tool.invoke, inventory_input)
+                inventory_result = _tool_result_dict(raw_inventory)
+            except Exception as exc:
+                logger.exception("[PURE_INVENTORY_STOCK] get_store_inventory_tool failed goods_no=%s shop_id=%s", goods_no, shop_id)
+                inventory_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_inventory_tool", inventory_input, inventory_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store/Stock AF]",
+                "agent_class": "Transaction Agent",
+                "status": inventory_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": inventory_input,
+                "output": json.dumps(inventory_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_inventory_tool",
+                "source_domain": "transaction",
+            })
+            tool_entries.append({"tool": "get_store_inventory_tool", "args": inventory_input, "data": inventory_result})
+
+            intro = f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요."
+            mapped_event = try_build_template(tool_entries, intro)
+            if mapped_event is not None:
+                mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                mapped_event["assistant_response_source"] = "code_pure_inventory_stock_resolver"
+                return emitted_events, mapped_event
+
+            return emitted_events, {
+                "type": "data",
+                "template": "quickReply",
+                "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                "assistant_response_source": "code_pure_inventory_stock_resolver",
+                "data": {
+                    "assistantResponse": (
+                        f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요. "
+                        "현재 매장 재고가 바로 확인되지 않아 다른 매장이나 조건으로 다시 확인해드릴게요."
+                    ),
+                    "quickReplies": [
+                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                        {"label": "대체상품 찾기", "domain": "DISCOVERY"},
+                    ],
+                    "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                    "metadata": {
+                        "response_shape_key": "stock_unavailable",
+                        "stock_check_mode": "inventory_only",
+                    },
+                },
+            }
+
+        pure_inventory_stock_resolution = await _resolve_pure_inventory_stock_with_code()
+        if pure_inventory_stock_resolution is not None:
+            code_events, stock_event = pure_inventory_stock_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            if stock_event is not None:
+                yield f"data: {json.dumps(stock_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((stock_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

@@ -33,6 +33,8 @@ _REQUIRED_SLOT_BLOCK_TEMPLATES = frozenset({
 })
 _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "datepick_for_unavailable_stock": frozenset({"datepick", "preOrder"}),
+    "datepick_for_pure_inventory_flow": frozenset({"datepick", "preOrder"}),
+    "preorder_for_pure_inventory_flow": frozenset({"preOrder", "orderComplete"}),
     "preorder": frozenset({"preOrder", "orderComplete"}),
     "preorder_with_null_required_fields": frozenset({"preOrder", "orderComplete"}),
     "order_summary_with_null_required_fields": frozenset({"preOrder", "orderComplete"}),
@@ -167,6 +169,7 @@ def build_turn_contract(
         compare_metric = str(intent_frame.entities.get("compare_metric") or "")
         comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
         oe_replacement_type = str(intent_frame.entities.get("oe_replacement_type") or "")
+        stock_check_mode = str(intent_frame.entities.get("stock_check_mode") or "")
         if requested_product_attribute:
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric:
@@ -175,6 +178,8 @@ def build_turn_contract(
             known_slots["comparison_followup_intent"] = comparison_followup_intent
         if oe_replacement_type:
             known_slots["oe_replacement_type"] = oe_replacement_type
+        if stock_check_mode:
+            known_slots["stock_check_mode"] = stock_check_mode
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
@@ -184,6 +189,7 @@ def build_turn_contract(
         compare_metric = str(response_metadata.get("compare_metric") or "")
         comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
         oe_replacement_type = str(response_metadata.get("oe_replacement_type") or "")
+        stock_check_mode = str(response_metadata.get("stock_check_mode") or "")
         if requested_product_attribute and not known_slots.get("requested_product_attribute"):
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric and not known_slots.get("compare_metric"):
@@ -192,6 +198,8 @@ def build_turn_contract(
             known_slots["comparison_followup_intent"] = comparison_followup_intent
         if oe_replacement_type and not known_slots.get("oe_replacement_type"):
             known_slots["oe_replacement_type"] = oe_replacement_type
+        if stock_check_mode and not known_slots.get("stock_check_mode"):
+            known_slots["stock_check_mode"] = stock_check_mode
 
     has_reference_signal = _has_reference_signal(user_text)
     required_slots = _merge_tuple(
@@ -221,6 +229,10 @@ def build_turn_contract(
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
     if domain == "support" and policy_intent and policy_intent != "none":
         intent = policy_intent
+        allowed_tools = _merge_tuple(
+            allowed_tools,
+            ("search_faq_hybrid_tool",),
+        )
         forbidden_tools = _merge_tuple(
             forbidden_tools,
             ("search_product_tool", "get_final_price_tool"),
@@ -351,7 +363,11 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 {"label": "가격 확인", "domain": "TRANSACTION"},
                 {"label": "상품 추천", "domain": "DISCOVERY"},
             ]
-    elif "datepick_for_unavailable_stock" in forbidden_set:
+    elif (
+        "datepick_for_unavailable_stock" in forbidden_set
+        or "datepick_for_pure_inventory_flow" in forbidden_set
+        or "preorder_for_pure_inventory_flow" in forbidden_set
+    ):
         message = "요청하신 조건으로 바로 예약 가능한 재고를 확인하지 못했어요. 다른 매장이나 조건으로 다시 확인해드릴게요."
         quick_replies = [
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
@@ -501,6 +517,15 @@ def response_contract_violations(
     )
     if compare_violation is not None:
         violations.append(compare_violation)
+    stock_violation = _stock_contract_violation(
+        template=template,
+        assistant_response_source=assistant_response_source,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if stock_violation is not None:
+        violations.append(stock_violation)
     return violations
 
 
@@ -620,6 +645,50 @@ def _comparison_contract_violation(
             "comparison_followup_intent": comparison_followup_intent,
             "compare_metric": compare_metric or "none",
             "expected_row": expected_row,
+        }
+    return None
+
+
+def _stock_contract_violation(
+    *,
+    template: str | None,
+    assistant_response_source: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "stock_store_search":
+        return None
+    stock_check_mode = str(contract.known_slots.get("stock_check_mode") or "")
+    called_tools = tuple(str(tool) for tool in tuple(called_tools or ()) if str(tool).strip())
+    if stock_check_mode == "inventory_only":
+        if str(response_shape_key or "") == "transaction_fallback" and not called_tools:
+            return {
+                "type": "stock_contract_fell_back_without_resolution",
+                "assistant_response_source": str(assistant_response_source or ""),
+                "response_shape_key": str(response_shape_key or ""),
+                "called_tools": [],
+            }
+        if not called_tools:
+            return {
+                "type": "inventory_tool_missing_for_stock_contract",
+                "assistant_response_source": str(assistant_response_source or ""),
+                "response_shape_key": str(response_shape_key or ""),
+            }
+        if any(tool == "transaction_store_preview_tool" for tool in called_tools):
+            return {
+                "type": "unexpected_preview_tool_for_inventory_only_stock",
+                "called_tools": list(called_tools),
+            }
+        if str(template or "") == "datepick":
+            return {
+                "type": "forbidden_datepick_for_inventory_only_stock",
+                "response_shape_key": str(response_shape_key or ""),
+            }
+    if str(response_shape_key or "") == "transaction_fallback":
+        return {
+            "type": "stock_contract_fell_back_without_resolution",
+            "assistant_response_source": str(assistant_response_source or ""),
         }
     return None
 

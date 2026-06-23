@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import asyncio
+import concurrent.futures
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +63,8 @@ from services.tstation.chat import (
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
     _build_store_availability_quantity_prompt_event,
+    _is_pure_inventory_stock_ready,
+    _is_quantity_only_stock_followup_text,
     _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
     _build_multi_product_detail_quickreply_event,
@@ -133,6 +136,7 @@ from services.tstation.chat import (
     _trace_final_error_state,
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
+    _promote_completed_speculative_router_contract,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
@@ -243,7 +247,7 @@ from services.tstation.policies.delivery_policy_gate import (
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
-from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
     TurnContract,
     build_required_slot_clarification_event,
@@ -835,6 +839,34 @@ def test_high_confidence_support_router_contract_blocks_product_price_override()
         candidate_override="p0b_transaction_redirect",
         override_reason=None,
     )
+
+
+def test_completed_speculative_router_policy_contract_promotes_over_discovery_guess() -> None:
+    routing = MultiAgentDomain(
+        reason="regional price policy",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:regional_price_policy"],
+        user_behavior="asking about regional purchase price policy",
+        flow="policy guidance",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="regional_price_policy",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile="full",
+    )
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    future.set_result(([MultiAgentDomain.Domain.SUPPORT], routing))
+
+    domains, promoted_routing, promoted = _promote_completed_speculative_router_contract(
+        classify_future=future,
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        routing_result=None,
+    )
+
+    assert promoted is True
+    assert domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert promoted_routing is routing
 
 
 def test_high_confidence_support_router_contract_allows_explicit_price_lookup_override_reason() -> None:
@@ -9691,6 +9723,88 @@ def test_transaction_followup_other_store_does_not_misclassify_as_favorite_store
     assert frame.sub_intent == "stock"
 
 
+def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/35R20",
+        "ord_qty": 4,
+        "shop_name": "판교점",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+    }
+
+    frame = build_transaction_intent_frame("4개", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="4개",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert _is_quantity_only_stock_followup_text("4개") is True
+    assert _is_pure_inventory_stock_ready(known_slots) is True
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "stock"
+    assert frame.known_slots["stock_check_mode"] == "inventory_only"
+    assert frame.known_slots["shop_name"] == "판교점"
+    assert tool_plan.allowed_tools == ("get_store_inventory_tool", "get_store_list_tool")
+    assert tool_plan.preferred_tool == "get_store_list_tool"
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+    assert response_decision.metadata["stock_check_mode"] == "inventory_only"
+
+
+def test_transaction_intent_policy_keeps_today_install_flow_for_quantity_only_followup() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/35R20",
+        "ord_qty": 4,
+        "shop_name": "판교점",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260623",
+    }
+
+    frame = build_transaction_intent_frame("4개", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+
+
+def test_transaction_intent_policy_keeps_store_missing_guard_for_pure_stock_without_store() -> None:
+    frame = build_transaction_intent_frame(
+        "ion evo as 재고 있어?",
+        known_slots={
+            "goods_no": "G000000317729",
+            "tire_size": "235/35R20",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert "location" in frame.missing_slots
+
+
+def test_transaction_intent_policy_keeps_reservation_flow_when_user_explicitly_books() -> None:
+    frame = build_transaction_intent_frame(
+        "판교점에 ion evo as 예약해줘",
+        known_slots={
+            "goods_no": "G000000317729",
+            "tire_size": "235/35R20",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+
+
 def test_turn_contract_detects_tool_drift_for_favorite_store_lookup() -> None:
     contract = _transaction_turn_contract("내 단골매장 보여줘")
 
@@ -9876,8 +9990,26 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
     assert contract.domain == "support"
     assert contract.intent == "regional_price_policy"
     assert contract.known_slots["policy_intent"] == "regional_price_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
     assert "get_final_price_tool" in contract.forbidden_tools
+    assert response_contract_violations(
+        template=None,
+        called_tools=["search_faq_hybrid_tool"],
+        contract=contract,
+    ) == []
+    violations = response_contract_violations(
+        template=None,
+        called_tools=["search_product_tool"],
+        contract=contract,
+    )
+    assert violations == [
+        {
+            "type": "unexpected_tool_for_contract",
+            "called_tools": ["search_product_tool"],
+            "allowed_tools": ["search_faq_hybrid_tool"],
+        }
+    ]
 
 
 def _routing_result(
@@ -10197,6 +10329,42 @@ def test_transaction_preview_tool_result_with_schedule_slots_is_not_treated_as_s
     assert "preorder" not in response_decision.forbidden_behaviors
 
 
+def test_inventory_availability_pure_stock_path_ignores_preview_slots() -> None:
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots={
+            "goods_no": "G000000317729",
+            "tire_size": "235/35R20",
+            "ord_qty": 4,
+            "shop_name": "판교점",
+            "stock_check_mode": "inventory_only",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "inventory": {
+                    "todayShopArray": [{"shopId": "F00721"}],
+                    "tnaShopArray": [],
+                },
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F00721",
+                        "is_installable": True,
+                        "slots": [{"cal_day": "20260623", "tm": "17"}],
+                    }],
+                },
+                "available_qty": 4,
+            },
+        },
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "stock_available"
+    assert response_decision.metadata["stock_check_mode"] == "inventory_only"
+    assert response_decision.template == TemplateName.LOCATION
+    assert "datepick_for_pure_inventory_flow" in response_decision.forbidden_behaviors
+    assert "preorder_for_pure_inventory_flow" in response_decision.forbidden_behaviors
+
+
 def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
     frame = IntentFrame(
         domain=PolicyDomain.TRANSACTION,
@@ -10223,6 +10391,116 @@ def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
         "response_shape_key": "",
         "assistant_response_source": "",
     }]
+
+
+def test_turn_contract_reports_missing_inventory_tool_for_pure_stock_contract() -> None:
+    contract = build_turn_contract(
+        user_text="4개",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="stock",
+            known_slots={
+                "goods_no": "G000000317729",
+                "tire_size": "235/35R20",
+                "ord_qty": 4,
+                "shop_name": "판교점",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "inventory_only",
+            },
+            entities={"stock_check_mode": "inventory_only"},
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_store_inventory_tool", "get_store_list_tool"),
+            preferred_tool="get_store_list_tool",
+            metadata={"response_intent": "stock_store_search", "stock_check_mode": "inventory_only"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            metadata={"response_shape_key": "stock_inventory_lookup", "stock_check_mode": "inventory_only"},
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_source="transaction_agent",
+        response_shape_key="transaction_fallback",
+        called_tools=[],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert violations == [
+        {
+            "type": "stock_contract_fell_back_without_resolution",
+            "assistant_response_source": "transaction_agent",
+            "response_shape_key": "transaction_fallback",
+            "called_tools": [],
+        },
+    ]
+
+
+def test_turn_contract_reports_preview_tool_on_pure_stock_contract() -> None:
+    contract = build_turn_contract(
+        user_text="4개",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="stock",
+            known_slots={
+                "goods_no": "G000000317729",
+                "tire_size": "235/35R20",
+                "ord_qty": 4,
+                "shop_name": "판교점",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "inventory_only",
+            },
+            entities={"stock_check_mode": "inventory_only"},
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_store_inventory_tool", "get_store_list_tool"),
+            preferred_tool="get_store_list_tool",
+            forbidden_tools=("transaction_store_preview_tool",),
+            metadata={"response_intent": "stock_store_search", "stock_check_mode": "inventory_only"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            forbidden_behaviors=("datepick_for_pure_inventory_flow",),
+            metadata={"response_shape_key": "stock_inventory_lookup", "stock_check_mode": "inventory_only"},
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="datepick",
+        assistant_response_source="transaction_agent",
+        response_shape_key="reservation_slots",
+        called_tools=["transaction_store_preview_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert violations == [
+        {
+            "type": "forbidden_template",
+            "template": "datepick",
+            "fallback_reason": "response_policy_forbidden_behaviors",
+            "response_shape_key": "reservation_slots",
+            "assistant_response_source": "transaction_agent",
+        },
+        {
+            "type": "unexpected_tool_for_contract",
+            "called_tools": ["transaction_store_preview_tool"],
+            "allowed_tools": ["get_store_inventory_tool", "get_store_list_tool"],
+        },
+        {
+            "type": "unexpected_preview_tool_for_inventory_only_stock",
+            "called_tools": ["transaction_store_preview_tool"],
+        },
+    ]
 
 
 def test_turn_contract_blocks_discovery_summary_before_transaction_resolution() -> None:

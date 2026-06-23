@@ -63,6 +63,12 @@ _PRODUCT_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
+    r"오늘\s*장착|오늘장착|오늘\s*서비스|오늘서비스|당일|"
+    r"예약|방문|장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정)|"
+    r"몇\s*시|시간|스케줄",
+    re.IGNORECASE,
+)
 _PRODUCT_ALIASES: tuple[tuple[str, str], ...] = (
     ("ventus air s", "Ventus air S"),
     ("벤투스 air s", "Ventus air S"),
@@ -172,6 +178,39 @@ def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
 
+def _has_confirmed_store_context(slots: dict[str, Any]) -> bool:
+    return bool(slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
+
+
+def _is_stock_flow_context(slots: dict[str, Any]) -> bool:
+    return bool(slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
+
+
+def _is_quantity_only_followup(
+    text: str,
+    *,
+    current_has_product: bool,
+    explicit_tire_size: str | None,
+    current_store_name: str | None,
+    current_region: str | None,
+    current_price: bool,
+    current_purchase: bool,
+    current_reservation: bool,
+    current_store_search: bool,
+) -> bool:
+    return bool(
+        extract_quantity(text)
+        and not current_has_product
+        and not explicit_tire_size
+        and not current_store_name
+        and not current_region
+        and not current_price
+        and not current_purchase
+        and not current_reservation
+        and not current_store_search
+    )
+
+
 def build_transaction_intent_frame(
     last_user_text: str,
     *,
@@ -243,11 +282,34 @@ def build_transaction_intent_frame(
         and not current_price
         and not current_purchase
     )
-
-    tire_size = explicit_tire_size or slots.get("tire_size")
+    quantity_only_stock_continuation = (
+        _is_stock_flow_context(slots)
+        and confirmed_product_quantity_context
+        and _has_confirmed_store_context(slots)
+        and _is_quantity_only_followup(
+            text,
+            current_has_product=current_has_product,
+            explicit_tire_size=explicit_tire_size,
+            current_store_name=current_store_name,
+            current_region=current_region,
+            current_price=current_price,
+            current_purchase=current_purchase,
+            current_reservation=current_reservation,
+            current_store_search=current_store_search,
+        )
+    )
     quantity = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
     result_limit = extract_result_limit(text) or slots.get("limit")
     requested_cal_day = extract_requested_cal_day(text)
+    today_requested = bool(_TODAY_RE.search(text))
+    explicit_preview_request = bool(
+        requested_cal_day
+        or today_requested
+        or _TODAY_INSTALL_OR_RESERVATION_RE.search(text)
+        or slots.get("availability_intent") == "today_install"
+    )
+
+    tire_size = explicit_tire_size or slots.get("tire_size")
     if pending_today_install and not requested_cal_day:
         requested_cal_day = slots.get("requested_cal_day")
     preserve_pending_today_install = (
@@ -270,12 +332,12 @@ def build_transaction_intent_frame(
         )
     )
     store_name = current_store_name or (
-        None if plain_store_search and not preserve_transaction_product_context else slots.get("store_name")
+        None if plain_store_search and not preserve_transaction_product_context else slots.get("store_name") or slots.get("shop_name")
     )
     region = current_region or slots.get("region") or slots.get("place")
 
     has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text))
-    has_location = bool(region or store_name or slots.get("shop_id") or slots.get("lat") or slots.get("lng"))
+    has_location = bool(region or store_name or slots.get("shop_name") or slots.get("shop_id") or slots.get("lat") or slots.get("lng"))
     today_requested = bool(_TODAY_RE.search(text))
 
     entities: dict[str, Any] = {
@@ -290,14 +352,21 @@ def build_transaction_intent_frame(
         "requested_cal_day": requested_cal_day,
         "noon_requested": bool(_NOON_RE.search(text)),
         "result_limit": result_limit,
+        "stock_check_mode": "inventory_only",
     }
 
     if preserve_pending_today_install:
         intent = "stock_store_search"
         sub_intent = "today_install"
+        entities["stock_check_mode"] = "preview"
+    elif quantity_only_stock_continuation:
+        intent = "stock_store_search"
+        sub_intent = "today_install" if explicit_preview_request else "stock"
+        entities["stock_check_mode"] = "preview" if sub_intent == "today_install" else "inventory_only"
     elif store_scope_product_continuation:
         intent = "stock_store_search"
         sub_intent = "stock"
+        entities["stock_check_mode"] = "inventory_only"
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
@@ -316,6 +385,7 @@ def build_transaction_intent_frame(
     elif (_STOCK_RE.search(text) or today_requested) and has_product:
         intent = "stock_store_search"
         sub_intent = "today_install" if today_requested else "stock"
+        entities["stock_check_mode"] = "preview" if sub_intent == "today_install" else "inventory_only"
     elif (_RESERVATION_RE.search(text) or current_purchase) and has_product:
         intent = "quick_order_reservation"
         sub_intent = "reservation"
@@ -344,6 +414,8 @@ def build_transaction_intent_frame(
     }
     if intent == "stock_store_search" and requested_cal_day:
         known["availability_intent"] = "today_install"
+    if intent == "stock_store_search":
+        known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
     if plain_store_search and not current_has_product and not preserve_transaction_product_context:
         for key in ("goods_no", "product_name", "pattern_name", "tire_size", "quantity", "ord_qty", "store_name"):
             known.pop(key, None)
@@ -353,6 +425,7 @@ def build_transaction_intent_frame(
             **({"quantity": quantity} if quantity else {}),
             **({"product_name": product_name} if product_name else {}),
             **({"store_name": store_name} if store_name else {}),
+            **({"shop_name": store_name} if store_name else {}),
         })
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:
         known["store_exact_match"] = False
@@ -391,16 +464,37 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": frame.intent, "guard": "require_product_size_before_transaction"},
         )
     if frame.intent == "stock_store_search":
-        args = _slot_args(frame, "goods_no", "tire_size", "quantity", "region", "store_name", "requested_cal_day")
+        args = _slot_args(
+            frame,
+            "goods_no",
+            "tire_size",
+            "quantity",
+            "region",
+            "store_name",
+            "requested_cal_day",
+            "shop_id",
+            "shop_name",
+        )
+        stock_check_mode = str(frame.known_slots.get("stock_check_mode") or frame.entities.get("stock_check_mode") or "")
         if frame.entities.get("today_requested"):
             args["today_only"] = True
+        if stock_check_mode == "inventory_only" and frame.sub_intent == "stock":
+            preferred_tool = "get_store_list_tool" if frame.known_slots.get("shop_name") and not frame.known_slots.get("shop_id") else "get_store_inventory_tool"
+            return ToolPlan(
+                allowed_tools=("get_store_inventory_tool", "get_store_list_tool"),
+                preferred_tool=preferred_tool,
+                tool_args_patch=args,
+                forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "preorder_with_null_required_fields"),
+                required_slots=frame.missing_slots,
+                metadata={"response_intent": "stock_store_search", "stock_check_mode": "inventory_only"},
+            )
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_store_inventory_tool", "get_store_list_tool"),
             preferred_tool="transaction_store_preview_tool",
             tool_args_patch=args,
             forbidden_tools=("get_store_schedule_tool", "preorder_with_null_required_fields"),
             required_slots=frame.missing_slots,
-            metadata={"response_intent": "stock_store_search"},
+            metadata={"response_intent": "stock_store_search", "stock_check_mode": "preview"},
         )
 
     if frame.intent == "store_schedule":
