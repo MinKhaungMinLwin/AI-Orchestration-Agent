@@ -303,6 +303,51 @@ def _product_transaction_pending_context() -> dict[str, object]:
     return context
 
 
+def _product_transaction_missing_size_event(
+    items: list[dict],
+    metadata: list[dict],
+    assistant_text: str,
+) -> dict | None:
+    if not items:
+        return None
+    product_name = str(items[0].get("titleProductName") or items[0].get("title") or "해당 상품").strip()
+    sizes: list[str] = []
+    for item in items:
+        size = str(item.get("titleTires") or "").strip()
+        if size and size not in sizes:
+            sizes.append(size)
+    if not sizes:
+        return None
+    pending_context = _product_transaction_pending_context()
+    quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in sizes[:6]]
+    quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
+    for meta in metadata:
+        if isinstance(meta, dict):
+            meta.update(pending_context)
+    assistant_response = (
+        f"{product_name}은 여러 규격이 있어요. "
+        "오늘서비스 구매를 진행하려면 장착할 타이어 규격을 선택해 주세요."
+    )
+    if assistant_text and "규격" in assistant_text and len(assistant_text) <= 120:
+        assistant_response = assistant_text
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "metadata": {
+                **pending_context,
+                "productName": product_name,
+                "sizes": sizes,
+                "products": metadata,
+            },
+        },
+        "assistant_response_source": "code_product_transaction_missing_size",
+    }
+
+
 def _single_product_transaction_handoff_event(items: list[dict], metadata: list[dict]) -> dict | None:
     if len(items) != 1 or len(metadata) != 1 or not (
         _is_goal_booking_followup() or _is_product_transaction_missing_size_turn()
@@ -2707,6 +2752,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     handoff_event = _single_product_transaction_handoff_event(items, metadata)
     if handoff_event is not None:
         return handoff_event
+    if _is_product_transaction_missing_size_turn():
+        missing_size_event = _product_transaction_missing_size_event(items, metadata, short)
+        if missing_size_event is not None:
+            return missing_size_event
 
     return {
         "type": "data",
@@ -4375,6 +4424,17 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
         )
         if event:
             schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+            stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
+            first_store = stores[0] if len(stores) == 1 and isinstance(stores[0], dict) else {}
+            event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            event_data["metadata"] = _build_datepick_metadata(
+                tool_data_list,
+                entry,
+                raw,
+                shop_id=_get_str(first_store, "shop_id"),
+                shop_name=_get_str(first_store, "shop_nm") or None,
+            )
+            schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
             schedule_tier = _get_str(schedule, "tier").lower()
             force_today_service_response = (
                 schedule_tier in {"tna_only", "logistics_only"} and _preview_schedule_starts_after_today(raw)
@@ -4496,9 +4556,14 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     if selected_idx is None:
         return None
 
-    metadata: dict = {"shopId": shop_id}
-    if shop_nm:
-        metadata["shopName"] = shop_nm
+    schedule_entry = entries[-1]
+    metadata = _build_datepick_metadata(
+        tool_data_list,
+        schedule_entry,
+        raw,
+        shop_id=shop_id,
+        shop_name=shop_nm or None,
+    )
     event = {
         "type": "data",
         "template": "datepick",
@@ -4517,6 +4582,79 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     event["assistant_response_source"] = response_source
     event["data"]["assistantResponse"] = short
     return event
+
+
+def _lookup_product_context_for_goods_no(tool_data_list: list[dict], goods_no: str) -> tuple[str | None, str | None]:
+    for entry in reversed(_find_entries(tool_data_list, "search_product_tool", "get_product_description_tool")):
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
+        rows = raw.get("items") if isinstance(raw.get("items"), list) else [raw]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_goods_no = _get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId")
+            if row_goods_no != goods_no:
+                continue
+            product_name = _get_str(row, "goods_nm", "goods_name", "product_name", "title") or None
+            tire_size = _get_str(row, "tire_size_1", "tire_size", "tireSize") or None
+            return product_name, tire_size
+    return None, None
+
+
+def _build_datepick_metadata(
+    tool_data_list: list[dict],
+    entry: dict[str, Any],
+    raw: dict[str, Any],
+    *,
+    shop_id: str,
+    shop_name: str | None = None,
+) -> dict[str, Any]:
+    args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+    args = args if isinstance(args, dict) else {}
+
+    metadata: dict[str, Any] = {"shopId": shop_id}
+    if shop_name:
+        metadata["shopName"] = shop_name
+
+    goods_no = _get_str(args, "goods_no") or _get_str(raw, "goods_no", "goodsNo")
+    if goods_no:
+        metadata["goodsNo"] = goods_no
+
+    ord_qty = args.get("ord_qty") or args.get("quantity") or raw.get("ord_qty") or raw.get("quantity")
+    try:
+        ord_qty_int = int(ord_qty) if ord_qty is not None else None
+    except (TypeError, ValueError):
+        ord_qty_int = None
+    if ord_qty_int and ord_qty_int > 0:
+        metadata["ordQty"] = ord_qty_int
+
+    tire_size = _get_str(args, "tire_size") or _get_str(raw, "tire_size", "tireSize")
+    product_name = _get_str(args, "product_name") or _get_str(raw, "product_name", "productName")
+    if goods_no:
+        resolved_product_name, resolved_tire_size = _lookup_product_context_for_goods_no(tool_data_list, goods_no)
+        product_name = product_name or resolved_product_name or ""
+        tire_size = tire_size or resolved_tire_size or ""
+    if product_name:
+        metadata["productName"] = product_name
+    if tire_size:
+        metadata["tireSize"] = tire_size
+
+    payment_amount: int | None = None
+    if ord_qty_int and ord_qty_int > 0:
+        for price_entry in _find_entries(tool_data_list, "get_final_price_tool"):
+            praw = _unwrap(price_entry)
+            if not isinstance(praw, dict):
+                continue
+            final_unit = _display_final_unit_price(praw)
+            wage = _get_num(praw, "wage_prc", default=0)
+            if final_unit:
+                payment_amount = int((final_unit + wage) * ord_qty_int)
+                break
+    if payment_amount and payment_amount > 0:
+        metadata["paymentAmount"] = payment_amount
+
+    return metadata
 
 
 def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -> dict | None:
@@ -4567,9 +4705,13 @@ def _map_datepick_from_detail(tool_data_list: list[dict], assistant_text: str) -
                 return _exact_time_no_slot_quickreply(_get_str(raw, "shop_nm"))
             continue
         shop_nm = _get_str(raw, "shop_nm")
-        metadata: dict = {"shopId": shop_id}
-        if shop_nm:
-            metadata["shopName"] = shop_nm
+        metadata = _build_datepick_metadata(
+            tool_data_list,
+            entry,
+            raw,
+            shop_id=shop_id,
+            shop_name=shop_nm or None,
+        )
         if treat_as_datepick:
             date_label = yyyymmdd_to_korean_date(cal_day)
             shop_label = f"{shop_nm}은" if shop_nm else "해당 매장은"
@@ -4863,6 +5005,8 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
     if "get_store_schedule_tool" in called_tools or "get_multi_store_schedule_tool" in called_tools:
         return None
     if called_tools & _BOOKING_SIGNAL_TOOLS:
+        return None
+    if current_pending_intent.get() == "order" or current_goal_type.get() == "place_order":
         return None
 
     entries = _find_entries(tool_data_list, "get_store_detail_tool")

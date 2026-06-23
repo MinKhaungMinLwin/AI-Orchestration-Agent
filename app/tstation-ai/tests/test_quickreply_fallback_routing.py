@@ -72,6 +72,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event,
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
+    _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
     _clear_stale_product_slots_for_new_recommendation,
     _comparison_query_with_recent_context,
@@ -89,6 +90,7 @@ from services.tstation.chat import (
     _bare_product_search_followup_override,
     _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
+    _build_missing_order_product_reselection_event,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
     _build_order_history_reorder_event,
@@ -105,6 +107,7 @@ from services.tstation.chat import (
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
     _is_oe_replacement_context,
+    _is_explicit_store_purchase_chain_request,
     _is_oe_replacement_equivalent_query,
     _is_oe_replacement_followup_query,
     _is_owned_vehicle_selection_cta,
@@ -242,6 +245,7 @@ from services.tstation.policies.pickup_service_gate import deterministic_pickup_
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.template_mapper import (
+    _map_store_detail_info,
     current_discovery_response_decision,
     current_goal_type,
     current_pending_intent,
@@ -5682,13 +5686,29 @@ def test_datepick_metadata_recovers_order_store_slots() -> None:
                 }
             ],
             "selectedDate": 0,
-            "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
+            "metadata": {
+                "shopId": "F00405",
+                "shopName": "티스테이션 경포점",
+                "goodsNo": "G000000317900",
+                "productName": "Dynapro HPX",
+                "tireSize": "235/55R19",
+                "ordQty": 2,
+                "paymentAmount": 286000,
+            },
         },
     }
 
     values = TStationChatServiceV2._datepick_slot_values_from_data(datepick)
 
-    assert values == {"shop_id": "F00405", "shop_name": "티스테이션 경포점"}
+    assert values == {
+        "shop_id": "F00405",
+        "shop_name": "티스테이션 경포점",
+        "goods_no": "G000000317900",
+        "tire_model": "Dynapro HPX",
+        "tire_size": "235/55R19",
+        "ord_qty": 2,
+        "payment_amount": 286000,
+    }
 
 
 def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
@@ -5737,6 +5757,191 @@ def test_datepick_slots_fill_missing_order_state_without_overwriting_preorder_va
     assert updated.shop_name == "기존 매장"
     assert updated.requested_cal_day == "20260624"
     assert updated.rsv_hour == "13"
+
+
+def test_preview_datepick_metadata_preserves_product_slots() -> None:
+    goal_token = current_goal_type.set("place_order")
+    pending_token = current_pending_intent.set("order")
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "search_product_tool",
+                    "args": {"keyword": "dynapro hpx", "size": "235/55R19"},
+                    "data": {
+                        "status": "success",
+                        "items": [
+                            {
+                                "goods_no": "G000000317900",
+                                "goods_nm": "Dynapro HPX",
+                                "tire_size_1": "235/55R19",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "tool": "transaction_store_preview_tool",
+                    "args": {
+                        "goods_no": "G000000317900",
+                        "ord_qty": 2,
+                        "store_nm": "티스테이션 판교점",
+                        "include_price": True,
+                    },
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "schedule": {
+                                "tier": "today",
+                                "stores": [
+                                    {
+                                        "shop_id": "F00405",
+                                        "shop_nm": "티스테이션 판교점",
+                                        "slots": [
+                                            {"cal_day": "20260701", "tm": "0900"},
+                                            {"cal_day": "20260701", "tm": "1500"},
+                                        ],
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                },
+            ],
+            "예약하려는 날짜와 시간을 선택해 주세요.",
+        )
+    finally:
+        current_pending_intent.reset(pending_token)
+        current_goal_type.reset(goal_token)
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    metadata = event["data"]["metadata"]
+    assert metadata["shopId"] == "F00405"
+    assert metadata["shopName"] == "티스테이션 판교점"
+    assert metadata["goodsNo"] == "G000000317900"
+    assert metadata["productName"] == "Dynapro HPX"
+    assert metadata["tireSize"] == "235/55R19"
+    assert metadata["ordQty"] == 2
+
+
+def test_store_detail_info_mapping_is_disabled_in_active_order_flow() -> None:
+    goal_token = current_goal_type.set("place_order")
+    pending_token = current_pending_intent.set("order")
+    try:
+        event = _map_store_detail_info(
+            [
+                {
+                    "tool": "get_store_detail_tool",
+                    "args": {"shop_id": "F00405"},
+                    "data": {
+                        "shop_nm": "티스테이션 판교점",
+                        "tel_no": "0311234567",
+                    },
+                }
+            ],
+            "매장 상세정보를 확인했어요.",
+        )
+    finally:
+        current_pending_intent.reset(pending_token)
+        current_goal_type.reset(goal_token)
+
+    assert event is None
+
+
+def test_explicit_store_purchase_chain_request_detection_is_narrow() -> None:
+    assert _is_explicit_store_purchase_chain_request("판교점에서 오늘서비스로 dynapro hpx 2355519 2개 구매하고싶어")
+    assert not _is_explicit_store_purchase_chain_request("판교점 정보 알려줘")
+    assert not _is_explicit_store_purchase_chain_request("2026년 7월 1일 (수)\n17:00")
+
+
+def test_missing_order_product_reselection_event_is_clarifying() -> None:
+    event = _build_missing_order_product_reselection_event()
+
+    assert event["template"] == "quickReply"
+    assert event["data"]["assistantResponse"] == "예약할 상품 정보가 확인되지 않아 상품을 다시 선택해 주세요."
+    assert _labels(event["data"]["quickReplies"]) == ["상품 다시 선택", "사이즈 다시 입력", "타이어 추천"]
+
+
+def test_transaction_unresolved_product_resolution_event_clarifies_size_for_multi_candidate_order() -> None:
+    slots = ConversationSlots(
+        pending_intent="order",
+        goal_type="place_order",
+        tire_model="Dynapro HPX",
+        ord_qty=2,
+        shop_name="판교점",
+    )
+
+    event = _build_transaction_unresolved_product_resolution_event(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        slots=slots,
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "limit": 10},
+                "data": {
+                    "items": [
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "225/60R18"},
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert event["source_domain"] == "transaction"
+    assert "구매 확인을 위해 Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["235/55R19", "255/45R20", "225/60R18", "사이즈 직접 입력"]
+
+
+def test_transaction_unresolved_product_resolution_event_returns_not_found_for_zero_rows() -> None:
+    slots = ConversationSlots(
+        pending_intent="price",
+        goal_type="price_inquiry",
+        tire_model="Dynapro HPX",
+    )
+
+    event = _build_transaction_unresolved_product_resolution_event(
+        user_text="dynapro hpx 가격 얼마야?",
+        slots=slots,
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "limit": 10},
+                "data": {"items": []},
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_not_found"
+    assert "Dynapro HPX 상품을 찾지 못해 가격을(를) 이어서 확인하지 못했어요." in event["data"]["assistantResponse"]
+
+
+def test_transaction_unresolved_product_resolution_event_skips_explicit_size_turn() -> None:
+    slots = ConversationSlots(
+        pending_intent="order",
+        goal_type="place_order",
+        tire_model="Dynapro HPX",
+        tire_size="235/55R19",
+    )
+
+    event = _build_transaction_unresolved_product_resolution_event(
+        user_text="dynapro hpx 2355519 2개 구매하고싶어",
+        slots=slots,
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "size": "235/55R19", "limit": 10},
+                "data": {"items": [{"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"}]},
+            }
+        ],
+    )
+
+    assert event is None
 
 
 def test_current_location_store_search_confirmation_is_narrow() -> None:

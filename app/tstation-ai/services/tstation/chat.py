@@ -2623,6 +2623,17 @@ class StreamingMultiAgentCoordinator:
                 )
                 and (pending_slots is None or pending_slots.goods_no is None)
             ):
+                unresolved_event = _build_transaction_unresolved_product_resolution_event(
+                    user_text=last_user_text_for_policy,
+                    slots=pending_slots or initial_slots,
+                    tool_data_list=accumulated_tool_data,
+                )
+                if unresolved_event is not None:
+                    assistant_text = str((unresolved_event.get("data") or {}).get("assistantResponse") or "")
+                    if assistant_text:
+                        accumulated_context[MultiAgentDomain.Domain.TRANSACTION.value] = assistant_text
+                        full_response = assistant_text
+                    yield unresolved_event
                 logger.debug(
                     "[COORDINATOR] skip_decision=True but Discovery did not resolve "
                     "goods_no before a queued Transaction agent — stopping chain"
@@ -2668,6 +2679,17 @@ class StreamingMultiAgentCoordinator:
                 if skip_decision and len(domains) >= 2:
                     goods_no_resolved = pending_slots is not None and pending_slots.goods_no is not None
                     if not goods_no_resolved:
+                        unresolved_event = _build_transaction_unresolved_product_resolution_event(
+                            user_text=last_user_text_for_policy,
+                            slots=pending_slots or initial_slots,
+                            tool_data_list=accumulated_tool_data,
+                        )
+                        if unresolved_event is not None:
+                            assistant_text = str((unresolved_event.get("data") or {}).get("assistantResponse") or "")
+                            if assistant_text:
+                                accumulated_context[MultiAgentDomain.Domain.TRANSACTION.value] = assistant_text
+                                full_response = assistant_text
+                            yield unresolved_event
                         logger.debug(
                             "[COORDINATOR] skip_decision=True but Discovery did not resolve "
                             "goods_no (0 or multiple results) — stopping chain"
@@ -10721,6 +10743,170 @@ def _build_product_size_list_event_from_search_results(
     }
 
 
+def _transactional_pending_intent_from_slots(slots: Any | None) -> str | None:
+    if slots is None:
+        return None
+    pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+    if pending_intent in {"order", "price", "stock"}:
+        return pending_intent
+    goal_type = str(getattr(slots, "goal_type", None) or "").strip()
+    return {
+        "place_order": "order",
+        "price_inquiry": "price",
+        "store_with_stock": "stock",
+    }.get(goal_type)
+
+
+def _transactional_resolution_action_label(intent: str | None) -> str:
+    return {
+        "order": "구매",
+        "price": "가격",
+        "stock": "재고",
+    }.get(str(intent or "").strip(), "확인")
+
+
+def _build_transaction_unresolved_product_not_found_event(
+    product_name: str,
+    *,
+    pending_intent: str | None,
+) -> dict[str, Any]:
+    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
+    action_label = _transactional_resolution_action_label(pending_intent)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_transaction_product_resolution_not_found",
+        "data": {
+            "assistantResponse": (
+                f"{product_label} 상품을 찾지 못해 {action_label}을(를) 이어서 확인하지 못했어요.\n"
+                "정확한 상품명이나 규격을 알려주시면 다시 확인해드릴게요."
+            ),
+            "quickReplies": [
+                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "productName": product_label,
+                "pendingIntent": pending_intent,
+            },
+        },
+    }
+
+
+def _build_transaction_unresolved_product_size_clarification_event(
+    product_name: str,
+    sizes: list[str],
+    *,
+    pending_intent: str | None,
+) -> dict[str, Any]:
+    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
+    action_label = _transactional_resolution_action_label(pending_intent)
+    visible_sizes = sizes[:8]
+    suffix = " 등" if len(sizes) > len(visible_sizes) else ""
+    assistant_response = (
+        f"{action_label} 확인을 위해 {product_label}의 타이어 규격을 선택해 주세요.\n"
+        f"현재 확인되는 규격은 {', '.join(visible_sizes)}{suffix}예요."
+    )
+    quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in sizes[:6]]
+    quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_transaction_product_resolution_size_clarification",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "productName": product_label,
+                "sizes": sizes,
+                "pendingIntent": pending_intent,
+            },
+        },
+    }
+
+
+def _search_result_size_candidates(rows: list[dict]) -> list[str]:
+    sizes: list[str] = []
+    seen_sizes: set[str] = set()
+    for row in rows:
+        tire_size = normalize_tire_size(
+            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
+        )
+        if not tire_size:
+            tire_size = normalize_tire_size(str(row.get("tire_size_2") or ""))
+        if not tire_size:
+            continue
+        compact_size = re.sub(r"[^0-9]", "", tire_size)
+        if compact_size in seen_sizes:
+            continue
+        seen_sizes.add(compact_size)
+        sizes.append(tire_size)
+    return sizes
+
+
+def _build_transaction_unresolved_product_resolution_event(
+    *,
+    user_text: str,
+    slots: Any | None,
+    tool_data_list: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    pending_intent = _transactional_pending_intent_from_slots(slots)
+    if pending_intent not in {"order", "price", "stock"}:
+        return None
+    if slots is None or getattr(slots, "goods_no", None) is not None:
+        return None
+    if normalize_tire_size(user_text or "") or getattr(slots, "tire_size", None):
+        return None
+
+    last_search_entry: dict[str, Any] | None = None
+    for entry in reversed(tool_data_list or []):
+        if entry.get("tool") == "search_product_tool":
+            last_search_entry = entry
+            break
+    if last_search_entry is None:
+        return None
+
+    search_input = last_search_entry.get("input") if isinstance(last_search_entry.get("input"), dict) else last_search_entry.get("args")
+    if not isinstance(search_input, dict):
+        search_input = {}
+    if search_input.get("size"):
+        return None
+
+    product_name = str(
+        getattr(slots, "tire_model", None)
+        or getattr(slots, "pending_product_name", None)
+        or search_input.get("keyword")
+        or ""
+    ).strip()
+    if not product_name:
+        return None
+
+    rows = _search_product_rows_from_payload(last_search_entry.get("data"))
+    if not rows:
+        return _build_transaction_unresolved_product_not_found_event(
+            product_name,
+            pending_intent=pending_intent,
+        )
+
+    sizes = _search_result_size_candidates(rows)
+    if sizes:
+        return _build_transaction_unresolved_product_size_clarification_event(
+            product_name,
+            sizes,
+            pending_intent=pending_intent,
+        )
+
+    return _build_transaction_unresolved_product_not_found_event(
+        product_name,
+        pending_intent=pending_intent,
+    )
+
+
 def _is_size_only_store_availability_continuation(
     user_text: str,
     *,
@@ -11956,6 +12142,34 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
     return ConversationSlots.has_product_keyword(text) or _has_sized_product_name_hint(text)
 
 
+def _is_explicit_store_purchase_chain_request(text: str) -> bool:
+    """True for first-leg purchase/reservation turns that must resolve product before store detail.
+
+    These turns explicitly provide product+size+qty+store and ask for purchase /
+    reservation / today-service. In that shape the store name is a Transaction
+    input slot, not the final answer target, so the coordinator should keep the
+    turn on the Discovery→Transaction chain.
+    """
+    if not text or _DATEPICK_SELECTION_RE.match(text):
+        return False
+    regex_slots = ConversationSlots.extract_from_user_text(text)
+    has_product_hint = bool(
+        ConversationSlots.has_product_keyword(text)
+        or _has_sized_product_name_hint(text)
+    )
+    has_tire_size = bool(normalize_tire_size(text))
+    has_quantity = bool(regex_slots.ord_qty or getattr(regex_slots, "quantity", None))
+    has_store_anchor = bool(regex_slots.shop_name or regex_slots.region)
+    has_transaction_action = bool(_PRODUCT_STORE_TRANSACTION_ACTION_RE.search(text))
+    return (
+        has_product_hint
+        and has_tire_size
+        and has_quantity
+        and has_store_anchor
+        and has_transaction_action
+    )
+
+
 def _is_plain_store_search_turn(text: str, regex_slots: ConversationSlots) -> bool:
     """True for explicit general store searches that should not inherit stock/order state."""
     if not text or regex_slots.pending_intent is not None:
@@ -12100,6 +12314,34 @@ def _clear_stale_product_slots_for_new_recommendation(
         cleared["payment_amount"] = slots.payment_amount
         slots.payment_amount = None
     return cleared
+
+
+def _is_active_order_flow_slots(slots: Any | None) -> bool:
+    if slots is None:
+        return False
+    return (
+        getattr(slots, "pending_intent", None) == "order"
+        or getattr(slots, "goal_type", None) == "place_order"
+    )
+
+
+def _build_missing_order_product_reselection_event() -> dict[str, Any]:
+    assistant_response = "예약할 상품 정보가 확인되지 않아 상품을 다시 선택해 주세요."
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_missing_order_product_context",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "상품 다시 선택", "domain": "DISCOVERY"},
+                {"label": "사이즈 다시 입력", "domain": "DISCOVERY"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+        },
+    }
 
 
 def _infer_followup_recommendation_context(messages: list[dict], last_user_text: str) -> str | None:
@@ -13323,6 +13565,39 @@ class TStationChatServiceV2:
         shop_name = str(metadata.get("shopName") or metadata.get("shop_name") or "").strip()
         if shop_name:
             slot_values["shop_name"] = shop_name
+        goods_no = str(
+            metadata.get("goodsNo")
+            or metadata.get("goods_no")
+            or metadata.get("goodsId")
+            or metadata.get("goods_id")
+            or ""
+        ).strip()
+        if goods_no:
+            slot_values["goods_no"] = goods_no
+        product_name = str(metadata.get("productName") or metadata.get("product_name") or "").strip()
+        if product_name:
+            slot_values["tire_model"] = product_name
+        tire_size = normalize_tire_size(
+            metadata.get("tireSize") or metadata.get("tire_size") or ""
+        )
+        if tire_size:
+            slot_values["tire_size"] = tire_size
+        raw_qty = metadata.get("ordQty") or metadata.get("quantity")
+        if raw_qty is not None:
+            try:
+                qty = int(raw_qty)
+                if qty > 0:
+                    slot_values["ord_qty"] = qty
+            except (TypeError, ValueError):
+                pass
+        raw_amount = metadata.get("paymentAmount") or metadata.get("payment_amount")
+        if raw_amount is not None:
+            try:
+                amount = int(raw_amount)
+                if amount > 0:
+                    slot_values["payment_amount"] = amount
+            except (TypeError, ValueError):
+                pass
 
         text = str(user_text or "").strip()
         rsv_hour = _reservation_hour_from_text(text)
@@ -14307,6 +14582,29 @@ class TStationChatServiceV2:
                         "[SLOTS] Recovered order slots from latest datepick template: %s",
                         missing_datepick_values,
                     )
+            if (
+                last_user_text
+                and _DATEPICK_SELECTION_RE.match(last_user_text)
+                and _is_active_order_flow_slots(merged_slots)
+                and merged_slots.goods_no is None
+            ):
+                logger.info(
+                    "[ORDER_DATEPICK] Missing product context after datepick recovery; "
+                    "forcing clarification instead of transaction fallback"
+                )
+                order_datepick_event = _build_missing_order_product_reselection_event()
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(order_datepick_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = order_datepick_event.get("data") if isinstance(order_datepick_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
             current_location_store_confirmation = _is_current_location_store_search_confirmation(
                 last_user_text,
                 latest_quickreply_tmpl,
@@ -15440,11 +15738,44 @@ class TStationChatServiceV2:
         # actually resolved after Discovery before running Transaction (search with
         # 0/multiple results → chain stops). See StreamingMultiAgentCoordinator.stream().
         skip_decision = policy_preclassified_skip_decision
+        explicit_store_purchase_chain_request = _is_explicit_store_purchase_chain_request(last_user_text)
+        if (
+            explicit_store_purchase_chain_request
+            and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
+            and merged_slots.goods_no is None
+            and (
+                MultiAgentDomain.Domain.TRANSACTION in domains
+                or domains == [MultiAgentDomain.Domain.DISCOVERY]
+            )
+            and domains != [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+        ):
+            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+            skip_decision = True
+            logger.info(
+                "[COORDINATOR] Explicit store purchase chain request: forcing [DISCOVERY, TRANSACTION] "
+                "(session_id=%s)",
+                request.session_id,
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="explicit_store_purchase_chain",
+                classifier_domains=[domain.value.lower() for domain in routing_result.domains] if routing_result and routing_result.domains else [],
+                corrected_domains=["discovery", "transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "tire_size": merged_slots.tire_size,
+                    "ord_qty": merged_slots.ord_qty,
+                    "store_name": merged_slots.shop_name,
+                },
+            )
+
         if (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
             and merged_slots.pending_intent is not None
             and merged_slots.goods_no is None
+            and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
             and (
                 merged_slots.tire_size is not None
                 or merged_slots.tire_model is not None
@@ -15507,6 +15838,7 @@ class TStationChatServiceV2:
         elif (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.TRANSACTION
+            and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
             # P0b assumes the user intends to buy/order — Discovery resolves
             # goods_no first. Favorite-store queries ("내 단골매장 / 단골 가게 /
             # 자주 가는 매장 / 마이샵 / 단골점") are info-only Transaction calls
@@ -15588,6 +15920,7 @@ class TStationChatServiceV2:
             fresh_product_transaction_request
             and merged_slots.goods_no is None
             and merged_slots.tire_size is not None
+            and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
         ):
             domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
             routing_result = MultiAgentDomain(
@@ -20472,6 +20805,7 @@ class TStationChatServiceV2:
                         source_domain == MultiAgentDomain.Domain.TRANSACTION.value
                         and event.get("template") == "quickReply"
                         and _should_replace_vague_store_detail_quickreply(event_data)
+                        and not _is_active_order_flow_slots(pending_slots or initial_slots)
                     ):
                         store_detail_event = _store_detail_quickreply_from_sources(
                             structured_sources,
@@ -20870,6 +21204,42 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         _t_agents = time.perf_counter()
+
+        if not (
+            str(draft_response or "").strip()
+            or buffered_data_events
+            or any(str(evt.get("content") or "").strip() for evt in original_message_events)
+        ):
+            no_output_fallback_event = None
+            if called_tool_names:
+                no_output_fallback_event = _build_transaction_unresolved_product_resolution_event(
+                    user_text=user_query,
+                    slots=pending_slots or initial_slots,
+                    tool_data_list=[
+                        {"tool": tool_name, "data": data}
+                        for tool_name, data in structured_sources
+                    ],
+                )
+            if no_output_fallback_event is not None:
+                logger.warning(
+                    "[NO_VISIBLE_OUTPUT] tool_called=%s forcing safe clarification fallback",
+                    sorted(called_tool_names),
+                )
+                assistant_response = str((no_output_fallback_event.get("data") or {}).get("assistantResponse") or "")
+                buffered_data_events = [no_output_fallback_event]
+                original_message_events = [{
+                    "type": "message",
+                    "content": assistant_response,
+                    "agent": "[TRANSACTION AGENT]",
+                }]
+                draft_response = assistant_response
+                draft_for_qc = assistant_response
+                last_template = "quickReply"
+                last_template_source = "no_visible_output_guard"
+                last_assistant_response_source = str(
+                    no_output_fallback_event.get("assistant_response_source")
+                    or "code_no_visible_output_guard"
+                )
 
         # 2. QC VERIFIER (deterministic)
         # Gated by AI_QC_ENABLED. Scans the draft for prices, goods_no, and
