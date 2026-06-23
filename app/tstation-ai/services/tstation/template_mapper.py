@@ -620,6 +620,22 @@ def _preview_location_assistant_response(
     return None
 
 
+def _schedule_mode_datepick_response(schedule_mode: str) -> str | None:
+    mode = (schedule_mode or "").strip().lower()
+    if not mode:
+        return None
+    suffix = "예약하려는 날짜와 시간을 선택해 주세요."
+    if mode == "logistics_only":
+        return f"물류 배송 후 장착 가능한 일정입니다. {suffix}"
+    if mode == "in_store_only":
+        return f"매장 재고 기준 장착 가능한 일정입니다. {suffix}"
+    if mode == "in_store_logistics_combined":
+        return f"매장 재고 또는 물류 배송 기준 장착 가능한 일정입니다. {suffix}"
+    if mode == "tna_only":
+        return f"T바로배송 기준 장착 가능한 일정입니다. {suffix}"
+    return None
+
+
 def _kst_today_yyyymmdd() -> str:
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y%m%d")
 
@@ -637,6 +653,69 @@ def _preview_schedule_stores_by_shop_id(raw: dict) -> dict[str, dict]:
         if shop_id:
             stores_by_shop_id[shop_id] = store
     return stores_by_shop_id
+
+
+def _preview_location_metadata(
+    *,
+    entry: dict,
+    raw: dict,
+    shop_id: str,
+    shop_name: str,
+    schedule_store: dict | None,
+) -> dict[str, Any]:
+    args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+    args = args if isinstance(args, dict) else {}
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    schedule_store = schedule_store if isinstance(schedule_store, dict) else {}
+    schedule_mode = _get_str(schedule_store, "mode").lower()
+    schedule_tier = _get_str(schedule, "tier").lower()
+
+    metadata: dict[str, Any] = {"shopId": shop_id}
+    if shop_name:
+        metadata["shopName"] = shop_name
+    if schedule_mode:
+        metadata["scheduleMode"] = schedule_mode
+        metadata["schedule_mode"] = schedule_mode
+    if schedule_tier:
+        metadata["scheduleTier"] = schedule_tier
+        metadata["schedule_tier"] = schedule_tier
+    if entry.get("tool") == "transaction_store_preview_tool":
+        metadata["sourceTool"] = "transaction_store_preview_tool"
+        metadata["source_tool"] = "transaction_store_preview_tool"
+        metadata["stockCheckMode"] = "preview"
+        metadata["stock_check_mode"] = "preview"
+        pending_intent = current_pending_intent.get()
+        goal_type = current_goal_type.get()
+        if pending_intent:
+            metadata["pendingIntent"] = pending_intent
+        if goal_type:
+            metadata["goalType"] = goal_type
+
+    goods_no = _get_str(args, "goods_no") or _get_str(raw, "goods_no", "goodsNo")
+    if goods_no:
+        metadata["goodsNo"] = goods_no
+        metadata["goods_no"] = goods_no
+        metadata["goods_no"] = goods_no
+    ord_qty = args.get("ord_qty") or args.get("quantity") or raw.get("ord_qty") or raw.get("quantity")
+    try:
+        ord_qty_int = int(ord_qty) if ord_qty is not None else None
+    except (TypeError, ValueError):
+        ord_qty_int = None
+    if ord_qty_int and ord_qty_int > 0:
+        metadata["ordQty"] = ord_qty_int
+        metadata["ord_qty"] = ord_qty_int
+        metadata["ord_qty"] = ord_qty_int
+    tire_size = _get_str(args, "tire_size") or _get_str(raw, "tire_size", "tireSize")
+    if tire_size:
+        metadata["tireSize"] = tire_size
+        metadata["tire_size"] = tire_size
+    region = _get_str(args, "region_code") or _get_str(raw, "region")
+    if region:
+        metadata["region"] = region
+    slots = schedule_store.get("slots")
+    if isinstance(slots, list) and slots:
+        metadata["slots"] = [slot for slot in slots if isinstance(slot, dict)]
+    return metadata
 
 
 def _store_has_bookable_slot_on_day(store: dict, cal_day: str) -> bool:
@@ -3854,11 +3933,14 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             continue
         stock_labels_by_shop_id: dict[str, str] = {}
         preview_today_schedule_by_shop_id: dict[str, dict] = {}
+        preview_schedule_by_shop_id: dict[str, dict] = {}
+        if entry.get("tool") == "transaction_store_preview_tool":
+            preview_schedule_by_shop_id = _preview_schedule_stores_by_shop_id(raw)
         if entry.get("tool") == "transaction_store_preview_tool" and _today_service_context(assistant_text):
             schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
             schedule_tier = _get_str(schedule, "tier").lower()
             if schedule_tier not in {"logistics_only", "tna_only"}:
-                preview_today_schedule_by_shop_id = _preview_schedule_stores_by_shop_id(raw)
+                preview_today_schedule_by_shop_id = preview_schedule_by_shop_id
                 earliest_filtered_schedule_label = earliest_filtered_schedule_label or _earliest_preview_schedule_label(raw)
         if entry.get("tool") in {
             "search_stores_tool",
@@ -4048,7 +4130,15 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "tnaDelivery": is_tna_delivery or stock_label == "T바로배송",
                 "description": description,
             })
-            metadata.append({"shopId": shop_id})
+            metadata.append(
+                _preview_location_metadata(
+                    entry=entry,
+                    raw=raw,
+                    shop_id=shop_id,
+                    shop_name=_get_str(detail, "shop_nm") or _get_str(row, "shop_nm", default=shop_id),
+                    schedule_store=preview_schedule_by_shop_id.get(shop_id),
+                )
+            )
 
     if not items:
         if filtered_by_today_schedule:
@@ -4564,6 +4654,11 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
                 event["data"]["assistantResponse"] = today_service_response
                 return event
             dates = event.get("data", {}).get("dates", [])
+            mode_response = _schedule_mode_datepick_response(_get_str(first_store, "mode"))
+            if mode_response:
+                event["assistant_response_source"] = "code_mapper_schedule_mode"
+                event["data"]["assistantResponse"] = mode_response
+                return event
             short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
             event["assistant_response_source"] = response_source
             event["data"]["assistantResponse"] = short
@@ -4697,6 +4792,11 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         event["assistant_response_source"] = "code_mapper_today_service"
         event["data"]["assistantResponse"] = today_service_response
         return event
+    mode_response = _schedule_mode_datepick_response(mode)
+    if mode_response:
+        event["assistant_response_source"] = "code_mapper_schedule_mode"
+        event["data"]["assistantResponse"] = mode_response
+        return event
     short, response_source = _summarize_with_source(assistant_text, "datepick", len(dates))
     event["assistant_response_source"] = response_source
     event["data"]["assistantResponse"] = short
@@ -4736,12 +4836,39 @@ def _build_datepick_metadata(
     if shop_name:
         metadata["shopName"] = shop_name
 
-    omit_product_slots = current_pending_intent.get() == "stock"
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    schedule_stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
+    matched_schedule_store = next(
+        (
+            store
+            for store in schedule_stores
+            if isinstance(store, dict) and _get_str(store, "shop_id") == shop_id
+        ),
+        {},
+    )
+    schedule_mode = _get_str(raw, "mode").lower() or _get_str(matched_schedule_store, "mode").lower()
+    schedule_tier = _get_str(schedule, "tier").lower()
+    if entry.get("tool") == "transaction_store_preview_tool":
+        metadata["sourceTool"] = "transaction_store_preview_tool"
+        metadata["source_tool"] = "transaction_store_preview_tool"
+        metadata["stockCheckMode"] = "preview"
+        metadata["stock_check_mode"] = "preview"
+    if schedule_mode:
+        metadata["scheduleMode"] = schedule_mode
+        metadata["schedule_mode"] = schedule_mode
+        metadata["inventoryMode"] = schedule_mode
+        metadata["inventory_mode"] = schedule_mode
+    if schedule_tier:
+        metadata["scheduleTier"] = schedule_tier
+        metadata["schedule_tier"] = schedule_tier
+
+    omit_product_slots = current_pending_intent.get() == "stock" and entry.get("tool") != "transaction_store_preview_tool"
     goods_no = _get_str(args, "goods_no") or _get_str(raw, "goods_no", "goodsNo")
     if omit_product_slots:
         goods_no = ""
     if goods_no:
         metadata["goodsNo"] = goods_no
+        metadata["goods_no"] = goods_no
 
     ord_qty = None if omit_product_slots else args.get("ord_qty") or args.get("quantity") or raw.get("ord_qty") or raw.get("quantity")
     try:
@@ -4750,6 +4877,7 @@ def _build_datepick_metadata(
         ord_qty_int = None
     if ord_qty_int and ord_qty_int > 0:
         metadata["ordQty"] = ord_qty_int
+        metadata["ord_qty"] = ord_qty_int
 
     tire_size = "" if omit_product_slots else _get_str(args, "tire_size") or _get_str(raw, "tire_size", "tireSize")
     product_name = "" if omit_product_slots else _get_str(args, "product_name") or _get_str(raw, "product_name", "productName")
@@ -4759,8 +4887,10 @@ def _build_datepick_metadata(
         tire_size = tire_size or resolved_tire_size or ""
     if product_name:
         metadata["productName"] = product_name
+        metadata["product_name"] = product_name
     if tire_size:
         metadata["tireSize"] = tire_size
+        metadata["tire_size"] = tire_size
 
     payment_amount: int | None = None
     if ord_qty_int and ord_qty_int > 0:
@@ -4775,6 +4905,7 @@ def _build_datepick_metadata(
                 break
     if payment_amount and payment_amount > 0:
         metadata["paymentAmount"] = payment_amount
+        metadata["payment_amount"] = payment_amount
 
     return metadata
 

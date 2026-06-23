@@ -15150,6 +15150,16 @@ class TStationChatServiceV2:
           2. Token-overlap against stores[].nameAddress — only resolves when
              exactly ONE store has the top score
         """
+        selected = TStationChatServiceV2._resolve_store_selection_from_history_template(user_text, template_data)
+        if selected is None:
+            return None
+        meta = selected.get("meta") or {}
+        shop_id = meta.get("shopId") if isinstance(meta, dict) else None
+        return str(shop_id).strip() or None
+
+    @staticmethod
+    def _resolve_store_selection_from_history_template(user_text: str, template_data: dict | None) -> dict | None:
+        """Return the matched store card and metadata from the last location template."""
         if not user_text or not isinstance(template_data, dict):
             return None
 
@@ -15177,40 +15187,84 @@ class TStationChatServiceV2:
         _STORE_SELECT_CHIPS = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
         if text in _STORE_SELECT_CHIPS and len(stores) == 1:
             meta = metadata[0]
-            if isinstance(meta, dict):
-                shop_id = meta.get("shopId")
-                if shop_id:
-                    return shop_id
+            store = stores[0]
+            if isinstance(meta, dict) and isinstance(store, dict) and meta.get("shopId"):
+                return {"store": store, "meta": meta}
 
         ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
         if ordinal_match:
             idx = int(ordinal_match.group(1)) - 1
             if 0 <= idx < len(metadata):
                 meta = metadata[idx]
-                if isinstance(meta, dict):
-                    shop_id = meta.get("shopId")
-                    if shop_id:
-                        return shop_id
+                store = stores[idx]
+                if isinstance(meta, dict) and isinstance(store, dict) and meta.get("shopId"):
+                    return {"store": store, "meta": meta}
 
         tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
         if tokens:
-            scored: list[tuple[int, dict]] = []
+            scored: list[tuple[int, dict, dict]] = []
             for store, meta in zip(stores, metadata):
                 if not isinstance(store, dict) or not isinstance(meta, dict):
                     continue
                 name = store.get("nameAddress") or store.get("name") or store.get("title") or ""
                 score = sum(1 for tok in tokens if tok in name)
                 if score > 0:
-                    scored.append((score, meta))
+                    scored.append((score, store, meta))
             if scored:
-                max_score = max(s for s, _ in scored)
-                top = [meta for s, meta in scored if s == max_score]
+                max_score = max(s for s, _, _ in scored)
+                top = [(store, meta) for s, store, meta in scored if s == max_score]
                 if len(top) == 1:
-                    shop_id = top[0].get("shopId")
-                    if shop_id:
-                        return shop_id
+                    store, meta = top[0]
+                    if meta.get("shopId"):
+                        return {"store": store, "meta": meta}
 
         return None
+
+    @staticmethod
+    def _preview_location_slot_values_from_selection(selection: dict | None) -> dict[str, Any] | None:
+        if not isinstance(selection, dict):
+            return None
+        meta = selection.get("meta")
+        if not isinstance(meta, dict):
+            return None
+        if (meta.get("sourceTool") or meta.get("source_tool")) != "transaction_store_preview_tool":
+            return None
+
+        values: dict[str, Any] = {}
+        shop_id = str(meta.get("shopId") or "").strip()
+        if shop_id:
+            values["shop_id"] = shop_id
+        shop_name = str(meta.get("shopName") or "").strip()
+        if shop_name:
+            values["shop_name"] = shop_name
+        goods_no = str(meta.get("goodsNo") or meta.get("goods_no") or "").strip()
+        if goods_no:
+            values["goods_no"] = goods_no
+        tire_size = normalize_tire_size(meta.get("tireSize") or meta.get("tire_size") or "")
+        if tire_size:
+            values["tire_size"] = tire_size
+        raw_qty = meta.get("ordQty") or meta.get("ord_qty") or meta.get("quantity")
+        if raw_qty is not None:
+            try:
+                qty = int(raw_qty)
+                if qty > 0:
+                    values["ord_qty"] = qty
+            except (TypeError, ValueError):
+                pass
+        region = str(meta.get("region") or "").strip()
+        if region:
+            values["region"] = region
+        pending_intent = str(meta.get("pendingIntent") or "").strip()
+        if pending_intent in {"stock", "order"}:
+            values["pending_intent"] = pending_intent
+        goal_type = str(meta.get("goalType") or "").strip()
+        if goal_type in {"store_with_stock", "place_order"}:
+            values["goal_type"] = goal_type
+        if not values.get("pending_intent") and values.get("goods_no") and values.get("ord_qty"):
+            values["pending_intent"] = "stock"
+        if not values.get("goal_type") and values.get("goods_no") and values.get("ord_qty"):
+            values["goal_type"] = "store_with_stock"
+        return values or None
 
     @staticmethod
     def _resolve_recent_single_shop_id_from_context(prev_tool_data: list[dict]) -> str | None:
@@ -16532,13 +16586,23 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_history_template(
+                    selected_location = TStationChatServiceV2._resolve_store_selection_from_history_template(
                         last_user_text, latest_location_tmpl
                     )
+                    resolved_shop_id = None
+                    if selected_location is not None:
+                        selected_meta = selected_location.get("meta") or {}
+                        if isinstance(selected_meta, dict):
+                            resolved_shop_id = str(selected_meta.get("shopId") or "").strip() or None
                     if resolved_shop_id:
+                        preview_values = TStationChatServiceV2._preview_location_slot_values_from_selection(
+                            selected_location
+                        ) or {"shop_id": resolved_shop_id}
                         merged_slots = merged_slots.apply_runtime_values(
-                            {"shop_id": resolved_shop_id},
-                            source="location_template_selection",
+                            preview_values,
+                            source="preview_location_template_selection"
+                            if preview_values.get("goods_no")
+                            else "location_template_selection",
                         )
                         logger.debug(
                             f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
@@ -17847,6 +17911,8 @@ class TStationChatServiceV2:
             "availability_intent": merged_slots.availability_intent,
             "requested_cal_day": merged_slots.requested_cal_day,
             "rsv_hour": merged_slots.rsv_hour,
+            "pending_intent": merged_slots.pending_intent,
+            "goal_type": merged_slots.goal_type,
         }
         transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,

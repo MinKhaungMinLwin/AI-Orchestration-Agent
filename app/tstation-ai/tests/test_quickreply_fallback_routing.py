@@ -6391,9 +6391,117 @@ def test_preview_datepick_metadata_preserves_product_slots() -> None:
     assert metadata["shopId"] == "F00405"
     assert metadata["shopName"] == "티스테이션 판교점"
     assert metadata["goodsNo"] == "G000000317900"
+    assert metadata["goods_no"] == "G000000317900"
     assert metadata["productName"] == "Dynapro HPX"
     assert metadata["tireSize"] == "235/55R19"
+    assert metadata["tire_size"] == "235/55R19"
     assert metadata["ordQty"] == 2
+    assert metadata["ord_qty"] == 2
+
+
+def test_preview_location_metadata_preserves_logistics_schedule_context() -> None:
+    goal_token = current_goal_type.set("store_with_stock")
+    pending_token = current_pending_intent.set("stock")
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "transaction_store_preview_tool",
+                    "args": {
+                        "goods_no": "G000000309780",
+                        "ord_qty": 4,
+                        "region_code": "서울",
+                        "include_price": True,
+                    },
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "schedule": {
+                                "tier": "logistics_only",
+                                "stores": [
+                                    {
+                                        "shop_id": "C01306",
+                                        "shop_nm": "티스테이션 영등포점",
+                                        "mode": "logistics_only",
+                                        "slots": [{"cal_day": "20260624", "tm": "09"}],
+                                    }
+                                ],
+                            },
+                            "stores": [
+                                {
+                                    "shop_id": "C01306",
+                                    "shop_nm": "티스테이션 영등포점",
+                                    "is_installable": True,
+                                }
+                            ],
+                        },
+                    },
+                }
+            ],
+            "서울에서 물류 배송 후 장착 가능한 매장입니다.",
+        )
+    finally:
+        current_pending_intent.reset(pending_token)
+        current_goal_type.reset(goal_token)
+
+    assert event is not None
+    assert event["template"] == "location"
+    metadata = event["data"]["metadata"][0]
+    assert metadata["shopId"] == "C01306"
+    assert metadata["sourceTool"] == "transaction_store_preview_tool"
+    assert metadata["source_tool"] == "transaction_store_preview_tool"
+    assert metadata["stockCheckMode"] == "preview"
+    assert metadata["scheduleMode"] == "logistics_only"
+    assert metadata["schedule_mode"] == "logistics_only"
+    assert metadata["scheduleTier"] == "logistics_only"
+    assert metadata["goodsNo"] == "G000000309780"
+    assert metadata["goods_no"] == "G000000309780"
+    assert metadata["ordQty"] == 4
+    assert metadata["ord_qty"] == 4
+    assert metadata["region"] == "서울"
+    assert metadata["slots"] == [{"cal_day": "20260624", "tm": "09"}]
+
+
+def test_preview_location_selection_recovers_transaction_slots() -> None:
+    latest_location = {
+        "template": "location",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 영등포점"}],
+            "metadata": [
+                {
+                    "shopId": "C01306",
+                    "shopName": "티스테이션 영등포점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "stockCheckMode": "preview",
+                    "scheduleMode": "logistics_only",
+                    "scheduleTier": "logistics_only",
+                    "goodsNo": "G000000309780",
+                    "tireSize": "205/60R15",
+                    "ordQty": 4,
+                    "region": "서울",
+                    "pendingIntent": "stock",
+                    "goalType": "store_with_stock",
+                }
+            ],
+        },
+    }
+
+    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+        "티스테이션 영등포점",
+        latest_location,
+    )
+    values = TStationChatServiceV2._preview_location_slot_values_from_selection(selection)
+
+    assert values == {
+        "shop_id": "C01306",
+        "shop_name": "티스테이션 영등포점",
+        "goods_no": "G000000309780",
+        "tire_size": "205/60R15",
+        "ord_qty": 4,
+        "region": "서울",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+    }
 
 
 def test_store_detail_info_mapping_is_disabled_in_active_order_flow() -> None:
@@ -11258,6 +11366,54 @@ def test_turn_contract_reports_preview_tool_on_pure_stock_contract() -> None:
             "called_tools": ["transaction_store_preview_tool"],
         },
     ]
+
+
+def test_turn_contract_blocks_general_schedule_datepick_for_preview_stock_contract() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 영등포점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="today_install",
+            known_slots={
+                "goods_no": "G000000309780",
+                "tire_size": "205/60R15",
+                "ord_qty": 4,
+                "shop_id": "C01306",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "preview",
+            },
+            entities={"stock_check_mode": "preview"},
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool", "get_store_inventory_tool", "get_store_list_tool"),
+            preferred_tool="transaction_store_preview_tool",
+            forbidden_tools=("get_store_schedule_tool",),
+            metadata={"response_intent": "stock_store_search", "stock_check_mode": "preview"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            metadata={"response_shape_key": "reservation_slots", "stock_check_mode": "preview"},
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["get_store_schedule_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert {
+        "type": "datepick_without_product_conditioned_preview_tool",
+        "severity": "error",
+        "called_tools": ["get_store_schedule_tool"],
+        "response_shape_key": "reservation_slots",
+    } in violations
 
 
 def test_turn_contract_blocks_discovery_summary_before_transaction_resolution() -> None:

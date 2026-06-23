@@ -786,6 +786,19 @@ def _stock_contract_violation(
                 "type": "forbidden_datepick_for_inventory_only_stock",
                 "response_shape_key": str(response_shape_key or ""),
             }
+    if (
+        stock_check_mode == "preview"
+        and str(template or "") == "datepick"
+        and contract.known_slots.get("goods_no")
+        and (contract.known_slots.get("ord_qty") or contract.known_slots.get("quantity"))
+        and "get_store_schedule_tool" in called_tools
+        and "transaction_store_preview_tool" not in called_tools
+    ):
+        return {
+            "type": "datepick_without_product_conditioned_preview_tool",
+            "called_tools": list(called_tools),
+            "response_shape_key": str(response_shape_key or ""),
+        }
     if str(response_shape_key or "") == "transaction_fallback":
         return {
             "type": "stock_contract_fell_back_without_resolution",
