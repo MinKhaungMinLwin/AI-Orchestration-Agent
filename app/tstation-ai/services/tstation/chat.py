@@ -9950,9 +9950,22 @@ def _build_product_coupon_price_amount_event(
     }
 
 
-def _build_product_coupon_price_no_product_event(product_name: str, tire_size: str) -> dict:
+def _build_product_coupon_price_no_product_event(
+    product_name: str,
+    tire_size: str,
+    *,
+    quantity: int | None = None,
+) -> dict:
     product_label = str(product_name or "해당 상품").strip() or "해당 상품"
     size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
+    metadata: dict[str, Any] = {
+        "pendingIntent": "price",
+        "goalType": "coupon_discount_amount",
+        "productName": product_label,
+        "tireSize": size_label,
+    }
+    if quantity:
+        metadata["ordQty"] = int(quantity)
     return {
         "type": "data",
         "template": "quickReply",
@@ -9969,6 +9982,7 @@ def _build_product_coupon_price_no_product_event(product_name: str, tire_size: s
                 {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY"],
+            "metadata": metadata,
         },
     }
 
@@ -10059,9 +10073,22 @@ def _build_product_coupon_price_amount_event(
     }
 
 
-def _build_product_coupon_price_no_product_event(product_name: str, tire_size: str) -> dict:
+def _build_product_coupon_price_no_product_event(
+    product_name: str,
+    tire_size: str,
+    *,
+    quantity: int | None = None,
+) -> dict:
     product_label = str(product_name or "해당 상품").strip() or "해당 상품"
     size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
+    metadata: dict[str, Any] = {
+        "pendingIntent": "price",
+        "goalType": "coupon_discount_amount",
+        "productName": product_label,
+        "tireSize": size_label,
+    }
+    if quantity:
+        metadata["ordQty"] = int(quantity)
     return {
         "type": "data",
         "template": "quickReply",
@@ -10078,6 +10105,7 @@ def _build_product_coupon_price_no_product_event(product_name: str, tire_size: s
                 {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY"],
+            "metadata": metadata,
         },
     }
 
@@ -12832,10 +12860,17 @@ def _build_product_size_list_event_from_search_results(
     product_label = keyword or first_product_name or "해당 상품"
     visible_sizes = sizes[:8]
     suffix = " 등" if len(sizes) > len(visible_sizes) else ""
-    assistant_response = (
-        f"{product_label}에서 확인되는 규격은 {', '.join(visible_sizes)}{suffix}이에요.\n"
-        "원하시는 규격을 선택하거나 사이즈를 직접 입력해 주세요."
-    )
+    if _is_coupon_discount_amount_context(slots):
+        assistant_response = (
+            f"{product_label} 쿠폰 할인금액 확인을 위해 선택 가능한 규격을 확인했어요.\n"
+            f"확인되는 규격은 {', '.join(visible_sizes)}{suffix}입니다. "
+            "원하시는 규격을 선택하면 쿠폰 적용 예상 할인액을 이어서 계산해 드릴게요."
+        )
+    else:
+        assistant_response = (
+            f"{product_label}에서 확인되는 규격은 {', '.join(visible_sizes)}{suffix}이에요.\n"
+            "원하시는 규격을 선택하거나 사이즈를 직접 입력해 주세요."
+        )
     quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in sizes[:6]]
     quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
     metadata: dict[str, Any] = {
@@ -22132,6 +22167,7 @@ class TStationChatServiceV2:
                     return emitted_events, _build_product_coupon_price_no_product_event(
                         preferred_keyword,
                         target_tire_size,
+                        quantity=int(target_quantity),
                     )
 
                 price_input = {"goods_no": goods_no}
@@ -23127,6 +23163,7 @@ class TStationChatServiceV2:
                         return emitted_events, _build_product_coupon_price_no_product_event(
                             str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
                             tire_size,
+                            quantity=target_quantity,
                         )
 
                     detail_input = {"goods_no": goods_no}
@@ -23179,6 +23216,7 @@ class TStationChatServiceV2:
                     return emitted_events, _build_product_coupon_price_no_product_event(
                         str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
                         str(tool_input.get("size") or ""),
+                        quantity=getattr(initial_slots, "ord_qty", None),
                     )
 
             mapped_event = try_build_template(

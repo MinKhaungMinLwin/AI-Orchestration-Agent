@@ -4769,6 +4769,47 @@ def test_product_size_list_preserves_coupon_discount_amount_metadata() -> None:
     assert metadata["goalType"] == "coupon_discount_amount"
     assert metadata["productName"] == "벤투스 에어S"
     assert metadata["ordQty"] == 4
+    assert "쿠폰 할인금액 확인" in event["data"]["assistantResponse"]
+    assert "쿠폰 적용 예상 할인액" in event["data"]["assistantResponse"]
+
+
+def test_coupon_discount_amount_other_size_cta_uses_pending_product_keyword() -> None:
+    slots = ConversationSlots(
+        pending_intent="price",
+        goal_type="coupon_discount_amount",
+        pending_product_name="Ventus air S",
+        ord_qty=4,
+    )
+
+    keyword = _product_size_list_keyword_from_context("다른 사이즈 확인", slots=slots)
+    event = _build_product_size_list_event_from_search_results(
+        "다른 사이즈 확인",
+        [
+            (
+                keyword or "",
+                {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {"goods_nm": "벤투스 에어S", "tire_size_1": "245/45R18"},
+                            {"goods_nm": "벤투스 에어S", "tire_size_1": "255/45R19"},
+                        ]
+                    },
+                },
+            )
+        ],
+        slots=slots,
+    )
+
+    assert keyword == "벤투스 에어S"
+    assert event is not None
+    labels = _labels(event["data"]["quickReplies"])
+    metadata = event["data"]["metadata"]
+    assert labels[:2] == ["245/45R18", "255/45R19"]
+    assert metadata["pendingIntent"] == "price"
+    assert metadata["goalType"] == "coupon_discount_amount"
+    assert metadata["productName"] == "Ventus air S"
+    assert metadata["ordQty"] == 4
 
 
 def test_product_size_list_not_found_event_uses_pending_product_cta_contract() -> None:
@@ -4782,13 +4823,19 @@ def test_product_size_list_not_found_event_uses_pending_product_cta_contract() -
 
 
 def test_product_coupon_price_no_product_message_names_product_before_size() -> None:
-    event = _build_product_coupon_price_no_product_event("벤투스 에어S", "265/45R19")
+    event = _build_product_coupon_price_no_product_event("벤투스 에어S", "265/45R19", quantity=4)
 
     assistant = event["data"]["assistantResponse"]
     labels = [chip["label"] for chip in event["data"]["quickReplies"]]
+    metadata = event["data"]["metadata"]
 
     assert "벤투스 에어S 265/45R19 규격 상품을 찾을 수 없어" in assistant
     assert labels == ["다른 사이즈 확인", "사이즈 없이 검색", "타이어 추천 받기"]
+    assert metadata["pendingIntent"] == "price"
+    assert metadata["goalType"] == "coupon_discount_amount"
+    assert metadata["productName"] == "벤투스 에어S"
+    assert metadata["tireSize"] == "265/45R19"
+    assert metadata["ordQty"] == 4
 
 
 def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
