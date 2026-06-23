@@ -916,9 +916,12 @@ def get_product_description_tool(goods_no: str):
               discount_amt}. 자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품
               할인쿠폰 적용 시 …").
 
-    If `cheapest_final_prc` is non-null, prefer phrasing like
-    "정가 {sale_prc:,}원 → 최종 혜택가 {cheapest_final_prc:,}원" with the
-    applied coupon names. If null, fall back to sale_prc only.
+    Price/coupon fields are reference facts, not a default narration target.
+    Use `sale_prc` / `cheapest_final_prc` / coupon names only when the current
+    turn explicitly asks for price, discount, or coupon applicability, or when
+    a downstream price flow requested those values. For normal product
+    explanation turns, prefer feature / review / rating summary and leave
+    price handling to price tools.
 
     Args:
         goods_no (str): Product number.

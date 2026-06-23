@@ -115,6 +115,8 @@ from services.tstation.chat import (
     _tool_error_response_decision,
     _tool_parse_failure_response_decision,
     _qc_factual_mismatch_guard_event,
+    _repair_assistant_response,
+    _repair_qc_mismatch_event,
     _tool_error_summary,
     _trace_final_error_state,
     _is_product_attribute_lookup_query,
@@ -2866,7 +2868,7 @@ def test_sized_bare_product_search_does_not_guess_ambiguous_goods_no() -> None:
     assert row is None
 
 
-def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
+def test_product_description_quickreply_stays_description_focused() -> None:
     event = _build_product_description_quickreply_event({
         "status": "success",
         "data": {
@@ -2919,9 +2921,10 @@ def test_product_description_quickreply_uses_purchase_and_cart_chips() -> None:
     assert "마일리지 4.1/5" in assistant_response
     assert "젖은노면 B등급" in assistant_response
     assert "회전저항 A등급" in assistant_response
-    assert "최종 혜택가는 118,800원" in assistant_response
+    assert "최종 혜택가" not in assistant_response
+    assert "정가" not in assistant_response
     assert "리뷰는 68건" in assistant_response
-    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "장바구니담기"]
+    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["가격 확인", "재고 확인", "다른 상품 보기"]
     assert event["data"]["metadata"] == {
         "goodsId": "G000000309783",
         "tireSize": "225/45R17",
@@ -4973,6 +4976,37 @@ def test_tool_context_formats_reservation_history_label() -> None:
     assert "• [최신] 예약 내역" in context
     assert "티스테이션 성남IC점" in context
     assert "2026-05-29 16:00" in context
+
+
+def test_tool_context_keeps_price_fields_without_mid_string_truncation() -> None:
+    context = TStationChatServiceV2._format_tool_context([
+        {
+            "tool": "get_products_recommendations_tool",
+            "input": {"rcmd_type": "wet", "brand_cd": "HK", "limit": 3},
+            "data": [
+                {
+                    "goods_no": "G000000310283",
+                    "goods_nm": "AH11S",
+                    "tire_size_1": "205/85R16",
+                    "sale_prc": 128700,
+                    "extra_fvr_sale_prc": 122300,
+                    "cheapest_final_prc": 122300,
+                    "cheapest_total_discount": 6400,
+                    "wet": 4.0,
+                    "rr": 3,
+                    "season_nm": "사계절",
+                    "car_knd_nm": "경트럭&밴",
+                    "goods_pfm_nm": "COMFORT",
+                    "prc_grd_nm": "스탠다드",
+                    "pc_prod_tech_desc": "x" * 3000,
+                }
+            ],
+        }
+    ])
+
+    assert "cheapest_final_prc: 122300 |" in context
+    assert "cheapest_total_discount: 6400" in context
+    assert "cheapest_final_prc: 12230 |" not in context
 
 
 def test_existing_reservation_management_filters_stale_store_schedule_context() -> None:
@@ -8715,6 +8749,43 @@ def test_qc_factual_mismatch_guard_event_uses_safe_fallback() -> None:
     assert event["template"] == "quickReply"
     assert "일치하지 않아" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["qcMismatchFields"] == ["goods_no", "price"]
+
+
+def test_repair_assistant_response_removes_mismatched_price_and_repasses_qc() -> None:
+    source = [
+        (
+            "get_product_description_tool",
+            {
+                "status": "success",
+                "data": {"goods_no": "G000000310283", "cheapest_final_prc": 122300},
+            },
+        )
+    ]
+    mismatches = qc_verifier.verify_draft("회원 최저가는 119,900원이에요.", source)
+
+    repaired = _repair_assistant_response("회원 최저가는 119,900원이에요.", mismatches)
+
+    assert repaired == "정확한 가격은 다시 확인해서 안내드릴게요."
+    assert qc_verifier.verify_draft(repaired, source) == []
+
+
+def test_repair_qc_mismatch_event_updates_assistant_response_without_guard_fallback() -> None:
+    event = _repair_qc_mismatch_event(
+        {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "회원 최저가는 119,900원이에요.",
+                "quickReplies": [{"label": "가격 확인", "domain": "TRANSACTION"}],
+            },
+        },
+        mismatches=[qc_verifier.Mismatch(field="price", value="119,900원")],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_qc_mismatch_repair"
+    assert event["data"]["assistantResponse"] == "정확한 가격은 다시 확인해서 안내드릴게요."
+    assert event["data"]["quickReplies"] == [{"label": "가격 확인", "domain": "TRANSACTION"}]
 
 
 def test_env_example_defaults_to_sequential_qc_for_blocking_contracts() -> None:

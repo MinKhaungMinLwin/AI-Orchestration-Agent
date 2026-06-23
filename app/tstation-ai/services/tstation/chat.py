@@ -8506,23 +8506,6 @@ def _product_description_lines_and_metadata(
     if performance_bits:
         lines.extend(["", f"주요 성능은 {', '.join(performance_bits)} 수준이에요."])
 
-    if size_specific:
-        sale_price = _format_krw(row.get("sale_prc"))
-        final_price = _format_krw(row.get("cheapest_final_prc"))
-        coupons = row.get("cheapest_applied_coupons")
-        coupon_names: list[str] = []
-        if isinstance(coupons, list):
-            for coupon in coupons:
-                if isinstance(coupon, dict):
-                    coupon_name = str(coupon.get("cpn_nm") or "").strip()
-                    if coupon_name and coupon_name not in coupon_names:
-                        coupon_names.append(coupon_name)
-        if sale_price and final_price and sale_price != final_price:
-            coupon_text = f"{', '.join(coupon_names[:2])} 적용 시 " if coupon_names else ""
-            lines.extend(["", f"정가 {sale_price}에서 {coupon_text}최종 혜택가는 {final_price}이에요."])
-        elif sale_price:
-            lines.extend(["", f"정가는 {sale_price}입니다."])
-
     rating = row.get("rating") if isinstance(row.get("rating"), dict) else {}
     review_count = row.get("review_count") or rating.get("review_count")
     rating_avg = row.get("rating_avg") or row.get("rate") or rating.get("rating_avg")
@@ -8544,6 +8527,37 @@ def _product_description_lines_and_metadata(
     return lines, metadata
 
 
+_PRODUCT_DESCRIPTION_INFO_CHIPS: list[dict[str, str]] = [
+    {"label": "가격 확인", "domain": "TRANSACTION"},
+    {"label": "재고 확인", "domain": "TRANSACTION"},
+    {"label": "다른 상품 보기", "domain": "DISCOVERY"},
+]
+
+_TOOL_CONTEXT_PRODUCT_FIELDS: tuple[str, ...] = (
+    "goods_no",
+    "goods_nm",
+    "tire_size_1",
+    "sale_prc",
+    "extra_fvr_sale_prc",
+    "cheapest_final_prc",
+    "cheapest_total_discount",
+    "wet",
+    "rr",
+    "season_nm",
+    "car_knd_nm",
+    "goods_pfm_nm",
+    "prc_grd_nm",
+)
+_TOOL_CONTEXT_LONG_TEXT_FIELDS: frozenset[str] = frozenset({
+    "pc_prod_remark_desc",
+    "pc_prod_tech_desc",
+    "slogan",
+    "assistantResponse",
+    "message",
+    "reason",
+})
+
+
 def _build_product_description_quickreply_event(detail_result: dict) -> dict | None:
     row = _unwrap_tool_data(detail_result)
     if not isinstance(row, dict) or not row:
@@ -8558,11 +8572,8 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
         "assistant_response_source": "code_product_description",
         "data": {
             "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "구매하기", "domain": "TRANSACTION"},
-                {"label": "장바구니담기", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
+            "quickReplies": [dict(chip) for chip in _PRODUCT_DESCRIPTION_INFO_CHIPS],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
             "metadata": metadata,
         },
     }
@@ -10801,6 +10812,114 @@ def _is_product_compare_missing_event(event: dict | None) -> bool:
     return "상품은 찾지 못했어요" in assistant or "비교할 상품명을 다시" in assistant
 
 
+_PRODUCT_DETAIL_PRICE_OR_COUPON_RE = re.compile(
+    r"가격|얼마|혜택가|최종가|할인가|쿠폰|할인",
+    re.IGNORECASE,
+)
+
+
+def _is_explicit_product_price_or_coupon_turn(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if _is_product_coupon_price_amount_query(text) or _is_product_coupon_eligibility_query(text):
+        return True
+    price_frame = build_price_intent_frame(text)
+    if price_frame.intent in {
+        "price_coupon_summary",
+        "product_coupon_eligibility",
+        "coupon_applicable_products",
+    }:
+        return True
+    return bool(_PRODUCT_DETAIL_PRICE_OR_COUPON_RE.search(text))
+
+
+def _repair_assistant_response(assistant_response: str, mismatches: list[Any]) -> str | None:
+    text = str(assistant_response or "").strip()
+    if not text or not mismatches:
+        return None
+
+    mismatch_values = [str(getattr(mismatch, "value", "") or "").strip() for mismatch in mismatches if mismatch is not None]
+    mismatch_values = [value for value in mismatch_values if value]
+    if not mismatch_values:
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    kept_lines = [
+        line for line in lines
+        if not any(value in line for value in mismatch_values)
+    ]
+    fields = {str(getattr(mismatch, "field", "") or "") for mismatch in mismatches if mismatch is not None}
+
+    guidance: list[str] = []
+    if "price" in fields:
+        guidance.append("정확한 가격은 다시 확인해서 안내드릴게요.")
+    if "goods_no" in fields:
+        guidance.append("상품 정보는 상품명 기준으로 다시 정리해 드릴게요.")
+    if "shop_id" in fields:
+        guidance.append("매장 정보는 다시 확인해서 안내드릴게요.")
+    if "tire_size" in fields:
+        guidance.append("규격 정보는 다시 확인해서 안내드릴게요.")
+
+    repaired_lines = kept_lines or [line for line in guidance if line]
+    if kept_lines and guidance:
+        repaired_lines.extend(line for line in guidance if line not in repaired_lines)
+    repaired = "\n\n".join(line for line in repaired_lines if line).strip()
+    return repaired or None
+
+
+def _repair_qc_mismatch_event(
+    event: dict[str, Any] | None,
+    *,
+    mismatches: list[Any],
+) -> dict[str, Any] | None:
+    if not isinstance(event, dict):
+        return None
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return None
+    repaired_response = _repair_assistant_response(str(data.get("assistantResponse") or ""), mismatches)
+    if not repaired_response:
+        return None
+
+    repaired_event = dict(event)
+    repaired_data = dict(data)
+    repaired_data["assistantResponse"] = repaired_response
+    metadata = dict(repaired_data.get("metadata") or {})
+    metadata["qcRepair"] = {
+        "attempted": True,
+        "fields": sorted({
+            str(getattr(mismatch, "field", "") or "")
+            for mismatch in mismatches
+            if mismatch is not None
+        }),
+    }
+    repaired_data["metadata"] = metadata
+    repaired_event["data"] = repaired_data
+    repaired_event["assistant_response_source"] = "code_qc_mismatch_repair"
+    return repaired_event
+
+
+def _build_repaired_product_description_event(
+    *,
+    structured_sources: list[tuple[str, dict]],
+    called_tool_names: set[str],
+    source_domain: str,
+    user_text: str,
+) -> dict[str, Any] | None:
+    if source_domain != MultiAgentDomain.Domain.DISCOVERY.value:
+        return None
+    if "get_product_description_tool" not in called_tool_names:
+        return None
+    if _is_explicit_product_price_or_coupon_turn(user_text):
+        return None
+    for tool_name, tool_output in reversed(structured_sources):
+        if tool_name != "get_product_description_tool":
+            continue
+        return _build_product_description_quickreply_event(tool_output)
+    return None
+
+
 def _normalize_unmatched_coupon_quickreply(
     event_data: dict[str, Any],
     *,
@@ -12499,6 +12618,68 @@ class TStationChatServiceV2:
             "",
         ]
 
+        def _format_context_value(field_name: str, value: Any) -> str | None:
+            if value in (None, "", [], {}):
+                return None
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, (int, float)):
+                return str(value)
+            if isinstance(value, str):
+                text = re.sub(r"\s+", " ", value).strip()
+                if not text:
+                    return None
+                if field_name in _TOOL_CONTEXT_LONG_TEXT_FIELDS and len(text) > 160:
+                    return text[:157] + "..."
+                return text
+            if isinstance(value, list):
+                scalars = [
+                    str(item).strip()
+                    for item in value
+                    if not isinstance(item, (dict, list)) and str(item).strip()
+                ]
+                if not scalars:
+                    return None
+                joined = ", ".join(scalars)
+                if field_name in _TOOL_CONTEXT_LONG_TEXT_FIELDS and len(joined) > 160:
+                    return joined[:157] + "..."
+                return joined
+            return None
+
+        def _row_fields_for_tool(tool_name: str, row: dict[str, Any]) -> list[str]:
+            if tool_name in {
+                "get_products_recommendations_tool",
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_final_price_tool",
+                "compare_discount_tool",
+                "get_cheapest_price_tool",
+            }:
+                preferred = [field for field in _TOOL_CONTEXT_PRODUCT_FIELDS if field in row]
+                remaining = [
+                    field
+                    for field, value in row.items()
+                    if field not in preferred
+                    and not str(field).startswith("_")
+                    and _format_context_value(str(field), value) is not None
+                ]
+                return [*preferred, *remaining[:6]]
+            return [
+                str(field)
+                for field, value in row.items()
+                if not str(field).startswith("_")
+                and _format_context_value(str(field), value) is not None
+            ]
+
+        def _format_context_row(tool_name: str, row: dict[str, Any]) -> str | None:
+            parts: list[str] = []
+            for field_name in _row_fields_for_tool(tool_name, row):
+                rendered = _format_context_value(field_name, row.get(field_name))
+                if rendered is None:
+                    continue
+                parts.append(f"{field_name}: {rendered}")
+            return " | ".join(parts) if parts else None
+
         for idx, item in enumerate(tool_data[:3]):
             tool_name = item.get("tool", "")
             label = tool_labels.get(tool_name, tool_name)
@@ -12519,13 +12700,15 @@ class TStationChatServiceV2:
                         if row.get("_truncated"):
                             lines.append(f"  ... {row['_truncated']}")
                         else:
-                            row_str = " | ".join(f"{k}: {v}" for k, v in row.items())
-                            lines.append(f"  {i}. {row_str[:1000]}")
+                            row_str = _format_context_row(tool_name, row)
+                            if row_str:
+                                lines.append(f"  {i}. {row_str}")
                     else:
                         lines.append(f"  {i}. {row}")
             elif isinstance(data, dict):
-                row_str = " | ".join(f"{k}: {v}" for k, v in data.items())
-                lines.append(f"  {row_str[:1500]}")
+                row_str = _format_context_row(tool_name, data)
+                if row_str:
+                    lines.append(f"  {row_str}")
 
             lines.append("")
 
@@ -19961,6 +20144,27 @@ class TStationChatServiceV2:
                     and last_assistant_response_source != "code_product_compare_resolver"
                 ):
                     source_domain = str(event.get("source_domain", "ui_template")).lower()
+                    repaired_product_description_event = _build_repaired_product_description_event(
+                        structured_sources=structured_sources,
+                        called_tool_names=called_tool_names,
+                        source_domain=source_domain,
+                        user_text=user_query,
+                    )
+                    if repaired_product_description_event is not None:
+                        logger.info("[PRODUCT_DESCRIPTION] replaced quickReply with deterministic detail summary")
+                        event = repaired_product_description_event
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_product_description"
+                        event_data = event.get("data", {})
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
                     if source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
                         comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
                         deterministic_compare_event = (
@@ -20461,6 +20665,7 @@ class TStationChatServiceV2:
             draft_response = _sanitize_response(draft_response)
 
             _qc_passed = True
+            repair_attempt_count = 0
             _contract_sensitive_qc = bool(
                 turn_contract
                 and (
@@ -20507,6 +20712,50 @@ class TStationChatServiceV2:
                                 template=last_template,
                                 contract=turn_contract,
                             )
+                            if (
+                                mismatches
+                                and not contract_violations
+                                and not _parallel_qc
+                                and repair_attempt_count <= 1
+                            ):
+                                repaired_event = _repair_qc_mismatch_event(
+                                    buffered_data_events[-1] if buffered_data_events else None,
+                                    mismatches=mismatches,
+                                )
+                                repaired_response = None
+                                if repaired_event is not None:
+                                    repaired_response = str(
+                                        ((repaired_event.get("data") or {}).get("assistantResponse") or "")
+                                    ).strip()
+                                if repaired_response:
+                                    repair_attempt_count += 1
+                                    repaired_mismatches = qc_verifier.verify_draft(
+                                        repaired_response,
+                                        structured_sources,
+                                    )
+                                    if not repaired_mismatches:
+                                        mismatches = []
+                                        buffered_data_events = [repaired_event]
+                                        event_data = repaired_event.get("data", {})
+                                        assistant_response = repaired_response
+                                        draft_response = repaired_response
+                                        draft_for_qc = repaired_response
+                                        last_template = "quickReply"
+                                        last_template_source = "qc_repair"
+                                        last_assistant_response_source = "code_qc_mismatch_repair"
+                                        repaired_agent = (
+                                            str(original_message_events[-1].get("agent") or "[DISCOVERY AGENT]")
+                                            if original_message_events
+                                            else "[DISCOVERY AGENT]"
+                                        )
+                                        original_message_events = [{
+                                            "type": "message",
+                                            "content": repaired_response,
+                                            "agent": repaired_agent,
+                                        }]
+                                        logger.info("[QC_VERIFIER] repaired factual mismatch before fallback")
+                                    else:
+                                        mismatches = repaired_mismatches
                             _qc_passed = not mismatches and not contract_violations
                             if _qc_passed:
                                 logger.debug("[QC_VERIFIER] PASS")
