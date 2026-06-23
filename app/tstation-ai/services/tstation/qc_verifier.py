@@ -132,6 +132,15 @@ _PRODUCT_ROW_TOOLS: frozenset[str] = frozenset({
     "get_best_selling_products_tool",
     "get_product_description_tool",
 })
+_BRAND_NAME_HINTS: dict[str, tuple[str, ...]] = {
+    "HK": ("hankook", "한국", "한국타이어"),
+    "MC": ("michelin", "미쉐린"),
+    "CT": ("continental", "콘티넨탈"),
+    "BS": ("bridgestone", "브리지스톤"),
+    "PI": ("pirelli", "피렐리"),
+    "GY": ("goodyear", "굿이어"),
+    "LF": ("laufenn", "라우펜"),
+}
 _RANKING_PRICE_FIELDS: tuple[str, ...] = ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc")
 _RANKING_METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "price": _RANKING_PRICE_FIELDS,
@@ -325,6 +334,54 @@ def _source_product_rows(structured_sources: Iterable[tuple[str, Any]]) -> list[
     return rows
 
 
+def _row_matches_brand(row: dict[str, Any], expected_brand_cd: str) -> bool | None:
+    expected = str(expected_brand_cd or "").strip().upper()
+    if not expected:
+        return None
+    row_brand_cd = str(row.get("brand_cd") or row.get("brandCode") or "").strip().upper()
+    if row_brand_cd:
+        return row_brand_cd == expected
+    hints = _BRAND_NAME_HINTS.get(expected, ())
+    if not hints:
+        return None
+    haystack = " ".join(
+        str(row.get(field) or "")
+        for field in ("brand_nm", "brand_name", "brandName", "goods_nm", "titleProductName", "title")
+    ).casefold()
+    if not haystack:
+        return None
+    if any(hint.casefold() in haystack for hint in hints):
+        return True
+    known_other_hints = {
+        hint.casefold()
+        for brand_cd, brand_hints in _BRAND_NAME_HINTS.items()
+        if brand_cd != expected
+        for hint in brand_hints
+    }
+    if any(hint in haystack for hint in known_other_hints):
+        return False
+    return None
+
+
+def _brand_mismatches(
+    structured_sources: Iterable[tuple[str, Any]],
+    *,
+    expected_brand_cd: str | None,
+) -> list[Mismatch]:
+    expected = str(expected_brand_cd or "").strip().upper()
+    if not expected:
+        return []
+    mismatches: list[Mismatch] = []
+    for row in _source_product_rows(structured_sources):
+        matches = _row_matches_brand(row, expected)
+        if matches is not False:
+            continue
+        name = _row_product_name(row)
+        row_brand = str(row.get("brand_cd") or row.get("brand_nm") or row.get("brandName") or "").strip()
+        mismatches.append(Mismatch(field="brand", value=f"expected={expected};row={row_brand or name}"))
+    return mismatches
+
+
 def _coerce_rank_value(value: Any) -> float | str | None:
     if isinstance(value, bool) or value in (None, "", [], {}):
         return None
@@ -465,6 +522,7 @@ def verify_draft(
     ranking_metric: str | None = None,
     ranking_direction: str | None = None,
     ranking_price_basis: str | None = None,
+    expected_brand_cd: str | None = None,
 ) -> list[Mismatch]:
     """Verify factual claims in the draft against the structured tool outputs.
 
@@ -533,6 +591,7 @@ def verify_draft(
             ranking_price_basis=ranking_price_basis,
         )
     )
+    mismatches.extend(_brand_mismatches(sources, expected_brand_cd=expected_brand_cd))
 
     return mismatches
 

@@ -13450,6 +13450,26 @@ _STORE_REFERENCE_SIGNAL_RE = re.compile(
 )
 
 
+def _is_fresh_brand_or_size_recommendation_turn(text: str) -> bool:
+    if not text or not ConversationSlots.has_recommend_intent(text):
+        return False
+    frame = build_discovery_intent_frame(text)
+    return bool(
+        frame.intent == "product_recommendation"
+        and (
+            frame.entities.get("brand_cd")
+            or frame.entities.get("explicit_tire_size")
+            or frame.entities.get("season")
+            or frame.entities.get("vehicle_category")
+            or frame.entities.get("quiet_focus")
+            or frame.entities.get("technology")
+            or frame.entities.get("service_program")
+            or frame.entities.get("recommendation_metric")
+            or frame.entities.get("performance")
+        )
+    )
+
+
 def _clear_stale_product_slots_for_new_recommendation(
     slots: ConversationSlots,
     *,
@@ -13461,12 +13481,16 @@ def _clear_stale_product_slots_for_new_recommendation(
     text = str(user_text or "").strip()
     if not text or not ConversationSlots.has_recommend_intent(text):
         return {}
-    if regex_slots.pending_intent is not None or regex_slots.tire_size is not None or _SIZE_ONLY_RE.match(text):
+    fresh_brand_or_size_recommendation = _is_fresh_brand_or_size_recommendation_turn(text)
+    if regex_slots.pending_intent is not None or _SIZE_ONLY_RE.match(text):
+        return {}
+    if regex_slots.tire_size is not None and not fresh_brand_or_size_recommendation:
         return {}
     if _RECOMMENDATION_SIZE_REFERENCE_RE.search(text):
         return {}
 
     cleared: dict[str, Any] = {}
+    current_turn_tire_size = normalize_tire_size(str(regex_slots.tire_size or ""))
     preserved_tire_size = normalize_tire_size(str(slots.tire_size or ""))
     if slots.goods_no:
         preserved_tire_size = (
@@ -13476,7 +13500,9 @@ def _clear_stale_product_slots_for_new_recommendation(
             )
             or preserved_tire_size
         )
-    if not (
+    if current_turn_tire_size:
+        preserved_tire_size = current_turn_tire_size
+    elif not (
         preserved_tire_size
         and (
             tire_size_resolved_from_vehicle_selection
@@ -13497,6 +13523,18 @@ def _clear_stale_product_slots_for_new_recommendation(
     if slots.payment_amount is not None:
         cleared["payment_amount"] = slots.payment_amount
         slots.payment_amount = None
+    if slots.pending_product_name is not None:
+        cleared["pending_product_name"] = slots.pending_product_name
+        slots.pending_product_name = None
+    if slots.pending_quantity_options is not None:
+        cleared["pending_quantity_options"] = slots.pending_quantity_options
+        slots.pending_quantity_options = None
+    if slots.pending_required_slot is not None:
+        cleared["pending_required_slot"] = slots.pending_required_slot
+        slots.pending_required_slot = None
+    if slots.ord_qty is not None and regex_slots.ord_qty is None:
+        cleared["ord_qty"] = slots.ord_qty
+        slots.ord_qty = None
     return cleared
 
 
@@ -18038,6 +18076,7 @@ class TStationChatServiceV2:
                     "tire_size": merged_slots.tire_size,
                     "goods_no": merged_slots.goods_no,
                     "vehicle_type": merged_slots.vehicle_type,
+                    "brand_cd": discovery_tool_patch.get("brand_cd"),
                 }
                 contract_frame = build_discovery_intent_frame(
                     last_user_text,
@@ -23480,6 +23519,12 @@ class TStationChatServiceV2:
                     else structured_sources
                 )
                 ranking_qc_enabled = bool(ranking_qc_metadata and ranking_qc_sources)
+                expected_brand_cd_for_qc = ""
+                if turn_contract and turn_contract.domain == "discovery" and turn_contract.intent == "product_recommendation":
+                    expected_brand_cd_for_qc = str(
+                        (turn_contract.known_slots or {}).get("brand_cd")
+                        or ""
+                    ).strip()
 
                 if (
                     (called_tool_names and qc_skip_reason is None)
@@ -23507,6 +23552,7 @@ class TStationChatServiceV2:
                                     ranking_metric=ranking_qc_metadata.get("metric"),
                                     ranking_direction=ranking_qc_metadata.get("direction"),
                                     ranking_price_basis=ranking_qc_metadata.get("price_basis"),
+                                    expected_brand_cd=expected_brand_cd_for_qc,
                                 )
                                 if (called_tool_names and qc_skip_reason is None) or ranking_qc_enabled
                                 else []
@@ -23534,6 +23580,7 @@ class TStationChatServiceV2:
                                         ranking_metric=ranking_qc_metadata.get("metric"),
                                         ranking_direction=ranking_qc_metadata.get("direction"),
                                         ranking_price_basis=ranking_qc_metadata.get("price_basis"),
+                                        expected_brand_cd=expected_brand_cd_for_qc,
                                     )
                                     if not repaired_mismatches:
                                         mismatches = []

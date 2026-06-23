@@ -993,6 +993,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args["sort_by"] = "price_asc"
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]
+        if frame.intent == "product_recommendation":
+            args["allow_cross_brand_fill"] = False
     return ToolPlan(
         allowed_tools=("get_products_recommendations_tool",),
         preferred_tool="get_products_recommendations_tool",

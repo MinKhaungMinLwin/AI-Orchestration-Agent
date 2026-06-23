@@ -9605,6 +9605,76 @@ def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
     assert slots.payment_amount == 412000
 
 
+def test_brand_size_recommendation_clears_stale_transaction_product_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309961",
+        tire_size="235/55R19",
+        pending_product_name="옵티모 H426",
+        pending_quantity_options=[2, 4],
+        pending_required_slot="tire_size",
+        ord_qty=4,
+        payment_amount=512000,
+    )
+    regex_slots = ConversationSlots.extract_from_user_text("미쉐린 2355519 사이즈 추천")
+
+    cleared = _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="미쉐린 2355519 사이즈 추천",
+        regex_slots=regex_slots,
+        prev_tool_data=[],
+    )
+
+    assert cleared == {
+        "goods_no": "G000000309961",
+        "payment_amount": 512000,
+        "pending_product_name": "옵티모 H426",
+        "pending_quantity_options": [2, 4],
+        "pending_required_slot": "tire_size",
+        "ord_qty": 4,
+    }
+    assert slots.tire_size == "235/55R19"
+    assert slots.goods_no is None
+    assert slots.pending_product_name is None
+    assert slots.ord_qty is None
+    assert slots.payment_amount is None
+
+
+def test_brand_recommendation_tool_patch_disables_cross_brand_fill() -> None:
+    frame = build_discovery_intent_frame("미쉐린 2355519 사이즈 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert "product" not in frame.missing_slots
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["brand_cd"] == "MC"
+    assert plan.tool_args_patch["tire_size"] == "235/55R19"
+    assert plan.tool_args_patch["allow_cross_brand_fill"] is False
+
+
+def test_brand_recommendation_qc_flags_cross_brand_product_rows() -> None:
+    source = [
+        (
+            "get_products_recommendations_tool",
+            {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {"goods_nm": "옵티모 H426", "brand_cd": "HK", "brand_nm": "HANKOOK"},
+                    ]
+                },
+            },
+        )
+    ]
+
+    mismatches = qc_verifier.verify_draft(
+        "추천 상품을 확인했어요.",
+        source,
+        expected_brand_cd="MC",
+    )
+
+    assert [mismatch.field for mismatch in mismatches] == ["brand"]
+
+
 def test_discovery_intent_frame_can_disable_inherited_tire_size() -> None:
     frame = build_discovery_intent_frame(
         "주말 장거리용으로 다른 거 추천해줘",
