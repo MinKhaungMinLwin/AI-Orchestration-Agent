@@ -17,6 +17,9 @@ def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     comparison_followup_intent = str(frame.entities.get("comparison_followup_intent") or "")
     if comparison_followup_intent:
         metadata["comparison_followup_intent"] = comparison_followup_intent
+    oe_replacement_type = str(frame.entities.get("oe_replacement_type") or "")
+    if oe_replacement_type:
+        metadata["oe_replacement_type"] = oe_replacement_type
     return metadata
 
 
@@ -131,6 +134,36 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             forbidden_behaviors=("misrecognize_ventus_air_s", "claim_kinergy_ex_is_premium_above_ventus"),
             assistant_guidance="상품명을 정확히 인식하고 각 상품의 등급/포지션 근거로 비교한다.",
             metadata=_metadata(frame, response_shape_key="grade_comparison_summary", compare_metric="grade"),
+        )
+
+    if frame.sub_intent == "oe_re_concept_explanation":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=("generic_unsized_summary", "claim_all_products_are_re"),
+            assistant_guidance=(
+                "OE/RE 개념만 설명하고, 현재 상품 데이터에 직접 확인 가능한 필드가 없으면 "
+                "특정 상품을 OE 또는 RE로 단정하지 않는다."
+            ),
+            metadata=_metadata(frame, response_shape_key="oe_re_concept_explanation"),
+        )
+
+    if frame.sub_intent == "oe_re_product_filter":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=(
+                "generic_unsized_summary",
+                "claim_all_products_are_re",
+                "invent_oe_re_classification",
+            ),
+            assistant_guidance=(
+                "OE 여부는 oe_badge_yn, t_oe_maker_1, certify_brand_nm 같은 실제 상품 필드로만 설명한다. "
+                "RE 전용 확정 필드가 부족하면 교체용 판매 개념만 설명하고 특정 상품을 RE라고 단정하지 않는다."
+            ),
+            metadata=_metadata(frame, response_shape_key="oe_re_product_filter_summary"),
         )
 
     if frame.sub_intent in ("product_attribute_lookup", "product_attribute_explanation"):

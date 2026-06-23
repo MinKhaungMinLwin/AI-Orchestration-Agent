@@ -437,6 +437,8 @@ class MultiAgentDomain(BaseModel):
             "Use 'recent_product_set_size_availability' only when the user asks whether a tire size exists for the "
             "recent recommendation/search product set. Examples: after showing multiple products, "
             "'두개다 2355519 사이즈가 있을까?', '2355519 규격 있어?', '위 상품들 235/55R19 돼?'. "
+            "Do NOT use this when the current turn explicitly asks about OE/RE/순정/교체용; those are fresh Discovery "
+            "attribute/filter turns, not recent-list availability follow-ups. "
             "Use 'product_objective_followup' when the PREVIOUS assistant turn was a recommendation/clarification tied to "
             "one of: 안심서비스(safe_service), 흡음재(sound_absorber), a product attribute question (attribute_lookup), or "
             "a recommendation filter/condition (recommendation_filter) — AND the current turn names ONLY a product, with "
@@ -712,6 +714,7 @@ Complaint routing rule:
    - "size_for_recommendation_continuation": the previous assistant gave an unsized recommendation/summary and the current turn provides only a tire size. Preserve the previous recommendation objective and continue/re-run recommendation with that size.
    - "recent_product_set_size_availability": the user is asking whether a tire size exists for the recent recommendation/search product set, not naming a new product
    - Use recent_product_set_size_availability when the current turn has a tire size AND an existence/availability question, recent conversation already showed multiple products, and the current wording is referential/pronominal or otherwise asking about the shown set.
+   - Do NOT use recent_product_set_size_availability for OE/RE/순정/교체용 questions such as "2454518 사이즈 OE 타이어 있어?" — treat those as a fresh Discovery attribute/filter turn.
    - Example size_for_recommendation_continuation: after "승용차용 조용한 타이어 추천" returned an unsized summary, "2454518" means recommend quiet passenger tires in 245/45R18.
    - Example recent_product_set_size_availability after a recommendation list: "두개다 2355519 사이즈가 있을까?", "2355519 규격 있어?", "위 상품들 235/55R19 돼?"
 
@@ -1023,6 +1026,8 @@ EXAMPLES (tricky cases):
 - [After previous size continuation for 245/45R18] "키너지 ST AS" → DISCOVERY, discovery_followup_intent=none, agent_prompt_profile=discovery_search, user_behavior="selecting product within the confirmed 245/45R18 recommendation context"
 - [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
+- "2454518 사이즈 OE 타이어 있음?" → DISCOVERY, discovery_followup_intent=none, referred_object_type=none, needs_clarification=false
+- "OE 타이어 뭐 있어? 다 RE 타이어야?" → DISCOVERY, discovery_followup_intent=none, referred_object_type=none, needs_clarification=false
 - [After showing multiple recommendation/search products] "그거 가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
 - [After showing multiple recommendation/search products] "가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=safe_service (NOT a fresh bare product description)

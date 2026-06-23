@@ -143,18 +143,24 @@ def build_turn_contract(
     if intent_frame is not None:
         compare_metric = str(intent_frame.entities.get("compare_metric") or "")
         comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
+        oe_replacement_type = str(intent_frame.entities.get("oe_replacement_type") or "")
         if compare_metric:
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent:
             known_slots["comparison_followup_intent"] = comparison_followup_intent
+        if oe_replacement_type:
+            known_slots["oe_replacement_type"] = oe_replacement_type
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
         compare_metric = str(response_metadata.get("compare_metric") or "")
         comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
+        oe_replacement_type = str(response_metadata.get("oe_replacement_type") or "")
         if compare_metric and not known_slots.get("compare_metric"):
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent and not known_slots.get("comparison_followup_intent"):
             known_slots["comparison_followup_intent"] = comparison_followup_intent
+        if oe_replacement_type and not known_slots.get("oe_replacement_type"):
+            known_slots["oe_replacement_type"] = oe_replacement_type
 
     required_slots = _merge_tuple(
         intent_frame.missing_slots if intent_frame is not None else (),

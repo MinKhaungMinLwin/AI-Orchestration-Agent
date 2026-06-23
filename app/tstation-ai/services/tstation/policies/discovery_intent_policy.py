@@ -40,6 +40,10 @@ _PASSENGER_RECOMMENDATION_RE = re.compile(r"승용차|세단|SEDAN|스포츠카"
 _TRUCK_VAN_RECOMMENDATION_RE = re.compile(r"경트럭|화물차|카고트럭|덤프트럭|트럭|밴|승합차", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
 _SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
+_OE_REPLACEMENT_TYPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("oe", re.compile(r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)", re.IGNORECASE)),
+    ("re", re.compile(r"(?:\bRE\b|교체용|replacement)", re.IGNORECASE)),
+)
 _MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
 _MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d)", re.IGNORECASE)
 _LATEST_RE = re.compile(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|새로\s*나온|등록일", re.IGNORECASE)
@@ -269,6 +273,13 @@ def extract_product_attribute_metrics(text: str) -> tuple[str, ...]:
     return tuple(metrics)
 
 
+def extract_oe_replacement_type(text: str) -> str | None:
+    for replacement_type, pattern in _OE_REPLACEMENT_TYPE_PATTERNS:
+        if pattern.search(text or ""):
+            return replacement_type
+    return None
+
+
 def classify_product_claim_check_type(text: str) -> str:
     """Classify whether a product turn asks for claim verification.
 
@@ -422,6 +433,7 @@ def build_discovery_intent_frame(
     tire_size = explicit_tire_size or (inherited_tire_size if allow_inherited_tire_size else None)
     products = extract_product_names(text)
     attribute_metrics = extract_product_attribute_metrics(text)
+    oe_replacement_type = extract_oe_replacement_type(text)
     brand_codes = extract_brand_codes(text)
     variant_constraints = extract_variant_constraints(text)
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
@@ -438,6 +450,8 @@ def build_discovery_intent_frame(
         "attribute_metrics": attribute_metrics,
         "claim_check_type": classify_product_claim_check_type(text),
     }
+    if oe_replacement_type:
+        entities["oe_replacement_type"] = oe_replacement_type
     if quantity_options:
         entities["quantity_options"] = quantity_options
     if discovery_followup_intent == "recent_product_set_size_availability":
@@ -514,6 +528,25 @@ def build_discovery_intent_frame(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
     if (
+        oe_replacement_type
+        and (
+            tire_size
+            or products
+            or brand_cd
+        )
+    ):
+        intent = "product_search"
+        sub_intent = "oe_re_product_filter"
+    elif (
+        oe_replacement_type
+        and (
+            concept
+            or not products
+        )
+    ):
+        intent = "product_description"
+        sub_intent = "oe_re_concept_explanation"
+    elif (
         discovery_followup_intent == "recent_product_set_size_availability"
         and tire_size
         and not products
@@ -676,6 +709,21 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "oe_re_product_filter":
+        args = {"limit": 10}
+        product_names = entities.get("product_names") or ()
+        if product_names:
+            args["keyword"] = product_names[0]
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
+        )
     if frame.sub_intent == "recent_product_set_size_availability":
         return ToolPlan(
             forbidden_tools=(

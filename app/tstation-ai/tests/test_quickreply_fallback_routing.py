@@ -2393,6 +2393,74 @@ def test_discovery_followup_intent_promotes_recent_product_set_size_availability
     assert plan.metadata["response_intent"] == "recent_product_set_size_availability"
 
 
+def test_oe_query_is_not_hijacked_by_recent_product_set_size_availability() -> None:
+    frame = build_discovery_intent_frame(
+        "2454518 사이즈 OE 타이어 있음?",
+        known_slots={"discovery_followup_intent": "recent_product_set_size_availability"},
+    )
+    plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "oe_re_product_filter"
+    assert frame.entities["oe_replacement_type"] == "oe"
+    assert frame.entities["tire_size"] == "245/45R18"
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {"limit": 10, "size": "245/45R18"}
+    assert decision.metadata["response_shape_key"] == "oe_re_product_filter_summary"
+
+
+def test_oe_concept_query_does_not_create_missing_reference_guard() -> None:
+    frame = build_discovery_intent_frame("OE 타이어 뭐 있어? 다 RE 타이어야?")
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text="OE 타이어 뭐 있어? 다 RE 타이어야?",
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decision,
+        routing_result=SimpleNamespace(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:oe_re_concept_explanation"],
+            referred_object_status="resolved",
+            referred_object_type="none",
+            needs_clarification=False,
+        ),
+    )
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "oe_re_concept_explanation"
+    assert decision.metadata["response_shape_key"] == "oe_re_concept_explanation"
+    assert contract.blocking_required_slots == ()
+    assert contract.known_slots["oe_replacement_type"] == "oe"
+
+
+def test_discovery_policy_context_preserves_oe_query_over_recent_size_followup_router_hint() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:oe_re_product_filter"],
+        user_behavior="asking for OE products in a specific size",
+        flow="oe filter search",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="recent_product_set_size_availability",
+        carried_discovery_objective="none",
+        agent_prompt_profile="discovery_search",
+    )
+
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2454518 사이즈 OE 타이어 있음?",
+        context_text="조용한 타이어 추천해줘\n2454518 사이즈 OE 타이어 있음?",
+        tire_size="245/45R18",
+        routing_result=routing_result,
+    )
+
+    assert tool_patch == {"size": "245/45R18"}
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] == "oe_re_product_filter_summary"
+
+
 def test_single_product_status_question_does_not_become_comparison() -> None:
     messages = [
         {"role": "user", "content": "벤투스 에어 S 알려줘"},
