@@ -106,6 +106,13 @@ _BEST_SELLER_AGGREGATE_RE = re.compile(
     r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)))",
     re.IGNORECASE,
 )
+_BEST_SELLER_UNSPECIFIED_COMMERCE_RE = re.compile(
+    r"(?=.*(?:요즘|최근|지금|현재))"
+    r"(?=.*(?:것|거|타이어|상품))"
+    r"(?=.*(?:인기\s*(?:있|많)|잘\s*팔리|잘\s*나가|"
+    r"(?:젤|제일|가장)\s*(?:인기|많이\s*(?:사는|구매한|산|팔린))))",
+    re.IGNORECASE,
+)
 _DEMOGRAPHIC_ATTRIBUTE_RE = re.compile(
     r"10대|20대|30대|40대|50대|60대|연령대|성별|남성|여성|남자|여자",
     re.IGNORECASE,
@@ -420,7 +427,10 @@ def is_best_seller_request(text: str, *, include_demographic_preference: bool = 
     deterministic runtime path and Discovery intent policy do not drift.
     """
     text = text or ""
-    if _BEST_SELLER_RE.search(text) and _BEST_SELLER_AGGREGATE_RE.search(text):
+    if _BEST_SELLER_RE.search(text) and (
+        _BEST_SELLER_AGGREGATE_RE.search(text)
+        or _BEST_SELLER_UNSPECIFIED_COMMERCE_RE.search(text)
+    ):
         return True
     if not include_demographic_preference:
         return False

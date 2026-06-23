@@ -725,6 +725,7 @@ _ROUTER_COMPARISON_METRICS = frozenset({
 _ROUTER_PROTECTED_ACTIONS = frozenset({
     "product_comparison",
     "discovery_recommendation",
+    "best_seller_search",
     "product_event_lookup",
     "product_promotion_lookup",
     "product_coupon_lookup",
@@ -1323,7 +1324,7 @@ Complaint routing rule:
        Only slot-lookup examples such as "토요일 예약 가능한 시간 보여줘", "이번 토요일 10시 예약 가능해?", "오늘 오후 예약 잡아줘", "방문예약 가능한 시간 알려줘" should use store_schedule/datepick.
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
-   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
@@ -1728,7 +1729,7 @@ agent_prompt_profile:
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는"), newest products ("최신/신제품/최근 출시")
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거"), newest products ("최신/신제품/최근 출시")
 - discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
 - discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain

@@ -6860,10 +6860,37 @@ def test_monthly_best_seller_request_forces_code_route_even_if_transaction_biase
         )
 
 
+def test_unspecified_current_best_seller_request_forces_code_route() -> None:
+    for text in (
+        "요즘 젤 잘 팔리는거 알려줘",
+        "요즘 제일 인기 있는 거",
+        "요즘 잘 팔리는 타이어",
+    ):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert is_best_seller_request(text)
+        assert best_seller_period_from_text(text) == "3months"
+        assert frame.sub_intent == "best_seller_search"
+        assert plan.allowed_tools == ("get_best_selling_products_tool",)
+        assert _should_force_best_seller_code_route(
+            text,
+            [MultiAgentDomain.Domain.LEADING],
+        )
+
+
 def test_non_aggregate_purchase_request_does_not_force_best_seller_code_route() -> None:
     assert not _should_force_best_seller_code_route(
         "이번달 내가 구매한 타이어 주문 확인해줘",
         [MultiAgentDomain.Domain.TRANSACTION],
+    )
+    assert not _should_force_best_seller_code_route(
+        "내가 쓴 베스트리뷰 어디서 봐",
+        [MultiAgentDomain.Domain.SUPPORT],
+    )
+    assert not _should_force_best_seller_code_route(
+        "요즘 되는 일이 없어",
+        [MultiAgentDomain.Domain.LEADING],
     )
 
 
