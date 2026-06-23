@@ -42,6 +42,20 @@ _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "datepick_on_tool_error": frozenset({"datepick", "preOrder"}),
     "assert_success_without_tool_result": frozenset({"datepick", "preOrder", "orderComplete", "billProduct"}),
 }
+_DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES = frozenset({
+    "product_attribute_summary",
+    "product_search_summary",
+    "technology_explanation_then_unsized_recommendation_summary",
+    "safe_service_explanation_then_unsized_recommendation_summary",
+    "unsized_recommendation_summary",
+    "neutral_product_description",
+    "discovery_summary",
+})
+_DISCOVERY_FIRST_LEG_BLOCK_SOURCES = frozenset({
+    "code_product_attribute_resolver",
+    "code_product_description",
+    "discovery_policy",
+})
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
 
@@ -229,7 +243,30 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
-    if "datepick_for_unavailable_stock" in forbidden_set:
+    if _is_discovery_first_leg_transaction_contract(contract):
+        intent = str(contract.intent or "")
+        if intent == "stock_store_search":
+            message = "재고를 확인하려면 어떤 상품 기준인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
+            quick_replies = [
+                {"label": "상품명 입력", "domain": "DISCOVERY"},
+                {"label": "재고 확인", "domain": "TRANSACTION"},
+                {"label": "상품 추천", "domain": "DISCOVERY"},
+            ]
+        elif intent == "quick_order_reservation":
+            message = "구매를 이어가려면 어떤 상품인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
+            quick_replies = [
+                {"label": "상품명 입력", "domain": "DISCOVERY"},
+                {"label": "구매 진행", "domain": "TRANSACTION"},
+                {"label": "상품 추천", "domain": "DISCOVERY"},
+            ]
+        else:
+            message = "가격을 확인하려면 어떤 상품 기준인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
+            quick_replies = [
+                {"label": "상품명 입력", "domain": "DISCOVERY"},
+                {"label": "가격 확인", "domain": "TRANSACTION"},
+                {"label": "상품 추천", "domain": "DISCOVERY"},
+            ]
+    elif "datepick_for_unavailable_stock" in forbidden_set:
         message = "요청하신 조건으로 바로 예약 가능한 재고를 확인하지 못했어요. 다른 매장이나 조건으로 다시 확인해드릴게요."
         quick_replies = [
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
@@ -289,6 +326,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
     template = str(event.get("template") or "")
     if should_guard_required_slots(contract) and template in _REQUIRED_SLOT_BLOCK_TEMPLATES:
         return True
+    if _is_discovery_first_leg_transaction_violation(event, contract):
+        return True
     response_decision = contract.response_decision or {}
     forbidden_behaviors = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     if not isinstance(forbidden_behaviors, list | tuple):
@@ -299,6 +338,9 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
 def response_contract_violations(
     *,
     template: str | None,
+    assistant_response_source: str | None = None,
+    response_shape_key: str | None = None,
+    called_tools: list[str] | tuple[str, ...] | None = None,
     contract: TurnContract | None,
 ) -> list[dict[str, Any]]:
     """Return deterministic contract violations for QC logging."""
@@ -306,7 +348,13 @@ def response_contract_violations(
     if contract is None:
         return []
     violations: list[dict[str, Any]] = []
-    event = {"template": template or ""}
+    event = {
+        "template": template or "",
+        "assistant_response_source": assistant_response_source or "",
+        "response_shape_key": response_shape_key or "",
+        "called_tools": list(called_tools or ()),
+        "source_domain": "discovery" if contract.domain == "discovery" else contract.domain,
+    }
     if should_guard_required_slots(contract) and template != "quickReply":
         violations.append({
             "type": "required_slots_not_clarified",
@@ -314,10 +362,17 @@ def response_contract_violations(
             "template": template,
         })
     if violates_response_template_contract(event, contract):
+        violation_type = (
+            "forbidden_discovery_first_leg_response"
+            if _is_discovery_first_leg_transaction_violation(event, contract)
+            else "forbidden_template"
+        )
         violations.append({
-            "type": "forbidden_template",
+            "type": violation_type,
             "template": template,
             "fallback_reason": contract.fallback_reason,
+            "response_shape_key": str(event.get("response_shape_key") or ""),
+            "assistant_response_source": str(event.get("assistant_response_source") or ""),
         })
     return violations
 
@@ -340,6 +395,37 @@ def _planner_domains(routing_result: Any | None, plan: CrossDomainPlan | None) -
     if plan is not None:
         return (_domain_value(plan.primary_domain),)
     return ()
+
+
+def _is_discovery_first_leg_transaction_contract(contract: TurnContract | None) -> bool:
+    if contract is None:
+        return False
+    if not contract.planner_domains or contract.planner_domains[0] != "discovery":
+        return False
+    if "transaction" in contract.planner_domains[1:]:
+        return True
+    return any(str(item).strip().startswith("transaction:") for item in contract.execution_plan)
+
+
+def _is_discovery_first_leg_transaction_violation(
+    event: Mapping[str, Any],
+    contract: TurnContract | None,
+) -> bool:
+    if not _is_discovery_first_leg_transaction_contract(contract):
+        return False
+    if str(event.get("source_domain") or "").lower() != "discovery":
+        return False
+    if str(event.get("template") or "") != "quickReply":
+        return False
+    response_shape_key = str(event.get("response_shape_key") or "")
+    assistant_response_source = str(event.get("assistant_response_source") or "")
+    called_tools = tuple(str(tool) for tool in tuple(event.get("called_tools") or ()))
+    if any(tool.startswith("get_final_price_tool") or tool.startswith("get_store") or tool.startswith("quick_order") for tool in called_tools):
+        return False
+    return (
+        response_shape_key in _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES
+        or assistant_response_source in _DISCOVERY_FIRST_LEG_BLOCK_SOURCES
+    )
 
 
 def _execution_plan(routing_result: Any | None, plan: CrossDomainPlan | None) -> tuple[str, ...]:

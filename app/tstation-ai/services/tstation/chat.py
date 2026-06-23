@@ -11459,6 +11459,11 @@ _SUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset(_CARRIED_OBJECTIVE_ENTITY_PA
 _UNSUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset({"attribute_lookup", "recommendation_filter"})
 _DISCOVERY_OBJECTIVE_BLOCKING_PENDING_INTENTS = frozenset({"price", "stock", "order"})
 _DISCOVERY_OBJECTIVE_BLOCKING_GOAL_TYPES = frozenset({"price_inquiry", "store_with_stock", "place_order"})
+_EXPLICIT_PRODUCT_ATTRIBUTE_QUERY_RE = re.compile(
+    r"젖은\s*노면|젖은노면|빗길|등급|소음|정숙|연비|하중|속도|출시|원산지|마일리지|"
+    r"성능|특징|속성|사양|스펙|흡음재|안심서비스|안심플러스|전기차용|차종",
+    re.IGNORECASE,
+)
 
 
 def _prior_context_text_without_current_turn(context_text: str, current_user_text: str) -> str:
@@ -11483,6 +11488,34 @@ def _is_discovery_objective_blocked_by_transaction_state(
         pending_intent in _DISCOVERY_OBJECTIVE_BLOCKING_PENDING_INTENTS
         or goal_type in _DISCOVERY_OBJECTIVE_BLOCKING_GOAL_TYPES
     )
+
+
+def _has_transaction_followup_priority(
+    *,
+    pending_intent: str | None = None,
+    goal_type: str | None = None,
+    routing_result: Any | None = None,
+) -> bool:
+    if _is_discovery_objective_blocked_by_transaction_state(pending_intent, goal_type):
+        return True
+    execution_plan = tuple(getattr(routing_result, "execution_plan", ()) or ())
+    return any(str(item).strip().startswith("transaction:") for item in execution_plan)
+
+
+def _is_explicit_product_attribute_query(text: str, discovery_frame: Any | None = None) -> bool:
+    if discovery_frame is not None:
+        if discovery_frame.sub_intent in {
+            "product_attribute_lookup",
+            "product_attribute_explanation",
+            "attribute_compare",
+            "latest_compare",
+            "grade_compare",
+            "mileage_compare",
+        }:
+            return True
+        if tuple(discovery_frame.entities.get("attribute_metrics") or ()):
+            return True
+    return bool(_EXPLICIT_PRODUCT_ATTRIBUTE_QUERY_RE.search(text or ""))
 
 
 def _infer_carried_discovery_objective_from_context(context_text: str) -> str | None:
@@ -11597,6 +11630,11 @@ def _build_discovery_policy_context(
         known_slots = {"tire_size": tire_size} if tire_size else {}
         if vehicle_type:
             known_slots["vehicle_type"] = vehicle_type
+        transaction_followup_priority = _has_transaction_followup_priority(
+            pending_intent=pending_intent,
+            goal_type=goal_type,
+            routing_result=routing_result,
+        )
         routing_followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
         if routing_followup_intent == "recent_product_set_size_availability":
             known_slots["discovery_followup_intent"] = routing_followup_intent
@@ -11609,7 +11647,11 @@ def _build_discovery_policy_context(
         )
         effective_supported_objective = (
             supported_followup_override["objective"]
-            if supported_followup_override and supported_followup_override["action"] == "agent"
+            if (
+                not transaction_followup_priority
+                and supported_followup_override
+                and supported_followup_override["action"] == "agent"
+            )
             else None
         )
         discovery_frame = build_discovery_intent_frame(
@@ -11633,7 +11675,12 @@ def _build_discovery_policy_context(
                 )
             else:
                 discovery_frame = replace(discovery_frame, entities=entities)
-        if discovery_frame.entities.get("product_names") and not discovery_frame.entities.get("attribute_metrics"):
+        if (
+            not transaction_followup_priority
+            and discovery_frame.entities.get("product_names")
+            and not discovery_frame.entities.get("attribute_metrics")
+            and _is_explicit_product_attribute_query(last_user_text, discovery_frame)
+        ):
             context_frame = build_discovery_intent_frame(
                 context_text,
                 known_slots=known_slots,
@@ -11668,7 +11715,7 @@ def _build_discovery_policy_context(
                     sub_intent="general_recommendation",
                     entities=entities,
                 )
-        if discovery_frame.intent == "product_recommendation":
+        if not transaction_followup_priority and discovery_frame.intent == "product_recommendation":
             context_frame = build_discovery_intent_frame(
                 context_text,
                 known_slots=known_slots,
@@ -20716,10 +20763,24 @@ class TStationChatServiceV2:
                         "[QUICKREPLY_FILTER] removed home chip from %s template",
                         last_template,
                     )
-                if violates_response_template_contract(event, turn_contract):
+                validation_event = dict(event)
+                validation_event["assistant_response_source"] = last_assistant_response_source
+                validation_event["called_tools"] = sorted(called_tool_names)
+                validation_event["execution_plan"] = list(getattr(turn_contract, "execution_plan", ()) or ())
+                validation_event["source_domain"] = str(event.get("source_domain") or "").lower()
+                event_decision = (
+                    _current_discovery_response_decision.get()
+                    if validation_event["source_domain"] == MultiAgentDomain.Domain.DISCOVERY.value
+                    else _current_transaction_response_decision.get()
+                )
+                validation_event["response_shape_key"] = str(
+                    getattr(event_decision, "metadata", {}).get("response_shape_key") or ""
+                )
+                if violates_response_template_contract(validation_event, turn_contract):
                     logger.warning(
-                        "[TURN_CONTRACT] blocked template=%s required_slots=%s intent=%s",
-                        event.get("template"),
+                        "[TURN_CONTRACT] blocked template=%s response_shape=%s required_slots=%s intent=%s",
+                        validation_event.get("template"),
+                        validation_event.get("response_shape_key"),
                         list(turn_contract.required_slots) if turn_contract else [],
                         turn_contract.intent if turn_contract else None,
                     )
@@ -20866,6 +20927,26 @@ class TStationChatServiceV2:
                             mismatches = qc_verifier.verify_draft(draft_for_qc, structured_sources)
                             contract_violations = response_contract_violations(
                                 template=last_template,
+                                assistant_response_source=last_assistant_response_source,
+                                response_shape_key=str(
+                                    getattr(
+                                        (
+                                            _current_discovery_response_decision.get()
+                                            if last_template_source in {"code_mapper", "turn_contract"}
+                                            and last_assistant_response_source
+                                            in {
+                                                "code_product_attribute_resolver",
+                                                "code_product_description",
+                                                "discovery_policy",
+                                            }
+                                            else _current_transaction_response_decision.get()
+                                        ),
+                                        "metadata",
+                                        {},
+                                    ).get("response_shape_key")
+                                    or ""
+                                ),
+                                called_tools=sorted(called_tool_names),
                                 contract=turn_contract,
                             )
                             if (

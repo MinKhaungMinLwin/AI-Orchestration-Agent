@@ -6803,6 +6803,35 @@ def test_supported_carried_objective_does_not_override_transaction_pending_inten
     )
 
 
+def test_transaction_followup_priority_blocks_attribute_context_inheritance() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["discovery:resolve_product", "transaction:price_or_coupon_check"],
+        user_behavior="asking price for a product family that previously had attribute context",
+        flow="discovery then transaction",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        agent_prompt_profile="discovery_search",
+    )
+
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="옵티모 가격 얼마야?",
+        context_text="옵티모 젖은노면 등급 알려줘\n옵티모 가격 얼마야?",
+        tire_size=None,
+        routing_result=routing_result,
+        pending_intent="price",
+        goal_type="price_inquiry",
+    )
+
+    assert patch == {}
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "product_search_summary"
+
+
 def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:
     prev_tool_data = [
         {
@@ -8817,6 +8846,61 @@ def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
         "type": "forbidden_template",
         "template": "datepick",
         "fallback_reason": "response_policy_forbidden_behaviors",
+        "response_shape_key": "",
+        "assistant_response_source": "",
+    }]
+
+
+def test_turn_contract_blocks_discovery_summary_before_transaction_resolution() -> None:
+    contract = build_turn_contract(
+        user_text="옵티모 가격 얼마야?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=decide_transaction_response(intent="price_or_coupon_check", user_text="옵티모 가격 얼마야?"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:price_or_coupon_check"],
+        ),
+    )
+
+    event = {
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_product_attribute_resolver",
+        "response_shape_key": "product_attribute_summary",
+        "called_tools": ["search_product_tool"],
+    }
+
+    assert violates_response_template_contract(event, contract)
+    fallback_event = build_response_policy_guard_event(contract)
+    assert "어떤 상품 기준인지" in fallback_event["data"]["assistantResponse"]
+    assert "상품명 입력" in _labels(fallback_event["data"]["quickReplies"])
+
+
+def test_turn_contract_qc_reports_discovery_first_leg_violation() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 재고 있어?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="stock_store_search"),
+        response_decision=decide_transaction_response(intent="stock_store_search", user_text="키너지 재고 있어?"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:stock_store_search"],
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_source="code_product_attribute_resolver",
+        response_shape_key="product_attribute_summary",
+        called_tools=["search_product_tool"],
+        contract=contract,
+    )
+
+    assert violations == [{
+        "type": "forbidden_discovery_first_leg_response",
+        "template": "quickReply",
+        "fallback_reason": "missing_required_slots:product",
+        "response_shape_key": "product_attribute_summary",
+        "assistant_response_source": "code_product_attribute_resolver",
     }]
 
 
