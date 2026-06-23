@@ -217,6 +217,7 @@ from services.tstation.chat import (
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
     _normalize_recommendation_approximation_response,
+    _normalize_cart_url_for_cart_check_chip,
     _complaint_scope_for_turn,
     _infer_complaint_scope,
     _normalize_existing_reservation_change_quickreply,
@@ -11765,6 +11766,45 @@ def test_remove_home_quick_reply_chips_strips_button_and_predicted_domain() -> N
     assert _remove_home_quick_reply_chips(event_data)
     assert _labels(event_data["quickReplies"]) == ["상품 검색"]
     assert event_data["predictedDomains"] == ["DISCOVERY"]
+
+
+@pytest.mark.parametrize("label", ["장바구니 확인", "장바구니 보기", "장바구니보기"])
+def test_normalize_cart_url_for_cart_check_chip_overwrites_bad_url(label: str) -> None:
+    event_data = {
+        "assistantResponse": "이미 장바구니에 담겨있는 상품이에요.",
+        "quickReplies": [
+            {"label": label, "url": "https://wwwqa.tstation.com/mypage/cart", "domain": "TRANSACTION"},
+        ],
+    }
+
+    assert _normalize_cart_url_for_cart_check_chip(event_data)
+    assert event_data["quickReplies"][0]["url"] == CTAUrls.CART
+
+
+def test_normalize_cart_url_for_cart_check_chip_injects_missing_url() -> None:
+    event_data = {
+        "assistantResponse": "장바구니에서 확인해 주세요.",
+        "quickReplies": [{"label": "장바구니 확인", "domain": "TRANSACTION"}],
+    }
+
+    assert _normalize_cart_url_for_cart_check_chip(event_data)
+    assert event_data["quickReplies"][0]["url"] == CTAUrls.CART
+
+
+def test_normalize_cart_url_for_cart_check_chip_keeps_existing_canonical_and_other_chips() -> None:
+    event_data = {
+        "assistantResponse": "장바구니에서 확인해 주세요.",
+        "quickReplies": [
+            {"label": "장바구니 보기", "url": CTAUrls.CART, "domain": "TRANSACTION"},
+            {"label": "주문 내역 상세 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "정비이력보기", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "TRANSACTION"},
+        ],
+    }
+
+    assert not _normalize_cart_url_for_cart_check_chip(event_data)
+    assert event_data["quickReplies"][0]["url"] == CTAUrls.CART
+    assert event_data["quickReplies"][1]["url"] == CTAUrls.ORDER_HISTORY
+    assert event_data["quickReplies"][2]["url"] == CTAUrls.STORE_SERVICE_HISTORY
 
 
 def test_discovery_explicit_support_text_keeps_dead_end_chips() -> None:

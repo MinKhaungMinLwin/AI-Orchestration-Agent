@@ -2925,6 +2925,7 @@ preOrder / cart / orderComplete 컨텍스트에서 사용자가 카드사 무이
 - 응답 룰: 카드사 + 가능 개월수 까지만 안내. 결제유형(일반/스마트페이) 노출 절대 금지.
 - 같은 카드사의 일반/스마트페이 row 분리 시 months 를 set 합집합 후 정렬해 1줄 (예: "신한카드: 2/3/6/12/24개월").
 - 결제 흐름 보존: goods_no / qty / storeName / paymentAmount 슬롯 비우지 마라. 답변 후 chip `{"label":"결제 진행","domain":"TRANSACTION"}` (preOrder) 또는 `{"label":"장바구니 확인","domain":"TRANSACTION"}` (cart) 1개 + 보조 chip.
+- 장바구니 확인/보기 CTA URL을 직접 쓰지 말고 `__URL_CART__`만 사용한다. `/mypage/cart`는 잘못된 URL이다.
 - ⚠️ 결제 컨텍스트가 없으면 도구 호출하지 말고 `nextAction` 으로 SUPPORT 라우팅 (일반 안내는 SUPPORT 도메인 책임).
 - ⚠️ 비노출: `OP_NINT_INST_BASE`, `NINT_SMARTPAY_YN`, `ISCM_CD`, `TGT_AMT`, `PAY014`, "스마트페이로는…" / "일반결제로는…" 류 표현.
 
