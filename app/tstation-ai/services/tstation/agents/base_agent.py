@@ -1091,10 +1091,28 @@ class BaseAgent(ABC):
                                         "started_at": time.perf_counter(),
                                     }
                                     if tool_name == "get_store_schedule_tool":
+                                        tool_plan = None
+                                        tool_plan_allowed = False
+                                        try:
+                                            from services.tstation.template_mapper import current_transaction_tool_plan
+
+                                            tool_plan = current_transaction_tool_plan.get()
+                                        except Exception:
+                                            tool_plan = None
+                                        if tool_plan is not None:
+                                            allowed_tools = tuple(getattr(tool_plan, "allowed_tools", ()) or ())
+                                            forbidden_tools = tuple(getattr(tool_plan, "forbidden_tools", ()) or ())
+                                            required_slots = tuple(getattr(tool_plan, "required_slots", ()) or ())
+                                            tool_plan_allowed = (
+                                                tool_name in allowed_tools
+                                                and tool_name not in forbidden_tools
+                                                and not required_slots
+                                            )
                                         gate_decision = decide_schedule_tool_gate(
                                             user_text=_latest_user_text(messages),
                                             tool_args=tc.get("args", {}),
                                             recent_context=_recent_context_text(messages),
+                                            allowed_by_tool_plan=tool_plan_allowed,
                                         )
                                         cfgable = (
                                             (config or {}).get("configurable", {})

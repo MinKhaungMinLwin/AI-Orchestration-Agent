@@ -8056,11 +8056,42 @@ def _reservation_date_range_guard_event(
     }
 
 
-def _pickup_service_guard_event(user_text: str) -> dict | None:
+_GATE_ADVISORY_TRANSACTION_GOALS = {"place_order", "store_with_stock"}
+_GATE_ADVISORY_TRANSACTION_INTENTS = {"order", "stock", "reservation"}
+_PURCHASE_OR_ORDER_CTA_RE = re.compile(
+    r"구매하기|주문하기|결제하기|구매\s*할게|주문\s*할게|구매\s*해줘|주문\s*해줘|이걸로\s*(?:구매|주문)|"
+    r"주문\s*확정|결제\s*진행|바로\s*주문",
+    re.IGNORECASE,
+)
+
+
+def _has_active_transaction_action_context(user_text: str, slots: object | None) -> bool:
+    if slots is None:
+        return False
+    pending_intent = str(getattr(slots, "pending_intent", "") or "")
+    goal_type = str(getattr(slots, "goal_type", "") or "")
+    has_product = bool(getattr(slots, "goods_no", None) or getattr(slots, "tire_model", None))
+    has_order_slot = bool(getattr(slots, "ord_qty", None) or getattr(slots, "shop_id", None))
+    if (
+        goal_type in _GATE_ADVISORY_TRANSACTION_GOALS
+        or pending_intent in _GATE_ADVISORY_TRANSACTION_INTENTS
+    ) and (has_product or has_order_slot):
+        return True
+    return bool(has_product and _PURCHASE_OR_ORDER_CTA_RE.search(user_text or ""))
+
+
+def _pickup_service_guard_event(user_text: str, *, active_transaction_context: bool = False) -> dict | None:
     if not user_text:
         return None
     decision = decide_pickup_service_gate(user_text=user_text)
     if not decision.is_pickup or decision.intent == "none":
+        return None
+    if active_transaction_context and decision.intent != "pickup_status":
+        logger.info(
+            "[PICKUP_SERVICE_GATE] advisory_only active_transaction_context intent=%s reason=%s",
+            decision.intent,
+            decision.reason,
+        )
         return None
     if decision.intent == "pickup_status":
         return {
@@ -8125,9 +8156,21 @@ def _recent_user_context_for_policy(messages: list[dict], limit: int = 3) -> str
     return "\n".join(reversed(recent_texts))
 
 
-def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> dict | None:
+def _delivery_policy_guard_event(
+    user_text: str,
+    recent_context: str = "",
+    *,
+    active_transaction_context: bool = False,
+) -> dict | None:
     decision = decide_delivery_policy_gate(user_text=user_text or "", recent_context=recent_context)
     if not decision.is_actionable:
+        return None
+    if active_transaction_context:
+        logger.info(
+            "[DELIVERY_POLICY_GATE] advisory_only active_transaction_context intent=%s reason=%s",
+            decision.intent.value,
+            decision.reason,
+        )
         return None
     if decision.intent == DeliveryPolicyIntent.DIRECT_HOME_DELIVERY:
         assistant_response = (
@@ -8200,8 +8243,8 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
     }
 
 
-def _direct_tire_delivery_guard_event(user_text: str) -> dict | None:
-    event = _delivery_policy_guard_event(user_text)
+def _direct_tire_delivery_guard_event(user_text: str, *, active_transaction_context: bool = False) -> dict | None:
+    event = _delivery_policy_guard_event(user_text, active_transaction_context=active_transaction_context)
     if event is None or event.get("assistant_response_source") != "code_direct_tire_delivery_guard":
         return None
     return event
@@ -13853,8 +13896,9 @@ def _rule_based_classify(
         logger.debug("[RULE_ROUTER] Default tire shopping CTA fast-path → DISCOVERY")
         return [MultiAgentDomain.Domain.DISCOVERY]
 
+    active_transaction_context = _has_active_transaction_action_context(text, merged_slots)
     pickup_decision = decide_pickup_service_gate(user_text=text)
-    if pickup_decision.is_pickup:
+    if pickup_decision.is_pickup and not active_transaction_context:
         logger.debug(
             "[RULE_ROUTER] Pickup gate fast-path → SUPPORT: intent=%s reason=%s",
             pickup_decision.intent,
@@ -13863,7 +13907,7 @@ def _rule_based_classify(
         return [MultiAgentDomain.Domain.SUPPORT]
 
     delivery_decision = decide_delivery_policy_gate(user_text=text)
-    if delivery_decision.is_actionable:
+    if delivery_decision.is_actionable and not active_transaction_context:
         logger.debug(
             "[RULE_ROUTER] Delivery gate fast-path → SUPPORT: intent=%s reason=%s",
             delivery_decision.intent,
@@ -17011,6 +17055,7 @@ class TStationChatServiceV2:
             policy_domains = _agent_domains_from_cross_domain_values(
                 agent_domain_values_for_initial_route(policy_plan, known_slots=policy_known_slots)
             )
+            active_transaction_action_context = _has_active_transaction_action_context(last_user_text, merged_slots)
             policy_product_resolution_first = (
                 bool(policy_domains)
                 and policy_domains[0] == MultiAgentDomain.Domain.DISCOVERY
@@ -17038,6 +17083,12 @@ class TStationChatServiceV2:
                 CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
                 CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
             }
+            coupon_gate_can_override_route = (
+                route_coupon_gate_decision is not None
+                and route_coupon_gate_decision.is_actionable
+                and route_coupon_gate_decision.intent in route_coupon_tool_intents
+                and not active_transaction_action_context
+            )
 
             if (
                 _should_force_warranty_claim_support_route(policy_plan)
@@ -17059,11 +17110,7 @@ class TStationChatServiceV2:
                     "[POLICY][route-fast-path] warranty claim/support override: plan=%s",
                     policy_plan.to_dict(),
                 )
-            elif (
-                route_coupon_gate_decision is not None
-                and route_coupon_gate_decision.is_actionable
-                and route_coupon_gate_decision.intent in route_coupon_tool_intents
-            ):
+            elif coupon_gate_can_override_route:
                 domains = [MultiAgentDomain.Domain.TRANSACTION]
                 routing_result = MultiAgentDomain(
                     reason=f"coupon_query_gate:{route_coupon_gate_decision.reason}",
@@ -17079,6 +17126,13 @@ class TStationChatServiceV2:
                 classify_future = None
                 logger.info(
                     "[COUPON_QUERY_GATE][route] transaction_coupon override: intent=%s confidence=%.2f",
+                    route_coupon_gate_decision.intent.value,
+                    route_coupon_gate_decision.confidence,
+                )
+            elif route_coupon_gate_decision is not None and route_coupon_gate_decision.is_actionable:
+                logger.info(
+                    "[COUPON_QUERY_GATE][route] advisory_only active_transaction_context=%s intent=%s confidence=%.2f",
+                    active_transaction_action_context,
                     route_coupon_gate_decision.intent.value,
                     route_coupon_gate_decision.confidence,
                 )

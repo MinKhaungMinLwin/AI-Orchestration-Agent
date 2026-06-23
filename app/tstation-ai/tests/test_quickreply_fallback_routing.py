@@ -236,6 +236,7 @@ from services.tstation.chat import (
     _sanitize_transaction_cta_contracts,
     _apply_cta_context_to_slots,
     _is_current_location_store_search_confirmation,
+    _has_active_transaction_action_context,
     _merged_quickreply_cta_context,
     _cta_preview_input_from_slots,
     _support_fast_path,
@@ -736,6 +737,13 @@ def test_pickup_service_guard_does_not_hijack_generic_application_question() -> 
     assert _pickup_service_guard_event("워런티 어떻게 신청해?") is None
 
 
+def test_pickup_service_guard_is_advisory_during_active_order_context() -> None:
+    assert _pickup_service_guard_event(
+        "픽업서비스로 주문하기",
+        active_transaction_context=True,
+    ) is None
+
+
 def test_direct_tire_delivery_guard_blocks_home_delivery_self_install() -> None:
     event = _direct_tire_delivery_guard_event("집으로 배송받아서 내가 직접 갈아도 돼?")
 
@@ -805,6 +813,33 @@ def test_delivery_policy_gate_does_not_hijack_order_delivery_status() -> None:
 
     assert decision.intent == DeliveryPolicyIntent.NONE
     assert _delivery_policy_guard_event("주문 배송 상태 확인해줘") is None
+
+
+def test_delivery_policy_guard_is_advisory_during_active_order_context() -> None:
+    assert _delivery_policy_guard_event(
+        "집으로 배송해줘",
+        active_transaction_context=True,
+    ) is None
+    assert _direct_tire_delivery_guard_event(
+        "집으로 배송해줘",
+        active_transaction_context=True,
+    ) is None
+
+
+def test_active_transaction_action_context_uses_confirmed_slots_not_gate_keywords() -> None:
+    order_slots = ConversationSlots(
+        goods_no="G000000317729",
+        tire_model="아이온 에보 AS",
+        ord_qty=4,
+        shop_id="F00098",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    discovery_slots = ConversationSlots(tire_model="아이온 에보 AS")
+
+    assert _has_active_transaction_action_context("주문하기", order_slots) is True
+    assert _has_active_transaction_action_context("쿠폰 있어?", order_slots) is True
+    assert _has_active_transaction_action_context("쿠폰 있어?", discovery_slots) is False
 
 
 def test_delivery_policy_gate_handles_online_store_price_policy() -> None:
