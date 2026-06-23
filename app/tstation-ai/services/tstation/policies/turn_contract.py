@@ -191,6 +191,7 @@ def build_turn_contract(
         oe_replacement_type = str(intent_frame.entities.get("oe_replacement_type") or "")
         stock_check_mode = str(intent_frame.entities.get("stock_check_mode") or "")
         discovery_followup_action = str(intent_frame.entities.get("discovery_followup_action") or "")
+        recommendation_scenario = str(intent_frame.entities.get("recommendation_scenario") or "")
         if requested_product_attribute:
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric:
@@ -203,6 +204,19 @@ def build_turn_contract(
             known_slots["stock_check_mode"] = stock_check_mode
         if discovery_followup_action:
             known_slots["discovery_followup_action"] = discovery_followup_action
+        if recommendation_scenario:
+            for key in (
+                "recommendation_scenario",
+                "applied_rcmd_type",
+                "applied_vehicle_type",
+                "applied_season_nm",
+                "approximation_basis",
+            ):
+                value = intent_frame.entities.get(key)
+                if value not in (None, ""):
+                    known_slots[key] = value
+            if intent_frame.entities.get("approximation") is True:
+                known_slots["approximation"] = True
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent

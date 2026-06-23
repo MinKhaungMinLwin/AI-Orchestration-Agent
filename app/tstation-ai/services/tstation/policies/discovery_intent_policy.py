@@ -6,6 +6,10 @@ import re
 from typing import Any
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.recommendation_scenario_catalog import (
+    recommendation_scenario_from_text,
+    recommendation_scenario_metadata,
+)
 from services.tstation.policies.response_decision import ToolPlan
 
 
@@ -497,6 +501,7 @@ def build_discovery_intent_frame(
     comparison_followup_intent = str(slots.get("comparison_followup_intent") or "").strip()
     comparison_metric = str(slots.get("comparison_metric") or "").strip()
     discovery_followup_action = str(slots.get("discovery_followup_action") or "").strip()
+    router_recommendation_scenario = str(slots.get("recommendation_scenario") or "").strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -536,6 +541,10 @@ def build_discovery_intent_frame(
         entities["compare_metric"] = comparison_metric
     if discovery_followup_action == "vehicle_based_recommendation_refinement":
         entities["discovery_followup_action"] = discovery_followup_action
+    scenario = recommendation_scenario_from_text(text, router_recommendation_scenario)
+    if scenario is not None:
+        entities.update(recommendation_scenario_metadata(scenario))
+        entities["recommendation_scenario_tool_args_patch"] = dict(scenario.tool_args_patch)
     if len(products) >= 2:
         entities["multi_product_names"] = True
         if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
@@ -749,6 +758,7 @@ def build_discovery_intent_frame(
         or _SAFE_SERVICE_RE.search(text)
         or _PERFORMANCE_RE.search(text)
         or _LOWEST_PRICE_RE.search(text)
+        or scenario is not None
     ):
         intent = "product_recommendation"
         sub_intent = "condition_recommendation"
@@ -970,33 +980,33 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             tool_args_patch=args,
             forbidden_tools=("generic_unsized_recommendation",),
         )
-    args = {}
+    args = dict(entities.get("recommendation_scenario_tool_args_patch") or {})
     if entities.get("vehicle_category"):
-        args["vehicle_type"] = entities["vehicle_category"]
-    if entities.get("quiet_focus"):
+        args.setdefault("vehicle_type", entities["vehicle_category"])
+    if entities.get("quiet_focus") and "rcmd_type" not in args:
         args["rcmd_type"] = "low_vibration"
-    elif entities.get("value_focus"):
+    elif entities.get("value_focus") and "rcmd_type" not in args:
         args["rcmd_type"] = "value"
-    elif entities.get("recommendation_metric") == "fuel_efficiency":
+    elif entities.get("recommendation_metric") == "fuel_efficiency" and "rcmd_type" not in args:
         args["rcmd_type"] = "fuel_efficiency"
-    elif entities.get("performance") == "performance":
+    elif entities.get("performance") == "performance" and "rcmd_type" not in args:
         args["rcmd_type"] = "performance"
-    if entities.get("season") == "winter":
+    if entities.get("season") == "winter" and not entities.get("recommendation_scenario"):
         if args.get("rcmd_type"):
             args["season_nm"] = "겨울"
         else:
             args.update({"rcmd_type": "snow", "season_nm": "겨울"})
-    elif entities.get("season") == "all_weather":
+    elif entities.get("season") == "all_weather" and not entities.get("recommendation_scenario"):
         if args.get("rcmd_type"):
             args["season_nm"] = "올웨더"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "올웨더"})
-    elif entities.get("season") == "all_season":
+    elif entities.get("season") == "all_season" and not entities.get("recommendation_scenario"):
         if args.get("rcmd_type"):
             args["season_nm"] = "사계절"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "사계절"})
-    elif entities.get("season") == "summer":
+    elif entities.get("season") == "summer" and not entities.get("recommendation_scenario"):
         args["season_nm"] = "여름"
     if entities.get("explicit_tire_size") or entities.get("price_goal") != "similar_range":
         if entities.get("tire_size"):
@@ -1009,11 +1019,29 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["allow_cross_brand_fill"] = False
     allowed_tools = ("get_products_recommendations_tool",)
     required_slots: tuple[str, ...] = ()
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = {
+        key: entities[key]
+        for key in (
+            "recommendation_scenario",
+            "recommendation_scenario_label",
+            "applied_rcmd_type",
+            "applied_vehicle_type",
+            "applied_season_nm",
+            "approximation",
+            "approximation_basis",
+        )
+        if key in entities
+    }
+    if metadata:
+        metadata["response_intent"] = "catalog_recommendation"
+        metadata["forbidden_behaviors"] = (
+            "drop_recommendation_scenario",
+            "claim_unsupported_scenario_as_exact",
+        )
     if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
         allowed_tools = ("get_my_cars_tool", "get_products_recommendations_tool")
         required_slots = ("tire_size",)
-        metadata = {"response_intent": "vehicle_based_recommendation_refinement"}
+        metadata = {**metadata, "response_intent": "vehicle_based_recommendation_refinement"}
     return ToolPlan(
         allowed_tools=allowed_tools,
         preferred_tool="get_products_recommendations_tool",

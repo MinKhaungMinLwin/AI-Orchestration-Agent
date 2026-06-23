@@ -35,6 +35,18 @@ def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     oe_replacement_type = str(frame.entities.get("oe_replacement_type") or "")
     if oe_replacement_type:
         metadata["oe_replacement_type"] = oe_replacement_type
+    for key in (
+        "recommendation_scenario",
+        "recommendation_scenario_label",
+        "applied_rcmd_type",
+        "applied_vehicle_type",
+        "applied_season_nm",
+        "approximation",
+        "approximation_basis",
+    ):
+        value = frame.entities.get(key)
+        if value not in (None, ""):
+            metadata[key] = value
     return metadata
 
 
@@ -314,6 +326,23 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                     "차량 조회 실패 또는 등록 차량 없음이면 차량번호나 사이즈 확인 quickReply로 안내한다."
                 ),
                 metadata=_metadata(frame, response_shape_key="vehicle_based_recommendation_refinement"),
+            )
+        if entities.get("recommendation_scenario"):
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=(
+                    "product_card_without_size",
+                    "price_without_size",
+                    "drop_recommendation_scenario",
+                    "claim_unsupported_scenario_as_exact",
+                ),
+                assistant_guidance=(
+                    "catalog recommendation scenario와 실제 적용된 tool 조건만 설명한다. "
+                    "approximation=true이면 전용 상품이라고 단정하지 말고 근사 기준을 밝힌다."
+                ),
+                metadata=_metadata(frame, response_shape_key="catalog_unsized_recommendation_summary"),
             )
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,

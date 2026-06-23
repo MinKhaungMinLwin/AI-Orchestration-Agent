@@ -286,6 +286,7 @@ from services.tstation.policies.discovery_intent_policy import (
     is_best_seller_request,
     plan_discovery_tools,
 )
+from services.tstation.policies.recommendation_scenario_catalog import recommendation_scenario_from_text
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.price_response_policy import build_price_intent_frame, decide_price_response
 from services.tstation.source_filter import filter_for_context
@@ -8757,6 +8758,107 @@ def test_sized_all_weather_recommendation_uses_all_weather_tool_filter() -> None
     assert plan.tool_args_patch["tire_size"] == "235/55R19"
     assert plan.tool_args_patch["rcmd_type"] == "all_weather"
     assert plan.tool_args_patch["season_nm"] == "올웨더"
+
+
+def test_offroad_recommendation_catalog_generates_stable_policy_patch() -> None:
+    first_frame = build_discovery_intent_frame("오프로드용 타이어 추천")
+    second_frame = build_discovery_intent_frame(
+        "오프로드용 타이어 추천",
+        known_slots={"recommendation_scenario": "offroad"},
+    )
+    first_plan = plan_discovery_tools(first_frame)
+    second_plan = plan_discovery_tools(second_frame)
+
+    assert first_frame.intent == "product_recommendation"
+    assert first_frame.entities["recommendation_scenario"] == "offroad"
+    assert first_frame.entities["approximation"] is True
+    assert first_frame.entities["approximation_basis"] == "SUV/하중 안정성"
+    assert first_plan.tool_args_patch["rcmd_type"] == "heavy_load"
+    assert first_plan.tool_args_patch["vehicle_type"] == "suv"
+    assert first_plan.tool_args_patch == second_plan.tool_args_patch
+
+
+def test_offroad_router_scenario_does_not_override_without_current_anchor() -> None:
+    frame = build_discovery_intent_frame(
+        "타이어 추천",
+        known_slots={"recommendation_scenario": "offroad"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities.get("recommendation_scenario") is None
+    assert plan.tool_args_patch == {}
+
+
+def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    class _Response:
+        status_code = 200
+        parsed = {"rcmd_type": "heavy_load", "total": 0, "items": []}
+
+    def _fake_recommendations(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    frame = build_discovery_intent_frame("험로 주행용 타이어 추천")
+    plan = plan_discovery_tools(frame)
+    monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
+    token = discovery_tools.current_discovery_recommendation_tool_patch.set(dict(plan.tool_args_patch))
+    try:
+        result = discovery_tools.get_products_recommendations_tool.func(
+            rcmd_type="tstation",
+            limit=3,
+            brand_cd="HK",
+        )
+    finally:
+        discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
+
+    assert result["status"] == "success"
+    assert captured["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
+    assert captured["vehicle_type"] == "suv"
+
+
+def test_all_season_and_all_weather_catalog_conditions_stay_distinct() -> None:
+    all_season_plan = plan_discovery_tools(build_discovery_intent_frame("사계절 타이어 추천"))
+    all_weather_plan = plan_discovery_tools(build_discovery_intent_frame("올웨더 타이어 추천"))
+
+    assert all_season_plan.tool_args_patch["rcmd_type"] == "all_weather"
+    assert all_season_plan.tool_args_patch["season_nm"] == "사계절"
+    assert all_weather_plan.tool_args_patch["rcmd_type"] == "all_weather"
+    assert all_weather_plan.tool_args_patch["season_nm"] == "올웨더"
+
+
+def test_suv_value_recommendation_keeps_vehicle_and_value_conditions() -> None:
+    frame = build_discovery_intent_frame("SUV 가성비 타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["recommendation_scenario"] == "value"
+    assert plan.tool_args_patch["rcmd_type"] == "value"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+
+
+def test_recommendation_scenario_metadata_flows_into_turn_contract() -> None:
+    frame = build_discovery_intent_frame("비포장도로 타이어 추천")
+    plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text="비포장도로 타이어 추천",
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decision,
+    )
+
+    assert contract.known_slots["recommendation_scenario"] == "offroad"
+    assert contract.known_slots["applied_rcmd_type"] == "heavy_load"
+    assert contract.known_slots["applied_vehicle_type"] == "suv"
+    assert contract.known_slots["approximation_basis"] == "SUV/하중 안정성"
+    assert decision.metadata["recommendation_scenario"] == "offroad"
+    assert decision.metadata["approximation"] is True
+
+
+def test_recommendation_scenario_catalog_matches_current_anchor() -> None:
+    assert recommendation_scenario_from_text("캠핑 SUV 타이어 추천").key == "offroad"
+    assert recommendation_scenario_from_text("타이어 추천", "offroad") is None
 
 
 def _recommendation_template_entry(
