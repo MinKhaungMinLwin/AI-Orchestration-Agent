@@ -8153,6 +8153,24 @@ def _has_active_transaction_action_context(user_text: str, slots: object | None)
     return bool(has_product and _PURCHASE_OR_ORDER_CTA_RE.search(user_text or ""))
 
 
+def _clear_order_continuation_slots_after_direct_delivery_policy(slots: Any) -> Any:
+    """Stop a direct-home-delivery policy question from being consumed as order slot-fill."""
+    if slots is None:
+        return slots
+    cleared_slots = slots.model_copy()
+    cleared_slots.pending_intent = None
+    cleared_slots.goal_type = None
+    cleared_slots.pending_required_slot = None
+    cleared_slots.ord_qty = None
+    cleared_slots.payment_amount = None
+    cleared_slots.shop_id = None
+    cleared_slots.shop_name = None
+    cleared_slots.requested_cal_day = None
+    cleared_slots.rsv_hour = None
+    cleared_slots.availability_intent = None
+    return cleared_slots
+
+
 def _pickup_service_guard_event(user_text: str, *, active_transaction_context: bool = False) -> dict | None:
     if not user_text:
         return None
@@ -8238,7 +8256,7 @@ def _delivery_policy_guard_event(
     decision = decide_delivery_policy_gate(user_text=user_text or "", recent_context=recent_context)
     if not decision.is_actionable:
         return None
-    if active_transaction_context:
+    if active_transaction_context and decision.intent != DeliveryPolicyIntent.DIRECT_HOME_DELIVERY:
         logger.info(
             "[DELIVERY_POLICY_GATE] advisory_only active_transaction_context intent=%s reason=%s",
             decision.intent.value,
@@ -16935,6 +16953,39 @@ class TStationChatServiceV2:
                 merged_slots.goal_type = "store_finder"
                 merged_slots.pending_intent = None
             logger.debug(f"[SLOTS] Merged slots: {merged_slots.model_dump()}")
+
+            active_delivery_order_context = _has_active_transaction_action_context(last_user_text, merged_slots)
+            direct_delivery_guard = _direct_tire_delivery_guard_event(
+                last_user_text,
+                active_transaction_context=active_delivery_order_context,
+            )
+            if direct_delivery_guard is not None:
+                if active_delivery_order_context:
+                    before_slots = merged_slots.model_dump()
+                    merged_slots = _clear_order_continuation_slots_after_direct_delivery_policy(merged_slots)
+                    await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                    event_data = direct_delivery_guard.get("data")
+                    if isinstance(event_data, dict):
+                        metadata = event_data.setdefault("metadata", {})
+                        metadata["clearedOrderContinuation"] = True
+                    logger.info(
+                        "[DELIVERY_POLICY_GATE] blocked direct home delivery during active order context; "
+                        "cleared continuation slots before=%s after=%s",
+                        {k: v for k, v in before_slots.items() if v not in (None, "", [], {})},
+                        {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
+                    )
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(direct_delivery_guard),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                guard_text = str((direct_delivery_guard.get("data") or {}).get("assistantResponse") or "")
+                return TStationChatResponse(content=guard_text)
 
             current_turn_store_name = regex_slots.shop_name
             current_turn_has_store_anchor = bool(current_turn_store_name or regex_slots.region)

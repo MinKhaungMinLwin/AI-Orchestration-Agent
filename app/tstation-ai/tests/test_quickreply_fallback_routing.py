@@ -161,6 +161,7 @@ from services.tstation.chat import (
     _coupon_target_brand_for_query,
     _coupon_target_product_name_for_query,
     _split_product_size_quantity_from_text,
+    _clear_order_continuation_slots_after_direct_delivery_policy,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _maintenance_addon_store_context_from_location_template,
@@ -822,15 +823,54 @@ def test_delivery_policy_gate_does_not_hijack_order_delivery_status() -> None:
     assert _delivery_policy_guard_event("주문 배송 상태 확인해줘") is None
 
 
-def test_delivery_policy_guard_is_advisory_during_active_order_context() -> None:
-    assert _delivery_policy_guard_event(
+def test_delivery_policy_guard_blocks_direct_home_delivery_during_active_order_context() -> None:
+    event = _delivery_policy_guard_event(
         "집으로 배송해줘",
         active_transaction_context=True,
-    ) is None
-    assert _direct_tire_delivery_guard_event(
+    )
+    assert event is not None
+    assert event["assistant_response_source"] == "code_direct_tire_delivery_guard"
+    assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in event["data"]["assistantResponse"]
+
+    direct_event = _direct_tire_delivery_guard_event(
         "집으로 배송해줘",
         active_transaction_context=True,
-    ) is None
+    )
+    assert direct_event is not None
+    assert direct_event["assistant_response_source"] == "code_direct_tire_delivery_guard"
+
+
+def test_direct_home_delivery_policy_clears_order_continuation_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317729",
+        tire_model="이글 투어링",
+        tire_size="245/45R18",
+        pending_intent="order",
+        goal_type="place_order",
+        pending_required_slot="quantity",
+        shop_name="판교점",
+        ord_qty=4,
+        payment_amount=120000,
+        availability_intent="today_install",
+    )
+
+    cleared = _clear_order_continuation_slots_after_direct_delivery_policy(slots)
+
+    assert cleared.goods_no == "G000000317729"
+    assert cleared.tire_size == "245/45R18"
+    assert cleared.pending_intent is None
+    assert cleared.goal_type is None
+    assert cleared.pending_required_slot is None
+    assert cleared.ord_qty is None
+    assert cleared.payment_amount is None
+    assert cleared.shop_name is None
+    assert cleared.availability_intent is None
+
+    next_frame = build_transaction_intent_frame("4개", known_slots=cleared.model_dump())
+    next_plan = plan_transaction_tools(next_frame)
+    assert "save_to_cart_tool" not in next_plan.allowed_tools
+    assert "quick_order_tool" not in next_plan.allowed_tools
+    assert "transaction_store_preview_tool" not in next_plan.allowed_tools
 
 
 def test_active_transaction_action_context_uses_confirmed_slots_not_gate_keywords() -> None:
