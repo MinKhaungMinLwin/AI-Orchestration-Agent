@@ -824,6 +824,7 @@ def test_high_confidence_support_router_contract_blocks_product_price_override()
         flow="policy guidance",
         claim_check_type="none",
         complaint_scope="none",
+        policy_intent="regional_price_policy",
         planner_confidence=0.93,
         needs_clarification=False,
         agent_prompt_profile="full",
@@ -845,6 +846,7 @@ def test_high_confidence_support_router_contract_allows_explicit_price_lookup_ov
         flow="policy guidance",
         claim_check_type="none",
         complaint_scope="none",
+        policy_intent="regional_price_policy",
         planner_confidence=0.93,
         needs_clarification=False,
         agent_prompt_profile="full",
@@ -5760,13 +5762,11 @@ def test_pickup_service_force_routes_to_support() -> None:
 def test_delivery_policy_force_routes_to_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("서귀포시인데 배송비 더 들어?")
 
-    assert result is not None
-    assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert result is None
 
     result = StreamingMultiAgentCoordinator._force_keyword_routing("집으로 배송해줘")
 
-    assert result is not None
-    assert result.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert result is None
 
 
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
@@ -5777,10 +5777,10 @@ def test_generic_application_question_does_not_force_route_to_pickup_support() -
 
 def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
     assert _support_fast_path("픽업서비스 어떻게 신청해?") == [MultiAgentDomain.Domain.SUPPORT]
-    assert _support_fast_path("타이어 집으로 걍 배송받고 싶어") == [MultiAgentDomain.Domain.SUPPORT]
-    assert _support_fast_path("집으로 배송해줘") == [MultiAgentDomain.Domain.SUPPORT]
-    assert _support_fast_path("서귀포시인데 배송비 더 들어?") == [MultiAgentDomain.Domain.SUPPORT]
-    assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("타이어 집으로 걍 배송받고 싶어") is None
+    assert _support_fast_path("집으로 배송해줘") is None
+    assert _support_fast_path("서귀포시인데 배송비 더 들어?") is None
+    assert _support_fast_path("제주도 매장에서도 온라인 가격이랑 똑같아?") is None
 
 
 def test_support_fast_path_routes_reminding_alarm_settings() -> None:
@@ -9838,7 +9838,11 @@ def test_clear_stale_store_search_context_preserves_explicit_store_finder_turn()
 
 
 def test_turn_contract_preserves_router_override_metadata() -> None:
-    routing = _routing_result(domains=[MultiAgentDomain.Domain.SUPPORT], execution_plan=["support:price_policy_faq"])
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:price_policy_faq"],
+        policy_intent="price_policy_faq",
+    )
     routing.override_applied = True
     routing.override_reason = "router_low_confidence_or_ambiguous"
     routing.original_router_domains = [MultiAgentDomain.Domain.DISCOVERY]
@@ -9859,6 +9863,23 @@ def test_turn_contract_preserves_router_override_metadata() -> None:
     assert contract.blocked_override_reason == "conflicts_with_high_confidence_router_contract"
 
 
+def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_price_tools() -> None:
+    contract = build_turn_contract(
+        user_text="ion evo 는 서울에서 사는거랑 제주도에서 사는거랑 가격이 달라?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:regional_price_policy"],
+            policy_intent="regional_price_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "regional_price_policy"
+    assert contract.known_slots["policy_intent"] == "regional_price_policy"
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+
 def _routing_result(
     *,
     domains=None,
@@ -9866,6 +9887,7 @@ def _routing_result(
     comparison_followup_intent: str = "none",
     comparison_metric: str = "none",
     requested_product_attribute: str = "none",
+    policy_intent: str = "none",
     referred_object_status: str = "resolved",
     referred_object_type: str = "none",
     needs_clarification: bool = False,
@@ -9883,6 +9905,7 @@ def _routing_result(
         comparison_followup_intent=comparison_followup_intent,
         comparison_metric=comparison_metric,
         requested_product_attribute=requested_product_attribute,
+        policy_intent=policy_intent,
         referred_object_status=referred_object_status,
         referred_object_type=referred_object_type,
         needs_clarification=needs_clarification,

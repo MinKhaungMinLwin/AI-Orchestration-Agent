@@ -403,6 +403,8 @@ class MultiAgentDomain(BaseModel):
                 data["comparison_metric"] = "none"
             if "requested_product_attribute" not in data:
                 data["requested_product_attribute"] = "none"
+            if "policy_intent" not in data:
+                data["policy_intent"] = "none"
             if "override_applied" not in data:
                 data["override_applied"] = False
             if "override_reason" not in data:
@@ -555,6 +557,18 @@ class MultiAgentDomain(BaseModel):
             "supported product attribute axes when the user asks for that specific field. Use 'none' otherwise."
         ),
     )
+    policy_intent: Literal[
+        "none",
+        "shipping_fee_policy",
+        "online_store_price_policy",
+        "regional_price_policy",
+        "price_policy_faq",
+    ] = Field(
+        description=(
+            "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
+            "online-vs-store price policy, regional price policy, or generic price policy FAQ. Use 'none' otherwise."
+        ),
+    )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
         description=(
             "Planner judgment for referential phrases in the current turn. Use 'resolved' when the object is explicit "
@@ -646,7 +660,8 @@ def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain 
     domains = list(getattr(routing_result, "domains", []) or [])
     if len(domains) != 1:
         return False
-    if domains[0] == MultiAgentDomain.Domain.SUPPORT:
+    policy_intent = str(getattr(routing_result, "policy_intent", "none") or "none")
+    if domains[0] == MultiAgentDomain.Domain.SUPPORT and policy_intent != "none":
         return True
     execution_plan = tuple(str(item) for item in (getattr(routing_result, "execution_plan", None) or ()))
     return bool(execution_plan and all(_NON_TRANSACTION_POLICY_PLAN_RE.search(item) for item in execution_plan))
@@ -773,6 +788,8 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["comparison_metric"] = "none"
             if "requested_product_attribute" not in data:
                 data["requested_product_attribute"] = "none"
+            if "policy_intent" not in data:
+                data["policy_intent"] = "none"
             if "override_applied" not in data:
                 data["override_applied"] = False
             if "override_reason" not in data:
@@ -871,6 +888,15 @@ class _SlimMultiAgentDomain(BaseModel):
     ] = Field(
         description="Structured requested product attribute for Discovery product-detail turns, or 'none'."
     )
+    policy_intent: Literal[
+        "none",
+        "shipping_fee_policy",
+        "online_store_price_policy",
+        "regional_price_policy",
+        "price_policy_faq",
+    ] = Field(
+        description="Structured support/policy intent, or 'none'."
+    )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
         description="First-turn reference status; usually 'resolved' unless the user uses an unclear reference."
     )
@@ -918,7 +944,7 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 15 outputs:
+Produce 17 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
@@ -976,7 +1002,16 @@ Complaint routing rule:
    - When the user asks a product's brand/manufacturer/origin, set requested_product_attribute accordingly even if the turn still needs product search/resolve first.
    - Do NOT use requested_product_attribute for brand-filter shopping requests such as "브리지스톤 타이어 보여줘". That is a product search, so keep requested_product_attribute="none".
 
-12. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+12. policy_intent — structured non-transaction policy intent:
+   - "none": default
+   - "shipping_fee_policy": 제주/서귀포/도서산간 배송비/추가 비용 정책
+   - "online_store_price_policy": 온라인 vs 매장 가격/구매 방식/주문 방식 정책
+   - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
+   - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
+   - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
+   - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
+
+13. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -987,14 +1022,14 @@ Complaint routing rule:
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
-13. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
+14. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
    - "resolved": current turn explicitly names the object or an existing slot/card uniquely identifies it
    - "resolvable_from_context": prior cards/history can resolve it before transaction execution
    - "missing": the user says "그거/이거/그 상품" etc. but no referent exists
    - "ambiguous": more than one possible referent exists ("두 개 다", "첫번째" when list is unavailable/ambiguous)
-14. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
-15. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
-16. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
+15. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
+16. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
+17. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -1198,6 +1233,13 @@ DOMAINS:
 - SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
+Also set `policy_intent`:
+- shipping fee / 제주 / 도서산간 / 서귀포 delivery policy → `shipping_fee_policy`
+- online vs store price or purchase method policy → `online_store_price_policy`
+- regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
+- generic pricing policy FAQ → `price_policy_faq`
+- otherwise `none`
+
 RULES:
 - G+12 digits in message → TRANSACTION
 - Product name only (벤투스/Ventus/다이나프로/Dynapro/...) + price/stock/buy, no goods_no → DISCOVERY
@@ -1304,7 +1346,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, comparison_followup_intent, comparison_metric, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, comparison_followup_intent, comparison_metric, requested_product_attribute, policy_intent, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -1770,19 +1812,6 @@ class StreamingMultiAgentCoordinator:
                 complaint_scope="none",
                 flow="pickup service intent gate — bypassed LLM router",
             )
-        delivery_decision = decide_delivery_policy_gate(user_text=text)
-        if delivery_decision.is_actionable:
-            return MultiAgentDomain(
-                reason=f"delivery policy gate matched {delivery_decision.intent}",
-                domains=[MultiAgentDomain.Domain.SUPPORT],
-                execution_plan=["Run SUPPORT for delivery/shipping-fee policy guidance"],
-                user_behavior="asking about direct delivery, shipping fee, or online/store price policy",
-                agent_prompt_profile=AgentPromptProfile.FULL,
-                claim_check_type="none",
-                complaint_scope="none",
-                flow="delivery policy intent gate — bypassed LLM router",
-            )
-
         if _is_order_history_reorder_query(text):
             return MultiAgentDomain(
                 reason="regex routing matched order-history reorder intent",
@@ -12250,14 +12279,6 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             pickup_decision.reason,
         )
         return [MultiAgentDomain.Domain.SUPPORT]
-    delivery_decision = decide_delivery_policy_gate(user_text=text)
-    if delivery_decision.is_actionable:
-        logger.debug(
-            "[SUPPORT_FAST_PATH] delivery gate → SUPPORT: intent=%s reason=%s",
-            delivery_decision.intent,
-            delivery_decision.reason,
-        )
-        return [MultiAgentDomain.Domain.SUPPORT]
     if _REMINDING_ALARM_QUERY_RE.search(text):
         logger.debug("[SUPPORT_FAST_PATH] reminding alarm CTA → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
@@ -15045,29 +15066,6 @@ class TStationChatServiceV2:
             if request.stream:
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(pickup_service_guard),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-            return TStationChatResponse(content=guard_text)
-
-        delivery_policy_guard = _delivery_policy_guard_event(
-            last_user_msg,
-            recent_context=_recent_user_context_for_policy(request.messages),
-        )
-        if delivery_policy_guard is not None:
-            logger.info(
-                "[CHAT_V2] Delivery policy fast-path intercept: %s source=%s",
-                last_user_msg[:80],
-                delivery_policy_guard.get("assistant_response_source"),
-            )
-            guard_text = str((delivery_policy_guard.get("data") or {}).get("assistantResponse") or "")
-            if request.stream:
-                return StreamingResponse(
-                    TStationChatServiceV2._stream_policy_guard_response(delivery_policy_guard),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",

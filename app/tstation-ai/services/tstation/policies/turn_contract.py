@@ -175,6 +175,9 @@ def build_turn_contract(
             known_slots["comparison_followup_intent"] = comparison_followup_intent
         if oe_replacement_type:
             known_slots["oe_replacement_type"] = oe_replacement_type
+    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    if policy_intent and policy_intent != "none":
+        known_slots["policy_intent"] = policy_intent
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
@@ -216,6 +219,12 @@ def build_turn_contract(
     )
     allowed_tools = tuple(tool_plan.allowed_tools) if tool_plan is not None else ()
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
+    if domain == "support" and policy_intent and policy_intent != "none":
+        intent = policy_intent
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            ("search_product_tool", "get_final_price_tool"),
+        )
 
     drift = _contract_drift(
         code_domain=code_domain,
