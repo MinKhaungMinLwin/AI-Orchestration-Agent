@@ -426,7 +426,31 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
     if _is_discovery_first_leg_transaction_contract(contract):
         intent = str(contract.intent or "")
-        if intent == "stock_store_search":
+        known_slots = contract.known_slots or {}
+        pending_intent = str(known_slots.get("pending_intent") or "").strip()
+        goal_type = str(known_slots.get("goal_type") or "").strip()
+        if pending_intent == "order" or goal_type == "place_order":
+            message = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
+            quick_replies = [
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "구매 진행", "domain": "TRANSACTION"},
+                {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+            ]
+        elif pending_intent == "stock" or goal_type == "store_with_stock":
+            message = "재고를 확인하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
+            quick_replies = [
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "재고 확인", "domain": "TRANSACTION"},
+                {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+            ]
+        elif pending_intent == "price" or goal_type == "price_inquiry":
+            message = "가격을 확인하려면 먼저 타이어 규격을 확인해야 해요. 확인할 규격을 선택해 주세요."
+            quick_replies = [
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "가격 확인", "domain": "TRANSACTION"},
+                {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+            ]
+        elif intent == "stock_store_search":
             message = "재고를 확인하려면 어떤 상품 기준인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
             quick_replies = [
                 {"label": "상품명 입력", "domain": "DISCOVERY"},

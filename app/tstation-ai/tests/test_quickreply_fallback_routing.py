@@ -12350,6 +12350,45 @@ def test_turn_contract_blocks_discovery_summary_before_transaction_resolution() 
     assert "상품명 입력" in _labels(fallback_event["data"]["quickReplies"])
 
 
+def test_discovery_first_leg_order_guard_does_not_use_price_clarification() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="product_name_search",
+        known_slots={
+            "ord_qty": 2,
+            "shop_name": "판교점",
+            "availability_intent": "today_install",
+            "requested_cal_day": "20260624",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_products_recommendations_tool",),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("answer_from_previous_recommendation",),
+            metadata={"response_shape_key": "product_search_summary"},
+        ).to_dict(),
+        risk_level="medium",
+        fallback_reason="response_policy_forbidden_behaviors",
+        planner_intent="resolve_or_describe_product",
+        planner_domains=("discovery",),
+        execution_plan=("discovery:resolve_product", "transaction:stock_store_or_reservation"),
+    )
+
+    fallback_event = build_response_policy_guard_event(contract)
+
+    assistant = fallback_event["data"]["assistantResponse"]
+    assert "구매를 진행하려면 먼저 타이어 규격" in assistant
+    assert "가격을 확인하려면" not in assistant
+    assert "사이즈 직접 입력" in _labels(fallback_event["data"]["quickReplies"])
+
+
 def test_turn_contract_qc_reports_discovery_first_leg_violation() -> None:
     contract = build_turn_contract(
         user_text="키너지 재고 있어?",
