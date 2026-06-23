@@ -1470,6 +1470,28 @@ def _normalize_time(s: str) -> str:
     return s
 
 
+_STORE_HOLIDAY_UNKNOWN_TEXT = "매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요."
+
+
+def _store_business_hour_lines(
+    *,
+    weekday_start: str,
+    weekday_end: str,
+    saturday_start: str = "",
+    saturday_end: str = "",
+    holiday: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    if weekday_start and weekday_end:
+        lines.append(f"평일: {weekday_start}~{weekday_end}")
+    if saturday_start and saturday_end:
+        lines.append(f"토요일: {saturday_start}~{saturday_end}")
+    else:
+        lines.append("토요일: 확인 필요")
+    lines.append(f"휴무일: {holiday or _STORE_HOLIDAY_UNKNOWN_TEXT}")
+    return lines
+
+
 def _format_phone(s: str) -> str:
     """Format a Korean landline/mobile phone number for display.
 
@@ -4034,23 +4056,16 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             if require_ev_charge and not is_ev_charge_available:
                 continue
 
-            biz_strt_wday = _get_str(detail, "shop_biz_strt_wday") or _get_str(row, "shop_biz_strt_wday")
-            biz_end_wday = _get_str(detail, "shop_biz_end_wday") or _get_str(row, "shop_biz_end_wday")
-            biz_wday = f"{biz_strt_wday}~{biz_end_wday}" if biz_strt_wday and biz_end_wday else ""
-
             biz_strt_time = _normalize_time(_get_str(detail, "shop_biz_strt_time") or _get_str(row, "shop_biz_strt_time"))
             biz_end_time = _normalize_time(_get_str(detail, "shop_biz_end_time") or _get_str(row, "shop_biz_end_time"))
             sat_strt_time = _normalize_time(_get_str(detail, "shop_sat_strt_time") or _get_str(row, "shop_sat_strt_time"))
             sat_end_time = _normalize_time(_get_str(detail, "shop_sat_end_time") or _get_str(row, "shop_sat_end_time"))
-            biz_weekday_str = f"평일 {biz_strt_time}~{biz_end_time}" if biz_strt_time and biz_end_time else ""
-            biz_sat_str = f"토요일 {sat_strt_time}~{sat_end_time}" if sat_strt_time and sat_end_time else ""
-            biz_hours = " / ".join(p for p in [biz_weekday_str, biz_sat_str] if p)
 
             # tel_no: prefer detail (most authoritative when get_store_detail_tool
             # ran in the same turn), fall back to the list row so basic store
             # search results always show the phone number.
             tel_no = _get_str(detail, "tel_no") or _get_str(row, "tel_no")
-            holiday = _get_str(detail, "holiday")
+            holiday = _get_str(detail, "holiday") or _get_str(row, "holiday")
             rating = _get_num(detail, "rating_idx", default=0.0) or _get_num(row, "rating_idx", default=0.0)
             review_count_raw = detail.get("review_count")
             if review_count_raw is None:
@@ -4081,12 +4096,15 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             description_lines: list[str] = []
             if road_full:
                 description_lines.append(f"📍 {road_full}")
-            if biz_wday:
-                description_lines.append(f"영업일: {biz_wday}")
-            if biz_hours:
-                description_lines.append(f"영업시간: {biz_hours}")
-            if holiday:
-                description_lines.append(f"휴무일: {holiday}")
+            description_lines.extend(
+                _store_business_hour_lines(
+                    weekday_start=biz_strt_time,
+                    weekday_end=biz_end_time,
+                    saturday_start=sat_strt_time,
+                    saturday_end=sat_end_time,
+                    holiday=holiday,
+                )
+            )
             if tel_no:
                 description_lines.append(f"전화: {tel_no}")
             if rating:
@@ -5277,35 +5295,25 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
 
     tel_no = _format_phone(_get_str(raw, "tel_no"))
     holiday = _get_str(raw, "holiday")
-    biz_wday_start = _get_str(raw, "shop_biz_strt_wday")
-    biz_wday_end = _get_str(raw, "shop_biz_end_wday")
     biz_start = _normalize_time(_get_str(raw, "shop_biz_strt_time"))
     biz_end = _normalize_time(_get_str(raw, "shop_biz_end_time"))
     sat_start = _normalize_time(_get_str(raw, "shop_sat_strt_time"))
     sat_end = _normalize_time(_get_str(raw, "shop_sat_end_time"))
 
-    biz_hours = f"{biz_start}~{biz_end}" if biz_start and biz_end else ""
-    sat_hours = f"{sat_start}~{sat_end}" if sat_start and sat_end else ""
-    # When Saturday has its own line, the weekday line implicitly means Mon-Fri.
-    # Otherwise fall back to BE's reported range (e.g. 월요일~일요일 for shops
-    # without a separate Saturday schedule).
-    if sat_hours:
-        biz_wday_label = "평일"
-    elif biz_wday_start and biz_wday_end:
-        biz_wday_label = f"{biz_wday_start}~{biz_wday_end}"
-    else:
-        biz_wday_label = "평일"
-
     lines: list[str] = [f"고객님, {shop_nm} 매장 정보를 안내드릴게요. 😊", ""]
     lines.append(f"• 매장명: {shop_nm}")
     if tel_no:
         lines.append(f"• 전화번호: {tel_no}")
-    if biz_hours:
-        lines.append(f"• {biz_wday_label} 영업시간: {biz_hours}")
-    if sat_hours:
-        lines.append(f"• 토요일 영업시간: {sat_hours}")
-    if holiday:
-        lines.append(f"• 휴무일: {holiday}")
+    lines.extend(
+        f"• {line}"
+        for line in _store_business_hour_lines(
+            weekday_start=biz_start,
+            weekday_end=biz_end,
+            saturday_start=sat_start,
+            saturday_end=sat_end,
+            holiday=holiday,
+        )
+    )
     if "is_all_my_t" in raw:
         lines.append("• 올마이T: 이용 가능" if raw.get("is_all_my_t") else "• 올마이T: 이용 불가")
     if "is_installable" in raw:

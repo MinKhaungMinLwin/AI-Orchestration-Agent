@@ -5713,6 +5713,8 @@ def test_store_contact_guidance_injects_store_detail_cta_from_context_list_shape
                     "tel": "0515038585",
                     "shop_biz_strt_time": "09",
                     "shop_biz_end_time": "19",
+                    "shop_sat_strt_time": "09",
+                    "shop_sat_end_time": "17",
                 }
             ],
             "input": {"store_nm": "티스테이션 부산거제점"},
@@ -5731,7 +5733,12 @@ def test_store_contact_guidance_injects_store_detail_cta_from_context_list_shape
     assert "매장명: 티스테이션 부산거제점" in event_data["assistantResponse"]
     assert "주소: 부산광역시 연제구 거제대로 295" in event_data["assistantResponse"]
     assert "전화: 051-503-8585" in event_data["assistantResponse"]
-    assert "영업시간: 평일 09:00~19:00" in event_data["assistantResponse"]
+    assert "평일: 09:00~19:00" in event_data["assistantResponse"]
+    assert "토요일: 09:00~17:00" in event_data["assistantResponse"]
+    assert "휴무일: 매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요." in event_data[
+        "assistantResponse"
+    ]
+    assert "영업시간:" not in event_data["assistantResponse"]
     assert "매장 찾기" in _labels(event_data["quickReplies"])
 
 
@@ -5757,6 +5764,8 @@ def test_store_contact_guidance_injects_detail_summary_for_staff_contact_copy() 
                     "tel_no": "0515038585",
                     "shop_biz_strt_time": "09",
                     "shop_biz_end_time": "19",
+                    "shop_sat_strt_time": "09",
+                    "shop_sat_end_time": "17",
                 },
             },
         }
@@ -5774,7 +5783,12 @@ def test_store_contact_guidance_injects_detail_summary_for_staff_contact_copy() 
     assert "매장명: 티스테이션 부산거제점" in event_data["assistantResponse"]
     assert "주소: 부산광역시 연제구 거제대로 295" in event_data["assistantResponse"]
     assert "전화: 051-503-8585" in event_data["assistantResponse"]
-    assert "영업시간: 평일 09:00~19:00" in event_data["assistantResponse"]
+    assert "평일: 09:00~19:00" in event_data["assistantResponse"]
+    assert "토요일: 09:00~17:00" in event_data["assistantResponse"]
+    assert "휴무일: 매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요." in event_data[
+        "assistantResponse"
+    ]
+    assert "영업시간:" not in event_data["assistantResponse"]
     assert "방문 예약하기" in _labels(event_data["quickReplies"])
 
 
@@ -5886,6 +5900,8 @@ def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
                 "tel_no": "027902921",
                 "shop_biz_strt_time": "09",
                 "shop_biz_end_time": "19",
+                "shop_sat_strt_time": "09",
+                "shop_sat_end_time": "18",
             },
         },
     )
@@ -5895,6 +5911,10 @@ def test_store_holiday_period_event_uses_detail_info_and_cta() -> None:
     assert "추석 연휴" in data["assistantResponse"]
     assert "현재 확인되는 매장 휴무일 정보는 `일요일 휴무`" in data["assistantResponse"]
     assert "매장명: 티스테이션 한남점" in data["assistantResponse"]
+    assert "평일: 09:00~19:00" in data["assistantResponse"]
+    assert "토요일: 09:00~18:00" in data["assistantResponse"]
+    assert "휴무일: 일요일 휴무" in data["assistantResponse"]
+    assert "영업시간:" not in data["assistantResponse"]
     assert data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
     assert data["quickReplies"][0]["url"].endswith("/store/locals/F204423537")
 
@@ -5921,6 +5941,11 @@ def test_store_holiday_period_event_does_not_infer_open_from_detail_slots() -> N
     assert event["template"] == "quickReply"
     assert "영업 중" not in data["assistantResponse"]
     assert "티스테이션 한남점의 일요일 휴무 여부는 현재 확인되지 않아요." in data["assistantResponse"]
+    assert "평일: 09:00~19:00" in data["assistantResponse"]
+    assert "토요일: 확인 필요" in data["assistantResponse"]
+    assert "휴무일: 매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요." in data[
+        "assistantResponse"
+    ]
     assert "일요일/공휴일 운영 여부는 매장 사정에 따라 달라질 수 있어 매장에 직접 확인해 주세요." in data["assistantResponse"]
 
 
@@ -6346,7 +6371,11 @@ def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
     assistant = event["data"]["assistantResponse"]
     assert "매장명: 티스테이션 고양시청점" in assistant
     assert "전화번호: 031-971-9333" in assistant
-    assert "영업시간: 09:00~19:00" in assistant
+    assert "• 평일: 09:00~19:00" in assistant
+    assert "• 토요일: 09:00~17:00" in assistant
+    assert "• 휴무일: 매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요." in assistant
+    assert "영업시간:" not in assistant
+    assert "월요일~일요일" not in assistant
 
 
 def test_plain_store_info_query_extracts_store_name_without_reservation_action() -> None:

@@ -7685,6 +7685,28 @@ def _normalize_store_time(raw: str) -> str:
     return value
 
 
+_STORE_HOLIDAY_UNKNOWN_TEXT = "매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요."
+
+
+def _store_business_hour_lines(
+    *,
+    weekday_start: str,
+    weekday_end: str,
+    saturday_start: str = "",
+    saturday_end: str = "",
+    holiday: str = "",
+) -> list[str]:
+    lines: list[str] = []
+    if weekday_start and weekday_end:
+        lines.append(f"평일: {weekday_start}~{weekday_end}")
+    if saturday_start and saturday_end:
+        lines.append(f"토요일: {saturday_start}~{saturday_end}")
+    else:
+        lines.append("토요일: 확인 필요")
+    lines.append(f"휴무일: {holiday or _STORE_HOLIDAY_UNKNOWN_TEXT}")
+    return lines
+
+
 def _format_store_phone(raw: str) -> str:
     digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
     if not digits:
@@ -7746,12 +7768,15 @@ def _build_store_detail_summary_from_context(tool_data_list: list[dict]) -> str 
         lines.append(f"주소: {address}")
     if phone:
         lines.append(f"전화: {phone}")
-    if weekday_start and weekday_end:
-        lines.append(f"영업시간: 평일 {weekday_start}~{weekday_end}")
-    if sat_start and sat_end:
-        lines.append(f"토요일: {sat_start}~{sat_end}")
-    if holiday:
-        lines.append(f"휴무일: {holiday}")
+    lines.extend(
+        _store_business_hour_lines(
+            weekday_start=weekday_start,
+            weekday_end=weekday_end,
+            saturday_start=sat_start,
+            saturday_end=sat_end,
+            holiday=holiday,
+        )
+    )
 
     if not lines:
         return None
