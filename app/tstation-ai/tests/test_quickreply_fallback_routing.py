@@ -103,6 +103,7 @@ from services.tstation.chat import (
     _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
+    _apply_order_snapshot_slots,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
     _build_order_history_reorder_event,
@@ -9918,6 +9919,7 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
         "shop_name": "티스테이션 한남점",
         "ord_qty": 2,
         "payment_amount": 237600,
+        "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
         "requested_cal_day": "20260609",
         "rsv_hour": "17",
@@ -9930,6 +9932,60 @@ def test_preorder_template_payload_ignores_non_ready_card() -> None:
         "isReadyToOrder": False,
         "metadata": {"shopId": "F07782"},
     }) is None
+
+
+def test_order_snapshot_commit_preserves_product_and_payment_across_store_selection() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="225/45R17",
+        ord_qty=2,
+        payment_amount=237600,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    updated = _apply_order_snapshot_slots(
+        slots,
+        {
+            "shop_id": "F07782",
+            "shop_name": "티스테이션 한남점",
+            "requested_cal_day": "20260624",
+            "rsv_hour": "17",
+        },
+        source="datepick_event",
+    )
+
+    assert updated.goods_no == "G000000309783"
+    assert updated.tire_model == "벤투스 S2 AS"
+    assert updated.tire_size == "225/45R17"
+    assert updated.ord_qty == 2
+    assert updated.payment_amount == 237600
+    assert updated.shop_id == "F07782"
+    assert updated.requested_cal_day == "20260624"
+    assert updated.rsv_hour == "17"
+    assert updated.pending_intent == "order"
+    assert updated.goal_type == "place_order"
+
+
+def test_order_snapshot_commit_can_make_redis_slots_sufficient_without_preorder_payload() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_size="225/45R17",
+        ord_qty=2,
+        shop_id="F07782",
+        requested_cal_day="20260624",
+        rsv_hour="17",
+        payment_amount=237600,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    known_slots = slots.model_dump()
+    frame = build_transaction_intent_frame("주문 확정", known_slots=known_slots)
+
+    assert frame.intent == "quick_order_execute"
+    assert frame.missing_slots == ()
 
 
 def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:
@@ -11296,6 +11352,7 @@ def test_preorder_slot_recovery_uses_ready_preorder_payload_as_execute_source() 
         "shop_name": "티스테이션 판교점",
         "ord_qty": 2,
         "payment_amount": 314400,
+        "tire_model": "다이나프로 HPX",
         "tire_size": "235/55R19",
         "requested_cal_day": "20260623",
         "rsv_hour": "17",

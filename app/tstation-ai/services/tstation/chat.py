@@ -12072,6 +12072,68 @@ def _verified_datepick_order_values(slot_values: Mapping[str, Any] | None) -> di
     return verified
 
 
+_ORDER_SNAPSHOT_FIELDS: tuple[str, ...] = (
+    "goods_no",
+    "tire_model",
+    "tire_size",
+    "ord_qty",
+    "shop_id",
+    "shop_name",
+    "requested_cal_day",
+    "rsv_hour",
+    "payment_amount",
+)
+
+
+def _apply_order_snapshot_slots(
+    slots: ConversationSlots,
+    values: Mapping[str, Any] | None,
+    *,
+    source: str,
+    fill_only: bool = False,
+) -> ConversationSlots:
+    """Commit a verified order-flow snapshot without product/store dependency resets.
+
+    Order snapshots come from current-turn tool/template metadata that already
+    ties product, quantity, store, date and amount together. Applying these
+    fields one-by-one through runtime dependency resets can erase the same
+    snapshot (e.g. shop_id change clearing payment_amount), so this helper
+    updates the snapshot atomically and marks the active order flow.
+    """
+    del source  # kept for log call sites and future provenance metadata.
+    if not isinstance(values, Mapping):
+        return slots
+
+    update: dict[str, Any] = {}
+    for field in _ORDER_SNAPSHOT_FIELDS:
+        value = values.get(field)
+        if value in (None, ""):
+            continue
+        if field == "ord_qty":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0:
+                continue
+        if field == "payment_amount":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0:
+                continue
+        if fill_only and getattr(slots, field, None) is not None:
+            continue
+        update[field] = value
+
+    update["pending_intent"] = "order"
+    update["goal_type"] = "place_order"
+    if not update:
+        return slots
+    return slots.model_copy(update=update)
+
+
 def _build_store_availability_quantity_prompt_event(
     *,
     product_keyword: str,
@@ -15042,6 +15104,14 @@ class TStationChatServiceV2:
                 pass
 
         product_text = str(order_info.get("product") or metadata.get("productName") or "").strip()
+        product_name = str(metadata.get("productName") or metadata.get("goodsNm") or "").strip() or product_text
+        if product_name:
+            slot_values["tire_model"] = re.sub(
+                r"\s*\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\s*$",
+                "",
+                product_name,
+                flags=re.IGNORECASE,
+            ).strip() or product_name
         tire_size = normalize_tire_size(product_text)
         if tire_size:
             slot_values["tire_size"] = tire_size
@@ -16113,13 +16183,14 @@ class TStationChatServiceV2:
                     if value is not None and getattr(merged_slots, field, None) is None
                 }
                 if missing_preorder_values:
-                    merged_slots = merged_slots.apply_runtime_values(
+                    merged_slots = _apply_order_snapshot_slots(
+                        merged_slots,
                         missing_preorder_values,
                         source="preorder_recovery",
                         fill_only=True,
                     )
                     logger.info(
-                        "[SLOTS] Recovered order slots from latest preOrder template: %s",
+                        "[SLOTS] recovered from preOrder template fallback: %s",
                         missing_preorder_values,
                     )
             if preorder_confirmation_turn:
@@ -16167,7 +16238,8 @@ class TStationChatServiceV2:
                     if value is not None and getattr(merged_slots, field, None) is None
                 }
                 if missing_datepick_values:
-                    merged_slots = merged_slots.apply_runtime_values(
+                    merged_slots = _apply_order_snapshot_slots(
+                        merged_slots,
                         missing_datepick_values,
                         source="datepick_recovery",
                         fill_only=True,
@@ -16192,7 +16264,8 @@ class TStationChatServiceV2:
                     if getattr(merged_slots, field, None) != value
                 }
                 if enforced_datepick_values:
-                    merged_slots = merged_slots.apply_runtime_values(
+                    merged_slots = _apply_order_snapshot_slots(
+                        merged_slots,
                         enforced_datepick_values,
                         source="datepick_recovery_verified",
                         fill_only=False,
@@ -21530,8 +21603,6 @@ class TStationChatServiceV2:
                 return None
 
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl) or {}
-            if not preorder_slot_values:
-                return None
             slot_values = (
                 initial_slots.model_dump()
                 if initial_slots is not None and hasattr(initial_slots, "model_dump")
@@ -22910,13 +22981,14 @@ class TStationChatServiceV2:
                         base_slots = pending_slots
                         if base_slots is None:
                             base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
-                        updated_slots = base_slots.apply_runtime_values(
+                        updated_slots = _apply_order_snapshot_slots(
+                            base_slots,
                             preorder_slots,
                             source="preorder_event",
                         )
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
-                            logger.info("[PREORDER_SLOT_STAGE] staged order slots from preOrder event: %s", preorder_slots)
+                            logger.info("[PREORDER_SLOT_COMMIT] staged canonical order snapshot: %s", preorder_slots)
                     datepick_slots = TStationChatServiceV2._datepick_slot_values_from_data(event)
                     if datepick_slots and (
                         getattr(pending_slots or initial_slots, "goal_type", None) == "place_order"
@@ -22931,7 +23003,8 @@ class TStationChatServiceV2:
                         base_slots = pending_slots
                         if base_slots is None:
                             base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
-                        updated_slots = base_slots.apply_runtime_values(
+                        updated_slots = _apply_order_snapshot_slots(
+                            base_slots,
                             datepick_slots,
                             source="datepick_event",
                             fill_only=True,
