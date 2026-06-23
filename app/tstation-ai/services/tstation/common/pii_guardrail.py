@@ -88,10 +88,36 @@ _REMEMBER_PII_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 저장된/소유한 민감정보를 채팅창에 표시하거나, 숫자가 아닌 말/글자/띄어쓰기 등으로 변환해 달라는 요청.
+# 실제 값이 메시지에 없어도 exfiltration/transform request 자체가 위험하므로 hard block 한다.
+_PII_SENSITIVE_INFO_RE = (
+    r"연락처|전화\s*번호|휴대폰|핸드폰|폰\s*번호|비밀\s*번호|비번|패스워드|password|passwd|"
+    r"카드\s*번호|카드\s*정보|계좌\s*번호|계좌\s*정보|주민\s*(?:등록)?\s*번호|주민번호|"
+    r"여권\s*번호|운전\s*면허\s*번호|면허\s*번호|인증\s*번호|인증\s*코드|OTP|오티피|"
+    r"이메일|메일\s*주소|개인\s*정보|민감\s*정보"
+)
+_PII_SELF_OR_STORED_RE = r"내|나의|제|저의|회원\s*정보|저장된|등록된|내\s*계정|계정에|마이페이지"
+_PII_EXFILTRATION_ACTION_RE = (
+    r"알려\s*줘|보여\s*줘|말해\s*줘|읽어\s*줘|써\s*줘|표시|노출|확인해\s*줘|채팅창에|"
+    r"변환해\s*줘|풀어\s*줘|마스킹\s*풀|전체|일부\s*말고|일부만\s*말고|원문"
+)
+_PII_OBFUSCATION_RE = (
+    r"공일공|영일영|하나둘셋|숫자\s*아니니까|숫자\s*말고|글자로|한글로|띄어서|"
+    r"분리해서|마스킹\s*풀어서|일부\s*말고\s*전체|일부만\s*말고\s*전체|채팅창에|"
+    r"변환해\s*줘|읽어\s*줘"
+)
+_PII_EXFILTRATION_OR_TRANSFORM_RE = re.compile(
+    rf"(?:{_PII_SELF_OR_STORED_RE}).{{0,30}}(?:{_PII_SENSITIVE_INFO_RE}).{{0,40}}"
+    rf"(?:{_PII_EXFILTRATION_ACTION_RE}|{_PII_OBFUSCATION_RE})|"
+    rf"(?:{_PII_SENSITIVE_INFO_RE}).{{0,40}}(?:{_PII_OBFUSCATION_RE})|"
+    rf"(?:{_PII_SENSITIVE_INFO_RE}).{{0,30}}(?:{_PII_EXFILTRATION_ACTION_RE}).{{0,30}}"
+    rf"(?:{_PII_SELF_OR_STORED_RE})",
+    re.IGNORECASE,
+)
+
 GUARDRAIL_RESPONSE = (
-    "고객님의 소중한 개인정보 보호를 위해, "
-    "민감한 개인정보는 입력하실 수 없으며 저장되지 않습니다.\n\n"
-    "타이어 관련 문의사항이 있으시면 편하게 말씀해 주세요."
+    "보안상 비밀번호, 카드번호, 주민번호, 여권번호, 연락처 같은 개인정보나 민감정보는 "
+    "채팅창에 표시하거나 다른 형태로 변환해 드릴 수 없어요."
 )
 
 
@@ -107,6 +133,10 @@ def check_pii(text: str) -> str | None:
         if pattern.search(text):
             logger.warning(f"[PII_GUARDRAIL] Detected: {name}")
             return name
+
+    if _PII_EXFILTRATION_OR_TRANSFORM_RE.search(text):
+        logger.warning("[PII_GUARDRAIL] Detected: PII exfiltration/transform request")
+        return "개인정보 노출/변환 요청"
 
     if _REMEMBER_PII_RE.search(text):
         logger.warning("[PII_GUARDRAIL] Detected: PII remember/store request")
