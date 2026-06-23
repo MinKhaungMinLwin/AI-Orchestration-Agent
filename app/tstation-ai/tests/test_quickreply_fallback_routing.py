@@ -6843,6 +6843,7 @@ def test_monthly_best_seller_request_forces_code_route_even_if_transaction_biase
     for text in (
         "이번달 사람들이 젤 많이 구매한 타이어",
         "이번 달 제일 많이 산 타이어",
+        "이번 달 많이 팔리는 타이어",
         "이번달 베스트셀러",
         "이달 최다 판매 타이어 뭐야",
         "월간 판매 순위 타이어 알려줘",
@@ -6864,8 +6865,16 @@ def test_monthly_best_seller_request_forces_code_route_even_if_transaction_biase
 def test_unspecified_current_best_seller_request_forces_code_route() -> None:
     for text in (
         "요즘 젤 잘 팔리는거 알려줘",
+        "요즘 젤 많이 팔리는거 추천",
+        "요즘 많이 팔리는 타이어 추천",
+        "제일 많이 팔리는 상품 알려줘",
+        "가장 많이 팔리는 타이어",
         "요즘 제일 인기 있는 거",
         "요즘 잘 팔리는 타이어",
+        "요즘 많이 팔린 타이어",
+        "잘 팔리는 타이어",
+        "베스트셀러 알려줘",
+        "판매량 순위 알려줘",
     ):
         frame = build_discovery_intent_frame(text)
         plan = plan_discovery_tools(frame)
@@ -6874,10 +6883,29 @@ def test_unspecified_current_best_seller_request_forces_code_route() -> None:
         assert best_seller_period_from_text(text) == "3months"
         assert frame.sub_intent == "best_seller_search"
         assert plan.allowed_tools == ("get_best_selling_products_tool",)
+        assert plan.preferred_tool == "get_best_selling_products_tool"
+        assert plan.tool_args_patch == {"period": "3months", "limit": 5}
         assert _should_force_best_seller_code_route(
             text,
             [MultiAgentDomain.Domain.LEADING],
         )
+
+
+def test_non_best_seller_recommendation_requests_do_not_force_best_seller_route() -> None:
+    for text in (
+        "많이 할인되는 타이어 추천",
+        "많이 타도 오래가는 타이어 추천",
+        "많이 마모 안 되는 타이어 추천",
+        "조용한 거 추천",
+        "가성비 좋은 거 추천",
+    ):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert not is_best_seller_request(text)
+        assert best_seller_period_from_text(text) is None
+        assert frame.sub_intent != "best_seller_search"
+        assert plan.preferred_tool != "get_best_selling_products_tool"
 
 
 def test_non_aggregate_purchase_request_does_not_force_best_seller_code_route() -> None:
