@@ -6614,8 +6614,10 @@ def test_transaction_unresolved_product_resolution_event_clarifies_size_for_mult
     assert event["template"] == "quickReply"
     assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
     assert event["source_domain"] == "transaction"
-    assert "구매 확인을 위해 Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+    assert "Dynapro HPX 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["235/55R19", "255/45R20", "225/60R18", "사이즈 직접 입력"]
+    assert event["data"]["metadata"]["ordQty"] == 2
+    assert event["data"]["metadata"]["shopName"] == "판교점"
 
 
 def test_transaction_unresolved_product_resolution_event_returns_not_found_for_zero_rows() -> None:
@@ -6639,7 +6641,44 @@ def test_transaction_unresolved_product_resolution_event_returns_not_found_for_z
 
     assert event is not None
     assert event["assistant_response_source"] == "code_transaction_product_resolution_not_found"
-    assert "Dynapro HPX 상품을 찾지 못해 가격을(를) 이어서 확인하지 못했어요." in event["data"]["assistantResponse"]
+    assert "Dynapro HPX 상품을 찾지 못해 가격 확인을(를) 이어서 확인하지 못했어요." in event["data"]["assistantResponse"]
+
+
+def test_transaction_unresolved_product_resolution_event_filters_size_candidates_by_product_name() -> None:
+    slots = ConversationSlots(
+        pending_intent="order",
+        goal_type="place_order",
+        tire_model="Dynapro HPX",
+        ord_qty=2,
+        shop_name="판교점",
+        availability_intent="today_install",
+        requested_cal_day="20260624",
+    )
+
+    event = _build_transaction_unresolved_product_resolution_event(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        slots=slots,
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "다이나프로 HPX", "limit": 10},
+                "data": {
+                    "items": [
+                        {"goods_nm": "다이나프로 HPX", "tire_size_1": "235/55R19"},
+                        {"goods_nm": "벤투스 에어S", "tire_size_1": "245/45R18"},
+                        {"goods_nm": "다이나프로 HPX", "tire_size_1": "255/45R20"},
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert "Dynapro HPX 오늘서비스 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["235/55R19", "255/45R20", "사이즈 직접 입력"]
+    assert event["data"]["metadata"]["requestedCalDay"] == "20260624"
+    assert event["data"]["metadata"]["availabilityIntent"] == "today_install"
 
 
 def test_transaction_unresolved_product_resolution_event_skips_explicit_size_turn() -> None:
@@ -6709,7 +6748,7 @@ def test_turn_contract_required_slot_guard_prefers_size_clarification_for_multi_
     assert event is not None
     assert event["template"] == "quickReply"
     assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
-    assert "Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+    assert "Dynapro HPX 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == [
         "255/45R20",
         "255/55R18",
@@ -6780,7 +6819,7 @@ def test_turn_contract_fallback_event_prefers_size_clarification_on_response_pol
 
     assert event is not None
     assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
-    assert "Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+    assert "Dynapro HPX 오늘서비스 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
 
 
 def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
@@ -7013,7 +7052,7 @@ def test_no_visible_output_fallback_event_prefers_transaction_size_clarification
 
     assert event is not None
     assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
-    assert "구매 확인을 위해 Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+    assert "Dynapro HPX 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
 
 
 def test_no_visible_output_fallback_event_uses_tool_context_input_for_size_clarification() -> None:

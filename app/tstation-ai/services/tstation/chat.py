@@ -11567,12 +11567,25 @@ def _transactional_pending_intent_from_slots(slots: Any | None) -> str | None:
     }.get(goal_type)
 
 
-def _transactional_resolution_action_label(intent: str | None) -> str:
+def _slot_value(slots: Any | None, key: str) -> Any:
+    if slots is None:
+        return None
+    if isinstance(slots, Mapping):
+        return slots.get(key)
+    return getattr(slots, key, None)
+
+
+def _transactional_resolution_action_label(intent: str | None, slots: Any | None = None) -> str:
+    normalized_intent = str(intent or "").strip()
+    if normalized_intent == "order":
+        availability_intent = str(_slot_value(slots, "availability_intent") or "").strip()
+        if availability_intent == "today_install" or _slot_value(slots, "requested_cal_day"):
+            return "오늘서비스 구매"
+        return "구매"
     return {
-        "order": "구매",
-        "price": "가격",
-        "stock": "재고",
-    }.get(str(intent or "").strip(), "확인")
+        "price": "가격 확인",
+        "stock": "재고 확인",
+    }.get(normalized_intent, "확인")
 
 
 def _build_transaction_unresolved_product_not_found_event(
@@ -11611,17 +11624,35 @@ def _build_transaction_unresolved_product_size_clarification_event(
     sizes: list[str],
     *,
     pending_intent: str | None,
+    slots: Any | None = None,
 ) -> dict[str, Any]:
     product_label = str(product_name or "해당 상품").strip() or "해당 상품"
-    action_label = _transactional_resolution_action_label(pending_intent)
+    action_label = _transactional_resolution_action_label(pending_intent, slots)
     visible_sizes = sizes[:8]
     suffix = " 등" if len(sizes) > len(visible_sizes) else ""
     assistant_response = (
-        f"{action_label} 확인을 위해 {product_label}의 타이어 규격을 선택해 주세요.\n"
+        f"{product_label} {action_label}를 진행하려면 타이어 사이즈를 선택해 주세요.\n"
         f"현재 확인되는 규격은 {', '.join(visible_sizes)}{suffix}예요."
     )
     quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in sizes[:6]]
     quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
+    metadata = {
+        "productName": product_label,
+        "sizes": sizes,
+        "pendingIntent": pending_intent,
+    }
+    for source_key, metadata_key in (
+        ("ord_qty", "ordQty"),
+        ("quantity", "quantity"),
+        ("shop_name", "shopName"),
+        ("store_name", "storeName"),
+        ("requested_cal_day", "requestedCalDay"),
+        ("availability_intent", "availabilityIntent"),
+        ("goal_type", "goalType"),
+    ):
+        value = _slot_value(slots, source_key)
+        if value not in (None, ""):
+            metadata[metadata_key] = value
     return {
         "type": "data",
         "template": "quickReply",
@@ -11631,11 +11662,7 @@ def _build_transaction_unresolved_product_size_clarification_event(
             "assistantResponse": assistant_response,
             "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
-            "metadata": {
-                "productName": product_label,
-                "sizes": sizes,
-                "pendingIntent": pending_intent,
-            },
+            "metadata": metadata,
         },
     }
 
@@ -11657,6 +11684,31 @@ def _search_result_size_candidates(rows: list[dict]) -> list[str]:
         seen_sizes.add(compact_size)
         sizes.append(tire_size)
     return sizes
+
+
+def _search_result_rows_for_product(rows: list[dict], product_name: str) -> list[dict]:
+    product_label = str(product_name or "").strip()
+    if not product_label:
+        return rows
+    target_names = set(extract_product_names(product_label))
+    matched_rows: list[dict] = []
+    for row in rows:
+        row_name = str(
+            row.get("goods_nm")
+            or row.get("titleProductName")
+            or row.get("title")
+            or ""
+        ).strip()
+        if not row_name:
+            matched_rows.append(row)
+            continue
+        row_names = set(extract_product_names(row_name))
+        if (target_names and row_names and target_names & row_names) or _is_strong_product_name_match(
+            product_label,
+            row_name,
+        ):
+            matched_rows.append(row)
+    return matched_rows
 
 
 def _build_transaction_unresolved_product_resolution_event(
@@ -11709,12 +11761,20 @@ def _build_transaction_unresolved_product_resolution_event(
             pending_intent=pending_intent,
         )
 
-    sizes = _search_result_size_candidates(rows)
+    matched_rows = _search_result_rows_for_product(rows, product_name)
+    if rows and not matched_rows:
+        return _build_transaction_unresolved_product_not_found_event(
+            product_name,
+            pending_intent=pending_intent,
+        )
+
+    sizes = _search_result_size_candidates(matched_rows)
     if sizes:
         return _build_transaction_unresolved_product_size_clarification_event(
             product_name,
             sizes,
             pending_intent=pending_intent,
+            slots=slots,
         )
 
     return _build_transaction_unresolved_product_not_found_event(
