@@ -10993,6 +10993,25 @@ def _build_no_visible_output_fallback_event(
     return None
 
 
+def _build_turn_contract_required_slot_guard_event(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    tool_data_list: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    if "tire_size" in set(turn_contract.blocking_required_slots):
+        unresolved_event = _build_transaction_unresolved_product_resolution_event(
+            user_text=user_text,
+            slots=turn_contract.known_slots,
+            tool_data_list=tool_data_list,
+        )
+        if unresolved_event is not None:
+            return unresolved_event
+    return build_required_slot_clarification_event(turn_contract)
+
+
 def _is_size_only_store_availability_continuation(
     user_text: str,
     *,
@@ -11071,6 +11090,60 @@ def _requested_day_label_from_availability_context(user_text: str, recent_contex
         if label in text:
             return label
     return "오늘"
+
+
+_PREVIOUS_SELECTION_DATA_MARKER = "[이전 선택된 상품 데이터]"
+
+
+def _template_data_from_assistant_message(message: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return None
+    template_data = message.get("template_data")
+    if isinstance(template_data, dict):
+        return template_data
+    content = str(message.get("content") or "")
+    if _PREVIOUS_SELECTION_DATA_MARKER not in content:
+        return None
+    _, _, suffix = content.partition(_PREVIOUS_SELECTION_DATA_MARKER)
+    raw_json = suffix.strip()
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _datepick_template_recovery_candidate_from_messages(
+    messages: list[dict] | None,
+) -> dict[str, Any] | None:
+    if not messages:
+        return None
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        template_data = _template_data_from_assistant_message(message)
+        if not isinstance(template_data, dict):
+            return None
+        if str(template_data.get("template") or "") == "datepick":
+            return template_data
+        return None
+    return None
+
+
+def _has_sufficient_datepick_order_metadata(slot_values: Mapping[str, Any] | None) -> bool:
+    if not isinstance(slot_values, Mapping):
+        return False
+    goods_no = str(slot_values.get("goods_no") or "").strip()
+    tire_size = str(slot_values.get("tire_size") or "").strip()
+    shop_id = str(slot_values.get("shop_id") or "").strip()
+    ord_qty = slot_values.get("ord_qty")
+    try:
+        qty_ok = int(ord_qty) > 0
+    except (TypeError, ValueError):
+        qty_ok = False
+    return bool(goods_no and tire_size and shop_id and qty_ok)
 
 
 def _build_store_availability_quantity_prompt_event(
@@ -14640,10 +14713,27 @@ class TStationChatServiceV2:
                         "[SLOTS] Recovered order slots from latest preOrder template: %s",
                         missing_preorder_values,
                     )
+            datepick_template_for_recovery = latest_datepick_tmpl
             datepick_slot_values = TStationChatServiceV2._datepick_slot_values_from_data(
-                latest_datepick_tmpl,
+                datepick_template_for_recovery,
                 user_text=last_user_text,
             )
+            if (
+                last_user_text
+                and _DATEPICK_SELECTION_RE.match(last_user_text)
+                and _is_active_order_flow_slots(merged_slots)
+                and not _has_sufficient_datepick_order_metadata(datepick_slot_values)
+            ):
+                datepick_template_from_messages = _datepick_template_recovery_candidate_from_messages(enriched_messages)
+                if datepick_template_from_messages is not None:
+                    recovered_datepick_slot_values = TStationChatServiceV2._datepick_slot_values_from_data(
+                        datepick_template_from_messages,
+                        user_text=last_user_text,
+                    )
+                    if _has_sufficient_datepick_order_metadata(recovered_datepick_slot_values):
+                        datepick_template_for_recovery = datepick_template_from_messages
+                        datepick_slot_values = recovered_datepick_slot_values
+                        logger.info("[SLOTS] Recovered datepick template from recent assistant message for order flow")
             should_recover_datepick_order_slots = bool(
                 datepick_slot_values
                 and (
@@ -16503,7 +16593,11 @@ class TStationChatServiceV2:
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if should_guard_required_slots(turn_contract):
-            turn_contract_guard_event = build_required_slot_clarification_event(turn_contract)
+            turn_contract_guard_event = _build_turn_contract_required_slot_guard_event(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                tool_data_list=prev_tool_data,
+            ) or build_required_slot_clarification_event(turn_contract)
             logger.info(
                 "[TURN_CONTRACT] required-slot guard response: contract=%s text=%r session_id=%s",
                 turn_contract.to_dict(),
@@ -21205,7 +21299,14 @@ class TStationChatServiceV2:
                         turn_contract.intent if turn_contract else None,
                     )
                     event = (
-                        build_required_slot_clarification_event(turn_contract)
+                        _build_turn_contract_required_slot_guard_event(
+                            turn_contract=turn_contract,
+                            user_text=user_query,
+                            tool_data_list=[
+                                {"tool": tool_name, "data": data}
+                                for tool_name, data in structured_sources
+                            ],
+                        )
                         if should_guard_required_slots(turn_contract)
                         else build_response_policy_guard_event(turn_contract)
                     )
@@ -21491,7 +21592,14 @@ class TStationChatServiceV2:
                             )
                             if contract_violations and turn_contract is not None and not _parallel_qc:
                                 fallback_event = (
-                                    build_required_slot_clarification_event(turn_contract)
+                                    _build_turn_contract_required_slot_guard_event(
+                                        turn_contract=turn_contract,
+                                        user_text=user_query,
+                                        tool_data_list=[
+                                            {"tool": tool_name, "data": data}
+                                            for tool_name, data in structured_sources
+                                        ],
+                                    )
                                     if should_guard_required_slots(turn_contract)
                                     else build_response_policy_guard_event(turn_contract)
                                 )

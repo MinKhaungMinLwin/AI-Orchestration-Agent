@@ -73,9 +73,11 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
     _build_no_visible_output_fallback_event,
+    _build_turn_contract_required_slot_guard_event,
     _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
     _clear_stale_product_slots_for_new_recommendation,
+    _datepick_template_recovery_candidate_from_messages,
     _comparison_query_with_recent_context,
     _recent_product_set_size_availability_context,
     _should_clarify_ambiguous_multi_product_query,
@@ -5736,6 +5738,30 @@ def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
     assert values["rsv_hour"] == "13"
 
 
+def test_datepick_template_recovery_candidate_uses_recent_assistant_template_marker() -> None:
+    messages = [
+        {"role": "user", "content": "2355519"},
+        {
+            "role": "assistant",
+            "content": (
+                "예약하려는 날짜와 시간을 선택해 주세요.\n\n[이전 선택된 상품 데이터]\n"
+                '{"template":"datepick","data":{"metadata":{"shopId":"F00405","goodsNo":"G000000317900",'
+                '"productName":"Dynapro HPX","tireSize":"235/55R19","ordQty":2}}}'
+            ),
+        },
+    ]
+
+    template = _datepick_template_recovery_candidate_from_messages(messages)
+    values = TStationChatServiceV2._datepick_slot_values_from_data(template)
+
+    assert template is not None
+    assert values is not None
+    assert values["shop_id"] == "F00405"
+    assert values["goods_no"] == "G000000317900"
+    assert values["tire_size"] == "235/55R19"
+    assert values["ord_qty"] == 2
+
+
 def test_datepick_slots_fill_missing_order_state_without_overwriting_preorder_values() -> None:
     slots = ConversationSlots(
         goods_no="G000000317900",
@@ -5943,6 +5969,61 @@ def test_transaction_unresolved_product_resolution_event_skips_explicit_size_tur
     )
 
     assert event is None
+
+
+def test_turn_contract_required_slot_guard_prefers_size_clarification_for_multi_size_order_rows() -> None:
+    contract = build_turn_contract(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="quick_order_reservation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("tire_size",),
+        ),
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            tire_model="Dynapro HPX",
+            ord_qty=2,
+            shop_name="판교점",
+        ),
+        routing_result=_routing_result(execution_plan=["transaction:quick_order_reservation"]),
+    )
+
+    event = _build_turn_contract_required_slot_guard_event(
+        turn_contract=contract,
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "limit": 10},
+                "data": {
+                    "items": [
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/55R18"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "215/55R18"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "215/45R18"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "265/50R20"},
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert "Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == [
+        "255/45R20",
+        "255/55R18",
+        "215/55R18",
+        "215/45R18",
+        "235/55R19",
+        "265/50R20",
+        "사이즈 직접 입력",
+    ]
 
 
 def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
