@@ -439,6 +439,11 @@ def _is_discovery_first_leg_transaction_violation(
         return False
     response_shape_key = str(event.get("response_shape_key") or "")
     assistant_response_source = str(event.get("assistant_response_source") or "")
+    if (
+        assistant_response_source == "code_product_compare_resolver"
+        and response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}
+    ):
+        return False
     called_tools = tuple(str(tool) for tool in tuple(event.get("called_tools") or ()))
     if any(tool.startswith("get_final_price_tool") or tool.startswith("get_store") or tool.startswith("quick_order") for tool in called_tools):
         return False

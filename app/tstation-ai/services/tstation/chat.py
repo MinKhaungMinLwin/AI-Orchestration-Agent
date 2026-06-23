@@ -10746,10 +10746,14 @@ def _build_product_size_list_event_from_search_results(
 def _transactional_pending_intent_from_slots(slots: Any | None) -> str | None:
     if slots is None:
         return None
-    pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+    if isinstance(slots, Mapping):
+        pending_intent = str(slots.get("pending_intent") or "").strip()
+        goal_type = str(slots.get("goal_type") or "").strip()
+    else:
+        pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+        goal_type = str(getattr(slots, "goal_type", None) or "").strip()
     if pending_intent in {"order", "price", "stock"}:
         return pending_intent
-    goal_type = str(getattr(slots, "goal_type", None) or "").strip()
     return {
         "place_order": "order",
         "price_inquiry": "price",
@@ -10858,9 +10862,15 @@ def _build_transaction_unresolved_product_resolution_event(
     pending_intent = _transactional_pending_intent_from_slots(slots)
     if pending_intent not in {"order", "price", "stock"}:
         return None
-    if slots is None or getattr(slots, "goods_no", None) is not None:
+    slot_goods_no = slots.get("goods_no") if isinstance(slots, Mapping) else getattr(slots, "goods_no", None)
+    slot_tire_size = slots.get("tire_size") if isinstance(slots, Mapping) else getattr(slots, "tire_size", None)
+    slot_tire_model = slots.get("tire_model") if isinstance(slots, Mapping) else getattr(slots, "tire_model", None)
+    slot_pending_product_name = (
+        slots.get("pending_product_name") if isinstance(slots, Mapping) else getattr(slots, "pending_product_name", None)
+    )
+    if slots is None or slot_goods_no is not None:
         return None
-    if normalize_tire_size(user_text or "") or getattr(slots, "tire_size", None):
+    if normalize_tire_size(user_text or "") or slot_tire_size:
         return None
 
     last_search_entry: dict[str, Any] | None = None
@@ -10878,8 +10888,8 @@ def _build_transaction_unresolved_product_resolution_event(
         return None
 
     product_name = str(
-        getattr(slots, "tire_model", None)
-        or getattr(slots, "pending_product_name", None)
+        slot_tire_model
+        or slot_pending_product_name
         or search_input.get("keyword")
         or ""
     ).strip()
@@ -10905,6 +10915,82 @@ def _build_transaction_unresolved_product_resolution_event(
         product_name,
         pending_intent=pending_intent,
     )
+
+
+def _is_compare_contract_for_no_output(contract: TurnContract | None) -> bool:
+    if contract is None:
+        return False
+    if str(contract.intent or "") == "product_comparison":
+        return True
+    response_decision = contract.response_decision or {}
+    response_shape_key = str(response_decision.get("metadata", {}).get("response_shape_key") or "")
+    return response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}
+
+
+def _search_results_from_structured_sources(
+    structured_sources: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    results: list[tuple[str, dict]] = []
+    for tool_name, tool_output in structured_sources:
+        if tool_name != "search_product_tool" or not isinstance(tool_output, dict):
+            continue
+        rows = _search_product_rows_from_payload(tool_output)
+        if not rows:
+            continue
+        keyword = ""
+        first_row = rows[0]
+        if isinstance(first_row, dict):
+            keyword = str(
+                first_row.get("goods_nm")
+                or first_row.get("titleProductName")
+                or first_row.get("title")
+                or ""
+            ).strip()
+        results.append((keyword, tool_output))
+    return results
+
+
+def _build_no_visible_output_fallback_event(
+    *,
+    user_text: str,
+    turn_contract: TurnContract | None,
+    structured_sources: list[tuple[str, dict]],
+    called_tool_names: set[str],
+    source_domain: str,
+) -> dict[str, Any] | None:
+    if _is_compare_contract_for_no_output(turn_contract):
+        compare_event = _build_product_comparison_event_from_search_results(
+            user_text,
+            _search_results_from_structured_sources(structured_sources),
+        )
+        if compare_event is not None:
+            return compare_event
+
+    unresolved_event = (
+        _build_transaction_unresolved_product_resolution_event(
+            user_text=user_text,
+            slots=None if turn_contract is None else turn_contract.known_slots,
+            tool_data_list=[
+                {"tool": tool_name, "data": data}
+                for tool_name, data in structured_sources
+            ],
+        )
+        if called_tool_names
+        else None
+    )
+    if unresolved_event is not None:
+        return unresolved_event
+
+    repaired_description_event = _build_repaired_product_description_event(
+        structured_sources=structured_sources,
+        called_tool_names=called_tool_names,
+        source_domain=source_domain,
+        user_text=user_text,
+    )
+    if repaired_description_event is not None:
+        return repaired_description_event
+
+    return None
 
 
 def _is_size_only_store_availability_continuation(
@@ -21210,27 +21296,30 @@ class TStationChatServiceV2:
             or buffered_data_events
             or any(str(evt.get("content") or "").strip() for evt in original_message_events)
         ):
-            no_output_fallback_event = None
-            if called_tool_names:
-                no_output_fallback_event = _build_transaction_unresolved_product_resolution_event(
-                    user_text=user_query,
-                    slots=pending_slots or initial_slots,
-                    tool_data_list=[
-                        {"tool": tool_name, "data": data}
-                        for tool_name, data in structured_sources
-                    ],
-                )
+            no_output_fallback_event = _build_no_visible_output_fallback_event(
+                user_text=user_query,
+                turn_contract=turn_contract,
+                structured_sources=structured_sources,
+                called_tool_names=called_tool_names,
+                source_domain=str(turn_contract.domain or "") if turn_contract is not None else "",
+            )
             if no_output_fallback_event is not None:
                 logger.warning(
-                    "[NO_VISIBLE_OUTPUT] tool_called=%s forcing safe clarification fallback",
+                    "[NO_VISIBLE_OUTPUT] tool_called=%s forcing safe fallback=%s",
                     sorted(called_tool_names),
+                    str(no_output_fallback_event.get("assistant_response_source") or ""),
                 )
                 assistant_response = str((no_output_fallback_event.get("data") or {}).get("assistantResponse") or "")
                 buffered_data_events = [no_output_fallback_event]
                 original_message_events = [{
                     "type": "message",
                     "content": assistant_response,
-                    "agent": "[TRANSACTION AGENT]",
+                    "agent": (
+                        "[DISCOVERY AGENT]"
+                        if str(no_output_fallback_event.get("source_domain") or "").lower()
+                        == MultiAgentDomain.Domain.DISCOVERY.value
+                        else "[TRANSACTION AGENT]"
+                    ),
                 }]
                 draft_response = assistant_response
                 draft_for_qc = assistant_response

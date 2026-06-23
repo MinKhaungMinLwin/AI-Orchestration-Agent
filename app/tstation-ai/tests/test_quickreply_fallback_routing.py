@@ -72,6 +72,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event,
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
+    _build_no_visible_output_fallback_event,
     _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
     _clear_stale_product_slots_for_new_recommendation,
@@ -5944,6 +5945,105 @@ def test_transaction_unresolved_product_resolution_event_skips_explicit_size_tur
     assert event is None
 
 
+def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
+    contract = build_turn_contract(
+        user_text="ventus s2 as, ventus air s 중에 뭐가 더 신상품?",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_comparison", sub_intent="latest_compare"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "metric_comparison_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_comparison"],
+        ),
+    )
+
+    event = _build_no_visible_output_fallback_event(
+        user_text="ventus s2 as, ventus air s 중에 뭐가 더 신상품?",
+        turn_contract=contract,
+        structured_sources=[
+            (
+                "search_product_tool",
+                {
+                    "items": [
+                        {
+                            "goods_nm": "벤투스 S2 AS",
+                            "t_rls_yearmon": "2016년 1월",
+                            "sys_reg_dtime": "2016-01-10 00:00:00",
+                        }
+                    ]
+                },
+            ),
+            (
+                "search_product_tool",
+                {
+                    "items": [
+                        {
+                            "goods_nm": "벤투스 에어S",
+                            "t_rls_yearmon": "2024년 7월",
+                            "sys_reg_dtime": "2024-07-01 00:00:00",
+                        }
+                    ]
+                },
+            ),
+        ],
+        called_tool_names={"search_product_tool"},
+        source_domain="discovery",
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert "최신 상품은 벤투스 에어S입니다." in event["data"]["assistantResponse"]
+
+
+def test_no_visible_output_fallback_event_prefers_transaction_size_clarification_over_description() -> None:
+    contract = build_turn_contract(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="quick_order_reservation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "order_summary"},
+        ),
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            tire_model="Dynapro HPX",
+            ord_qty=2,
+            shop_name="판교점",
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:quick_order_reservation"],
+        ),
+    )
+
+    event = _build_no_visible_output_fallback_event(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        turn_contract=contract,
+        structured_sources=[
+            (
+                "search_product_tool",
+                {
+                    "items": [
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                    ]
+                },
+            )
+        ],
+        called_tool_names={"search_product_tool"},
+        source_domain="transaction",
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert "구매 확인을 위해 Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+
+
 def test_current_location_store_search_confirmation_is_narrow() -> None:
     latest_quickreply = {
         "assistantResponse": "현재 위치 기반으로 가까운 매장 검색을 진행할까요?",
@@ -9177,6 +9277,33 @@ def test_turn_contract_keeps_product_template_when_current_turn_has_product_sour
         },
         contract,
     )
+
+
+def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_transaction_chain() -> None:
+    contract = build_turn_contract(
+        user_text="ventus s2 as, ventus air s 중에 뭐가 더 신상품?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "metric_comparison_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:price_or_coupon_check"],
+        ),
+    )
+
+    compare_event = {
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_product_compare_resolver",
+        "response_shape_key": "metric_comparison_summary",
+        "called_tools": ["search_product_tool"],
+    }
+
+    assert not violates_response_template_contract(compare_event, contract)
+    assert response_contract_violations(contract=contract, **compare_event) == []
 
 
 def test_turn_contract_reports_product_template_without_current_source_even_without_called_tools() -> None:
