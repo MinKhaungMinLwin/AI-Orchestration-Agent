@@ -8966,7 +8966,7 @@ def _normalize_order_cancel_request_guidance(
     else:
         response = (
             "제가 직접 주문을 취소 처리할 수는 없어요.\n"
-            "취소 가능 여부와 취소 버튼은 주문 상세 화면에서 확인해 주세요."
+            "취소 가능 여부는 주문 상세 화면에서 확인해 주세요."
         )
         primary_chip = {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
 

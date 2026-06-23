@@ -1784,7 +1784,7 @@ def test_order_cancel_request_normalizer_uses_order_history_even_for_explicit_or
     assert changed is True
     assert event_data["assistantResponse"] == (
         "제가 직접 주문을 취소 처리할 수는 없어요.\n"
-        "취소 가능 여부와 취소 버튼은 주문 상세 화면에서 확인해 주세요."
+        "취소 가능 여부는 주문 상세 화면에서 확인해 주세요."
     )
     assert event_data["quickReplies"] == [
         {
