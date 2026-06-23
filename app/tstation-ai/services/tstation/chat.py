@@ -10969,6 +10969,7 @@ def _build_no_visible_output_fallback_event(
     user_text: str,
     turn_contract: TurnContract | None,
     structured_sources: list[tuple[str, dict]],
+    tool_data_list: list[dict] | None = None,
     called_tool_names: set[str],
     source_domain: str,
 ) -> dict[str, Any] | None:
@@ -10984,7 +10985,9 @@ def _build_no_visible_output_fallback_event(
         _build_transaction_unresolved_product_resolution_event(
             user_text=user_text,
             slots=None if turn_contract is None else turn_contract.known_slots,
-            tool_data_list=[
+            tool_data_list=tool_data_list
+            if tool_data_list is not None
+            else [
                 {"tool": tool_name, "data": data}
                 for tool_name, data in structured_sources
             ],
@@ -21332,10 +21335,7 @@ class TStationChatServiceV2:
                     event = _build_turn_contract_fallback_event(
                         turn_contract=turn_contract,
                         user_text=user_query,
-                        tool_data_list=[
-                            {"tool": tool_name, "data": data}
-                            for tool_name, data in structured_sources
-                        ],
+                        tool_data_list=tool_context_items,
                     ) or build_response_policy_guard_event(turn_contract)
                     last_template = "quickReply"
                     last_template_source = "turn_contract"
@@ -21428,6 +21428,7 @@ class TStationChatServiceV2:
                 user_text=user_query,
                 turn_contract=turn_contract,
                 structured_sources=structured_sources,
+                tool_data_list=tool_context_items,
                 called_tool_names=called_tool_names,
                 source_domain=str(turn_contract.domain or "") if turn_contract is not None else "",
             )
@@ -21603,10 +21604,7 @@ class TStationChatServiceV2:
                                 fallback_event = _build_turn_contract_fallback_event(
                                     turn_contract=turn_contract,
                                     user_text=user_query,
-                                    tool_data_list=[
-                                        {"tool": tool_name, "data": data}
-                                        for tool_name, data in structured_sources
-                                    ],
+                                    tool_data_list=tool_context_items,
                                 ) or build_response_policy_guard_event(turn_contract)
                                 buffered_data_events = [fallback_event]
                                 last_template = "quickReply"

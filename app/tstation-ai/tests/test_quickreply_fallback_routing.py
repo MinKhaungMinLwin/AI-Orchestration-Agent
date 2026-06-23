@@ -6205,6 +6205,61 @@ def test_no_visible_output_fallback_event_prefers_transaction_size_clarification
     assert "구매 확인을 위해 Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
 
 
+def test_no_visible_output_fallback_event_uses_tool_context_input_for_size_clarification() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        known_slots={
+            "ord_qty": 2,
+            "shop_name": "판교점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=("product", "goods_no", "tire_size", "quantity"),
+        blocking_required_slots=("tire_size", "quantity"),
+        resolvable_required_slots=("product", "goods_no"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "product_search_summary"},
+        ).to_dict(),
+        risk_level="medium",
+    )
+
+    event = _build_no_visible_output_fallback_event(
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        turn_contract=contract,
+        structured_sources=[
+            (
+                "search_product_tool",
+                {
+                    "items": [
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                    ]
+                },
+            )
+        ],
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "limit": 10},
+                "data": {
+                    "items": [
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                    ]
+                },
+            }
+        ],
+        called_tool_names={"search_product_tool"},
+        source_domain="discovery",
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+
+
 def test_current_location_store_search_confirmation_is_narrow() -> None:
     latest_quickreply = {
         "assistantResponse": "현재 위치 기반으로 가까운 매장 검색을 진행할까요?",
