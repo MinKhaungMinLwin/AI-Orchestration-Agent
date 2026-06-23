@@ -9023,6 +9023,118 @@ def test_turn_contract_blocks_price_without_size_templates(template: str) -> Non
     assert violates_response_template_contract({"template": template}, contract)
 
 
+@pytest.mark.parametrize(
+    ("dialogue", "followup_text"),
+    [
+        (
+            [
+                {"role": "user", "content": "벤투스 에어S 가격 알려줘"},
+                {"role": "assistant", "content": "규격이 확인되면 가격을 안내해드릴게요."},
+                {"role": "user", "content": "가격은?"},
+            ],
+            "가격은?",
+        ),
+        (
+            [
+                {"role": "user", "content": "벤투스 에어S 가격 알려줘"},
+                {"role": "assistant", "content": "규격이 확인되면 가격을 안내해드릴게요."},
+                {"role": "user", "content": "얼마야?"},
+            ],
+            "얼마야?",
+        ),
+        (
+            [
+                {"role": "user", "content": "벤투스 에어S 가격 알려줘"},
+                {"role": "assistant", "content": "규격이 확인되면 가격을 안내해드릴게요."},
+                {"role": "user", "content": "가격 알려줘"},
+            ],
+            "가격 알려줘",
+        ),
+        (
+            [
+                {"role": "user", "content": "벤투스 에어S 가격 알려줘"},
+                {"role": "assistant", "content": "규격이 확인되면 가격을 안내해드릴게요."},
+                {"role": "user", "content": "그럼 가격은?"},
+            ],
+            "그럼 가격은?",
+        ),
+        (
+            [
+                {"role": "user", "content": "벤투스 에어S 가격 알려줘"},
+                {"role": "assistant", "content": "규격이 확인되면 가격을 안내해드릴게요."},
+                {"role": "user", "content": "최종가는?"},
+            ],
+            "최종가는?",
+        ),
+    ],
+)
+def test_real_dialogue_price_followup_blocks_source_less_product_card(
+    dialogue: list[dict[str, str]],
+    followup_text: str,
+) -> None:
+    """실제 대화: 상품명 기반 가격 요청 뒤 규격 미확정 상태의 가격 재질문은 product 카드로 끝나면 안 된다."""
+
+    contract = build_turn_contract(
+        user_text=followup_text,
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("price_without_size",),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:price_or_coupon_check"],
+        ),
+    )
+
+    llm_product_event = {
+        "template": "product",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_product_description",
+        "response_shape_key": "product_search_summary",
+        "called_tools": [],
+        "messages": dialogue,
+    }
+
+    assert violates_response_template_contract(llm_product_event, contract)
+    fallback_event = build_response_policy_guard_event(contract)
+    assert fallback_event["template"] == "quickReply"
+    assert "어떤 상품 기준인지" in fallback_event["data"]["assistantResponse"]
+
+
+def test_real_dialogue_sized_price_flow_keeps_current_turn_product_source_card_allowed() -> None:
+    """실제 대화: 규격이 명시된 상품 가격 문의에서 현재 턴 search_product_tool 결과 product 카드는 차단 대상이 아니다."""
+
+    dialogue = [
+        {"role": "user", "content": "벤투스 에어S 2454518 가격 알려줘"},
+        {"role": "assistant", "content": "245/45R18 기준 상품을 찾았어요."},
+    ]
+    contract = build_turn_contract(
+        user_text="벤투스 에어S 2454518 가격 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_search"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_product"],
+        ),
+    )
+
+    mapper_product_event = {
+        "template": "product",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_bare_product_search",
+        "response_shape_key": "product_search_summary",
+        "called_tools": ["search_product_tool"],
+        "messages": dialogue,
+    }
+
+    assert not violates_response_template_contract(mapper_product_event, contract)
+
+
 def test_turn_contract_accumulates_post_tool_forbidden_behaviors_across_tools() -> None:
     price_error_decision = _tool_error_response_decision("get_final_price_tool")
     accumulated_behaviors = list(price_error_decision.forbidden_behaviors)
