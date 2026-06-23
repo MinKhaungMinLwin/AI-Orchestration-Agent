@@ -73,6 +73,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
     _build_product_objective_followup_clarification_event,
+    _clear_stale_product_slots_for_new_recommendation,
     _comparison_query_with_recent_context,
     _recent_product_set_size_availability_context,
     _should_clarify_ambiguous_multi_product_query,
@@ -7961,11 +7962,10 @@ def test_single_product_search_result_updates_goods_no_and_tire_size() -> None:
     assert slots.payment_amount is None
 
 
-def test_product_description_result_updates_tire_size_with_goods_no() -> None:
+def test_product_description_result_keeps_goods_no_but_does_not_promote_unsized_row_tire_size() -> None:
     slots = ConversationSlots(
         goods_no="GOLD00000001",
         tire_model="이전 상품",
-        tire_size="205/55R17",
         payment_amount=300000,
     )
 
@@ -7981,13 +7981,147 @@ def test_product_description_result_updates_tire_size_with_goods_no() -> None:
             },
         },
         {"goods_no": "G000000309855"},
+        [],
     )
 
     assert changed is True
     assert slots.goods_no == "G000000309855"
-    assert slots.tire_size == "225/50R18"
+    assert slots.tire_size is None
     assert slots.tire_model is None
     assert slots.payment_amount is None
+
+
+def test_product_description_result_preserves_sized_source_tire_size() -> None:
+    slots = ConversationSlots(
+        goods_no="GOLD00000001",
+        tire_model="이전 상품",
+        payment_amount=300000,
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_product_description_tool",
+        {
+            "status": "success",
+            "data": {
+                "goods_no": "G000000309855",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "225/50R18",
+            },
+        },
+        {"goods_no": "G000000309855"},
+        [
+            {
+                "tool": "get_products_recommendations_tool",
+                "input": {"rcmd_type": "wet", "tire_size": "245/45R18"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000309855",
+                                "goods_nm": "벤투스 S2 AS",
+                                "tire_size_1": "225/50R18",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000309855"
+    assert slots.tire_size == "245/45R18"
+    assert slots.tire_model is None
+    assert slots.payment_amount is None
+
+
+def test_fresh_recommendation_turn_clears_unsized_selected_product_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309855",
+        tire_size="195/65R15",
+        payment_amount=412000,
+    )
+
+    cleared = _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="주말 장거리용으로 다른 거 추천해줘",
+        regex_slots=ConversationSlots(),
+        prev_tool_data=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "input": {"rcmd_type": "wet"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000309855",
+                                "goods_nm": "키너지 ST AS",
+                                "tire_size_1": "195/65R15",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert cleared == {
+        "tire_size": "195/65R15",
+        "goods_no": "G000000309855",
+        "payment_amount": 412000,
+    }
+    assert slots.goods_no is None
+    assert slots.tire_size is None
+    assert slots.payment_amount is None
+
+
+def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309855",
+        tire_size="245/45R18",
+        payment_amount=412000,
+    )
+
+    cleared = _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="같은 사이즈로 주말 장거리용 다른 거 추천해줘",
+        regex_slots=ConversationSlots(),
+        prev_tool_data=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "input": {"rcmd_type": "low_vibration", "tire_size": "245/45R18"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000309855",
+                                "goods_nm": "벤투스 S2 AS",
+                                "tire_size_1": "225/50R18",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert cleared == {}
+    assert slots.goods_no == "G000000309855"
+    assert slots.tire_size == "245/45R18"
+    assert slots.payment_amount == 412000
+
+
+def test_discovery_intent_frame_can_disable_inherited_tire_size() -> None:
+    frame = build_discovery_intent_frame(
+        "주말 장거리용으로 다른 거 추천해줘",
+        known_slots={"tire_size": "195/65R15", "allow_inherited_tire_size": False},
+    )
+
+    assert frame.entities["tire_size"] is None
 
 
 def test_final_price_result_updates_payment_amount_with_cheapest_final_price_first() -> None:

@@ -1777,7 +1777,61 @@ class StreamingMultiAgentCoordinator:
     }
 
     @staticmethod
-    def _apply_tool_derived_slots(slots: Any, tool_name: str, parsed_data: dict, tool_input: dict | None = None) -> bool:
+    def _tool_input_tire_size(tool_input: dict | None) -> str | None:
+        if not isinstance(tool_input, dict):
+            return None
+        raw_size = tool_input.get("tire_size") or tool_input.get("size")
+        if raw_size is None:
+            return None
+        return normalize_tire_size(str(raw_size))
+
+    @staticmethod
+    def _resolve_tire_size_from_sized_product_source(
+        goods_no: str | None,
+        prev_tool_data: list[dict] | None,
+    ) -> str | None:
+        target_goods_no = str(goods_no or "").strip()
+        if not target_goods_no or not prev_tool_data:
+            return None
+
+        for entry in reversed(prev_tool_data):
+            if entry.get("tool") not in ("search_product_tool", "get_products_recommendations_tool"):
+                continue
+            input_tire_size = StreamingMultiAgentCoordinator._tool_input_tire_size(entry.get("input"))
+            if not input_tire_size:
+                continue
+            data = entry.get("data")
+            if not isinstance(data, dict):
+                continue
+            payload = data.get("data", data)
+            rows = []
+            if isinstance(payload, dict):
+                raw_rows = payload.get("items")
+                if isinstance(raw_rows, list):
+                    rows = raw_rows
+                else:
+                    rows = [payload]
+            elif isinstance(payload, list):
+                rows = payload
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("goods_no") or "").strip() != target_goods_no:
+                    continue
+                row_tire_size = normalize_tire_size(
+                    str(row.get("tire_size") or row.get("tire_size_1") or row.get("tireSize") or "")
+                )
+                return input_tire_size or row_tire_size
+        return None
+
+    @staticmethod
+    def _apply_tool_derived_slots(
+        slots: Any,
+        tool_name: str,
+        parsed_data: dict,
+        tool_input: dict | None = None,
+        prev_tool_data: list[dict] | None = None,
+    ) -> bool:
         """Apply tool-derived slot changes in memory; caller persists once after streaming."""
         changed = False
 
@@ -1811,7 +1865,7 @@ class StreamingMultiAgentCoordinator:
 
         tool_slots = {}
         if tool_name == "get_products_recommendations_tool" and tool_input:
-            input_tire_size = tool_input.get("tire_size")
+            input_tire_size = StreamingMultiAgentCoordinator._tool_input_tire_size(tool_input)
             if input_tire_size:
                 tool_slots["tire_size"] = input_tire_size
 
@@ -1819,13 +1873,38 @@ class StreamingMultiAgentCoordinator:
             input_goods_no = tool_input.get("goods_no")
             if input_goods_no:
                 tool_slots["goods_no"] = input_goods_no
-            data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, dict) else {}
-            if isinstance(data, dict):
-                tire_size = normalize_tire_size(
-                    str(data.get("tire_size") or data.get("tire_size_1") or data.get("tireSize") or "")
+            inherited_tire_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
+            carried_sized_source = StreamingMultiAgentCoordinator._resolve_tire_size_from_sized_product_source(
+                str(input_goods_no or ""),
+                prev_tool_data,
+            )
+            pending_intent = str(getattr(slots, "pending_intent", "") or "").strip()
+            goal_type = str(getattr(slots, "goal_type", "") or "").strip()
+            has_vehicle_size_context = bool(
+                inherited_tire_size
+                and any(
+                    getattr(slots, field, None)
+                    for field in ("car_no", "car_model", "tire_size_front", "tire_size_rear")
                 )
-                if tire_size:
-                    tool_slots["tire_size"] = tire_size
+            )
+            has_confirmed_transaction_size = bool(
+                inherited_tire_size
+                and (
+                    pending_intent in {"price", "stock", "order"}
+                    or goal_type in {"price_inquiry", "store_with_stock", "place_order"}
+                )
+            )
+            resolved_tire_size = (
+                StreamingMultiAgentCoordinator._tool_input_tire_size(tool_input)
+                or carried_sized_source
+                or (
+                    inherited_tire_size
+                    if has_vehicle_size_context or has_confirmed_transaction_size
+                    else None
+                )
+            )
+            if resolved_tire_size:
+                tool_slots["tire_size"] = resolved_tire_size
 
         # `get_store_schedule_tool` / `get_store_detail_tool` 은 사용자가 매장을 확정한 뒤
         # 호출되는 도구다 (datepick / 매장 상세 페이지 진입). list-tool 의 result-count
@@ -2387,7 +2466,11 @@ class StreamingMultiAgentCoordinator:
                         slot_parsed = event.get("slot_data")
                         if pending_slots is not None and isinstance(slot_parsed, dict):
                             pending_slots_dirty = self._apply_tool_derived_slots(
-                                pending_slots, tool_name, slot_parsed, event.get("input", {})
+                                pending_slots,
+                                tool_name,
+                                slot_parsed,
+                                event.get("input", {}),
+                                accumulated_tool_data,
                             ) or pending_slots_dirty
                         tool_output = event.get("output", "")
                         if tool_output:
@@ -2406,7 +2489,11 @@ class StreamingMultiAgentCoordinator:
                                     and isinstance(parsed, dict)
                                 ):
                                     pending_slots_dirty = self._apply_tool_derived_slots(
-                                        pending_slots, tool_name, parsed, event.get("input", {})
+                                        pending_slots,
+                                        tool_name,
+                                        parsed,
+                                        event.get("input", {}),
+                                        accumulated_tool_data,
                                     ) or pending_slots_dirty
 
                             except (json.JSONDecodeError, TypeError):
@@ -11912,6 +11999,62 @@ def _clear_stale_product_identity_for_fresh_transaction(
     return True
 
 
+_RECOMMENDATION_SIZE_REFERENCE_RE = re.compile(
+    r"이\s*사이즈|그\s*사이즈|같(?:은|은)\s*사이즈|동일\s*사이즈|해당\s*사이즈",
+    re.IGNORECASE,
+)
+
+
+def _clear_stale_product_slots_for_new_recommendation(
+    slots: ConversationSlots,
+    *,
+    user_text: str,
+    regex_slots: ConversationSlots,
+    prev_tool_data: list[dict] | None = None,
+    tire_size_resolved_from_vehicle_selection: bool = False,
+) -> dict[str, Any]:
+    text = str(user_text or "").strip()
+    if not text or not ConversationSlots.has_recommend_intent(text):
+        return {}
+    if regex_slots.pending_intent is not None or regex_slots.tire_size is not None or _SIZE_ONLY_RE.match(text):
+        return {}
+    if _RECOMMENDATION_SIZE_REFERENCE_RE.search(text):
+        return {}
+
+    cleared: dict[str, Any] = {}
+    preserved_tire_size = normalize_tire_size(str(slots.tire_size or ""))
+    if slots.goods_no:
+        preserved_tire_size = (
+            StreamingMultiAgentCoordinator._resolve_tire_size_from_sized_product_source(
+                slots.goods_no,
+                prev_tool_data,
+            )
+            or preserved_tire_size
+        )
+    if not (
+        preserved_tire_size
+        and (
+            tire_size_resolved_from_vehicle_selection
+            or any(getattr(slots, field, None) for field in ("car_no", "car_model", "tire_size_front", "tire_size_rear"))
+            or (slots.goods_no and prev_tool_data and StreamingMultiAgentCoordinator._resolve_tire_size_from_sized_product_source(
+                slots.goods_no,
+                prev_tool_data,
+            ))
+        )
+    ):
+        if slots.tire_size is not None:
+            cleared["tire_size"] = slots.tire_size
+            slots.tire_size = None
+
+    if slots.goods_no is not None:
+        cleared["goods_no"] = slots.goods_no
+        slots.goods_no = None
+    if slots.payment_amount is not None:
+        cleared["payment_amount"] = slots.payment_amount
+        slots.payment_amount = None
+    return cleared
+
+
 def _infer_followup_recommendation_context(messages: list[dict], last_user_text: str) -> str | None:
     """Infer the scenario/category to preserve when the user replies with only a tire size or car pick.
 
@@ -14642,6 +14785,19 @@ class TStationChatServiceV2:
                             f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from recent product context "
                             f"using vehicle-selected tire_size={merged_slots.tire_size!r}"
                         )
+
+            cleared_recommendation_slots = _clear_stale_product_slots_for_new_recommendation(
+                merged_slots,
+                user_text=last_user_text,
+                regex_slots=regex_slots,
+                prev_tool_data=prev_tool_data,
+                tire_size_resolved_from_vehicle_selection=tire_size_resolved_from_vehicle_selection,
+            )
+            if cleared_recommendation_slots:
+                logger.info(
+                    "[SLOTS] Fresh recommendation turn cleared stale product context: %s",
+                    cleared_recommendation_slots,
+                )
 
             # 3.9) Resolve shop_id from the user's list-selection reply matched against
             # the most recent search_stores_tool / get_nearby_stores_tool / get_store_list_tool result.

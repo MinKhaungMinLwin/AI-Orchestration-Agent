@@ -417,7 +417,9 @@ def build_discovery_intent_frame(
     text = last_user_text or ""
     slots = dict(known_slots or {})
     explicit_tire_size = normalize_tire_size(text)
-    tire_size = explicit_tire_size or slots.get("tire_size")
+    inherited_tire_size = normalize_tire_size(str(slots.get("tire_size") or ""))
+    allow_inherited_tire_size = slots.get("allow_inherited_tire_size", True)
+    tire_size = explicit_tire_size or (inherited_tire_size if allow_inherited_tire_size else None)
     products = extract_product_names(text)
     attribute_metrics = extract_product_attribute_metrics(text)
     brand_codes = extract_brand_codes(text)
