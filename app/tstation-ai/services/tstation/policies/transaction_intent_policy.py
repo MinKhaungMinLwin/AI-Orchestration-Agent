@@ -349,6 +349,21 @@ def build_transaction_intent_frame(
         and not current_price
         and not current_purchase
     )
+    quantity_slot_fill_stock_continuation = (
+        _is_stock_flow_context(slots)
+        and bool(slots.get("goods_no") and (slots.get("tire_size") or slots.get("product_name")))
+        and _is_quantity_only_followup(
+            text,
+            current_has_product=current_has_product,
+            explicit_tire_size=explicit_tire_size,
+            current_store_name=current_store_name,
+            current_region=current_region,
+            current_price=current_price,
+            current_purchase=current_purchase,
+            current_reservation=current_reservation,
+            current_store_search=current_store_search,
+        )
+    )
     quantity_only_stock_continuation = (
         _is_stock_flow_context(slots)
         and confirmed_product_quantity_context
@@ -387,11 +402,17 @@ def build_transaction_intent_frame(
         _is_store_candidate_search_turn(text, slots)
         and not _is_specific_store_recheck_turn(text, current_store_name, slots)
     )
+    specific_store_recheck = (
+        _is_specific_store_recheck_turn(text, current_store_name, slots)
+        and _is_stock_flow_context(slots)
+        and bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
+    )
     preserve_pending_today_install = (
         region_only_today_install_continuation
         or date_only_today_install_continuation
         or other_store_today_install_continuation
         or store_candidate_search
+        or specific_store_recheck
     )
     preserve_transaction_product_context = preserve_pending_today_install or store_scope_product_continuation
     goods_no = (
@@ -415,7 +436,24 @@ def build_transaction_intent_frame(
     region = current_region or slots.get("region") or slots.get("place")
 
     has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text))
-    has_location = bool(region or store_name or slots.get("shop_name") or slots.get("shop_id") or slots.get("lat") or slots.get("lng"))
+    has_location = bool(
+        region
+        or store_name
+        or (
+            not store_candidate_search
+            and (slots.get("shop_name") or slots.get("shop_id"))
+        )
+        or slots.get("lat")
+        or slots.get("lng")
+    )
+    today_install_candidate_scope = bool(
+        store_candidate_search
+        or (
+            quantity_slot_fill_stock_continuation
+            and _is_today_install_context(slots, requested_cal_day)
+            and not _has_confirmed_store_context(slots)
+        )
+    )
     today_requested = bool(_TODAY_RE.search(text))
 
     entities: dict[str, Any] = {
@@ -440,7 +478,7 @@ def build_transaction_intent_frame(
     elif preorder_confirmation:
         intent = "quick_order_execute"
         sub_intent = "confirm"
-    elif quantity_only_stock_continuation:
+    elif quantity_only_stock_continuation or quantity_slot_fill_stock_continuation:
         intent = "stock_store_search"
         sub_intent = "today_install" if explicit_preview_request else "stock"
         entities["stock_check_mode"] = "preview" if sub_intent == "today_install" else "inventory_only"
@@ -483,7 +521,7 @@ def build_transaction_intent_frame(
         goods_no=goods_no,
         tire_size=tire_size,
         quantity=quantity,
-        has_location=has_location,
+        has_location=has_location or today_install_candidate_scope,
         has_store=bool(store_name or slots.get("shop_id")),
         shop_id=slots.get("shop_id"),
         requested_cal_day=requested_cal_day or slots.get("requested_cal_day"),
@@ -514,6 +552,9 @@ def build_transaction_intent_frame(
             **({"store_name": store_name} if store_name else {}),
             **({"shop_name": store_name} if store_name else {}),
         })
+    if store_candidate_search:
+        for key in ("shop_id", "shop_name", "store_name"):
+            known.pop(key, None)
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:
         known["store_exact_match"] = False
 

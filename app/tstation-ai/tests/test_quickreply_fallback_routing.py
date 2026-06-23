@@ -148,6 +148,7 @@ from services.tstation.chat import (
     _is_recent_product_size_availability_query,
     _is_size_only_store_availability_continuation,
     _is_confirmed_product_store_scope_followup,
+    _is_stock_store_candidate_search_followup,
     _is_strong_product_name_match,
     _is_product_size_list_intent,
     _is_owned_coupon_best_discount_query,
@@ -6108,6 +6109,47 @@ def test_store_scope_followup_preserves_confirmed_product_slots() -> None:
     assert patch["preserve_confirmed_product_slots"] is True
 
 
+def test_store_candidate_search_followup_clears_stale_store_scope() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317729",
+        tire_size="235/55R19",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_intent="today_install",
+        requested_cal_day="20260623",
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+    )
+    regex_slots = ConversationSlots.extract_from_user_text("오늘 장착 가능 매장 찾아줘")
+
+    assert _is_stock_store_candidate_search_followup("오늘 장착 가능 매장 찾아줘", slots) is True
+    assert _is_plain_store_search_reset_allowed("오늘 장착 가능 매장 찾아줘", regex_slots, slots) is False
+
+    patch, _decision = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="오늘 장착 가능 매장 찾아줘",
+        known_slots={
+            "goods_no": slots.goods_no,
+            "tire_size": slots.tire_size,
+            "ord_qty": slots.ord_qty,
+            "shop_id": slots.shop_id,
+            "shop_name": slots.shop_name,
+            "pending_intent": slots.pending_intent,
+            "goal_type": slots.goal_type,
+            "availability_intent": slots.availability_intent,
+            "requested_cal_day": slots.requested_cal_day,
+        },
+    )
+
+    assert patch["goods_no"] == "G000000317729"
+    assert patch["quantity"] == 4
+    assert patch["requested_cal_day"] == "20260623"
+    assert "shop_id" not in patch
+    assert "shop_name" not in patch
+    assert "store_name" not in patch
+
+
 def test_datepick_metadata_recovers_order_store_slots() -> None:
     datepick = {
         "template": "datepick",
@@ -9800,6 +9842,84 @@ def test_transaction_intent_policy_keeps_today_install_flow_for_quantity_only_fo
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
 
 
+def test_transaction_intent_policy_switches_today_install_to_candidate_store_search() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260623",
+    }
+
+    frame = build_transaction_intent_frame("오늘 장착 가능 매장 찾아줘", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["quantity"] == 4
+    assert frame.known_slots["ord_qty"] == 4
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert "location" not in frame.missing_slots
+    assert "quantity" not in frame.missing_slots
+    assert "shop_id" not in frame.known_slots
+    assert "shop_name" not in frame.known_slots
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["goods_no"] == "G000000317729"
+    assert tool_plan.tool_args_patch["tire_size"] == "235/55R19"
+    assert tool_plan.tool_args_patch["quantity"] == 4
+    assert "shop_id" not in tool_plan.tool_args_patch
+    assert "shop_name" not in tool_plan.tool_args_patch
+
+
+def test_transaction_intent_policy_keeps_specific_store_recheck_scope() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260623",
+    }
+
+    frame = build_transaction_intent_frame("판교점 다시 확인해줘", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.known_slots["shop_id"] == "F00721"
+    assert frame.known_slots["shop_name"] == "판교점"
+    assert tool_plan.tool_args_patch["shop_id"] == "F00721"
+    assert tool_plan.tool_args_patch["shop_name"] == "판교점"
+
+
+def test_transaction_intent_policy_uses_new_quantity_for_today_install_candidate_search() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260623",
+    }
+
+    frame = build_transaction_intent_frame("4개", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["quantity"] == 4
+    assert frame.known_slots["ord_qty"] == 4
+    assert "quantity" not in frame.missing_slots
+    assert "location" not in frame.missing_slots
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+
+
 def test_transaction_intent_policy_keeps_store_missing_guard_for_pure_stock_without_store() -> None:
     frame = build_transaction_intent_frame(
         "ion evo as 재고 있어?",
@@ -10234,6 +10354,48 @@ def test_turn_contract_allows_stock_when_required_slots_are_known() -> None:
     assert contract.intent == "stock_store_search"
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+def test_turn_contract_treats_ord_qty_as_quantity_for_stock_required_slot() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="stock_store_search",
+        known_slots={
+            "goods_no": "G000000000001",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "availability_intent": "today_install",
+        },
+        missing_slots=("quantity",),
+    )
+    contract = build_turn_contract(user_text="오늘 장착 가능 매장 찾아줘", intent_frame=frame)
+
+    assert contract.known_slots["quantity"] == 4
+    assert contract.known_slots["ord_qty"] == 4
+    assert "quantity" not in contract.required_slots
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_turn_contract_recovers_today_install_stock_from_transaction_fallback() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="transaction_fallback",
+        known_slots={
+            "goods_no": "G000000000001",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "availability_intent": "today_install",
+        },
+    )
+    contract = build_turn_contract(user_text="오늘 장착 가능 매장 찾아줘", intent_frame=frame)
+
+    assert contract.intent == "stock_store_search"
+    assert contract.fallback_reason == "high_risk_intent"
 
 
 def test_quick_order_reservation_treats_selected_datepick_as_resolved_booking_datetime() -> None:

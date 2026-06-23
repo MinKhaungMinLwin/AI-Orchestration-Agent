@@ -12930,6 +12930,14 @@ _STORE_SCOPE_FOLLOWUP_RE = re.compile(
     r"(?:매장|지점)\s*(?:더|또|추가)|다른\s*지역|예약\s*가능\s*시간|가능\s*시간|가능\s*일정",
     re.IGNORECASE,
 )
+_STORE_CANDIDATE_SEARCH_RE = re.compile(
+    r"(?:오늘\s*)?(?:장착\s*)?가능\s*(?:한\s*)?(?:매장|지점|곳)|"
+    r"재고\s*(?:있는|있는\s*곳|확인\s*된)\s*(?:매장|지점|곳)|"
+    r"다른\s*(?:매장|지점|곳)|(?:매장|지점)\s*(?:찾아|검색|보여)",
+    re.IGNORECASE,
+)
+_SPECIFIC_STORE_RECHECK_RE = re.compile(r"다시\s*확인|재확인|한\s*번\s*더|한번\s*더", re.IGNORECASE)
+_STORE_EXCLUSION_RE = re.compile(r"말고|제외|빼고|다른", re.IGNORECASE)
 
 
 def _recent_conversation_text_for_policy(messages: list[dict] | None, *, limit: int = 8) -> str:
@@ -13003,6 +13011,50 @@ def _is_confirmed_product_store_scope_followup(text: str | None, slots: Mapping[
     return bool(_STORE_SCOPE_FOLLOWUP_RE.search(text) or has_region_only)
 
 
+def _slot_value(slots: Mapping[str, Any] | Any, key: str) -> Any:
+    if isinstance(slots, Mapping):
+        return slots.get(key)
+    return getattr(slots, key, None)
+
+
+def _is_stock_store_candidate_search_followup(text: str | None, slots: Mapping[str, Any] | Any) -> bool:
+    """True when a stock/today-install flow switches from one store to candidate stores."""
+    text = str(text or "").strip()
+    if not text or not _STORE_CANDIDATE_SEARCH_RE.search(text):
+        return False
+    if _is_specific_store_recheck_followup(text, slots):
+        return False
+    if not (_slot_value(slots, "goods_no") and (_slot_value(slots, "ord_qty") or _slot_value(slots, "quantity"))):
+        return False
+    if not (
+        _slot_value(slots, "pending_intent") == "stock"
+        or _slot_value(slots, "goal_type") == "store_with_stock"
+        or _slot_value(slots, "availability_intent") == "today_install"
+        or _slot_value(slots, "requested_cal_day")
+    ):
+        return False
+    regex_slots = ConversationSlots.extract_from_user_text(text)
+    if regex_slots.ord_qty is not None or regex_slots.tire_size is not None:
+        return False
+    if ConversationSlots.has_product_keyword(text) or _has_sized_product_name_hint(text):
+        return False
+    return True
+
+
+def _is_specific_store_recheck_followup(text: str | None, slots: Mapping[str, Any] | Any) -> bool:
+    text = str(text or "").strip()
+    if not text or not _SPECIFIC_STORE_RECHECK_RE.search(text):
+        return False
+    current_store = str(_slot_value(slots, "shop_name") or _slot_value(slots, "store_name") or "").strip()
+    if not current_store:
+        return bool(_slot_value(slots, "shop_id"))
+    return current_store in text or text in current_store or bool(_slot_value(slots, "shop_id"))
+
+
+def _should_exclude_current_store_for_candidate_search(text: str | None, slots: Mapping[str, Any] | Any) -> bool:
+    return bool(_STORE_EXCLUSION_RE.search(str(text or "")) and _slot_value(slots, "shop_id"))
+
+
 def _is_ev_suitability_turn(
     text: str,
     pending_intent: str | None = None,
@@ -13070,6 +13122,8 @@ def _is_plain_store_search_reset_allowed(
     slots: ConversationSlots,
 ) -> bool:
     if not _is_plain_store_search_turn(text, regex_slots):
+        return False
+    if _is_stock_store_candidate_search_followup(text, slots):
         return False
     return not _is_confirmed_product_store_scope_followup(text, slots)
 
@@ -15265,6 +15319,7 @@ class TStationChatServiceV2:
                 break
         current_vehicle_selection_prompt_event.set(None)
 
+        stock_store_candidate_excluded_shop_id: str | None = None
         try:
             chat_history_svc = get_chat_history_service()
 
@@ -15643,7 +15698,32 @@ class TStationChatServiceV2:
                 )
                 merged_slots.pending_intent = None
 
-            if _is_plain_store_search_reset_allowed(last_user_text, regex_slots, merged_slots):
+            if _is_stock_store_candidate_search_followup(last_user_text, merged_slots):
+                previous_shop = {
+                    "shop_id": merged_slots.shop_id,
+                    "shop_name": merged_slots.shop_name,
+                }
+                if _should_exclude_current_store_for_candidate_search(last_user_text, merged_slots):
+                    stock_store_candidate_excluded_shop_id = str(merged_slots.shop_id)
+                merged_slots.shop_id = None
+                merged_slots.shop_name = None
+                merged_slots.payment_amount = None
+                merged_slots.pending_intent = "stock"
+                merged_slots.goal_type = "store_with_stock"
+                if not merged_slots.availability_intent:
+                    merged_slots.availability_intent = "today_install"
+                if merged_slots.availability_intent == "today_install" and not merged_slots.requested_cal_day:
+                    merged_slots.requested_cal_day = _requested_reservation_cal_day_or_today(last_user_text)
+                logger.debug(
+                    "[SLOTS] Store candidate search follow-up; cleared stale store identity and preserved "
+                    "stock slots: previous=%s goods_no=%r tire_size=%r ord_qty=%r excluded_shop_id=%r",
+                    {k: v for k, v in previous_shop.items() if v not in (None, "")},
+                    merged_slots.goods_no,
+                    merged_slots.tire_size,
+                    merged_slots.ord_qty,
+                    stock_store_candidate_excluded_shop_id,
+                )
+            elif _is_plain_store_search_reset_allowed(last_user_text, regex_slots, merged_slots):
                 cleared_values = {
                     "pending_intent": merged_slots.pending_intent,
                     "goods_no": merged_slots.goods_no,
@@ -16188,6 +16268,7 @@ class TStationChatServiceV2:
                 and prev_tool_data
                 and (regex_slots.pending_intent in ("order", "stock") or size_only_store_availability_continuation)
                 and not re.search(r"다른\s*매장|근처\s*매장|주변\s*매장|매장\s*찾|지역", last_user_text or "")
+                and not _is_stock_store_candidate_search_followup(last_user_text, merged_slots)
                 and not current_turn_has_store_anchor
             ):
                 resolved_shop_id = TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data)
@@ -17521,6 +17602,8 @@ class TStationChatServiceV2:
             re.search(r"매장\s*다시\s*이용하기|점\s*다시\s*이용하기", last_user_text)
         ))
         excluded_store_ids: set[str] = set()
+        if stock_store_candidate_excluded_shop_id:
+            excluded_store_ids.add(stock_store_candidate_excluded_shop_id)
         if re.search(r"(?:다른|추가|더)\s*(?:매장|지점)|(?:매장|지점)\s*(?:더|또|추가)", last_user_text or ""):
             if merged_slots.shop_id:
                 excluded_store_ids.add(str(merged_slots.shop_id))

@@ -165,6 +165,7 @@ def build_turn_contract(
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
         **_slots_from_model(merged_slots),
     })
+    known_slots = _normalize_quantity_slots(known_slots)
     if intent_frame is not None:
         requested_product_attribute = str(intent_frame.entities.get("requested_product_attribute") or "")
         compare_metric = str(intent_frame.entities.get("compare_metric") or "")
@@ -203,6 +204,8 @@ def build_turn_contract(
             known_slots["stock_check_mode"] = stock_check_mode
 
     has_reference_signal = _has_reference_signal(user_text)
+    if intent == "transaction_fallback" and _is_recoverable_today_install_stock_contract(known_slots):
+        intent = "stock_store_search"
     required_slots = _merge_tuple(
         intent_frame.missing_slots if intent_frame is not None else (),
         tool_plan.required_slots if tool_plan is not None else (),
@@ -218,6 +221,7 @@ def build_turn_contract(
             cross_domain_plan=cross_domain_plan,
         ),
     )
+    required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan)
     blocking_required_slots = _blocking_required_slots(
         user_text,
@@ -1059,6 +1063,61 @@ def _slots_from_model(model: Any | None) -> dict[str, Any]:
 
 def _compact_slots(slots: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in slots.items() if value not in (None, "", [], {})}
+
+
+def _normalize_quantity_slots(slots: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(slots)
+    quantity = normalized.get("quantity") or normalized.get("ord_qty")
+    if quantity in (None, "") and normalized.get("pending_intent") in {"stock", "order"}:
+        quantity = normalized.get("limit")
+    if quantity not in (None, ""):
+        normalized["quantity"] = quantity
+        normalized["ord_qty"] = quantity
+    return normalized
+
+
+def _has_quantity_slot(known_slots: Mapping[str, Any]) -> bool:
+    return bool(known_slots.get("quantity") or known_slots.get("ord_qty"))
+
+
+def _filter_satisfied_required_slots(
+    required_slots: tuple[str, ...],
+    known_slots: Mapping[str, Any],
+) -> tuple[str, ...]:
+    if not required_slots:
+        return ()
+    filtered: list[str] = []
+    for slot in required_slots:
+        if slot == "quantity" and _has_quantity_slot(known_slots):
+            continue
+        if slot in {"product", "goods_no"} and (
+            known_slots.get("goods_no")
+            or known_slots.get("product_name")
+            or known_slots.get("tire_model")
+            or known_slots.get("pattern_name")
+        ):
+            continue
+        if slot == "tire_size" and known_slots.get("tire_size"):
+            continue
+        if slot in {"store", "location"} and (
+            known_slots.get("shop_id")
+            or known_slots.get("shop_name")
+            or known_slots.get("store_name")
+            or known_slots.get("region")
+        ):
+            continue
+        filtered.append(slot)
+    return tuple(filtered)
+
+
+def _is_recoverable_today_install_stock_contract(known_slots: Mapping[str, Any]) -> bool:
+    return bool(
+        (known_slots.get("pending_intent") == "stock" or known_slots.get("goal_type") == "store_with_stock")
+        and known_slots.get("availability_intent") == "today_install"
+        and known_slots.get("goods_no")
+        and known_slots.get("tire_size")
+        and _has_quantity_slot(known_slots)
+    )
 
 
 def _merge_tuple(*values: tuple[str, ...]) -> tuple[str, ...]:
