@@ -70,6 +70,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event,
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
+    _build_product_objective_followup_clarification_event,
     _comparison_query_with_recent_context,
     _recent_product_set_size_availability_context,
     _should_clarify_ambiguous_multi_product_query,
@@ -82,6 +83,7 @@ from services.tstation.chat import (
     _build_oe_replacement_followup_recommendation_args,
     _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
+    _bare_product_search_followup_override,
     _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_order_quantity_prompt_event,
@@ -6473,6 +6475,7 @@ def test_discovery_policy_context_carries_safe_service_objective_into_bare_produ
         routing_result=routing_result,
     )
 
+    assert _tool_patch == {"rcmd_type": "safe_kids", "brand_cd": "HK"}
     assert response_decision is not None
     assert (
         response_decision.metadata["response_shape_key"]
@@ -6502,6 +6505,7 @@ def test_discovery_policy_context_carries_sound_absorber_objective_into_bare_pro
         routing_result=routing_result,
     )
 
+    assert _tool_patch == {"rcmd_type": "sound_absorber"}
     assert response_decision is not None
     assert (
         response_decision.metadata["response_shape_key"]
@@ -6537,6 +6541,138 @@ def test_discovery_policy_context_ignores_carried_objective_without_followup_int
     assert (
         response_decision.metadata.get("response_shape_key")
         != "safe_service_explanation_then_unsized_recommendation_summary"
+    )
+
+
+def test_bare_product_followup_override_routes_supported_safe_service_to_agent() -> None:
+    routing_result = SimpleNamespace(
+        discovery_followup_intent="product_objective_followup",
+        carried_discovery_objective="safe_service",
+    )
+
+    override = _bare_product_search_followup_override(
+        "dynapro hp3",
+        context_text="안심서비스 가능한 타이어는?\ndynapro hp3",
+        routing_result=routing_result,
+    )
+
+    assert override == {"action": "agent", "objective": "safe_service"}
+
+
+def test_bare_product_followup_override_routes_supported_sound_absorber_to_agent() -> None:
+    routing_result = SimpleNamespace(
+        discovery_followup_intent="product_objective_followup",
+        carried_discovery_objective="sound_absorber",
+    )
+
+    override = _bare_product_search_followup_override(
+        "벤투스 에어S",
+        context_text="흡음재 들어간 타이어 알려줘\n벤투스 에어S",
+        routing_result=routing_result,
+    )
+
+    assert override == {"action": "agent", "objective": "sound_absorber"}
+
+
+@pytest.mark.parametrize(
+    ("context_text", "objective"),
+    [
+        ("dynapro hp3 소음 어때?\ndynapro hp3", "attribute_lookup"),
+        ("올시즌 타이어 추천해줘\ndynapro hp3", "recommendation_filter"),
+    ],
+)
+def test_bare_product_followup_override_clarifies_unsupported_objective_context(
+    context_text: str,
+    objective: str,
+) -> None:
+    override = _bare_product_search_followup_override(
+        "dynapro hp3",
+        context_text=context_text,
+        routing_result=SimpleNamespace(
+            discovery_followup_intent="none",
+            carried_discovery_objective="none",
+        ),
+    )
+
+    assert override == {"action": "clarify", "objective": objective}
+    event = _build_product_objective_followup_clarification_event(objective)
+    assert event["assistant_response_source"] == "code_product_objective_followup_clarification"
+    assert event["data"]["assistantResponse"] == "해당 상품으로 어떤 정보를 확인해드릴까요?"
+    assert _labels(event["data"]["quickReplies"]) == ["상품 설명", "가격 확인", "재고/장착 확인", "타이어 추천"]
+
+
+def test_bare_product_followup_override_keeps_general_context_on_plain_bare_search() -> None:
+    override = _bare_product_search_followup_override(
+        "dynapro hp3",
+        context_text="dynapro hp3",
+        routing_result=SimpleNamespace(
+            discovery_followup_intent="none",
+            carried_discovery_objective="none",
+        ),
+    )
+
+    assert override is None
+
+
+def test_bare_product_followup_override_does_not_block_explicit_description_intent() -> None:
+    override = _bare_product_search_followup_override(
+        "dynapro hp3 설명해줘",
+        context_text="안심서비스 가능한 타이어는?\ndynapro hp3 설명해줘",
+        routing_result=SimpleNamespace(
+            discovery_followup_intent="product_objective_followup",
+            carried_discovery_objective="safe_service",
+        ),
+    )
+
+    assert override is None
+
+
+@pytest.mark.parametrize(
+    ("pending_intent", "goal_type"),
+    [
+        ("price", "price_inquiry"),
+        ("stock", "store_with_stock"),
+    ],
+)
+def test_supported_carried_objective_does_not_override_transaction_pending_intent(
+    pending_intent: str,
+    goal_type: str,
+) -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_objective_followup"],
+        user_behavior="naming a product after a prior objective",
+        flow="transaction pending intent should win",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="product_objective_followup",
+        carried_discovery_objective="safe_service",
+        agent_prompt_profile="discovery_search",
+    )
+
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hp3",
+        context_text="안심서비스 가능한 타이어는?\ndynapro hp3",
+        tire_size=None,
+        routing_result=routing_result,
+        pending_intent=pending_intent,
+        goal_type=goal_type,
+    )
+
+    assert patch == {}
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "product_search_summary"
+    assert (
+        _bare_product_search_followup_override(
+            "dynapro hp3",
+            context_text="안심서비스 가능한 타이어는?\ndynapro hp3",
+            routing_result=routing_result,
+            pending_intent=pending_intent,
+            goal_type=goal_type,
+        )
+        is None
     )
 
 

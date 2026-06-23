@@ -11145,6 +11145,122 @@ _CARRIED_OBJECTIVE_ENTITY_PATCH: dict[str, dict[str, str]] = {
     "safe_service": {"service_program": "safe_service", "rcmd_type": "safe_kids"},
     "sound_absorber": {"technology": "sound_absorber", "rcmd_type": "sound_absorber"},
 }
+_SUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset(_CARRIED_OBJECTIVE_ENTITY_PATCH)
+_UNSUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset({"attribute_lookup", "recommendation_filter"})
+_DISCOVERY_OBJECTIVE_BLOCKING_PENDING_INTENTS = frozenset({"price", "stock", "order"})
+_DISCOVERY_OBJECTIVE_BLOCKING_GOAL_TYPES = frozenset({"price_inquiry", "store_with_stock", "place_order"})
+
+
+def _prior_context_text_without_current_turn(context_text: str, current_user_text: str) -> str:
+    context = str(context_text or "").strip()
+    current = str(current_user_text or "").strip()
+    if not context or not current:
+        return context
+    if context == current:
+        return ""
+    if context.endswith(f"\n{current}"):
+        return context[: -(len(current) + 1)].strip()
+    if context.endswith(current):
+        return context[: -len(current)].strip()
+    return context
+
+
+def _is_discovery_objective_blocked_by_transaction_state(
+    pending_intent: str | None,
+    goal_type: str | None,
+) -> bool:
+    return (
+        pending_intent in _DISCOVERY_OBJECTIVE_BLOCKING_PENDING_INTENTS
+        or goal_type in _DISCOVERY_OBJECTIVE_BLOCKING_GOAL_TYPES
+    )
+
+
+def _infer_carried_discovery_objective_from_context(context_text: str) -> str | None:
+    prior_context_text = str(context_text or "").strip()
+    if not prior_context_text:
+        return None
+    context_frame = build_discovery_intent_frame(prior_context_text)
+    entities = context_frame.entities
+    if entities.get("service_program") == "safe_service":
+        return "safe_service"
+    if entities.get("technology") == "sound_absorber":
+        return "sound_absorber"
+    standalone_attribute_metrics = tuple(
+        metric for metric in entities.get("attribute_metrics", ()) if metric not in ("season", "car_type")
+    )
+    if context_frame.sub_intent == "product_attribute_lookup" or standalone_attribute_metrics:
+        return "attribute_lookup"
+    if entities.get("product_names") and any(
+        entities.get(key) for key in ("quiet_focus", "performance", "value_focus", "label_metric")
+    ):
+        return "attribute_lookup"
+    if context_frame.intent == "product_recommendation" and any(
+        entities.get(key)
+        for key in (
+            "recommendation_metric",
+            "vehicle_category",
+            "quiet_focus",
+            "performance",
+            "season",
+            "value_focus",
+            "price_goal",
+        )
+    ):
+        return "recommendation_filter"
+    return None
+
+
+def _bare_product_search_followup_override(
+    user_text: str,
+    *,
+    context_text: str = "",
+    routing_result: Any | None = None,
+    pending_intent: str | None = None,
+    goal_type: str | None = None,
+) -> dict[str, str] | None:
+    if not _is_bare_product_name_search_query(user_text):
+        return None
+    if _is_discovery_objective_blocked_by_transaction_state(pending_intent, goal_type):
+        return None
+    followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+    carried_objective = str(getattr(routing_result, "carried_discovery_objective", "") or "").strip()
+    if followup_intent == "product_objective_followup":
+        if carried_objective in _SUPPORTED_CARRIED_DISCOVERY_OBJECTIVES:
+            return {"action": "agent", "objective": carried_objective}
+        if carried_objective in _UNSUPPORTED_CARRIED_DISCOVERY_OBJECTIVES:
+            return {"action": "clarify", "objective": carried_objective}
+        return None
+    inferred_objective = _infer_carried_discovery_objective_from_context(
+        _prior_context_text_without_current_turn(context_text, user_text)
+    )
+    if inferred_objective in _SUPPORTED_CARRIED_DISCOVERY_OBJECTIVES:
+        return {"action": "agent", "objective": inferred_objective}
+    if inferred_objective in _UNSUPPORTED_CARRIED_DISCOVERY_OBJECTIVES:
+        return {"action": "clarify", "objective": inferred_objective}
+    return None
+
+
+def _build_product_objective_followup_clarification_event(objective: str | None = None) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_objective_followup_clarification",
+        "data": {
+            "assistantResponse": "해당 상품으로 어떤 정보를 확인해드릴까요?",
+            "quickReplies": [
+                {"label": "상품 설명", "domain": "DISCOVERY"},
+                {"label": "가격 확인", "domain": "TRANSACTION"},
+                {"label": "재고/장착 확인", "domain": "TRANSACTION"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "metadata": {
+                "source": "product_objective_followup_clarification",
+                "objective": objective or "none",
+            },
+        },
+    }
 
 
 def _build_discovery_policy_context(
@@ -11156,6 +11272,8 @@ def _build_discovery_policy_context(
     goods_no: str | None = None,
     vehicle_type: str | None = None,
     routing_result: Any | None = None,
+    pending_intent: str | None = None,
+    goal_type: str | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     """Build request-scoped Discovery policy context for tool/mapper integration.
 
@@ -11172,8 +11290,18 @@ def _build_discovery_policy_context(
         routing_followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
         if routing_followup_intent == "recent_product_set_size_availability":
             known_slots["discovery_followup_intent"] = routing_followup_intent
-        routing_carried_objective = str(getattr(routing_result, "carried_discovery_objective", "") or "").strip()
-        is_objective_followup = routing_followup_intent == "product_objective_followup"
+        supported_followup_override = _bare_product_search_followup_override(
+            last_user_text,
+            context_text=context_text,
+            routing_result=routing_result,
+            pending_intent=pending_intent,
+            goal_type=goal_type,
+        )
+        effective_supported_objective = (
+            supported_followup_override["objective"]
+            if supported_followup_override and supported_followup_override["action"] == "agent"
+            else None
+        )
         discovery_frame = build_discovery_intent_frame(
             last_user_text,
             known_slots=known_slots,
@@ -11216,14 +11344,21 @@ def _build_discovery_policy_context(
                     sub_intent="product_attribute_lookup",
                     entities=entities,
                 )
-        if is_objective_followup and routing_carried_objective in _CARRIED_OBJECTIVE_ENTITY_PATCH:
+        if effective_supported_objective in _CARRIED_OBJECTIVE_ENTITY_PATCH:
             entities = dict(discovery_frame.entities)
-            entities.update(_CARRIED_OBJECTIVE_ENTITY_PATCH[routing_carried_objective])
-            if entities != discovery_frame.entities:
-                discovery_frame = replace(discovery_frame, entities=entities)
-        if discovery_frame.intent == "product_recommendation" or (
-            is_objective_followup and routing_carried_objective == "recommendation_filter"
-        ):
+            entities.update(_CARRIED_OBJECTIVE_ENTITY_PATCH[effective_supported_objective])
+            if (
+                entities != discovery_frame.entities
+                or discovery_frame.intent != "product_recommendation"
+                or discovery_frame.sub_intent != "general_recommendation"
+            ):
+                discovery_frame = replace(
+                    discovery_frame,
+                    intent="product_recommendation",
+                    sub_intent="general_recommendation",
+                    entities=entities,
+                )
+        if discovery_frame.intent == "product_recommendation":
             context_frame = build_discovery_intent_frame(
                 context_text,
                 known_slots=known_slots,
@@ -11252,6 +11387,8 @@ def _build_discovery_policy_context(
             if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
             else {}
         )
+        if effective_supported_objective == "sound_absorber":
+            discovery_tool_patch.pop("brand_cd", None)
         if (
             discovery_frame.sub_intent == "similar_price_recommendation"
             and tire_size
@@ -15209,6 +15346,8 @@ class TStationChatServiceV2:
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
             routing_result=routing_result,
+            pending_intent=merged_slots.pending_intent,
+            goal_type=merged_slots.goal_type,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)
@@ -17378,19 +17517,22 @@ class TStationChatServiceV2:
             return emitted_events, comparison_event
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
-            followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
-            carried_objective = str(getattr(routing_result, "carried_discovery_objective", "") or "").strip()
-            if followup_intent == "product_objective_followup" and carried_objective in {
-                "safe_service",
-                "sound_absorber",
-                "attribute_lookup",
-                "recommendation_filter",
-            }:
-                # Carrying an unresolved discovery objective (안심서비스/흡음재/attribute/
-                # recommendation-condition) into this bare product-name turn — let the
-                # normal Discovery agent answer using the merged entities/tool patch from
-                # _build_discovery_policy_context instead of a generic product description.
-                return None
+            followup_override = _bare_product_search_followup_override(
+                user_query,
+                context_text=recent_user_context_text,
+                routing_result=routing_result,
+                pending_intent=getattr(initial_slots, "pending_intent", None) if initial_slots is not None else None,
+                goal_type=getattr(initial_slots, "goal_type", None) if initial_slots is not None else None,
+            )
+            if followup_override is not None:
+                if followup_override["action"] == "agent":
+                    # Supported carried objectives must stay on the deterministic
+                    # Discovery policy/tool path rather than collapsing into a
+                    # generic code_bare_product_search description.
+                    return None
+                return [], _build_product_objective_followup_clarification_event(
+                    followup_override.get("objective")
+                )
             size_only_tool_input = _build_size_only_product_search_tool_input(
                 user_query,
                 prev_tool_data=prev_tool_data or [],
