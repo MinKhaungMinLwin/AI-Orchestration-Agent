@@ -132,6 +132,7 @@ from services.tstation.chat import (
     _trace_final_error_state,
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
+    _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
@@ -811,6 +812,48 @@ def test_delivery_policy_gate_handles_regional_purchase_method_policy() -> None:
     assert event is not None
     assert event["assistant_response_source"] == "code_online_store_price_policy_guard"
     assert "서울이든 제주든 온라인 주문 자체는 같은 방식" in event["data"]["assistantResponse"]
+
+
+def test_high_confidence_support_router_contract_blocks_product_price_override() -> None:
+    routing = MultiAgentDomain(
+        reason="support policy intent",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["Run SUPPORT for delivery/shipping-fee policy guidance"],
+        user_behavior="asking about online/store policy",
+        flow="policy guidance",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.93,
+        needs_clarification=False,
+        agent_prompt_profile="full",
+    )
+
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0b_transaction_redirect",
+        override_reason=None,
+    )
+
+
+def test_high_confidence_support_router_contract_allows_explicit_price_lookup_override_reason() -> None:
+    routing = MultiAgentDomain(
+        reason="support policy intent",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["Run SUPPORT for delivery/shipping-fee policy guidance"],
+        user_behavior="asking about online/store policy",
+        flow="policy guidance",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.93,
+        needs_clarification=False,
+        agent_prompt_profile="full",
+    )
+
+    assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0_auto_chain",
+        override_reason="explicit_current_turn_price_lookup",
+    )
 
 
 def test_delivery_policy_gate_handles_regional_product_price_policy() -> None:
@@ -9686,6 +9729,28 @@ def test_turn_contract_does_not_block_missing_reference_for_favorite_store_looku
 
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+def test_turn_contract_preserves_router_override_metadata() -> None:
+    routing = _routing_result(domains=[MultiAgentDomain.Domain.SUPPORT], execution_plan=["support:price_policy_faq"])
+    routing.override_applied = True
+    routing.override_reason = "router_low_confidence_or_ambiguous"
+    routing.original_router_domains = [MultiAgentDomain.Domain.DISCOVERY]
+    routing.original_router_execution_plan = ["discovery:resolve_product"]
+    routing.override_blocked = True
+    routing.blocked_override_reason = "conflicts_with_high_confidence_router_contract"
+
+    contract = build_turn_contract(
+        user_text="서울이랑 제주 구매방법 달라?",
+        routing_result=routing,
+    )
+
+    assert contract.override_applied is True
+    assert contract.override_reason == "router_low_confidence_or_ambiguous"
+    assert contract.original_router_domains == ("discovery",)
+    assert contract.original_router_execution_plan == ("discovery:resolve_product",)
+    assert contract.override_blocked is True
+    assert contract.blocked_override_reason == "conflicts_with_high_confidence_router_contract"
 
 
 def _routing_result(

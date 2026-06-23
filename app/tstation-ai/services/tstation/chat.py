@@ -403,6 +403,18 @@ class MultiAgentDomain(BaseModel):
                 data["comparison_metric"] = "none"
             if "requested_product_attribute" not in data:
                 data["requested_product_attribute"] = "none"
+            if "override_applied" not in data:
+                data["override_applied"] = False
+            if "override_reason" not in data:
+                data["override_reason"] = "none"
+            if "original_router_domains" not in data:
+                data["original_router_domains"] = []
+            if "original_router_execution_plan" not in data:
+                data["original_router_execution_plan"] = []
+            if "override_blocked" not in data:
+                data["override_blocked"] = False
+            if "blocked_override_reason" not in data:
+                data["blocked_override_reason"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -559,6 +571,24 @@ class MultiAgentDomain(BaseModel):
     planner_confidence: float = Field(
         description="Planner confidence from 0.0 to 1.0 for the chosen domains/plan/reference judgment."
     )
+    override_applied: bool = Field(
+        description="True when deterministic coordinator logic overrode the original router contract."
+    )
+    override_reason: str = Field(
+        description="Structured reason for deterministic override, or 'none'."
+    )
+    original_router_domains: list[Domain] = Field(
+        description="Original router domains before any deterministic override."
+    )
+    original_router_execution_plan: list[str] = Field(
+        description="Original router execution plan before any deterministic override."
+    )
+    override_blocked: bool = Field(
+        description="True when a candidate deterministic override was blocked to preserve the router contract."
+    )
+    blocked_override_reason: str = Field(
+        description="Why a candidate deterministic override was blocked, or 'none'."
+    )
 
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
@@ -599,6 +629,116 @@ def _agent_domains_from_cross_domain_values(values: list[str]) -> list[MultiAgen
     return domains
 
 
+_ROUTER_OVERRIDE_PRESERVE_CONFIDENCE = 0.8
+_NON_TRANSACTION_POLICY_PLAN_RE = re.compile(
+    r"policy|faq|shipping-fee|online/store price|price policy|delivery/shipping-fee",
+    re.IGNORECASE,
+)
+
+
+def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE:
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if len(domains) != 1:
+        return False
+    if domains[0] == MultiAgentDomain.Domain.SUPPORT:
+        return True
+    execution_plan = tuple(str(item) for item in (getattr(routing_result, "execution_plan", None) or ()))
+    return bool(execution_plan and all(_NON_TRANSACTION_POLICY_PLAN_RE.search(item) for item in execution_plan))
+
+
+def _explicit_current_turn_override_reason(
+    *,
+    user_text: str,
+    regex_slots: ConversationSlots,
+    explicit_store_purchase_chain_request: bool,
+) -> str | None:
+    if explicit_store_purchase_chain_request or regex_slots.pending_intent == "order":
+        return "explicit_current_turn_purchase"
+    if regex_slots.pending_intent == "stock":
+        return "explicit_current_turn_stock_or_booking"
+    if regex_slots.pending_intent == "price":
+        return "explicit_current_turn_price_lookup"
+    if re.search(r"가격|얼마|최종가|할인가|쿠폰", user_text or "", re.IGNORECASE) and (
+        ConversationSlots.has_product_keyword(user_text) or normalize_tire_size(user_text)
+    ):
+        return "explicit_current_turn_price_lookup"
+    if re.search(r"재고|오늘\s*서비스|오늘서비스|예약|장착|방문", user_text or "", re.IGNORECASE) and (
+        ConversationSlots.has_product_keyword(user_text) or normalize_tire_size(user_text)
+    ):
+        return "explicit_current_turn_stock_or_booking"
+    if re.search(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", user_text or "", re.IGNORECASE):
+        return "explicit_current_turn_purchase"
+    return None
+
+
+def _should_preserve_router_contract(
+    *,
+    routing_result: MultiAgentDomain | None,
+    candidate_override: str,
+    override_reason: str | None,
+) -> bool:
+    if routing_result is None:
+        return False
+    if not _router_contract_is_high_confidence_policy(routing_result):
+        return False
+    if override_reason in {
+        "missing_goods_no_for_explicit_transaction",
+        "explicit_current_turn_price_lookup",
+        "explicit_current_turn_stock_or_booking",
+        "explicit_current_turn_purchase",
+    }:
+        return False
+    logger.info(
+        "[ROUTER_CONTRACT] preserve router contract: override=%s planner_confidence=%.2f domains=%s execution_plan=%s",
+        candidate_override,
+        float(getattr(routing_result, "planner_confidence", 0.0) or 0.0),
+        [getattr(domain, "value", domain) for domain in list(getattr(routing_result, "domains", []) or [])],
+        list(getattr(routing_result, "execution_plan", []) or []),
+    )
+    return True
+
+
+def _mark_router_override_applied(
+    routing_result: MultiAgentDomain | None,
+    *,
+    previous_domains: list[MultiAgentDomain.Domain],
+    previous_execution_plan: list[str],
+    reason: str,
+) -> None:
+    if routing_result is None:
+        return
+    if not routing_result.original_router_domains:
+        routing_result.original_router_domains = list(previous_domains)
+    if not routing_result.original_router_execution_plan:
+        routing_result.original_router_execution_plan = list(previous_execution_plan)
+    routing_result.override_applied = True
+    routing_result.override_reason = reason
+    routing_result.override_blocked = False
+    routing_result.blocked_override_reason = "none"
+
+
+def _mark_router_override_blocked(
+    routing_result: MultiAgentDomain | None,
+    *,
+    previous_domains: list[MultiAgentDomain.Domain],
+    previous_execution_plan: list[str],
+) -> None:
+    if routing_result is None:
+        return
+    if not routing_result.original_router_domains:
+        routing_result.original_router_domains = list(previous_domains)
+    if not routing_result.original_router_execution_plan:
+        routing_result.original_router_execution_plan = list(previous_execution_plan)
+    routing_result.override_blocked = True
+    routing_result.blocked_override_reason = "conflicts_with_high_confidence_router_contract"
+
+
 class _SlimMultiAgentDomain(BaseModel):
     """First-turn slim classification schema.
 
@@ -633,6 +773,18 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["comparison_metric"] = "none"
             if "requested_product_attribute" not in data:
                 data["requested_product_attribute"] = "none"
+            if "override_applied" not in data:
+                data["override_applied"] = False
+            if "override_reason" not in data:
+                data["override_reason"] = "none"
+            if "original_router_domains" not in data:
+                data["original_router_domains"] = []
+            if "original_router_execution_plan" not in data:
+                data["original_router_execution_plan"] = []
+            if "override_blocked" not in data:
+                data["override_blocked"] = False
+            if "blocked_override_reason" not in data:
+                data["blocked_override_reason"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -727,6 +879,16 @@ class _SlimMultiAgentDomain(BaseModel):
     )
     needs_clarification: bool = Field(description="True when an unclear reference must be clarified.")
     planner_confidence: float = Field(description="Planner confidence from 0.0 to 1.0.")
+    override_applied: bool = Field(description="True when deterministic logic overrode the original router contract.")
+    override_reason: str = Field(description="Structured override reason, or 'none'.")
+    original_router_domains: list[MultiAgentDomain.Domain] = Field(
+        description="Original router domains before any deterministic override."
+    )
+    original_router_execution_plan: list[str] = Field(
+        description="Original router execution plan before any deterministic override."
+    )
+    override_blocked: bool = Field(description="True when a candidate deterministic override was blocked.")
+    blocked_override_reason: str = Field(description="Why a candidate override was blocked, or 'none'.")
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
@@ -16383,6 +16545,11 @@ class TStationChatServiceV2:
         # 0/multiple results → chain stops). See StreamingMultiAgentCoordinator.stream().
         skip_decision = policy_preclassified_skip_decision
         explicit_store_purchase_chain_request = _is_explicit_store_purchase_chain_request(last_user_text)
+        explicit_override_reason = _explicit_current_turn_override_reason(
+            user_text=last_user_text,
+            regex_slots=regex_slots,
+            explicit_store_purchase_chain_request=explicit_store_purchase_chain_request,
+        )
         if (
             explicit_store_purchase_chain_request
             and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
@@ -16393,26 +16560,45 @@ class TStationChatServiceV2:
             )
             and domains != [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
         ):
-            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
-            skip_decision = True
-            logger.info(
-                "[COORDINATOR] Explicit store purchase chain request: forcing [DISCOVERY, TRANSACTION] "
-                "(session_id=%s)",
-                request.session_id,
-            )
-            log_classifier_redirect(
-                trace_id=request.tracing_id,
-                rule="explicit_store_purchase_chain",
-                classifier_domains=[domain.value.lower() for domain in routing_result.domains] if routing_result and routing_result.domains else [],
-                corrected_domains=["discovery", "transaction"],
-                user_text=last_user_text,
-                user_behavior=getattr(routing_result, "user_behavior", "") or "",
-                slots={
-                    "tire_size": merged_slots.tire_size,
-                    "ord_qty": merged_slots.ord_qty,
-                    "store_name": merged_slots.shop_name,
-                },
-            )
+            if _should_preserve_router_contract(
+                routing_result=routing_result,
+                candidate_override="explicit_store_purchase_chain",
+                override_reason=explicit_override_reason,
+            ):
+                _mark_router_override_blocked(
+                    routing_result,
+                    previous_domains=list(domains),
+                    previous_execution_plan=list(getattr(routing_result, "execution_plan", []) or []),
+                )
+            else:
+                previous_domains = list(domains)
+                previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+                domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+                skip_decision = True
+                _mark_router_override_applied(
+                    routing_result,
+                    previous_domains=previous_domains,
+                    previous_execution_plan=previous_execution_plan,
+                    reason=explicit_override_reason or "missing_goods_no_for_explicit_transaction",
+                )
+                logger.info(
+                    "[COORDINATOR] Explicit store purchase chain request: forcing [DISCOVERY, TRANSACTION] "
+                    "(session_id=%s)",
+                    request.session_id,
+                )
+                log_classifier_redirect(
+                    trace_id=request.tracing_id,
+                    rule="explicit_store_purchase_chain",
+                    classifier_domains=[domain.value.lower() for domain in routing_result.domains] if routing_result and routing_result.domains else [],
+                    corrected_domains=["discovery", "transaction"],
+                    user_text=last_user_text,
+                    user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                    slots={
+                        "tire_size": merged_slots.tire_size,
+                        "ord_qty": merged_slots.ord_qty,
+                        "store_name": merged_slots.shop_name,
+                    },
+                )
 
         if (
             len(domains) == 1
@@ -16426,29 +16612,48 @@ class TStationChatServiceV2:
                 or ConversationSlots.has_product_keyword(last_user_text)
             )
         ):
-            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
-            skip_decision = True
-            logger.debug(
-                f"[COORDINATOR] P0 auto-chain gate triggered: "
-                f"pending_intent={merged_slots.pending_intent!r} "
-                f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
-                f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
-                f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
-            )
-            log_classifier_redirect(
-                trace_id=request.tracing_id,
-                rule="P0_auto_chain",
-                classifier_domains=["discovery"],
-                corrected_domains=["discovery", "transaction"],
-                user_text=last_user_text,
-                user_behavior=getattr(routing_result, "user_behavior", "") or "",
-                slots={
-                    "pending_intent": merged_slots.pending_intent,
-                    "fresh_intent_this_turn": regex_slots.pending_intent,
-                    "tire_size": merged_slots.tire_size,
-                    "tire_model": merged_slots.tire_model,
-                },
-            )
+            if _should_preserve_router_contract(
+                routing_result=routing_result,
+                candidate_override="p0_auto_chain",
+                override_reason=explicit_override_reason,
+            ):
+                _mark_router_override_blocked(
+                    routing_result,
+                    previous_domains=list(domains),
+                    previous_execution_plan=list(getattr(routing_result, "execution_plan", []) or []),
+                )
+            else:
+                previous_domains = list(domains)
+                previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+                domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+                skip_decision = True
+                _mark_router_override_applied(
+                    routing_result,
+                    previous_domains=previous_domains,
+                    previous_execution_plan=previous_execution_plan,
+                    reason=explicit_override_reason or "missing_goods_no_for_explicit_transaction",
+                )
+                logger.debug(
+                    f"[COORDINATOR] P0 auto-chain gate triggered: "
+                    f"pending_intent={merged_slots.pending_intent!r} "
+                    f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
+                    f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
+                    f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+                )
+                log_classifier_redirect(
+                    trace_id=request.tracing_id,
+                    rule="P0_auto_chain",
+                    classifier_domains=["discovery"],
+                    corrected_domains=["discovery", "transaction"],
+                    user_text=last_user_text,
+                    user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                    slots={
+                        "pending_intent": merged_slots.pending_intent,
+                        "fresh_intent_this_turn": regex_slots.pending_intent,
+                        "tire_size": merged_slots.tire_size,
+                        "tire_model": merged_slots.tire_model,
+                    },
+                )
 
         # P0b TRANSACTION → DISCOVERY+TRANSACTION redirect: when the classifier
         # picked [TRANSACTION] alone but the user actually provided product
@@ -16534,31 +16739,50 @@ class TStationChatServiceV2:
                 or fresh_product_transaction_request
             )
         ):
-            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
-            skip_decision = True
-            logger.debug(
-                f"[COORDINATOR] P0b TX→DISC+TX redirect: classifier=[TRANSACTION], "
-                f"goods_no={merged_slots.goods_no!r}, tire_size={merged_slots.tire_size!r}, "
-                f"tire_model={merged_slots.tire_model!r}, "
-                f"has_product_keyword={ConversationSlots.has_product_keyword(last_user_text)}, "
-                f"fresh_product_transaction_request={fresh_product_transaction_request}, "
-                f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
-            )
-            log_classifier_redirect(
-                trace_id=request.tracing_id,
-                rule="P0b",
-                classifier_domains=["transaction"],
-                corrected_domains=["discovery", "transaction"],
-                user_text=last_user_text,
-                user_behavior=getattr(routing_result, "user_behavior", "") or "",
-                slots={
-                    "tire_size": merged_slots.tire_size,
-                    "tire_model": merged_slots.tire_model,
-                    "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
-                    "fresh_product_transaction_request": fresh_product_transaction_request,
-                    "fresh_intent_this_turn": regex_slots.pending_intent,
-                },
-            )
+            if _should_preserve_router_contract(
+                routing_result=routing_result,
+                candidate_override="p0b_transaction_redirect",
+                override_reason=explicit_override_reason,
+            ):
+                _mark_router_override_blocked(
+                    routing_result,
+                    previous_domains=list(domains),
+                    previous_execution_plan=list(getattr(routing_result, "execution_plan", []) or []),
+                )
+            else:
+                previous_domains = list(domains)
+                previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+                domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+                skip_decision = True
+                _mark_router_override_applied(
+                    routing_result,
+                    previous_domains=previous_domains,
+                    previous_execution_plan=previous_execution_plan,
+                    reason=explicit_override_reason or "missing_goods_no_for_explicit_transaction",
+                )
+                logger.debug(
+                    f"[COORDINATOR] P0b TX→DISC+TX redirect: classifier=[TRANSACTION], "
+                    f"goods_no={merged_slots.goods_no!r}, tire_size={merged_slots.tire_size!r}, "
+                    f"tire_model={merged_slots.tire_model!r}, "
+                    f"has_product_keyword={ConversationSlots.has_product_keyword(last_user_text)}, "
+                    f"fresh_product_transaction_request={fresh_product_transaction_request}, "
+                    f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
+                )
+                log_classifier_redirect(
+                    trace_id=request.tracing_id,
+                    rule="P0b",
+                    classifier_domains=["transaction"],
+                    corrected_domains=["discovery", "transaction"],
+                    user_text=last_user_text,
+                    user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                    slots={
+                        "tire_size": merged_slots.tire_size,
+                        "tire_model": merged_slots.tire_model,
+                        "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
+                        "fresh_product_transaction_request": fresh_product_transaction_request,
+                        "fresh_intent_this_turn": regex_slots.pending_intent,
+                    },
+                )
 
         if (
             fresh_product_transaction_request
@@ -16566,27 +16790,44 @@ class TStationChatServiceV2:
             and merged_slots.tire_size is not None
             and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
         ):
-            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
-            routing_result = MultiAgentDomain(
-                reason="fresh_sized_product_transaction_search_first",
-                domains=domains,
-                execution_plan=["discovery:resolve_product", "transaction:continue_purchase"],
-                user_behavior="providing a new tire product name and size with transactional intent",
-                flow="fresh product transaction",
-                claim_check_type="none",
-                complaint_scope="none",
-                agent_prompt_profile=AgentPromptProfile.DISCOVERY_SEARCH,
-            )
-            skip_decision = False
-            speculative_classify_future = None
-            logger.info(
-                "[COORDINATOR] Fresh sized product transaction route: forcing "
-                "[DISCOVERY, TRANSACTION] with discovery_search profile "
-                "(tire_size=%r, pending_intent=%r, session_id=%s)",
-                merged_slots.tire_size,
-                regex_slots.pending_intent,
-                request.session_id,
-            )
+            if _should_preserve_router_contract(
+                routing_result=routing_result,
+                candidate_override="fresh_sized_product_transaction",
+                override_reason=explicit_override_reason,
+            ):
+                _mark_router_override_blocked(
+                    routing_result,
+                    previous_domains=list(domains),
+                    previous_execution_plan=list(getattr(routing_result, "execution_plan", []) or []),
+                )
+            else:
+                previous_domains = list(domains)
+                previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+                domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+                routing_result = MultiAgentDomain(
+                    reason="fresh_sized_product_transaction_search_first",
+                    domains=domains,
+                    execution_plan=["discovery:resolve_product", "transaction:continue_purchase"],
+                    user_behavior="providing a new tire product name and size with transactional intent",
+                    flow="fresh product transaction",
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    agent_prompt_profile=AgentPromptProfile.DISCOVERY_SEARCH,
+                    override_applied=True,
+                    override_reason=explicit_override_reason or "missing_goods_no_for_explicit_transaction",
+                    original_router_domains=previous_domains,
+                    original_router_execution_plan=previous_execution_plan,
+                )
+                skip_decision = False
+                speculative_classify_future = None
+                logger.info(
+                    "[COORDINATOR] Fresh sized product transaction route: forcing "
+                    "[DISCOVERY, TRANSACTION] with discovery_search profile "
+                    "(tire_size=%r, pending_intent=%r, session_id=%s)",
+                    merged_slots.tire_size,
+                    regex_slots.pending_intent,
+                    request.session_id,
+                )
 
         # P0d profile upgrade: classifier picked [TRANSACTION] + transaction_price_stock,
         # but the user is mid-order (pending_intent=order + goods_no resolved). The
@@ -16800,57 +17041,87 @@ class TStationChatServiceV2:
                     getattr(routing_result, "referred_object_type", None),
                 )
             if should_apply_cross_domain_route:
-                previous_domains = list(domains)
-                domains[:] = planned_domains
-                if routing_result is None:
-                    routing_result = MultiAgentDomain(
-                        reason="cross_domain_policy_route",
-                        domains=planned_domains,
-                        execution_plan=[
-                            f"{task.domain.value}:{task.intent}" for task in cross_domain_plan.subtasks
-                        ],
-                        user_behavior="policy-engine deterministic cross-domain plan",
-                        flow=cross_domain_plan.response_strategy,
-                        claim_check_type="none",
-                        complaint_scope="none",
-                        agent_prompt_profile=(
-                            AgentPromptProfile.TRANSACTION_COUPON
-                            if has_coupon_pattern_plan
-                            else AgentPromptProfile.FULL
-                        ),
+                cross_domain_override_reason = (
+                    explicit_override_reason
+                    or "router_low_confidence_or_ambiguous"
+                    if routing_result is None
+                    or float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < 0.8
+                    or bool(getattr(routing_result, "needs_clarification", False))
+                    else "missing_goods_no_for_explicit_transaction"
+                )
+                if _should_preserve_router_contract(
+                    routing_result=routing_result,
+                    candidate_override="cross_domain_policy_route",
+                    override_reason=cross_domain_override_reason,
+                ):
+                    _mark_router_override_blocked(
+                        routing_result,
+                        previous_domains=list(domains),
+                        previous_execution_plan=list(getattr(routing_result, "execution_plan", []) or []),
                     )
                 else:
-                    routing_result.domains = planned_domains
-                    routing_result.execution_plan = [
-                        f"{task.domain.value}:{task.intent}" for task in cross_domain_plan.subtasks
-                    ]
-                    if cross_domain_plan.is_cross_domain:
-                        routing_result.agent_prompt_profile = AgentPromptProfile.FULL
-                    elif has_coupon_pattern_plan:
-                        routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_COUPON
-                if (
-                    planned_domains
-                    and planned_domains[0] == MultiAgentDomain.Domain.DISCOVERY
-                    and MultiAgentDomain.Domain.TRANSACTION in planned_domains[1:]
-                ):
-                    skip_decision = True
-                    speculative_classify_future = None
-                logger.info(
-                    "[POLICY][cross-domain] route normalized: %s -> %s plan=%s skip_decision=%s",
-                    [domain.value for domain in previous_domains],
-                    [domain.value for domain in planned_domains],
-                    cross_domain_plan.to_dict(),
-                    skip_decision,
-                )
-                log_classifier_redirect(
-                    trace_id=request.tracing_id,
-                    rule="cross_domain_policy",
-                    classifier_domains=[domain.value for domain in previous_domains],
-                    corrected_domains=[domain.value for domain in planned_domains],
-                    user_text=last_user_text,
-                    user_behavior=getattr(routing_result, "user_behavior", "") or "",
-                    slots=known_slots,
-                )
+                    previous_domains = list(domains)
+                    previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+                    domains[:] = planned_domains
+                    if routing_result is None:
+                        routing_result = MultiAgentDomain(
+                            reason="cross_domain_policy_route",
+                            domains=planned_domains,
+                            execution_plan=[
+                                f"{task.domain.value}:{task.intent}" for task in cross_domain_plan.subtasks
+                            ],
+                            user_behavior="policy-engine deterministic cross-domain plan",
+                            flow=cross_domain_plan.response_strategy,
+                            claim_check_type="none",
+                            complaint_scope="none",
+                            agent_prompt_profile=(
+                                AgentPromptProfile.TRANSACTION_COUPON
+                                if has_coupon_pattern_plan
+                                else AgentPromptProfile.FULL
+                            ),
+                            override_applied=True,
+                            override_reason=cross_domain_override_reason,
+                            original_router_domains=previous_domains,
+                            original_router_execution_plan=previous_execution_plan,
+                        )
+                    else:
+                        _mark_router_override_applied(
+                            routing_result,
+                            previous_domains=previous_domains,
+                            previous_execution_plan=previous_execution_plan,
+                            reason=cross_domain_override_reason,
+                        )
+                        routing_result.domains = planned_domains
+                        routing_result.execution_plan = [
+                            f"{task.domain.value}:{task.intent}" for task in cross_domain_plan.subtasks
+                        ]
+                        if cross_domain_plan.is_cross_domain:
+                            routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+                        elif has_coupon_pattern_plan:
+                            routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_COUPON
+                    if (
+                        planned_domains
+                        and planned_domains[0] == MultiAgentDomain.Domain.DISCOVERY
+                        and MultiAgentDomain.Domain.TRANSACTION in planned_domains[1:]
+                    ):
+                        skip_decision = True
+                        speculative_classify_future = None
+                    logger.info(
+                        "[POLICY][cross-domain] route normalized: %s -> %s plan=%s skip_decision=%s",
+                        [domain.value for domain in previous_domains],
+                        [domain.value for domain in planned_domains],
+                        cross_domain_plan.to_dict(),
+                        skip_decision,
+                    )
+                    log_classifier_redirect(
+                        trace_id=request.tracing_id,
+                        rule="cross_domain_policy",
+                        classifier_domains=[domain.value for domain in previous_domains],
+                        corrected_domains=[domain.value for domain in planned_domains],
+                        user_text=last_user_text,
+                        user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                        slots=known_slots,
+                    )
         except Exception:
             logger.exception("[POLICY][cross-domain] Failed to normalize route")
 

@@ -90,6 +90,12 @@ class TurnContract:
     referred_objects: Mapping[str, Any] = field(default_factory=dict)
     planner_confidence: float | None = None
     planner_source: str | None = None
+    override_applied: bool = False
+    override_reason: str | None = None
+    original_router_domains: tuple[str, ...] = ()
+    original_router_execution_plan: tuple[str, ...] = ()
+    override_blocked: bool = False
+    blocked_override_reason: str | None = None
     contract_drift: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +118,12 @@ class TurnContract:
             "referred_objects": dict(self.referred_objects),
             "planner_confidence": self.planner_confidence,
             "planner_source": self.planner_source,
+            "override_applied": self.override_applied,
+            "override_reason": self.override_reason,
+            "original_router_domains": list(self.original_router_domains),
+            "original_router_execution_plan": list(self.original_router_execution_plan),
+            "override_blocked": self.override_blocked,
+            "blocked_override_reason": self.blocked_override_reason,
             "contract_drift": [dict(item) for item in self.contract_drift],
         }
 
@@ -233,6 +245,17 @@ def build_turn_contract(
         referred_objects=_referred_objects(routing_result),
         planner_confidence=_planner_confidence(routing_result),
         planner_source=_planner_source(routing_result, cross_domain_plan),
+        override_applied=bool(getattr(routing_result, "override_applied", False)),
+        override_reason=str(getattr(routing_result, "override_reason", "") or "") or None,
+        original_router_domains=tuple(
+            _domain_value(domain)
+            for domain in tuple(getattr(routing_result, "original_router_domains", ()) or ())
+        ),
+        original_router_execution_plan=tuple(
+            str(item) for item in tuple(getattr(routing_result, "original_router_execution_plan", ()) or ())
+        ),
+        override_blocked=bool(getattr(routing_result, "override_blocked", False)),
+        blocked_override_reason=str(getattr(routing_result, "blocked_override_reason", "") or "") or None,
         contract_drift=drift,
     )
 
