@@ -7203,7 +7203,8 @@ def _extract_store_holiday_store_name(user_text: str | None) -> str | None:
 
 _PLAIN_STORE_INFO_RE = re.compile(
     r"정보|상세|주소|전화|연락처|영업\s*시간|운영\s*시간|휴무|서비스|올마이T|올마이티|"
-    r"T\s*바로\s*배송|T바로배송|온라인\s*장착|수입차|전경|사진|외관|내부|모습|이미지",
+    r"T\s*바로\s*배송|T바로배송|온라인\s*장착|수입차|전경|사진|외관|내부|모습|이미지|"
+    r"질소|질소\s*충전|무료|얼라인먼트|밸런스|워셔액|라운지|휴게실",
     re.IGNORECASE,
 )
 _PRODUCT_STORE_TRANSACTION_ACTION_RE = re.compile(
@@ -14348,6 +14349,56 @@ def _is_new_store_name_anchor_for_current_turn(
     return bool(existing_shop_name or existing_shop_id)
 
 
+def _is_general_store_info_turn_with_explicit_store(
+    text: str,
+    regex_slots: ConversationSlots,
+) -> bool:
+    if not text or regex_slots.shop_name is None:
+        return False
+    if regex_slots.pending_intent is not None:
+        return False
+    if _STORE_RESERVATION_ACTION_RE.search(text):
+        return False
+    if ConversationSlots.has_product_keyword(text) and _PRODUCT_STORE_TRANSACTION_ACTION_RE.search(text):
+        return False
+    return bool(_extract_plain_store_info_store_name(text) or ConversationSlots.has_store_finder_intent(text))
+
+
+def _clear_stale_slots_for_explicit_store_info_turn(
+    slots: ConversationSlots,
+    *,
+    current_store_name: str,
+    reason: str = "explicit_store_change",
+) -> dict[str, Any]:
+    cleared: dict[str, Any] = {}
+    for field in (
+        "shop_id",
+        "shop_name",
+        "region",
+        "requested_cal_day",
+        "rsv_hour",
+        "pending_intent",
+        "goal_type",
+        "availability_intent",
+        "goods_no",
+        "tire_model",
+        "tire_size",
+        "ord_qty",
+        "payment_amount",
+    ):
+        value = getattr(slots, field, None)
+        if value in (None, "", [], {}):
+            continue
+        cleared[field] = value
+        setattr(slots, field, None)
+    slots.shop_name = current_store_name
+    return {
+        "cleared_stale_store_slots": cleared,
+        "current_turn_store_name": current_store_name,
+        "slot_clear_reason": reason,
+    }
+
+
 def _clear_stale_product_identity_for_fresh_transaction(
     slots: ConversationSlots,
     text: str,
@@ -17130,6 +17181,7 @@ class TStationChatServiceV2:
 
             current_turn_store_name = regex_slots.shop_name
             current_turn_has_store_anchor = bool(current_turn_store_name or regex_slots.region)
+            explicit_store_info_cleanup: dict[str, Any] = {}
             size_only_store_availability_continuation = _is_size_only_store_availability_continuation(
                 last_user_text,
                 prev_tool_data=prev_tool_data,
@@ -17137,7 +17189,40 @@ class TStationChatServiceV2:
                 messages=request.messages,
                 slots=merged_slots,
             )
-            if _is_new_store_name_anchor_for_current_turn(
+            explicit_store_info_turn = _is_general_store_info_turn_with_explicit_store(last_user_text, regex_slots)
+            if current_turn_store_name and explicit_store_info_turn and (
+                _is_new_store_name_anchor_for_current_turn(
+                    current_turn_store_name,
+                    existing_slots.shop_name,
+                    existing_slots.shop_id,
+                )
+                or any(
+                    getattr(merged_slots, field, None) not in (None, "", [], {})
+                    for field in (
+                        "region",
+                        "requested_cal_day",
+                        "rsv_hour",
+                        "pending_intent",
+                        "goal_type",
+                        "availability_intent",
+                        "goods_no",
+                        "ord_qty",
+                        "payment_amount",
+                    )
+                )
+            ):
+                before_slots = merged_slots.model_dump()
+                explicit_store_info_cleanup = _clear_stale_slots_for_explicit_store_info_turn(
+                    merged_slots,
+                    current_store_name=current_turn_store_name,
+                )
+                logger.info(
+                    "[SLOTS] cleared stale store/order context for explicit store info turn: metadata=%s before=%s after=%s",
+                    explicit_store_info_cleanup,
+                    {k: v for k, v in before_slots.items() if v not in (None, "", [], {})},
+                    {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
+                )
+            elif _is_new_store_name_anchor_for_current_turn(
                 current_turn_store_name,
                 existing_slots.shop_name,
                 existing_slots.shop_id,

@@ -189,7 +189,9 @@ from services.tstation.chat import (
     _extract_plain_store_info_store_name,
     _is_bare_product_name_search_query,
     _is_fresh_product_transaction_request,
+    _is_general_store_info_turn_with_explicit_store,
     _is_new_store_name_anchor_for_current_turn,
+    _clear_stale_slots_for_explicit_store_info_turn,
     _unique_product_row_from_sized_search_result,
     _clear_stale_product_identity_for_fresh_transaction,
     _normalize_store_name_for_slot_compare,
@@ -3221,6 +3223,83 @@ def test_current_turn_same_store_name_can_keep_carried_shop_id() -> None:
         existing_shop_id="F07782",
     ) is False
     assert _normalize_store_name_for_slot_compare("티스테이션 한남점") == "한남점"
+
+
+def test_explicit_store_info_turn_clears_stale_store_and_order_context() -> None:
+    regex_slots = ConversationSlots.extract_from_user_text("한남점 질소충전 무료라고 하던데 맞제~?")
+    slots = ConversationSlots(
+        goods_no="G000000317729",
+        tire_model="이글 투어링",
+        tire_size="245/45R18",
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        region="분당",
+        requested_cal_day="20260624",
+        rsv_hour="17",
+        ord_qty=4,
+        payment_amount=120000,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_intent="today_install",
+    )
+
+    assert regex_slots.shop_name == "한남점"
+    assert _is_general_store_info_turn_with_explicit_store(
+        "한남점 질소충전 무료라고 하던데 맞제~?",
+        regex_slots,
+    ) is True
+
+    metadata = _clear_stale_slots_for_explicit_store_info_turn(
+        slots,
+        current_store_name=regex_slots.shop_name,
+    )
+
+    assert metadata["slot_clear_reason"] == "explicit_store_change"
+    assert metadata["current_turn_store_name"] == "한남점"
+    assert metadata["cleared_stale_store_slots"]["shop_id"] == "F00721"
+    assert metadata["cleared_stale_store_slots"]["region"] == "분당"
+    assert metadata["cleared_stale_store_slots"]["requested_cal_day"] == "20260624"
+    assert slots.shop_name == "한남점"
+    assert slots.shop_id is None
+    assert slots.region is None
+    assert slots.requested_cal_day is None
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.goods_no is None
+    assert slots.ord_qty is None
+    assert slots.payment_amount is None
+
+
+def test_explicit_store_info_turn_clears_previous_map_store_context() -> None:
+    regex_slots = ConversationSlots.extract_from_user_text("한남점 전화번호 알려줘")
+    slots = ConversationSlots(
+        goal_type="store_finder",
+        shop_id="F11111",
+        shop_name="티스테이션 광교점",
+        region="광교",
+        requested_cal_day="20260624",
+    )
+
+    assert regex_slots.shop_name == "한남점"
+    assert _is_general_store_info_turn_with_explicit_store("한남점 전화번호 알려줘", regex_slots) is True
+
+    _clear_stale_slots_for_explicit_store_info_turn(slots, current_store_name=regex_slots.shop_name)
+
+    assert slots.shop_name == "한남점"
+    assert slots.shop_id is None
+    assert slots.region is None
+    assert slots.requested_cal_day is None
+    assert slots.goal_type is None
+
+
+def test_explicit_store_purchase_chain_is_not_treated_as_plain_store_info_cleanup() -> None:
+    regex_slots = ConversationSlots.extract_from_user_text("판교점에서 벤투스 S2 AS 4개 구매하고 싶어")
+
+    assert regex_slots.shop_name == "판교점"
+    assert _is_general_store_info_turn_with_explicit_store(
+        "판교점에서 벤투스 S2 AS 4개 구매하고 싶어",
+        regex_slots,
+    ) is False
 
 
 def test_recent_single_store_context_not_reused_when_current_turn_names_store() -> None:
