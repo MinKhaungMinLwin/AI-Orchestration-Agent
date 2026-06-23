@@ -58,6 +58,8 @@ def decide_transaction_response(
         return _decide_favorite_store_lookup()
     if intent == "reservation_store_info_lookup":
         return _decide_reservation_store_info_lookup()
+    if intent == "maintenance_history_lookup":
+        return _decide_maintenance_history_lookup(slots=slots)
     if intent == "price_or_benefit_alert_request":
         return _decide_price_or_benefit_alert_request(slots=slots)
     if intent == "inventory_availability":
@@ -236,6 +238,26 @@ def _decide_reservation_store_info_lookup() -> ResponseDecision:
             "예약한 매장/예약 지점 참조는 최근 조회 매장이 아니라 예약 내역 source로 확인한다. "
             "get_my_reservations_tool 또는 주문/예약 내역 결과가 없으면 예약 매장을 단정하지 말고 예약번호/주문번호 또는 예약 내역 확인을 요청한다."
         ),
+    )
+
+
+def _decide_maintenance_history_lookup(*, slots: dict[str, Any]) -> ResponseDecision:
+    requested_item = str(slots.get("requested_service_item") or "").strip()
+    return _decision(
+        response_shape_key="maintenance_history_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "fallback_to_support_without_history_tool",
+            "ask_order_for_maintenance_history",
+            "use_order_history_for_maintenance_history",
+            "recommend_product_for_maintenance_history",
+        ),
+        assistant_guidance=(
+            "정비/서비스 이력 조회는 주문번호나 상품 슬롯 없이 get_maintenance_history_tool(limit=5)를 호출한다. "
+            "사용자가 특정 항목을 언급했으면 tool 결과에서 해당 항목을 우선 필터링하고, 결과 응답에는 정비이력보기 CTA를 포함한다."
+        ),
+        metadata={"requested_service_item": requested_item} if requested_item else None,
     )
 
 

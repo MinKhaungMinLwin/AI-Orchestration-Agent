@@ -46,6 +46,7 @@ from services.tstation.chat import (
     _build_coupon_channel_policy_event,
     _build_default_benefit_event,
     _build_maintenance_dday_event,
+    _build_maintenance_history_event,
     _build_owned_coupon_best_discount_event,
     _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
@@ -113,6 +114,7 @@ from services.tstation.chat import (
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
+    _is_maintenance_history_lookup_query,
     _is_order_quantity_prompt_continuation_text,
     _is_staggered_selected_tire_size_context,
     _listcar_allows_staggered_tire_prompt,
@@ -14664,3 +14666,105 @@ def test_contract_sensitive_turn_should_disable_parallel_qc_condition() -> None:
 
     assert contract_sensitive_qc is True
     assert not (True and True and not contract_sensitive_qc)
+
+
+@pytest.mark.parametrize(
+    "user_text,requested_item",
+    [
+        ("마지막으로 휠얼라인먼트 서비스 받은게 언제더라?", "휠얼라인먼트"),
+        ("오일필터 교체한 날이 언제야", "오일필터"),
+        ("최근 엔진오일 언제 갈았어?", "엔진오일"),
+    ],
+)
+def test_maintenance_history_lookup_contract_uses_history_tool(user_text: str, requested_item: str) -> None:
+    assert _is_maintenance_history_lookup_query(user_text) is True
+
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "ord_qty": 4,
+            "goods_no": "G000000309780",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "maintenance_history_lookup"
+    assert frame.known_slots["requested_service_item"] == requested_item
+    assert tool_plan.allowed_tools == ("get_maintenance_history_tool",)
+    assert "get_orders_of_user_tool" in tool_plan.forbidden_tools
+    assert "search_product_tool" in tool_plan.forbidden_tools
+    assert contract.intent == "maintenance_history_lookup"
+    assert "get_maintenance_history_tool" in contract.allowed_tools
+    assert contract.blocking_required_slots == ()
+
+
+def test_maintenance_history_event_filters_requested_service_and_has_cta() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_svc_dt": "2026-04-02",
+                    "shop_nm": "티스테이션 모란점",
+                    "car_svc_info": "휠 얼라인먼트 점검",
+                    "car_svc_qty": "1",
+                    "svc_tp": "오프라인",
+                },
+                {
+                    "car_svc_dt": "2026-03-01",
+                    "shop_nm": "티스테이션 판교점",
+                    "car_svc_info": "엔진오일 교체",
+                    "car_svc_qty": "1",
+                    "svc_tp": "경정비",
+                },
+            ],
+        },
+    }
+
+    event = _build_maintenance_history_event(tool_result, "마지막으로 휠얼라인먼트 서비스 받은게 언제더라?")
+    data = event["data"]
+    response = data["assistantResponse"]
+    chips = data["quickReplies"]
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_maintenance_history_lookup"
+    assert "2026-04-02" in response
+    assert "티스테이션 모란점" in response
+    assert "엔진오일" not in response
+    assert chips[0]["label"] == "정비이력보기"
+    assert chips[0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+
+
+def test_maintenance_history_event_reports_no_matching_requested_service() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_svc_dt": "2026-03-01",
+                    "shop_nm": "티스테이션 판교점",
+                    "car_svc_info": "타이어 장착",
+                    "car_svc_qty": "4",
+                },
+            ],
+        },
+    }
+
+    event = _build_maintenance_history_event(tool_result, "오일필터 교체한 날이 언제야")
+    data = event["data"]
+
+    assert "최근 정비이력에서 오일필터 항목은 확인되지 않아요" in data["assistantResponse"]
+    assert data["quickReplies"][0]["url"] == CTAUrls.STORE_SERVICE_HISTORY

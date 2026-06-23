@@ -1551,7 +1551,9 @@ RULES:
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
 - 매장/근처/올마이티/All My T → TRANSACTION
-- 정비이력/정비내역/관리받은 내역/서비스 이력/받은 서비스 → TRANSACTION, agent_prompt_profile=transaction_order
+- 정비이력/정비내역/관리받은 내역/서비스 이력/받은 서비스, "마지막으로 휠얼라인먼트 받은게 언제",
+  "오일필터 교체한 날이 언제야", "최근 엔진오일 언제 갈았어" → TRANSACTION,
+  agent_prompt_profile=transaction_order, intent=maintenance_history_lookup
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
@@ -1588,7 +1590,9 @@ EXAMPLES (tricky cases):
 - "기획전 할인이랑 쿠폰 같이 돼?" → SUPPORT (기획전+쿠폰 stacking, NOT discovery_event_content)
 - "두 쿠폰 동시 적용 가능?" → SUPPORT (쿠폰+쿠폰 stacking, NOT transaction_coupon)
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
-- "정비이력 보여줘", "내가 관리받은 내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (maintenance/service history lookup, NOT SUPPORT)
+- "정비이력 보여줘", "내가 관리받은 내역 알려줘", "마지막으로 휠얼라인먼트 서비스 받은게 언제더라?",
+  "오일필터 교체한 날이 언제야", "최근 엔진오일 언제 갈았어?" → TRANSACTION,
+  agent_prompt_profile=transaction_order, intent=maintenance_history_lookup (maintenance/service history lookup, NOT SUPPORT)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "예약한 매장 전화번호", "내 예약 매장 위치", "예약 지점 연락처" → TRANSACTION, agent_prompt_profile=transaction_order (reservation store info lookup from reservation/order source; do NOT infer from recently viewed/searched store)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
@@ -2027,7 +2031,13 @@ class StreamingMultiAgentCoordinator:
     )
     _TRANSACTION_MAINTENANCE_HISTORY_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"정비\s*이력|정비이력|정비\s*내역|정비내역|관리받은\s*(?:내역|거)|관리\s*받은\s*(?:내역|거)"
-        r"|서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)",
+        r"|서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)"
+        r"|(?:마지막|최근|전에|예전에).{0,24}"
+        r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+        r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:언제|받|교체|갈|했|한\s*적)"
+        r"|(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+        r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:받은|교체한|갈았|했던|한)\s*(?:날|날짜|때|적|게)?"
+        r".{0,16}(?:언제|있)",
         re.IGNORECASE,
     )
     _TRANSACTION_CANCELLATION_RE: ClassVar[re.Pattern[str]] = re.compile(
@@ -2207,7 +2217,8 @@ class StreamingMultiAgentCoordinator:
                                     "취소", "택배비", "왕복 배송비", "반품 비용", "반품수수료",
                                     "정비이력", "정비 이력", "정비내역", "정비 내역",
                                     "관리받은", "관리 받은", "서비스 이력", "서비스 내역",
-                                    "받은 서비스", "받은 정비",
+                                    "받은 서비스", "받은 정비", "휠얼라인먼트", "휠 얼라인먼트",
+                                    "오일필터", "오일 필터", "엔진오일", "엔진 오일",
                                 )
                             )
                             else AgentPromptProfile.TRANSACTION_STORE
@@ -5609,6 +5620,144 @@ def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, use
                 {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
+        },
+    }
+
+
+_MAINTENANCE_HISTORY_LOOKUP_RE = re.compile(
+    r"정비\s*이력|정비이력|정비\s*내역|정비내역|관리받은\s*(?:내역|거)|관리\s*받은\s*(?:내역|거)|"
+    r"서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)|"
+    r"(?:마지막|최근|전에|예전에).{0,24}"
+    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:언제|받|교체|갈|했|한\s*적)|"
+    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:받은|교체한|갈았|했던|한)\s*(?:날|날짜|때|적|게)?"
+    r".{0,16}(?:언제|있)",
+    re.IGNORECASE,
+)
+_MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("휠얼라인먼트", (r"휠\s*얼라인먼트", r"얼라인먼트")),
+    ("오일필터", (r"오일\s*필터", r"오일필터")),
+    ("엔진오일", (r"엔진\s*오일", r"엔진오일")),
+    ("배터리", (r"배터리",)),
+    ("와이퍼", (r"와이퍼",)),
+    ("실내필터", (r"실내\s*필터", r"에어컨\s*필터", r"캐빈\s*필터")),
+    ("타이어 교체", (r"타이어\s*(?:교체|장착)",)),
+    ("경정비", (r"경정비",)),
+)
+
+
+def _is_maintenance_history_lookup_query(user_text: str | None) -> bool:
+    return bool(_MAINTENANCE_HISTORY_LOOKUP_RE.search(user_text or ""))
+
+
+def _requested_maintenance_history_item(user_text: str | None) -> tuple[str, tuple[str, ...]] | None:
+    text = user_text or ""
+    for label, patterns in _MAINTENANCE_HISTORY_SERVICE_RULES:
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return label, patterns
+    return None
+
+
+def _maintenance_history_items(tool_result: dict) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    raw_items = data.get("items") or data.get("histories") or data.get("maintenance_history") or []
+    if isinstance(raw_items, dict):
+        raw_items = raw_items.get("items") or raw_items.get("list") or []
+    if not isinstance(raw_items, list):
+        return []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _maintenance_history_text(item: dict) -> str:
+    values = [
+        item.get("car_svc_info"),
+        item.get("item_nm"),
+        item.get("svc_nm"),
+        item.get("service_nm"),
+        item.get("svc_tp"),
+        item.get("goods_nm"),
+    ]
+    return " ".join(str(value or "") for value in values)
+
+
+def _maintenance_history_matches_item(item: dict, patterns: tuple[str, ...]) -> bool:
+    haystack = _maintenance_history_text(item)
+    return any(re.search(pattern, haystack, re.IGNORECASE) for pattern in patterns)
+
+
+def _maintenance_history_field(item: dict, *keys: str) -> str:
+    for key in keys:
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _format_maintenance_history_row(item: dict) -> str:
+    date = _maintenance_history_field(item, "car_svc_dt", "svc_dt", "service_dt", "ord_dt", "date")
+    shop = _maintenance_history_field(item, "shop_nm", "store_nm", "shop_name")
+    service = _maintenance_history_field(item, "car_svc_info", "item_nm", "svc_nm", "service_nm", "svc_tp")
+    qty = _maintenance_history_field(item, "car_svc_qty", "qty", "quantity")
+    parts = [part for part in (date, shop, service) if part]
+    if qty:
+        parts.append(f"{qty}개")
+    return " / ".join(parts) if parts else "정비 이력 항목"
+
+
+def _build_maintenance_history_event(tool_result: dict, user_query: str) -> dict:
+    items = _maintenance_history_items(tool_result)
+    focus = _requested_maintenance_history_item(user_query)
+    rows = items
+    if focus is not None:
+        _label, patterns = focus
+        matched_rows = [item for item in items if _maintenance_history_matches_item(item, patterns)]
+        rows = matched_rows
+
+    if tool_result.get("status") == "error":
+        assistant_response = (
+            "정비이력 조회 중 오류가 발생했어요. 잠시 후 다시 시도하거나 정비이력 페이지에서 확인해 주세요."
+        )
+    elif not items:
+        assistant_response = "최근 5년 내 확인되는 정비이력이 없어요.\n\n자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
+    elif focus is not None and not rows:
+        label = focus[0]
+        assistant_response = (
+            f"최근 정비이력에서 {label} 항목은 확인되지 않아요.\n\n"
+            "전체 정비이력은 정비이력 페이지에서 직접 확인할 수 있어요."
+        )
+    elif focus is not None:
+        label = focus[0]
+        top = rows[0]
+        assistant_response = (
+            f"최근 {label} 이력은 다음과 같이 확인돼요.\n"
+            f"• {_format_maintenance_history_row(top)}\n\n"
+            "자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
+        )
+    else:
+        lines = ["최근 정비이력은 다음과 같이 확인돼요."]
+        lines.extend(f"• {_format_maintenance_history_row(item)}" for item in rows[:5])
+        lines.append("")
+        lines.append("자세한 내용은 정비이력 페이지에서 확인할 수 있어요.")
+        assistant_response = "\n".join(lines).strip()
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_maintenance_history_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "정비이력보기", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"},
+                {"label": "내 주문 조회", "domain": "TRANSACTION"},
+                {"label": "다른 정비 문의", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "maintenance_history_lookup",
+                "requestedServiceItem": focus[0] if focus else None,
+            },
         },
     }
 
@@ -21336,6 +21485,47 @@ class TStationChatServiceV2:
                 requested_plate=_extract_vehicle_plate_from_text(user_query),
             )
 
+        async def _resolve_maintenance_history_lookup_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_maintenance_history_lookup_query(user_query):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_maintenance_history_tool as _maintenance_history_tool,
+            )
+
+            emitted_events: list[dict] = []
+            tool_input = {"limit": 5}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_maintenance_history_tool",
+                "display_name": "정비이력 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_history = await asyncio.to_thread(_maintenance_history_tool.invoke, tool_input)
+                history_result = _tool_result_dict(raw_history)
+            except Exception as exc:
+                logger.exception("[MAINTENANCE_HISTORY] tool failed")
+                history_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_maintenance_history_tool", tool_input, history_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": history_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(history_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_maintenance_history_tool",
+                "source_domain": "transaction",
+            })
+            return emitted_events, _build_maintenance_history_event(history_result, user_query)
+
         async def _resolve_reservation_store_info_with_code() -> tuple[list[dict], dict] | None:
             if not _is_reservation_store_info_lookup_query(user_query):
                 return None
@@ -24023,6 +24213,22 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(reorder_event, ensure_ascii=False)}\n\n"
             assistant_response = str((reorder_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        maintenance_history_resolution = await _resolve_maintenance_history_lookup_with_code()
+        if maintenance_history_resolution is not None:
+            code_events, maintenance_event = maintenance_history_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(maintenance_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((maintenance_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

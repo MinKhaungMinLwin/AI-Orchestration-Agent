@@ -55,6 +55,27 @@ _SERVICE_DURATION_ADVISORY_RE = re.compile(
     r".{0,40}(?:현장(?:에서)?\s*)?(?:추가|같이|함께).{0,30}(?:시간|얼마나|소요|걸려)",
     re.IGNORECASE,
 )
+_MAINTENANCE_HISTORY_LOOKUP_RE = re.compile(
+    r"정비\s*이력|정비이력|정비\s*내역|정비내역|관리받은\s*(?:내역|거)|관리\s*받은\s*(?:내역|거)|"
+    r"서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)|"
+    r"(?:마지막|최근|전에|예전에).{0,24}"
+    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:언제|받|교체|갈|했|한\s*적)|"
+    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:받은|교체한|갈았|했던|한)\s*(?:날|날짜|때|적|게)?"
+    r".{0,16}(?:언제|있)",
+    re.IGNORECASE,
+)
+_MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("휠얼라인먼트", (r"휠\s*얼라인먼트", r"얼라인먼트")),
+    ("오일필터", (r"오일\s*필터", r"오일필터")),
+    ("엔진오일", (r"엔진\s*오일", r"엔진오일")),
+    ("배터리", (r"배터리",)),
+    ("와이퍼", (r"와이퍼",)),
+    ("실내필터", (r"실내\s*필터", r"에어컨\s*필터", r"캐빈\s*필터")),
+    ("타이어 교체", (r"타이어\s*(?:교체|장착)",)),
+    ("경정비", (r"경정비",)),
+)
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
 _STORE_SERVICE_AVAILABILITY_RE = re.compile(
     r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
@@ -313,6 +334,13 @@ def _is_order_execute_confirmation_context(text: str, slots: dict[str, Any]) -> 
     )
 
 
+def _requested_maintenance_history_item(text: str) -> str | None:
+    for label, patterns in _MAINTENANCE_HISTORY_SERVICE_RULES:
+        if any(re.search(pattern, text or "", re.IGNORECASE) for pattern in patterns):
+            return label
+    return None
+
+
 def _is_preorder_confirmation_text(text: str) -> bool:
     return bool(_QUICK_ORDER_CONFIRM_RE.match(text or ""))
 
@@ -363,6 +391,7 @@ def build_transaction_intent_frame(
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     current_price_or_benefit_alert = bool(_PRICE_OR_BENEFIT_ALERT_RE.search(text))
+    current_maintenance_history_lookup = bool(_MAINTENANCE_HISTORY_LOOKUP_RE.search(text))
     current_purchase = bool(_PURCHASE_RE.search(text))
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
@@ -563,7 +592,11 @@ def build_transaction_intent_frame(
         "today_install_candidate_scope": today_install_candidate_scope,
     }
 
-    if current_price_or_benefit_alert:
+    if current_maintenance_history_lookup:
+        intent = "maintenance_history_lookup"
+        sub_intent = "service_history"
+        entities["requested_service_item"] = _requested_maintenance_history_item(text)
+    elif current_price_or_benefit_alert:
         intent = "price_or_benefit_alert_request"
         sub_intent = "alert_request"
         entities["alert_request"] = True
@@ -681,6 +714,11 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "reservation_store_info_lookup"
         known["goal_type"] = "reservation_store_info"
         known["reservation_store_reference"] = True
+    if intent == "maintenance_history_lookup":
+        known["pending_intent"] = "maintenance_history_lookup"
+        known["goal_type"] = "maintenance_history_lookup"
+        if entities.get("requested_service_item"):
+            known["requested_service_item"] = entities["requested_service_item"]
     if intent == "stock_store_search":
         known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
         if requested_cal_day:
@@ -831,6 +869,24 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "reservation_store_info_lookup", "action": action},
         )
 
+    if frame.intent == "maintenance_history_lookup":
+        return ToolPlan(
+            allowed_tools=("get_maintenance_history_tool",),
+            preferred_tool="get_maintenance_history_tool",
+            tool_args_patch={"limit": 5},
+            forbidden_tools=("get_products_recommendations_tool", "search_product_tool", "get_orders_of_user_tool"),
+            required_slots=(),
+            metadata={
+                "response_intent": "maintenance_history_lookup",
+                "action": action,
+                **(
+                    {"requested_service_item": frame.known_slots["requested_service_item"]}
+                    if frame.known_slots.get("requested_service_item")
+                    else {}
+                ),
+            },
+        )
+
     if frame.intent == "service_duration_advisory":
         return ToolPlan(
             allowed_tools=(),
@@ -969,6 +1025,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "store_service_availability"
     if frame.intent == "reservation_store_info_lookup":
         return "reservation_store_info_lookup"
+    if frame.intent == "maintenance_history_lookup":
+        return "maintenance_history_lookup"
     return frame.intent or "transaction_fallback"
 
 
