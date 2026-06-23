@@ -4135,7 +4135,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
             services: list[str] = []
             if is_all_my_t:
-                services.append("올마이T")
+                services.append("올마이티")
             services.append("온라인 장착 가능" if is_installable else "온라인 장착 불가")
             if is_tna_delivery:
                 services.append("T바로배송")
@@ -5412,7 +5412,7 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
         )
     )
     if "is_all_my_t" in raw:
-        lines.append("• 올마이T: 이용 가능" if raw.get("is_all_my_t") else "• 올마이T: 이용 불가")
+        lines.append("• 올마이티: 이용 가능" if raw.get("is_all_my_t") else "• 올마이티: 이용 불가")
     if "is_installable" in raw:
         lines.append("• 온라인 장착: 가능" if raw.get("is_installable") else "• 온라인 장착: 불가")
     if "is_tna_delivery" in raw:

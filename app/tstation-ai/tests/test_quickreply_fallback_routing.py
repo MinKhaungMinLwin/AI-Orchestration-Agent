@@ -7717,6 +7717,30 @@ def test_store_detail_info_mapping_is_disabled_in_active_order_flow() -> None:
     assert event is None
 
 
+def test_store_detail_info_mapping_uses_allmyti_label() -> None:
+    event = _map_store_detail_info(
+        [
+            {
+                "tool": "get_store_detail_tool",
+                "args": {"shop_id": "F00405"},
+                "data": {
+                    "shop_nm": "티스테이션 송파 삼전점",
+                    "tel_no": "0212345678",
+                    "is_all_my_t": True,
+                    "is_installable": True,
+                    "rating_idx": 4.1,
+                },
+            }
+        ],
+        "매장 상세정보를 확인했어요.",
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "• 올마이티: 이용 가능" in assistant
+    assert "올마이T" not in assistant
+
+
 def test_explicit_store_purchase_chain_request_detection_is_narrow() -> None:
     assert _is_explicit_store_purchase_chain_request("판교점에서 오늘서비스로 dynapro hpx 2355519 2개 구매하고싶어")
     assert not _is_explicit_store_purchase_chain_request("판교점 정보 알려줘")
