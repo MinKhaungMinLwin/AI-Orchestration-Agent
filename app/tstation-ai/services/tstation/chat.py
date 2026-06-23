@@ -870,6 +870,7 @@ RULES:
 - After an unsized recommendation/summary, a bare tire size like "2454518" → DISCOVERY with discovery_followup_intent=size_for_recommendation_continuation. Preserve the previous recommendation objective and continue with that size.
 - After size_for_recommendation_continuation, a bare product name from that result set like "키너지 ST AS" → DISCOVERY product resolve/search within the confirmed tire_size context; do not revert to the previous unsized text summary.
 - After a recent recommendation/search list, "두개다 2355519 사이즈가 있을까?" / "2355519 규격 있어?" → DISCOVERY with discovery_followup_intent=recent_product_set_size_availability, not a new product search
+- After a recent recommendation/search list with multiple products, a bare price/stock/buy follow-up like "그거 가격 알려줘", "가격 알려줘", "그거 재고 있어?", or "구매할래" is ambiguous unless one product was explicitly selected. Keep DISCOVERY, set referred_object_status=ambiguous, referred_object_type=product_set, and needs_clarification=true.
 - After the assistant's previous turn asked for missing info (vehicle/size) to answer a 안심서비스/흡음재/attribute/recommendation-condition question, and the current turn names ONLY a product with no new explicit intent → DISCOVERY with discovery_followup_intent=product_objective_followup and carried_discovery_objective set to the matching objective, NOT a fresh bare product search.
 - If the current turn instead states a new explicit intent ("설명해줘", price/stock ask, comparison, a different attribute) → discovery_followup_intent=none even if a prior objective exists in the conversation.
 - Greeting only (안녕/hi/hello) → LEADING
@@ -912,6 +913,8 @@ EXAMPLES (tricky cases):
 - [After previous size continuation for 245/45R18] "키너지 ST AS" → DISCOVERY, discovery_followup_intent=none, agent_prompt_profile=discovery_search, user_behavior="selecting product within the confirmed 245/45R18 recommendation context"
 - [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
+- [After showing multiple recommendation/search products] "그거 가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
+- [After showing multiple recommendation/search products] "가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=safe_service (NOT a fresh bare product description)
 - [Prior turn: "흡음재 들어간 타이어 알려줘" → agent asked for car/size] "벤투스 에어S" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=sound_absorber
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3 설명해줘" → DISCOVERY, discovery_followup_intent=none (explicit description intent overrides the carried objective)
@@ -15367,6 +15370,11 @@ class TStationChatServiceV2:
         # ordered differently from the deterministic task decomposition.
         cross_domain_plan = None
         try:
+            router_requires_reference_clarification = bool(
+                routing_result is not None
+                and getattr(routing_result, "needs_clarification", False)
+                and getattr(routing_result, "referred_object_status", None) in {"missing", "ambiguous"}
+            )
             known_slots = {
                 "goods_no": merged_slots.goods_no,
                 "product_name": merged_slots.tire_model,
@@ -15390,6 +15398,7 @@ class TStationChatServiceV2:
             )
             should_apply_cross_domain_route = (
                 bool(planned_domains)
+                and not router_requires_reference_clarification
                 and (
                     cross_domain_plan.is_cross_domain
                     or cross_domain_plan.primary_domain.value == "support"
@@ -15418,6 +15427,15 @@ class TStationChatServiceV2:
                     and MultiAgentDomain.Domain.TRANSACTION in domains
                 )
             )
+            if router_requires_reference_clarification and planned_domains != domains:
+                logger.info(
+                    "[POLICY][cross-domain] kept router clarification route: current=%s planned=%s "
+                    "referred_status=%s referred_type=%s",
+                    [domain.value for domain in domains],
+                    [domain.value for domain in planned_domains],
+                    getattr(routing_result, "referred_object_status", None),
+                    getattr(routing_result, "referred_object_type", None),
+                )
             if should_apply_cross_domain_route:
                 previous_domains = list(domains)
                 domains[:] = planned_domains

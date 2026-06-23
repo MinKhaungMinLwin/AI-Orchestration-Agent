@@ -592,7 +592,7 @@ def _fallback_reason(
 
 
 def _clarification_text(required_slots: tuple[str, ...]) -> str:
-    if "product" in required_slots or "goods_no" in required_slots:
+    if "product" in required_slots or "goods_no" in required_slots or "product_set" in required_slots:
         return "어떤 상품 기준으로 확인해드릴까요?"
     if "tire_size" in required_slots:
         return "확인할 타이어 사이즈를 알려주세요."
@@ -605,7 +605,7 @@ def _clarification_text(required_slots: tuple[str, ...]) -> str:
 
 def _clarification_chips(required_slots: tuple[str, ...]) -> list[dict[str, str]]:
     chips: list[dict[str, str]] = []
-    if "product" in required_slots or "goods_no" in required_slots:
+    if "product" in required_slots or "goods_no" in required_slots or "product_set" in required_slots:
         chips.append({"label": "상품명 입력", "domain": "DISCOVERY"})
     if "tire_size" in required_slots:
         chips.append({"label": "사이즈 입력", "domain": "DISCOVERY"})

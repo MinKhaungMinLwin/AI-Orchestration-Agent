@@ -8514,6 +8514,40 @@ def test_turn_contract_blocks_missing_reference_even_when_planner_starts_with_di
     assert should_guard_required_slots(contract)
 
 
+def test_turn_contract_blocks_ambiguous_price_followup_even_with_transaction_policy_plan() -> None:
+    cross_domain_plan = plan_cross_domain_turn("가격 알려줘", known_slots={})
+
+    contract = build_turn_contract(
+        user_text="가격 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("price_without_size",),
+        ),
+        cross_domain_plan=cross_domain_plan,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:clarify_ambiguous_product_set_price"],
+            referred_object_status="ambiguous",
+            referred_object_type="product_set",
+            needs_clarification=True,
+        ),
+    )
+    event = build_required_slot_clarification_event(contract)
+
+    assert contract.referred_objects == {
+        "status": "ambiguous",
+        "type": "product_set",
+        "needs_clarification": True,
+    }
+    assert contract.blocking_required_slots == ("product_set",)
+    assert contract.risk_level == "high"
+    assert should_guard_required_slots(contract)
+    assert event["data"]["assistantResponse"] == "어떤 상품 기준으로 확인해드릴까요?"
+    assert event["data"]["quickReplies"][0]["label"] == "상품명 입력"
+
+
 def test_turn_contract_ignores_freeform_execution_plan_as_planner_intent() -> None:
     contract = build_turn_contract(
         user_text="가격 알려줘",
