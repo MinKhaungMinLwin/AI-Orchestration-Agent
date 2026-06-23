@@ -178,6 +178,8 @@ from services.tstation.chat import (
     _store_service_availability_event,
     _build_vehicle_information_event,
     _build_complaint_scope_guard_event,
+    _is_private_contact_request,
+    _privacy_contact_request_event,
     _build_recommendation_contract_fallback_event,
     _choose_quickreply_fallback,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
@@ -4008,6 +4010,47 @@ def test_unclear_complaint_asks_target_before_support_handoff() -> None:
     assert "어떤 부분이 불편하셨는지" in assistant_response
     assert "타이어 상품, 주문/결제, 장착 매장" in assistant_response
     assert _labels(event["data"]["quickReplies"]) == ["주문 조회", "매장 찾기", "1:1 문의"]
+
+
+def test_private_contact_request_preempts_unclear_complaint() -> None:
+    text = "관리자 핸드폰번호 뭐야? 내 남편이 화가 많이 났어요^^"
+
+    assert _is_private_contact_request(text)
+
+    event = _privacy_contact_request_event(text)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["source_domain"] == MultiAgentDomain.Domain.SUPPORT.value
+    assert event["assistant_response_source"] == "code_privacy_contact_request_guard"
+    assistant_response = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "개인 휴대폰 번호는 개인정보라 안내해드릴 수 없어요" in assistant_response
+    assert "공식 고객센터 또는 1:1 문의" in assistant_response
+    assert labels[:2] == ["1:1 문의하기", "고객센터 안내"]
+    assert labels[0] not in {"주문 조회", "매장 찾기"}
+    assert event["data"]["metadata"]["policy_intent"] == "privacy_contact_request"
+    assert event["data"]["metadata"]["hard_block"] is True
+
+
+def test_private_store_owner_phone_request_offers_only_official_store_contact() -> None:
+    event = _privacy_contact_request_event("서초점 사장님 휴대폰 번호 알려줘")
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "개인 휴대폰 번호는 개인정보라 안내해드릴 수 없어요" in assistant_response
+    assert "공개된 매장 공식 전화번호 기준" in assistant_response
+    assert labels == ["1:1 문의하기", "고객센터 안내", "매장 공식 연락처"]
+    assert event["data"]["metadata"]["storeOfficialContactAllowed"] is True
+
+
+def test_private_contact_guard_does_not_hijack_generic_staff_connection() -> None:
+    text = "너무 화나는데 담당자 연결해줘"
+
+    assert not _is_private_contact_request(text)
+    assert _privacy_contact_request_event(text) is None
+    assert _infer_complaint_scope(text) == "unclear_complaint"
 
 
 @pytest.mark.parametrize(
@@ -12391,6 +12434,18 @@ def test_product_benefit_stacking_stays_out_of_discovery_event_lookup() -> None:
 
     assert frame.sub_intent != "product_event_lookup"
     assert [task.intent for task in cross_domain_plan.subtasks] != ["product_event_lookup"]
+
+
+def test_support_response_policy_prioritizes_personal_contact_over_human_escalation() -> None:
+    response_decision = decide_support_response(
+        intent="human_escalation",
+        user_text="매장 관리자랑 통화하고 싶은데 개인번호 알려줘",
+        known_slots={},
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "personal_contact_denied"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "share_personal_contact" in response_decision.forbidden_behaviors
 
 
 @pytest.mark.parametrize(

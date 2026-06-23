@@ -13,7 +13,11 @@ _EXPIRED_COUPON_RE = re.compile(r"만료|끝난|종료|원복|복구|다시\s*�
 _COUPON_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _HUMAN_RE = re.compile(r"상담원|사람\s*상담|고객센터|전화번호|연결", re.IGNORECASE)
-_PERSONAL_CONTACT_RE = re.compile(r"개인\s*(?:핸드폰|전화|연락처)|담당자\s*연락처|관리자\s*번호", re.IGNORECASE)
+_PERSONAL_CONTACT_RE = re.compile(
+    r"개인\s*(?:핸드폰|휴대폰|전화|번호|연락처)"
+    r"|(?:담당자|관리자|직원|사장님|매니저|점장).{0,16}(?:개인\s*)?(?:연락처|번호|전화번호|휴대폰|핸드폰)",
+    re.IGNORECASE,
+)
 _TPMS_RE = re.compile(
     r"TPMS|공기압\s*경고등|공기압\s*점검등|타이어압력모니터링"
     r"|경고등.*안\s*꺼|안\s*꺼.*경고등|경고등.*꺼지지|경고등.*계속",
@@ -152,15 +156,6 @@ def decide_support_response(
             ),
         )
 
-    if intent == "human_escalation" or _HUMAN_RE.search(text):
-        return _decision(
-            response_shape_key="human_escalation",
-            response_shape=ResponseShape.ACTION_CONFIRM,
-            template=TemplateName.QNA_COMPLETE,
-            forbidden_behaviors=("overpromise_live_agent", "hide_official_contact"),
-            assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
-        )
-
     if intent == "personal_contact" or _PERSONAL_CONTACT_RE.search(text):
         return _decision(
             response_shape_key="personal_contact_denied",
@@ -168,6 +163,15 @@ def decide_support_response(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("share_personal_contact", "invent_staff_contact"),
             assistant_guidance="개인 연락처는 제공할 수 없으며 공식 고객센터 또는 1:1 문의 경로만 안내한다.",
+        )
+
+    if intent == "human_escalation" or _HUMAN_RE.search(text):
+        return _decision(
+            response_shape_key="human_escalation",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.QNA_COMPLETE,
+            forbidden_behaviors=("overpromise_live_agent", "hide_official_contact"),
+            assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
         )
 
     if slots.get("qna_required"):

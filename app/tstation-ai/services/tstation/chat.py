@@ -4465,6 +4465,64 @@ _OUT_OF_SCOPE_COMPLAINT_RE = re.compile(
     r"연애|정치|선거|법률|소송|의료|병원|건강|타사|다른\s*회사|은행|보험|부동산|코인|비트코인",
     re.IGNORECASE,
 )
+_PRIVATE_CONTACT_REQUEST_RE = re.compile(
+    r"(?:관리자|직원|담당자|사장님|대표|매니저|점장|기사님|정비사|상담원|상담사).{0,16}"
+    r"(?:개인\s*)?(?:휴대폰|핸드폰|폰|전화번호|번호|연락처|연락\s*번호)"
+    r"|(?:개인\s*)?(?:휴대폰|핸드폰|폰|전화번호|번호|연락처|연락\s*번호).{0,16}"
+    r"(?:관리자|직원|담당자|사장님|대표|매니저|점장|기사님|정비사|상담원|상담사)",
+    re.IGNORECASE,
+)
+_STORE_OFFICIAL_CONTACT_ALLOWED_RE = re.compile(r"매장\s*(?:공식\s*)?(?:전화|연락처)|매장으로\s*전화", re.IGNORECASE)
+
+
+def _is_private_contact_request(text: str | None) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if _STORE_OFFICIAL_CONTACT_ALLOWED_RE.search(value) and not re.search(
+        r"개인|휴대폰|핸드폰|사장님|관리자|직원|담당자|매니저|점장",
+        value,
+        re.IGNORECASE,
+    ):
+        return False
+    return bool(_PRIVATE_CONTACT_REQUEST_RE.search(value))
+
+
+def _privacy_contact_request_event(text: str | None) -> dict | None:
+    if not _is_private_contact_request(text):
+        return None
+    has_store_anchor = bool(re.search(r"(?:[가-힣A-Za-z0-9]+점|티스테이션\s*[가-힣A-Za-z0-9]+)", str(text or "")))
+    quick_replies = [
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        {"label": "고객센터 안내", "domain": "SUPPORT"},
+    ]
+    if has_store_anchor:
+        quick_replies.append({"label": "매장 공식 연락처", "domain": "TRANSACTION"})
+    else:
+        quick_replies.append({"label": "매장 찾기", "domain": "TRANSACTION"})
+    assistant_response = (
+        "관리자나 직원의 개인 휴대폰 번호는 개인정보라 안내해드릴 수 없어요. "
+        "문의나 불편사항은 공식 고객센터 또는 1:1 문의로 접수해 주세요."
+    )
+    if has_store_anchor:
+        assistant_response += " 매장명이 확인된 경우에는 공개된 매장 공식 전화번호 기준으로만 안내할 수 있어요."
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_privacy_contact_request_guard",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "policy_intent": "privacy_contact_request",
+                "hard_block": True,
+                "safety_category": "privacy_contact_request",
+                "storeOfficialContactAllowed": has_store_anchor,
+            },
+        },
+    }
 
 
 def _infer_complaint_scope(text: str | None) -> str:
@@ -17842,6 +17900,25 @@ class TStationChatServiceV2:
                     },
                 )
             return TStationChatResponse(content=GUARDRAIL_RESPONSE)
+
+        privacy_contact_guard = _privacy_contact_request_event(last_user_msg)
+        if privacy_contact_guard is not None:
+            logger.info(
+                "[PRIVACY_CONTACT_REQUEST] blocked private contact request before routing: %s",
+                last_user_msg[:80],
+            )
+            guard_text = str((privacy_contact_guard.get("data") or {}).get("assistantResponse") or "")
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(privacy_contact_guard),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return TStationChatResponse(content=guard_text)
 
         early_cta_context = _quickreply_cta_context_from_chip(request.chip_context)
         cta_clarification_event = None
