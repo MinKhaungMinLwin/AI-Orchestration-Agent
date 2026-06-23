@@ -2620,11 +2620,129 @@ def test_external_price_comparison_event_can_use_product_description_source() ->
 
 
 def test_product_description_turn_does_not_apply_attribute_resolver() -> None:
-    text = "아이온 에보 AS SUV 235/55R19"
+    text = "아이온 에보 AS SUV 차종이 뭐야?"
 
     assert _is_product_attribute_lookup_query(text) is True
     assert _should_apply_product_attribute_resolver(text, {"get_product_description_tool"}) is False
     assert _should_apply_product_attribute_resolver(text, set()) is True
+
+
+def test_requested_brand_attribute_keeps_product_attribute_lookup_contract() -> None:
+    frame = build_discovery_intent_frame(
+        "세레니티 플러스 브랜드 어디꺼야?",
+        known_slots={"requested_product_attribute": "brand"},
+    )
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "product_attribute_lookup"
+    assert frame.entities["requested_product_attribute"] == "brand"
+
+    decision = decide_discovery_response(frame)
+
+    assert decision.metadata["response_shape_key"] == "product_attribute_summary"
+    assert decision.metadata["requested_product_attribute"] == "brand"
+
+
+def test_discovery_policy_context_preserves_router_requested_origin_attribute() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="세레니티 플러스 어느 나라 제품이야?",
+        context_text="세레니티 플러스 어느 나라 제품이야?",
+        tire_size=None,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_or_describe_product"],
+            requested_product_attribute="origin",
+        ),
+    )
+
+    assert patch == {}
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "product_attribute_summary"
+    assert decision.metadata["requested_product_attribute"] == "origin"
+
+
+def test_product_attribute_event_uses_router_requested_brand_attribute_metadata() -> None:
+    decision = decide_discovery_response(
+        build_discovery_intent_frame(
+            "세레니티 플러스 브랜드 어디꺼야?",
+            known_slots={"requested_product_attribute": "brand"},
+        )
+    )
+    decision_token = current_discovery_response_decision.set(decision)
+    text_token = current_user_text.set("세레니티 플러스 브랜드 어디꺼야?")
+    try:
+        event = _build_product_attribute_event_from_search_results(
+            "세레니티 플러스 브랜드 어디꺼야?",
+            [
+                (
+                    "세레니티 플러스",
+                    {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {
+                                    "goods_nm": "세레니티 플러스",
+                                    "brand_nm": "BRIDGESTONE",
+                                    "certify_brand_nm": "브리지스톤",
+                                    "orpl_nm": "일본",
+                                }
+                            ]
+                        },
+                    },
+                )
+            ],
+        )
+    finally:
+        current_user_text.reset(text_token)
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_attribute_resolver"
+    assert "세레니티 플러스의 브랜드는 BRIDGESTONE" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["response_shape_key"] == "product_attribute_summary"
+    assert event["data"]["metadata"]["requested_product_attribute"] == "brand"
+
+
+def test_requested_product_attribute_contract_drift_is_reported() -> None:
+    frame = build_discovery_intent_frame(
+        "세레니티 플러스 원산지 알려줘",
+        known_slots={"requested_product_attribute": "origin"},
+    )
+    contract = build_turn_contract(
+        user_text="세레니티 플러스 원산지 알려줘",
+        intent_frame=frame,
+        response_decision=decide_discovery_response(frame),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_or_describe_product"],
+            requested_product_attribute="origin",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_source="code_product_description",
+        response_shape_key="product_search_summary",
+        called_tools=["search_product_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert {
+        "type": "requested_product_attribute_contract_drift",
+        "requested_product_attribute": "origin",
+        "response_shape_key": "product_search_summary",
+        "assistant_response_source": "code_product_description",
+        "expected_response_shape_key": "product_attribute_summary",
+    } in violations
+
+
+def test_brand_filter_search_does_not_become_product_attribute_lookup() -> None:
+    frame = build_discovery_intent_frame("브리지스톤 타이어 보여줘")
+
+    assert frame.sub_intent != "product_attribute_lookup"
+    assert "requested_product_attribute" not in frame.entities
 
 
 def test_product_warranty_question_does_not_apply_attribute_resolver() -> None:
@@ -9406,6 +9524,7 @@ def _routing_result(
     execution_plan=None,
     comparison_followup_intent: str = "none",
     comparison_metric: str = "none",
+    requested_product_attribute: str = "none",
     referred_object_status: str = "resolved",
     referred_object_type: str = "none",
     needs_clarification: bool = False,
@@ -9422,6 +9541,7 @@ def _routing_result(
         carried_discovery_objective="none",
         comparison_followup_intent=comparison_followup_intent,
         comparison_metric=comparison_metric,
+        requested_product_attribute=requested_product_attribute,
         referred_object_status=referred_object_status,
         referred_object_type=referred_object_type,
         needs_clarification=needs_clarification,

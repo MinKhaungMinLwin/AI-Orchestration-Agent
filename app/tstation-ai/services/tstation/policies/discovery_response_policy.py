@@ -11,6 +11,9 @@ def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     claim_check_type = frame.entities.get("claim_check_type")
     if claim_check_type and claim_check_type != "none":
         metadata["claim_check_type"] = claim_check_type
+    requested_product_attribute = str(frame.entities.get("requested_product_attribute") or "")
+    if requested_product_attribute:
+        metadata["requested_product_attribute"] = requested_product_attribute
     compare_metric = str(frame.entities.get("compare_metric") or "")
     if compare_metric:
         metadata["compare_metric"] = compare_metric

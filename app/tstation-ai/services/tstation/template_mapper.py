@@ -1752,6 +1752,8 @@ def _product_search_policy_fallback_response(tool_data_list: list[dict] | None =
 
 
 _PRODUCT_ATTRIBUTE_METRIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("brand", re.compile(r"브랜드|brand", re.IGNORECASE)),
+    ("manufacturer", re.compile(r"제조사|제조원|만든\s*회사|어디꺼|어느\s*회사", re.IGNORECASE)),
     ("noise", re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)),
     ("fuel_efficiency", re.compile(r"연비|회전\s*저항|rr\b", re.IGNORECASE)),
     ("wet", re.compile(r"빗길|젖은\s*노면|젖은노면|wet|제동\s*등급", re.IGNORECASE)),
@@ -1765,7 +1767,17 @@ _PRODUCT_ATTRIBUTE_METRIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+def _requested_product_attribute_from_decision() -> str:
+    decision = current_discovery_response_decision.get()
+    if decision is None:
+        return ""
+    return str(decision.metadata.get("requested_product_attribute") or "").strip()
+
+
 def _requested_product_attribute_metrics() -> list[str]:
+    requested_product_attribute = _requested_product_attribute_from_decision()
+    if requested_product_attribute:
+        return [requested_product_attribute]
     user_text = current_user_text.get()
     metrics: list[str] = []
     for metric, pattern in _PRODUCT_ATTRIBUTE_METRIC_PATTERNS:
@@ -1775,6 +1787,9 @@ def _requested_product_attribute_metrics() -> list[str]:
 
 
 def _explicit_requested_product_attribute_metrics() -> list[str]:
+    requested_product_attribute = _requested_product_attribute_from_decision()
+    if requested_product_attribute:
+        return [requested_product_attribute]
     user_text = current_user_text.get()
     metrics: list[str] = []
     for metric, pattern in _PRODUCT_ATTRIBUTE_METRIC_PATTERNS:
@@ -1868,6 +1883,15 @@ def _format_noise_label(rows: list[dict]) -> tuple[str, bool]:
 
 
 def _format_product_attribute(metric: str, rows: list[dict]) -> tuple[str, bool]:
+    if metric == "brand":
+        values = _unique_nonempty([_get_str(row, "brand_nm") for row in rows])
+        return (f"브랜드 {', '.join(values[:3])}" if values else "브랜드 확인되지 않음", False)
+    if metric == "manufacturer":
+        values = _unique_nonempty([
+            _get_str(row, "certify_brand_nm") or _get_str(row, "brand_nm")
+            for row in rows
+        ])
+        return (f"제조사 {', '.join(values[:3])}" if values else "제조사 확인되지 않음", False)
     if metric == "noise":
         return _format_noise_label(rows)
     if metric == "fuel_efficiency":
@@ -1904,6 +1928,12 @@ def _format_product_attribute(metric: str, rows: list[dict]) -> tuple[str, bool]
 
 
 def _product_attribute_explanation(metrics: list[str]) -> str:
+    if "brand" in metrics:
+        return "상품명을 알려주시면 해당 상품의 브랜드 정보를 DB 기준으로 확인해 드릴게요."
+    if "manufacturer" in metrics:
+        return "상품명을 알려주시면 해당 상품의 제조사 정보를 DB 기준으로 확인해 드릴게요."
+    if "origin" in metrics:
+        return "상품명을 알려주시면 해당 상품의 원산지 정보를 DB 기준으로 확인해 드릴게요."
     if "noise" in metrics:
         return (
             "타이어 소음 등급은 타이어 라벨에 표시되는 외부 주행 소음 기준입니다.\n"
@@ -1940,11 +1970,54 @@ def _product_attribute_no_results_response(tool_data_list: list[dict]) -> str:
     return ""
 
 
+def _identity_attribute_values(requested_attribute: str, rows: list[dict]) -> list[str]:
+    if requested_attribute == "brand":
+        return _unique_nonempty([_get_str(row, "brand_nm") for row in rows])
+    if requested_attribute == "manufacturer":
+        return _unique_nonempty([
+            _get_str(row, "certify_brand_nm") or _get_str(row, "brand_nm")
+            for row in rows
+        ])
+    if requested_attribute == "origin":
+        return _unique_nonempty([_get_str(row, "orpl_nm") for row in rows])
+    return []
+
+
+def _product_identity_attribute_response(
+    requested_attribute: str,
+    grouped: dict[str, list[dict]],
+) -> str:
+    attribute_label = {
+        "brand": "브랜드",
+        "manufacturer": "제조사",
+        "origin": "원산지",
+    }.get(requested_attribute, "상세 정보")
+    if len(grouped) == 1:
+        name, rows = next(iter(grouped.items()))
+        values = _identity_attribute_values(requested_attribute, rows)
+        if values:
+            if requested_attribute == "origin":
+                return f"{name}의 원산지는 {', '.join(values[:3])}로 확인돼요."
+            return f"{name}의 {attribute_label}는 {', '.join(values[:3])}로 확인돼요."
+        return f"{name}의 {attribute_label} 정보는 현재 확인되지 않아요."
+
+    lines = [f"조회된 상품의 {attribute_label} 정보는 아래처럼 확인돼요."]
+    for name, rows in list(grouped.items())[:5]:
+        values = _identity_attribute_values(requested_attribute, rows)
+        if values:
+            lines.append(f"- {name}: {attribute_label} {', '.join(values[:3])}")
+        else:
+            lines.append(f"- {name}: {attribute_label} 정보 확인되지 않음")
+    return "\n".join(lines)
+
+
 def _product_attribute_policy_response(tool_data_list: list[dict]) -> str:
     metrics = _requested_product_attribute_metrics()
     grouped = _collect_product_attribute_rows(tool_data_list)
 
     if grouped:
+        if metrics and metrics[0] in {"brand", "manufacturer", "origin"}:
+            return _product_identity_attribute_response(metrics[0], grouped)
         if metrics == ["price_grade"] and len(grouped) == 1:
             name, rows = next(iter(grouped.items()))
             detail, _ = _format_product_attribute("price_grade", rows)
@@ -2431,6 +2504,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     if not called_tools & _DISCOVERY_POLICY_SOURCE_TOOLS:
         return None
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
+    requested_product_attribute = str(decision.metadata.get("requested_product_attribute") or "")
     if response_shape_key not in {
         "technology_explanation_then_unsized_recommendation_summary",
         "safe_service_explanation_then_unsized_recommendation_summary",
@@ -2488,6 +2562,10 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
             "assistantResponse": response,
             "quickReplies": quick_replies,
             "predictedDomains": predicted_domains,
+            "metadata": {
+                "response_shape_key": response_shape_key,
+                **({"requested_product_attribute": requested_product_attribute} if requested_product_attribute else {}),
+            },
         },
         "assistant_response_source": "discovery_policy",
     }
@@ -2527,6 +2605,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         response = _product_attribute_policy_response(tool_data_list)
         response = sanitize_user_facing_response(response)
         if response:
+            requested_product_attribute = _requested_product_attribute_from_decision()
             return {
                 "type": "data",
                 "template": "quickReply",
@@ -2534,6 +2613,14 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                     "assistantResponse": response,
                     "quickReplies": _DISCOVERY_POLICY_QUICKREPLY_CHIPS,
                     "predictedDomains": ["DISCOVERY"],
+                    "metadata": {
+                        "response_shape_key": "product_attribute_summary",
+                        **(
+                            {"requested_product_attribute": requested_product_attribute}
+                            if requested_product_attribute
+                            else {}
+                        ),
+                    },
                 },
                 "assistant_response_source": "code_mapper",
             }

@@ -141,9 +141,12 @@ def build_turn_contract(
         **_slots_from_model(merged_slots),
     })
     if intent_frame is not None:
+        requested_product_attribute = str(intent_frame.entities.get("requested_product_attribute") or "")
         compare_metric = str(intent_frame.entities.get("compare_metric") or "")
         comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
         oe_replacement_type = str(intent_frame.entities.get("oe_replacement_type") or "")
+        if requested_product_attribute:
+            known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric:
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent:
@@ -152,9 +155,12 @@ def build_turn_contract(
             known_slots["oe_replacement_type"] = oe_replacement_type
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
+        requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
         compare_metric = str(response_metadata.get("compare_metric") or "")
         comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
         oe_replacement_type = str(response_metadata.get("oe_replacement_type") or "")
+        if requested_product_attribute and not known_slots.get("requested_product_attribute"):
+            known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric and not known_slots.get("compare_metric"):
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent and not known_slots.get("comparison_followup_intent"):
@@ -424,6 +430,13 @@ def response_contract_violations(
     )
     if compare_metadata_violation is not None:
         violations.append(compare_metadata_violation)
+    product_attribute_violation = _product_attribute_contract_violation(
+        assistant_response_source=assistant_response_source,
+        response_shape_key=response_shape_key,
+        contract=contract,
+    )
+    if product_attribute_violation is not None:
+        violations.append(product_attribute_violation)
     compare_violation = _comparison_contract_violation(
         assistant_response_text=assistant_response_text,
         assistant_response_source=assistant_response_source,
@@ -455,6 +468,34 @@ def _comparison_metric_metadata_violation(
         "type": "compare_metric_metadata_drift",
         "compare_metric": expected_metric,
         "assistant_compare_metric": actual_metric,
+    }
+
+
+def _product_attribute_contract_violation(
+    *,
+    assistant_response_source: str | None,
+    response_shape_key: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None:
+        return None
+    response_metadata = contract.response_decision or {}
+    response_metadata = response_metadata.get("metadata") if isinstance(response_metadata, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        return None
+    requested_product_attribute = str(
+        response_metadata.get("requested_product_attribute") or contract.known_slots.get("requested_product_attribute") or ""
+    )
+    if not requested_product_attribute:
+        return None
+    if str(response_shape_key or "") == "product_attribute_summary":
+        return None
+    return {
+        "type": "requested_product_attribute_contract_drift",
+        "requested_product_attribute": requested_product_attribute,
+        "response_shape_key": str(response_shape_key or ""),
+        "assistant_response_source": str(assistant_response_source or ""),
+        "expected_response_shape_key": "product_attribute_summary",
     }
 
 

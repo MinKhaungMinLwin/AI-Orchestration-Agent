@@ -49,6 +49,7 @@ from services.tstation.policies.discovery_intent_policy import (
     build_discovery_intent_frame,
     extract_product_names,
     extract_product_attribute_metrics,
+    extract_requested_product_attribute,
     is_default_benefit_request,
     is_default_tire_shopping_request,
     is_best_seller_request,
@@ -184,6 +185,18 @@ def _response_shape_key_for_source_domain(source_domain: str | None) -> str:
     return str(metadata.get("response_shape_key") or "")
 
 
+def _response_shape_key_from_event(event: Mapping[str, Any] | None) -> str:
+    if not isinstance(event, Mapping):
+        return ""
+    data = event.get("data")
+    if not isinstance(data, Mapping):
+        return ""
+    metadata = data.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    return str(metadata.get("response_shape_key") or "").strip()
+
+
 def _compare_metric_from_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""
@@ -194,6 +207,19 @@ def _compare_metric_from_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(metadata, Mapping):
         return ""
     return str(metadata.get("compareMetric") or metadata.get("compare_metric") or "").strip()
+
+
+def _requested_product_attribute_from_context(user_text: str) -> str:
+    decision = current_discovery_response_decision.get()
+    if decision is not None:
+        requested_product_attribute = str(decision.metadata.get("requested_product_attribute") or "").strip()
+        if requested_product_attribute:
+            return requested_product_attribute
+    frame = build_discovery_intent_frame(user_text)
+    requested_product_attribute = str(frame.entities.get("requested_product_attribute") or "").strip()
+    if requested_product_attribute:
+        return requested_product_attribute
+    return str(extract_requested_product_attribute(user_text) or "").strip()
 
 
 def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
@@ -372,6 +398,8 @@ class MultiAgentDomain(BaseModel):
                 data["comparison_followup_intent"] = "none"
             if "comparison_metric" not in data:
                 data["comparison_metric"] = "none"
+            if "requested_product_attribute" not in data:
+                data["requested_product_attribute"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -489,6 +517,29 @@ class MultiAgentDomain(BaseModel):
             "turn is not a compare or no stable metric was resolved."
         ),
     )
+    requested_product_attribute: Literal[
+        "none",
+        "brand",
+        "manufacturer",
+        "origin",
+        "release",
+        "noise",
+        "fuel_efficiency",
+        "wet",
+        "price_grade",
+        "season",
+        "car_type",
+        "price",
+        "mileage",
+        "load",
+        "speed",
+    ] = Field(
+        description=(
+            "Structured requested product attribute for Discovery product-detail turns. Use 'brand', "
+            "'manufacturer', or 'origin' for who-makes-it / where-is-it-from questions, or one of the "
+            "supported product attribute axes when the user asks for that specific field. Use 'none' otherwise."
+        ),
+    )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
         description=(
             "Planner judgment for referential phrases in the current turn. Use 'resolved' when the object is explicit "
@@ -577,6 +628,8 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["comparison_followup_intent"] = "none"
             if "comparison_metric" not in data:
                 data["comparison_metric"] = "none"
+            if "requested_product_attribute" not in data:
+                data["requested_product_attribute"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -643,6 +696,25 @@ class _SlimMultiAgentDomain(BaseModel):
         "detail",
     ] = Field(
         description="Resolved comparison axis, or 'none'. First-turn classification should usually return 'none'."
+    )
+    requested_product_attribute: Literal[
+        "none",
+        "brand",
+        "manufacturer",
+        "origin",
+        "release",
+        "noise",
+        "fuel_efficiency",
+        "wet",
+        "price_grade",
+        "season",
+        "car_type",
+        "price",
+        "mileage",
+        "load",
+        "speed",
+    ] = Field(
+        description="Structured requested product attribute for Discovery product-detail turns, or 'none'."
     )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
         description="First-turn reference status; usually 'resolved' unless the user uses an unclear reference."
@@ -730,7 +802,16 @@ Complaint routing rule:
    - If comparison_followup_intent=continue_previous_compare_metric, keep the prior compare axis unless the current turn explicitly introduces a new one.
    - If the current turn explicitly says 가격/연비/마일리지/소음/차종/등급/출시일, prefer that current-turn metric and set comparison_followup_intent=new_compare_metric.
 
-11. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+11. requested_product_attribute — structured requested product detail field for Discovery product-detail turns:
+   - "none": default
+   - "brand": asks brand/브랜드
+   - "manufacturer": asks 제조사/어디꺼/누가 만드는지
+   - "origin": asks 원산지/어느 나라 제품인지
+   - Or one of the supported product attribute axes: "release", "noise", "fuel_efficiency", "wet", "price_grade", "season", "car_type", "price", "mileage", "load", "speed"
+   - When the user asks a product's brand/manufacturer/origin, set requested_product_attribute accordingly even if the turn still needs product search/resolve first.
+   - Do NOT use requested_product_attribute for brand-filter shopping requests such as "브리지스톤 타이어 보여줘". That is a product search, so keep requested_product_attribute="none".
+
+12. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -741,14 +822,14 @@ Complaint routing rule:
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
-12. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
+13. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
    - "resolved": current turn explicitly names the object or an existing slot/card uniquely identifies it
    - "resolvable_from_context": prior cards/history can resolve it before transaction execution
    - "missing": the user says "그거/이거/그 상품" etc. but no referent exists
    - "ambiguous": more than one possible referent exists ("두 개 다", "첫번째" when list is unavailable/ambiguous)
-13. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
-14. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
-15. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
+14. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
+15. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
+16. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -1086,6 +1167,8 @@ comparison_followup_intent:
 - generic_compare: broad compare with no fixed metric
 comparison_metric:
 - none, release, price, grade, mileage, noise, fuel_efficiency, wet, car_type, detail
+requested_product_attribute:
+- none, brand, manufacturer, origin, release, noise, fuel_efficiency, wet, price_grade, season, car_type, price, mileage, load, speed
 referred_object_status:
 - resolved: explicit object or uniquely resolved context
 - resolvable_from_context: prior tool/card context can resolve before risky transaction execution
@@ -1715,6 +1798,7 @@ class StreamingMultiAgentCoordinator:
                     carried_discovery_objective=raw_result.carried_discovery_objective,
                     comparison_followup_intent=raw_result.comparison_followup_intent,
                     comparison_metric=raw_result.comparison_metric,
+                    requested_product_attribute=raw_result.requested_product_attribute,
                     referred_object_status=raw_result.referred_object_status,
                     referred_object_type=raw_result.referred_object_type,
                     needs_clarification=raw_result.needs_clarification,
@@ -10186,7 +10270,12 @@ def _build_product_attribute_event_from_search_results(
     if is_warranty_claim_signal(user_text):
         return None
     frame = build_discovery_intent_frame(user_text)
-    if frame.sub_intent != "product_attribute_lookup":
+    requested_product_attribute = _requested_product_attribute_from_context(user_text)
+    decision = current_discovery_response_decision.get()
+    decision_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision is not None else ""
+    if frame.sub_intent != "product_attribute_lookup" and not (
+        decision_shape_key == "product_attribute_summary" and requested_product_attribute
+    ):
         return None
     product_names = tuple(frame.entities.get("product_names") or ())
     if not product_names or not search_results:
@@ -10230,6 +10319,12 @@ def _build_product_attribute_event_from_search_results(
             "assistantResponse": response,
             "quickReplies": _DISCOVERY_POLICY_QUICKREPLY_CHIPS,
             "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "product_attribute_summary",
+                "requested_product_attribute": requested_product_attribute or str(
+                    frame.entities.get("requested_product_attribute") or ""
+                ),
+            },
         },
     }
 
@@ -10253,7 +10348,13 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
         return False
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
-    return frame.sub_intent == "product_attribute_lookup" and bool(product_names)
+    if frame.sub_intent == "product_attribute_lookup" and bool(product_names):
+        return True
+    decision = current_discovery_response_decision.get()
+    decision_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision is not None else ""
+    return bool(product_names) and decision_shape_key == "product_attribute_summary" and bool(
+        _requested_product_attribute_from_context(user_text)
+    )
 
 
 def _should_apply_product_attribute_resolver(user_text: str, called_tool_names: set[str]) -> bool:
@@ -12080,7 +12181,8 @@ _UNSUPPORTED_CARRIED_DISCOVERY_OBJECTIVES = frozenset({"attribute_lookup", "reco
 _DISCOVERY_OBJECTIVE_BLOCKING_PENDING_INTENTS = frozenset({"price", "stock", "order"})
 _DISCOVERY_OBJECTIVE_BLOCKING_GOAL_TYPES = frozenset({"price_inquiry", "store_with_stock", "place_order"})
 _EXPLICIT_PRODUCT_ATTRIBUTE_QUERY_RE = re.compile(
-    r"젖은\s*노면|젖은노면|빗길|등급|소음|정숙|연비|하중|속도|출시|원산지|마일리지|"
+    r"젖은\s*노면|젖은노면|빗길|등급|소음|정숙|연비|하중|속도|출시|원산지|어느\s*나라|"
+    r"브랜드|제조사|어디꺼|마일리지|"
     r"성능|특징|속성|사양|스펙|흡음재|안심서비스|안심플러스|전기차용|차종",
     re.IGNORECASE,
 )
@@ -12134,6 +12236,8 @@ def _is_explicit_product_attribute_query(text: str, discovery_frame: Any | None 
         }:
             return True
         if tuple(discovery_frame.entities.get("attribute_metrics") or ()):
+            return True
+        if str(discovery_frame.entities.get("requested_product_attribute") or ""):
             return True
     return bool(_EXPLICIT_PRODUCT_ATTRIBUTE_QUERY_RE.search(text or ""))
 
@@ -12273,6 +12377,26 @@ def _build_discovery_policy_context(
             "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
         }:
             known_slots["comparison_metric"] = routing_comparison_metric
+        routing_requested_product_attribute = str(
+            getattr(routing_result, "requested_product_attribute", "") or ""
+        ).strip()
+        if routing_requested_product_attribute in {
+            "brand",
+            "manufacturer",
+            "origin",
+            "release",
+            "noise",
+            "fuel_efficiency",
+            "wet",
+            "price_grade",
+            "season",
+            "car_type",
+            "price",
+            "mileage",
+            "load",
+            "speed",
+        }:
+            known_slots["requested_product_attribute"] = routing_requested_product_attribute
         if "comparison_metric" not in known_slots and "comparison_followup_intent" not in known_slots:
             recovered_compare_context = _recent_compare_context_from_messages(last_user_text, messages)
             recovered_followup_intent = str(recovered_compare_context.get("comparison_followup_intent") or "").strip()
@@ -21799,7 +21923,9 @@ class TStationChatServiceV2:
                 current_contract_source_domain = str(
                     ((buffered_data_events[-1] if buffered_data_events else {}) or {}).get("source_domain") or ""
                 ).lower()
-                current_contract_response_shape_key = _response_shape_key_for_source_domain(
+                current_contract_response_shape_key = _response_shape_key_from_event(
+                    buffered_data_events[-1] if buffered_data_events else None
+                ) or _response_shape_key_for_source_domain(
                     current_contract_source_domain
                 )
                 current_contract_compare_metric = _compare_metric_from_event(

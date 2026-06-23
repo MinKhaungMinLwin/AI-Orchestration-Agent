@@ -110,6 +110,23 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("season", re.compile(r"계절|사계절|겨울용|여름용|올웨더|올시즌", re.IGNORECASE)),
     ("car_type", re.compile(r"차종|승용\s*/\s*suv|suv\s*용|승용차용|전기차용|전기차\s*전용|승용차\s*대비|suv\s*대비", re.IGNORECASE)),
 )
+_REQUESTED_PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("brand", re.compile(r"브랜드|brand", re.IGNORECASE)),
+    ("manufacturer", re.compile(r"제조사|제조원|만든\s*회사|어디꺼|어느\s*회사", re.IGNORECASE)),
+    ("origin", re.compile(r"원산지|생산국|제조국|어느\s*나라", re.IGNORECASE)),
+    ("release", re.compile(r"출시|출시일|출시년도|등록일", re.IGNORECASE)),
+    ("noise", _NOISE_LABEL_RE),
+    ("fuel_efficiency", re.compile(r"연비|회전\s*저항|rr\b", re.IGNORECASE)),
+    ("wet", re.compile(r"빗길|젖은\s*노면|젖은노면|wet|제동\s*등급", re.IGNORECASE)),
+    ("price_grade", re.compile(r"상품\s*등급|가격\s*등급|프리미엄|스탠다드|이코노미", re.IGNORECASE)),
+    ("season", re.compile(r"계절|사계절|겨울용|여름용|올웨더|올시즌", re.IGNORECASE)),
+    ("car_type", re.compile(r"차종|승용\s*/\s*suv|suv\s*용|승용차용|전기차용|전기차\s*전용|승용차\s*대비|suv\s*대비", re.IGNORECASE)),
+    ("price", re.compile(r"가격\s*비교|가격\s*차이|더\s*싸|더\s*비싸|가격은\s*얼마|얼마나\s*저렴", re.IGNORECASE)),
+    ("mileage", _MILEAGE_ATTRIBUTE_RE),
+    ("load", re.compile(r"하중|하중지수|무게", re.IGNORECASE)),
+    ("speed", re.compile(r"속도\s*기호|속도|고속", re.IGNORECASE)),
+)
+_REQUESTED_PRODUCT_ATTRIBUTES = frozenset(metric for metric, _ in _REQUESTED_PRODUCT_ATTRIBUTE_PATTERNS)
 _RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
     {"fuel_efficiency", "wet", "load", "speed"}
 )
@@ -273,6 +290,13 @@ def extract_product_attribute_metrics(text: str) -> tuple[str, ...]:
     return tuple(metrics)
 
 
+def extract_requested_product_attribute(text: str) -> str | None:
+    for requested_attribute, pattern in _REQUESTED_PRODUCT_ATTRIBUTE_PATTERNS:
+        if pattern.search(text or ""):
+            return requested_attribute
+    return None
+
+
 def extract_oe_replacement_type(text: str) -> str | None:
     for replacement_type, pattern in _OE_REPLACEMENT_TYPE_PATTERNS:
         if pattern.search(text or ""):
@@ -433,6 +457,9 @@ def build_discovery_intent_frame(
     tire_size = explicit_tire_size or (inherited_tire_size if allow_inherited_tire_size else None)
     products = extract_product_names(text)
     attribute_metrics = extract_product_attribute_metrics(text)
+    requested_product_attribute = str(
+        slots.get("requested_product_attribute") or extract_requested_product_attribute(text) or ""
+    ).strip()
     oe_replacement_type = extract_oe_replacement_type(text)
     brand_codes = extract_brand_codes(text)
     variant_constraints = extract_variant_constraints(text)
@@ -450,6 +477,8 @@ def build_discovery_intent_frame(
         "attribute_metrics": attribute_metrics,
         "claim_check_type": classify_product_claim_check_type(text),
     }
+    if requested_product_attribute in _REQUESTED_PRODUCT_ATTRIBUTES:
+        entities["requested_product_attribute"] = requested_product_attribute
     if oe_replacement_type:
         entities["oe_replacement_type"] = oe_replacement_type
     if quantity_options:
@@ -645,6 +674,9 @@ def build_discovery_intent_frame(
     elif concept and _WINTER_RE.search(text) and _ALL_SEASON_RE.search(text):
         intent = "product_description"
         sub_intent = "season_concept_compare"
+    elif requested_product_attribute and products:
+        intent = "product_description"
+        sub_intent = "product_attribute_lookup"
     elif attribute_metrics and products:
         intent = "product_description"
         sub_intent = "product_attribute_lookup"
