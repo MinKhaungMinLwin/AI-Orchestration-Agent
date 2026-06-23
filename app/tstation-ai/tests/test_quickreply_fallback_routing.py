@@ -6451,6 +6451,95 @@ def test_discovery_policy_context_carries_recent_product_set_followup_from_route
     assert response_decision.metadata["response_shape_key"] == "product_search_summary"
 
 
+def test_discovery_policy_context_carries_safe_service_objective_into_bare_product_name() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_objective_followup"],
+        user_behavior="naming a product after asking about safe-service eligibility",
+        flow="안심서비스 질문 후 상품명만 답변",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="product_objective_followup",
+        carried_discovery_objective="safe_service",
+        agent_prompt_profile="discovery_search",
+    )
+
+    _tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hp3",
+        context_text="안심서비스 가능한 타이어는?\ndynapro hp3",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert response_decision is not None
+    assert (
+        response_decision.metadata["response_shape_key"]
+        == "safe_service_explanation_then_unsized_recommendation_summary"
+    )
+
+
+def test_discovery_policy_context_carries_sound_absorber_objective_into_bare_product_name() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_objective_followup"],
+        user_behavior="naming a product after asking about sound-absorber tires",
+        flow="흡음재 질문 후 상품명만 답변",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="product_objective_followup",
+        carried_discovery_objective="sound_absorber",
+        agent_prompt_profile="discovery_search",
+    )
+
+    _tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="벤투스 에어S",
+        context_text="흡음재 들어간 타이어 알려줘\n벤투스 에어S",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert response_decision is not None
+    assert (
+        response_decision.metadata["response_shape_key"]
+        == "technology_explanation_then_unsized_recommendation_summary"
+    )
+
+
+def test_discovery_policy_context_ignores_carried_objective_without_followup_intent() -> None:
+    """carried_discovery_objective alone (without discovery_followup_intent=product_objective_followup)
+    must NOT trigger the entity patch — guards against a partially-set router output."""
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_search"],
+        user_behavior="explicitly asking for a product description",
+        flow="안심서비스 질문 후 명시적 설명 요청으로 전환",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="safe_service",
+        agent_prompt_profile="discovery_search",
+    )
+
+    _tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hp3 설명해줘",
+        context_text="안심서비스 가능한 타이어는?\ndynapro hp3 설명해줘",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert response_decision is not None
+    assert (
+        response_decision.metadata.get("response_shape_key")
+        != "safe_service_explanation_then_unsized_recommendation_summary"
+    )
+
+
 def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_size() -> None:
     prev_tool_data = [
         {

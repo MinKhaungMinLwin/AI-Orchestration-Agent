@@ -307,6 +307,8 @@ class MultiAgentDomain(BaseModel):
                 data["claim_check_type"] = "none"
             if "discovery_followup_intent" not in data:
                 data["discovery_followup_intent"] = "none"
+            if "carried_discovery_objective" not in data:
+                data["carried_discovery_objective"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -359,12 +361,31 @@ class MultiAgentDomain(BaseModel):
             "Use 'unclear_complaint' when anger/frustration is present but the complaint target is unclear."
         ),
     )
-    discovery_followup_intent: Literal["none", "recent_product_set_size_availability"] = Field(
+    discovery_followup_intent: Literal[
+        "none", "recent_product_set_size_availability", "product_objective_followup"
+    ] = Field(
         description=(
             "For Discovery follow-up turns only. Use 'recent_product_set_size_availability' when the user is not "
             "naming a new product but asking whether a tire size exists for the recent recommendation/search product set. "
             "Examples: after showing multiple products, '두개다 2355519 사이즈가 있을까?', '2355519 규격 있어?', "
-            "'위 상품들 235/55R19 돼?'. Use 'none' otherwise."
+            "'위 상품들 235/55R19 돼?'. "
+            "Use 'product_objective_followup' when the PREVIOUS assistant turn was a recommendation/clarification tied to "
+            "one of: 안심서비스(safe_service), 흡음재(sound_absorber), a product attribute question (attribute_lookup), or "
+            "a recommendation filter/condition (recommendation_filter) — AND the current turn names ONLY a product, with "
+            "no new explicit intent (no '설명해줘', no comparison, no price/stock ask, no different attribute). "
+            "If the current turn states any new explicit intent, do NOT use this value — use 'none' instead, even if a "
+            "prior objective exists. Use 'none' otherwise."
+        ),
+    )
+    carried_discovery_objective: Literal[
+        "none", "safe_service", "sound_absorber", "attribute_lookup", "recommendation_filter"
+    ] = Field(
+        description=(
+            "Set ONLY when discovery_followup_intent='product_objective_followup'. Identifies which prior objective "
+            "the bare product-name turn is continuing: 'safe_service' (안심서비스/안심플러스), 'sound_absorber' (흡음재), "
+            "'attribute_lookup' (a specific product attribute the user asked about, e.g. 소음/연비/내구성), or "
+            "'recommendation_filter' (a recommendation condition like 계절/차종/가성비/퍼포먼스). Use 'none' when "
+            "discovery_followup_intent is not 'product_objective_followup'."
         ),
     )
 
@@ -425,6 +446,8 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["claim_check_type"] = "none"
             if "discovery_followup_intent" not in data:
                 data["discovery_followup_intent"] = "none"
+            if "carried_discovery_objective" not in data:
+                data["carried_discovery_objective"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -446,9 +469,21 @@ class _SlimMultiAgentDomain(BaseModel):
             "'out_of_scope_complaint', or 'unclear_complaint'."
         ),
     )
-    discovery_followup_intent: Literal["none", "recent_product_set_size_availability"] = Field(
+    discovery_followup_intent: Literal[
+        "none", "recent_product_set_size_availability", "product_objective_followup"
+    ] = Field(
         description=(
-            "Discovery follow-up intent: 'none' or 'recent_product_set_size_availability'."
+            "Discovery follow-up intent: 'none', 'recent_product_set_size_availability', or "
+            "'product_objective_followup'. This is a first-turn classification with no prior context, so this "
+            "should almost always be 'none'."
+        ),
+    )
+    carried_discovery_objective: Literal[
+        "none", "safe_service", "sound_absorber", "attribute_lookup", "recommendation_filter"
+    ] = Field(
+        description=(
+            "Set ONLY when discovery_followup_intent='product_objective_followup'. This is a first-turn "
+            "classification with no prior context, so this should almost always be 'none'."
         ),
     )
     agent_prompt_profile: AgentPromptProfile = Field(
@@ -752,6 +787,8 @@ RULES:
   - out_of_scope_complaint → LEADING with support-scope guidance, no 상담/불편 접수
   - unclear_complaint → LEADING with a clarification question, no immediate 상담 연결
 - After a recent recommendation/search list, "두개다 2355519 사이즈가 있을까?" / "2355519 규격 있어?" → DISCOVERY with discovery_followup_intent=recent_product_set_size_availability, not a new product search
+- After the assistant's previous turn asked for missing info (vehicle/size) to answer a 안심서비스/흡음재/attribute/recommendation-condition question, and the current turn names ONLY a product with no new explicit intent → DISCOVERY with discovery_followup_intent=product_objective_followup and carried_discovery_objective set to the matching objective, NOT a fresh bare product search.
+- If the current turn instead states a new explicit intent ("설명해줘", price/stock ask, comparison, a different attribute) → discovery_followup_intent=none even if a prior objective exists in the conversation.
 - Greeting only (안녕/hi/hello) → LEADING
 
 EXAMPLES (tricky cases):
@@ -790,6 +827,9 @@ EXAMPLES (tricky cases):
 - "되는 일이 없어 짜증나" → LEADING, complaint_scope=unclear_complaint
 - [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
+- [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=safe_service (NOT a fresh bare product description)
+- [Prior turn: "흡음재 들어간 타이어 알려줘" → agent asked for car/size] "벤투스 에어S" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=sound_absorber
+- [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3 설명해줘" → DISCOVERY, discovery_followup_intent=none (explicit description intent overrides the carried objective)
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
@@ -815,7 +855,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, and agent_prompt_profile.
+Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -828,6 +868,13 @@ complaint_scope:
 discovery_followup_intent:
 - none: default
 - recent_product_set_size_availability: asking size existence for the recent product set, not a new product search
+- product_objective_followup: current turn names only a product, continuing a prior turn's unresolved 안심서비스/흡음재/attribute/recommendation-condition question — NOT a fresh bare product search
+carried_discovery_objective:
+- none: default (use when discovery_followup_intent != product_objective_followup)
+- safe_service: continuing a 안심서비스/안심플러스 question
+- sound_absorber: continuing a 흡음재 question
+- attribute_lookup: continuing a specific product attribute question (소음/연비/내구성 등)
+- recommendation_filter: continuing a recommendation condition/filter question (계절/차종/가성비/퍼포먼스 등)
 agent_prompt_profile:
 - transaction_coupon: coupon/promotion -> transaction_coupon
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
@@ -1443,6 +1490,7 @@ class StreamingMultiAgentCoordinator:
                     claim_check_type=raw_result.claim_check_type,
                     complaint_scope=raw_result.complaint_scope,
                     discovery_followup_intent=raw_result.discovery_followup_intent,
+                    carried_discovery_objective=raw_result.carried_discovery_objective,
                     agent_prompt_profile=raw_result.agent_prompt_profile,
                     flow="",
                 )
@@ -11088,6 +11136,16 @@ _SIMILAR_PRICE_SIZE_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Entity patch applied when the router confirms the current bare product-name turn
+# is continuing a prior turn's unresolved discovery objective
+# (discovery_followup_intent=product_objective_followup). Narrow on purpose — only
+# objectives with no existing ConversationSlots representation (price/stock/order
+# already persist via pending_intent and don't need this path).
+_CARRIED_OBJECTIVE_ENTITY_PATCH: dict[str, dict[str, str]] = {
+    "safe_service": {"service_program": "safe_service", "rcmd_type": "safe_kids"},
+    "sound_absorber": {"technology": "sound_absorber", "rcmd_type": "sound_absorber"},
+}
+
 
 def _build_discovery_policy_context(
     *,
@@ -11114,6 +11172,8 @@ def _build_discovery_policy_context(
         routing_followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
         if routing_followup_intent == "recent_product_set_size_availability":
             known_slots["discovery_followup_intent"] = routing_followup_intent
+        routing_carried_objective = str(getattr(routing_result, "carried_discovery_objective", "") or "").strip()
+        is_objective_followup = routing_followup_intent == "product_objective_followup"
         discovery_frame = build_discovery_intent_frame(
             last_user_text,
             known_slots=known_slots,
@@ -11156,7 +11216,14 @@ def _build_discovery_policy_context(
                     sub_intent="product_attribute_lookup",
                     entities=entities,
                 )
-        elif discovery_frame.intent == "product_recommendation":
+        if is_objective_followup and routing_carried_objective in _CARRIED_OBJECTIVE_ENTITY_PATCH:
+            entities = dict(discovery_frame.entities)
+            entities.update(_CARRIED_OBJECTIVE_ENTITY_PATCH[routing_carried_objective])
+            if entities != discovery_frame.entities:
+                discovery_frame = replace(discovery_frame, entities=entities)
+        if discovery_frame.intent == "product_recommendation" or (
+            is_objective_followup and routing_carried_objective == "recommendation_filter"
+        ):
             context_frame = build_discovery_intent_frame(
                 context_text,
                 known_slots=known_slots,
@@ -17311,6 +17378,19 @@ class TStationChatServiceV2:
             return emitted_events, comparison_event
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
+            followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+            carried_objective = str(getattr(routing_result, "carried_discovery_objective", "") or "").strip()
+            if followup_intent == "product_objective_followup" and carried_objective in {
+                "safe_service",
+                "sound_absorber",
+                "attribute_lookup",
+                "recommendation_filter",
+            }:
+                # Carrying an unresolved discovery objective (안심서비스/흡음재/attribute/
+                # recommendation-condition) into this bare product-name turn — let the
+                # normal Discovery agent answer using the merged entities/tool patch from
+                # _build_discovery_policy_context instead of a generic product description.
+                return None
             size_only_tool_input = _build_size_only_product_search_tool_input(
                 user_query,
                 prev_tool_data=prev_tool_data or [],
