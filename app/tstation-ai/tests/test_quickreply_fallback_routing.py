@@ -9520,7 +9520,12 @@ def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_
             }
             yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
 
+    async def _fake_async_from_sync_iter(iterator):
+        for item in iterator:
+            yield item
+
     monkeypatch.setattr(chat_module, "_coordinator", _FakeCoordinator())
+    monkeypatch.setattr(chat_module, "_async_from_sync_iter", _fake_async_from_sync_iter)
     monkeypatch.setattr(chat_module.settings, "AI_QC_ENABLED", False)
     monkeypatch.setattr(
         chat_module,
