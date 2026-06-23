@@ -11373,6 +11373,11 @@ def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() 
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == "stock_inventory_lookup"
     assert response_decision.metadata["stock_check_mode"] == "inventory_only"
+    assert response_decision.metadata["logistics_notice_allowed"] is True
+    assert response_decision.metadata["reservation_ui_allowed"] is False
+    assert "get_store_inventory_tool만" not in response_decision.assistant_guidance
+    assert "물류 재고" in response_decision.assistant_guidance
+    assert "datepick/preOrder" in response_decision.assistant_guidance
 
 
 def test_transaction_intent_policy_keeps_today_install_flow_for_quantity_only_followup() -> None:

@@ -112,10 +112,15 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
             template=TemplateName.LOCATION,
             forbidden_behaviors=_PURE_INVENTORY_FLOW_FORBIDDEN + ("empty_select_only_response",),
             assistant_guidance=(
-                "순수 재고 확인 흐름은 매장 ID를 해소한 뒤 get_store_inventory_tool만 사용한다. "
-                "datepick이나 예약 유도 없이 재고 가능/불가만 결과 기반으로 안내한다."
+                "순수 재고 확인 흐름은 매장 ID를 해소한 뒤 매장 오늘 장착 가능 재고를 먼저 확인한다. "
+                "매장 재고가 확인되지 않으면 goods_no 기준 물류 재고와 rsv_install_date를 확인할 수 있다. "
+                "datepick/preOrder/주문 확정으로 바로 확장하지 말고, 물류 기준 가능 일정은 텍스트 안내와 확인 CTA까지만 제공한다."
             ),
-            metadata={"stock_check_mode": "inventory_only"},
+            metadata={
+                "stock_check_mode": "inventory_only",
+                "logistics_notice_allowed": True,
+                "reservation_ui_allowed": False,
+            },
         )
 
     return _decision(
