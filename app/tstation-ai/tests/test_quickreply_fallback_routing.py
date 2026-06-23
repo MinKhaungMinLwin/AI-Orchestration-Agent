@@ -10191,6 +10191,55 @@ def _routing_result(
     )
 
 
+def test_transaction_policy_preserves_korean_ventus_air_s_product_name_with_size() -> None:
+    user_text = "벤투스 에어S 235/55R19 2개 판교점에서 오늘 5시 예약할게"
+
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["product_name"] == "Ventus air S"
+    assert frame.known_slots["tire_size"] == "235/55R19"
+    assert frame.known_slots["quantity"] == 2
+    assert "product" not in response_decision.required_slots
+
+
+def test_discovery_first_leg_product_search_no_result_is_not_contract_tool_violation() -> None:
+    user_text = "벤투스 에어S 235/55R19 2개 판교점에서 오늘 5시 예약할게"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:stock_store_or_reservation"],
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="입력하신 벤투스 에어S 235/55R19 상품은 현재 확인되지 않아요.",
+        assistant_response_source="discovery_agent",
+        response_shape_key="product_search_summary",
+        called_tools=["search_product_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert not violations
+
+
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "이 상품 주문할게", "그거 결제하고 싶어"])
 def test_turn_contract_guards_unclear_purchase_reference_followup(user_text: str) -> None:
     contract = _transaction_turn_contract(user_text)

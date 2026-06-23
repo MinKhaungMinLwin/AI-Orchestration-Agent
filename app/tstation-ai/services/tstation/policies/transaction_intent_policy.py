@@ -89,6 +89,7 @@ _PRODUCT_ALIASES: tuple[tuple[str, str], ...] = (
     ("ventus air s", "Ventus air S"),
     ("벤투스 air s", "Ventus air S"),
     ("벤투스 에어 s", "Ventus air S"),
+    ("벤투스 에어s", "Ventus air S"),
     ("dynapro hpx", "Dynapro HPX"),
     ("다이나프로 hpx", "Dynapro HPX"),
     ("kinergy ex", "Kinergy EX"),

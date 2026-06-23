@@ -66,7 +66,13 @@ def decide_transaction_response(
 def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseDecision:
     has_goods = bool(slots.get("goods_no"))
     has_size = bool(slots.get("tire_size"))
-    has_product = bool(slots.get("product_name") or slots.get("pattern_name") or has_goods)
+    has_product = bool(
+        slots.get("product_name")
+        or slots.get("pattern_name")
+        or slots.get("tire_model")
+        or slots.get("pending_product_name")
+        or has_goods
+    )
     has_location = bool(slots.get("region") or slots.get("place") or slots.get("lat") or slots.get("lng"))
     has_quantity = bool(slots.get("quantity") or slots.get("ord_qty"))
     stock_check_mode = str(slots.get("stock_check_mode") or "inventory_only")

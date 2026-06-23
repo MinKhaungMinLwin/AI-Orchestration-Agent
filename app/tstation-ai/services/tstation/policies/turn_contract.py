@@ -609,6 +609,13 @@ def _tool_contract_violation(
 ) -> dict[str, Any] | None:
     if contract is None or not contract.allowed_tools or not called_tools:
         return None
+    called_tool_set = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    if (
+        called_tool_set
+        and called_tool_set <= _DISCOVERY_PRODUCT_SOURCE_TOOLS
+        and _is_discovery_first_leg_transaction_contract(contract)
+    ):
+        return None
     disallowed = [
         str(tool)
         for tool in called_tools
@@ -813,6 +820,8 @@ def _is_discovery_first_leg_transaction_violation(
         return False
     called_tools = tuple(str(tool) for tool in tuple(event.get("called_tools") or ()))
     if any(tool.startswith("get_final_price_tool") or tool.startswith("get_store") or tool.startswith("quick_order") for tool in called_tools):
+        return False
+    if set(called_tools) & _DISCOVERY_PRODUCT_SOURCE_TOOLS:
         return False
     return (
         response_shape_key in _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES
