@@ -8690,30 +8690,7 @@ def _reminding_alarm_event() -> dict:
     }
 
 
-def _price_or_benefit_alert_event(*, product_context_available: bool = True) -> dict:
-    if not product_context_available:
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-            "assistant_response_source": "code_price_or_benefit_alert_guidance",
-            "data": {
-                "assistantResponse": (
-                    "가격이나 쿠폰·이벤트 알림을 확인할 상품이 먼저 필요해요. "
-                    "어떤 상품 기준으로 안내해드릴까요?"
-                ),
-                "quickReplies": [
-                    {"label": "상품명 입력", "domain": "DISCOVERY"},
-                    {"label": "타이어 추천", "domain": "DISCOVERY"},
-                    {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                ],
-                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
-                "metadata": {
-                    "response_shape_key": "price_or_benefit_alert_needs_product",
-                    "intent": "price_or_benefit_alert_request",
-                },
-            },
-        }
+def _price_or_benefit_alert_event() -> dict:
     return {
         "type": "data",
         "template": "quickReply",
@@ -8721,12 +8698,12 @@ def _price_or_benefit_alert_event(*, product_context_available: bool = True) -> 
         "assistant_response_source": "code_price_or_benefit_alert_guidance",
         "data": {
             "assistantResponse": (
-                "채팅에서는 상품 가격이나 쿠폰·이벤트 알림을 바로 등록할 수는 없어요. "
-                "관심상품이나 알림 설정에서 가격·혜택 알림을 확인하거나 관리해 주세요."
+                "가격이 내려가거나 쿠폰·이벤트가 생겼을 때 자동으로 알려드리는 기능은 현재 제공되지 않아요. "
+                "상품 가격이나 진행 중인 혜택은 상품 상세와 쿠폰함에서 직접 확인해 주세요."
             ),
             "quickReplies": [
-                {"label": "알림 설정", "url": CTAUrls.REMINDING_ALARM, "domain": "SUPPORT"},
-                {"label": "관심상품 보기", "domain": "TRANSACTION"},
+                {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+                {"label": "상품 다시 보기", "domain": "DISCOVERY"},
                 {"label": "1:1 문의하기", "domain": "SUPPORT"},
             ],
             "predictedDomains": ["TRANSACTION", "SUPPORT"],
@@ -23996,13 +23973,7 @@ class TStationChatServiceV2:
             return
 
         if _PRICE_OR_BENEFIT_ALERT_QUERY_RE.search(user_query or ""):
-            alert_slots = pending_slots or initial_slots
-            has_alert_product_context = bool(
-                getattr(alert_slots, "goods_no", None)
-                or getattr(alert_slots, "tire_model", None)
-                or getattr(alert_slots, "pending_product_name", None)
-            )
-            alert_event = _price_or_benefit_alert_event(product_context_available=has_alert_product_context)
+            alert_event = _price_or_benefit_alert_event()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(alert_event, ensure_ascii=False)}\n\n"

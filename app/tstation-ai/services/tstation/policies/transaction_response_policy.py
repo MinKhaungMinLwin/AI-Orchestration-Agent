@@ -138,34 +138,14 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
 
 
 def _decide_price_or_benefit_alert_request(*, slots: dict[str, Any]) -> ResponseDecision:
-    has_product_context = bool(
-        slots.get("goods_no")
-        or slots.get("product_name")
-        or slots.get("pattern_name")
-        or slots.get("tire_model")
-        or slots.get("pending_product_name")
-    )
-    if not has_product_context:
-        return _decision(
-            response_shape_key="price_or_benefit_alert_needs_product",
-            response_shape=ResponseShape.CLARIFY,
-            template=TemplateName.QUICK_REPLY,
-            required_slots=("product",),
-            forbidden_behaviors=("promise_price_alert_registration", "issue_coupon_tool"),
-            assistant_guidance=(
-                "가격이나 쿠폰·이벤트 알림 요청이지만 대상 상품이 확정되지 않았다. "
-                "알림 등록 완료처럼 말하지 말고, 어떤 상품 기준인지 먼저 짧게 확인한다."
-            ),
-            metadata={"alert_scope": "price_or_benefit"},
-        )
     return _decision(
         response_shape_key="price_or_benefit_alert_guidance",
         response_shape=ResponseShape.SUMMARY,
         template=TemplateName.QUICK_REPLY,
         forbidden_behaviors=("promise_price_alert_registration", "promise_coupon_issue", "invent_discount"),
         assistant_guidance=(
-            "확정 상품의 가격·혜택 알림 요청이다. 채팅에서는 알림을 바로 등록할 수 없다고 밝히고, "
-            "관심상품 또는 알림 설정에서 가격·쿠폰·이벤트 알림을 확인하도록 안내한다."
+            "가격이 내려가거나 쿠폰·이벤트가 생겼을 때 자동으로 알려주는 기능은 제공되지 않는다. "
+            "알림 등록 완료처럼 말하지 말고, 상품 상세와 쿠폰함에서 가격·혜택을 직접 확인하도록 안내한다."
         ),
         metadata={"alert_scope": "price_or_benefit"},
     )

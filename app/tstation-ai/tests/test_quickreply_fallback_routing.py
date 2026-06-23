@@ -6671,28 +6671,19 @@ def test_price_or_benefit_alert_request_is_not_coupon_gate_or_support_reminder()
 
 
 def test_price_or_benefit_alert_event_guides_without_registration_claim() -> None:
-    event = _price_or_benefit_alert_event(product_context_available=True)
+    event = _price_or_benefit_alert_event()
     data = event["data"]
 
     assert event["source_domain"] == MultiAgentDomain.Domain.TRANSACTION.value
     assert data["metadata"]["intent"] == "price_or_benefit_alert_request"
-    assert "바로 등록할 수는 없어요" in data["assistantResponse"]
+    assert "자동으로 알려드리는 기능은 현재 제공되지 않아요" in data["assistantResponse"]
+    assert "상품 상세와 쿠폰함" in data["assistantResponse"]
     assert "등록됐" not in data["assistantResponse"]
     assert data["quickReplies"][0] == {
-        "label": "알림 설정",
-        "url": CTAUrls.REMINDING_ALARM,
-        "domain": "SUPPORT",
+        "label": "쿠폰함 바로가기",
+        "url": CTAUrls.MY_COUPON_LIST_PC,
+        "domain": "TRANSACTION",
     }
-
-
-def test_price_or_benefit_alert_event_asks_product_when_context_is_missing() -> None:
-    event = _price_or_benefit_alert_event(product_context_available=False)
-    data = event["data"]
-
-    assert data["metadata"]["response_shape_key"] == "price_or_benefit_alert_needs_product"
-    assert "어떤 상품 기준" in data["assistantResponse"]
-    assert data["quickReplies"][0]["label"] == "상품명 입력"
-    assert "등록됐" not in data["assistantResponse"]
 
 
 def test_support_fast_path_routes_product_warranty_claims() -> None:
