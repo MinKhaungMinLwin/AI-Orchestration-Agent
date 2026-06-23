@@ -355,6 +355,10 @@ class MultiAgentDomain(BaseModel):
                 data["needs_clarification"] = False
             if "planner_confidence" not in data:
                 data["planner_confidence"] = 0.0
+            if "comparison_followup_intent" not in data:
+                data["comparison_followup_intent"] = "none"
+            if "comparison_metric" not in data:
+                data["comparison_metric"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -437,6 +441,37 @@ class MultiAgentDomain(BaseModel):
             "'attribute_lookup' (a specific product attribute the user asked about, e.g. 소음/연비/내구성), or "
             "'recommendation_filter' (a recommendation condition like 계절/차종/가성비/퍼포먼스). Use 'none' when "
             "discovery_followup_intent is not 'product_objective_followup'."
+        ),
+    )
+    comparison_followup_intent: Literal[
+        "none",
+        "continue_previous_compare_metric",
+        "new_compare_metric",
+        "generic_compare",
+    ] = Field(
+        description=(
+            "Planner-only comparison follow-up state. Use 'continue_previous_compare_metric' when the current compare "
+            "turn inherits the prior comparison axis from conversation context, 'new_compare_metric' when the current "
+            "turn explicitly changes the comparison axis, 'generic_compare' for a broad compare with no fixed metric, "
+            "and 'none' otherwise."
+        ),
+    )
+    comparison_metric: Literal[
+        "none",
+        "release",
+        "price",
+        "grade",
+        "mileage",
+        "noise",
+        "fuel_efficiency",
+        "wet",
+        "car_type",
+        "detail",
+    ] = Field(
+        description=(
+            "Resolved comparison axis for Discovery compare turns. Use explicit metrics like 'release', 'price', "
+            "'grade', 'mileage', 'noise', 'fuel_efficiency', 'wet', 'car_type', or 'detail'. Use 'none' when the "
+            "turn is not a compare or no stable metric was resolved."
         ),
     )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
@@ -523,6 +558,10 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["needs_clarification"] = False
             if "planner_confidence" not in data:
                 data["planner_confidence"] = 0.0
+            if "comparison_followup_intent" not in data:
+                data["comparison_followup_intent"] = "none"
+            if "comparison_metric" not in data:
+                data["comparison_metric"] = "none"
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -565,6 +604,31 @@ class _SlimMultiAgentDomain(BaseModel):
             "classification with no prior context, so this should almost always be 'none'."
         ),
     )
+    comparison_followup_intent: Literal[
+        "none",
+        "continue_previous_compare_metric",
+        "new_compare_metric",
+        "generic_compare",
+    ] = Field(
+        description=(
+            "Comparison follow-up intent. This is a first-turn classification with no prior context, so this should "
+            "almost always be 'none'."
+        ),
+    )
+    comparison_metric: Literal[
+        "none",
+        "release",
+        "price",
+        "grade",
+        "mileage",
+        "noise",
+        "fuel_efficiency",
+        "wet",
+        "car_type",
+        "detail",
+    ] = Field(
+        description="Resolved comparison axis, or 'none'. First-turn classification should usually return 'none'."
+    )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
         description="First-turn reference status; usually 'resolved' unless the user uses an unclear reference."
     )
@@ -602,7 +666,7 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 13 outputs:
+Produce 15 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
@@ -638,7 +702,19 @@ Complaint routing rule:
    - Example size_for_recommendation_continuation: after "승용차용 조용한 타이어 추천" returned an unsized summary, "2454518" means recommend quiet passenger tires in 245/45R18.
    - Example recent_product_set_size_availability after a recommendation list: "두개다 2355519 사이즈가 있을까?", "2355519 규격 있어?", "위 상품들 235/55R19 돼?"
 
-9. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+9. comparison_followup_intent — for Discovery product comparison turns:
+   - "none": default
+   - "continue_previous_compare_metric": the current turn continues the previous compare axis from context. Example: after "A, B 중에 뭐가 더 신상품?" the current "C, D 중에서는?" should continue release comparison.
+   - "new_compare_metric": the current turn explicitly switches compare axis. Example: after a release compare, "C, D 가격은?" means price.
+   - "generic_compare": compare request exists but no stable metric was resolved. Use for "A, B 중에서는?" without prior compare context.
+   - Do not infer car_type just because product names contain suffixes like SUV, AS, HPX. Use car_type only when the user explicitly asks for 차종 기준, SUV용, 승용/SUV 차이, 전기차용 여부, etc.
+
+10. comparison_metric — the compare axis for Discovery product comparison turns:
+   - "none", "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"
+   - If comparison_followup_intent=continue_previous_compare_metric, keep the prior compare axis unless the current turn explicitly introduces a new one.
+   - If the current turn explicitly says 가격/연비/마일리지/소음/차종/등급/출시일, prefer that current-turn metric and set comparison_followup_intent=new_compare_metric.
+
+11. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -649,14 +725,14 @@ Complaint routing rule:
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
-10. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
+12. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
    - "resolved": current turn explicitly names the object or an existing slot/card uniquely identifies it
    - "resolvable_from_context": prior cards/history can resolve it before transaction execution
    - "missing": the user says "그거/이거/그 상품" etc. but no referent exists
    - "ambiguous": more than one possible referent exists ("두 개 다", "첫번째" when list is unavailable/ambiguous)
-11. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
-12. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
-13. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
+13. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
+14. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
+15. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -887,6 +963,10 @@ RULES:
 - After an unsized recommendation/summary, a bare tire size like "2454518" → DISCOVERY with discovery_followup_intent=size_for_recommendation_continuation. Preserve the previous recommendation objective and continue with that size.
 - After size_for_recommendation_continuation, a bare product name from that result set like "키너지 ST AS" → DISCOVERY product resolve/search within the confirmed tire_size context; do not revert to the previous unsized text summary.
 - After a recent recommendation/search list, "두개다 2355519 사이즈가 있을까?" / "2355519 규격 있어?" → DISCOVERY with discovery_followup_intent=recent_product_set_size_availability, not a new product search
+- After a compare like "벤투스 S2 AS, 벤투스 에어S 중에 뭐가 더 신상품?" the follow-up "다이나프로 HPX, 다이나프로 HP3 중에서는?" → DISCOVERY, comparison_followup_intent=continue_previous_compare_metric, comparison_metric=release
+- After a release compare, "다이나프로 HPX, 다이나프로 HP3 가격은?" → DISCOVERY, comparison_followup_intent=new_compare_metric, comparison_metric=price
+- After a release compare, "iON evo AS, iON evo AS SUV 차종 기준으로는?" → DISCOVERY, comparison_followup_intent=new_compare_metric, comparison_metric=car_type
+- Without prior compare context, "다이나프로 HPX, 다이나프로 HP3 중에서는?" → DISCOVERY, comparison_followup_intent=generic_compare, comparison_metric=detail
 - After a recent recommendation/search list with multiple products, a bare price/stock/buy follow-up like "그거 가격 알려줘", "가격 알려줘", "그거 재고 있어?", or "구매할래" is ambiguous unless one product was explicitly selected. Keep DISCOVERY, set referred_object_status=ambiguous, referred_object_type=product_set, and needs_clarification=true.
 - After the assistant's previous turn asked for missing info (vehicle/size) to answer a 안심서비스/흡음재/attribute/recommendation-condition question, and the current turn names ONLY a product with no new explicit intent → DISCOVERY with discovery_followup_intent=product_objective_followup and carried_discovery_objective set to the matching objective, NOT a fresh bare product search.
 - If the current turn instead states a new explicit intent ("설명해줘", price/stock ask, comparison, a different attribute) → discovery_followup_intent=none even if a prior objective exists in the conversation.
@@ -960,7 +1040,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, comparison_followup_intent, comparison_metric, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -981,6 +1061,13 @@ carried_discovery_objective:
 - sound_absorber: continuing a 흡음재 question
 - attribute_lookup: continuing a specific product attribute question (소음/연비/내구성 등)
 - recommendation_filter: continuing a recommendation condition/filter question (계절/차종/가성비/퍼포먼스 등)
+comparison_followup_intent:
+- none: default
+- continue_previous_compare_metric: continue the prior compare axis from conversation context
+- new_compare_metric: current turn explicitly changes compare axis
+- generic_compare: broad compare with no fixed metric
+comparison_metric:
+- none, release, price, grade, mileage, noise, fuel_efficiency, wet, car_type, detail
 referred_object_status:
 - resolved: explicit object or uniquely resolved context
 - resolvable_from_context: prior tool/card context can resolve before risky transaction execution
@@ -1608,6 +1695,8 @@ class StreamingMultiAgentCoordinator:
                     complaint_scope=raw_result.complaint_scope,
                     discovery_followup_intent=raw_result.discovery_followup_intent,
                     carried_discovery_objective=raw_result.carried_discovery_objective,
+                    comparison_followup_intent=raw_result.comparison_followup_intent,
+                    comparison_metric=raw_result.comparison_metric,
                     referred_object_status=raw_result.referred_object_status,
                     referred_object_type=raw_result.referred_object_type,
                     needs_clarification=raw_result.needs_clarification,
@@ -9187,6 +9276,8 @@ def _product_comparison_value(row: dict, key: str) -> str:
         return str(row.get("t_fuel_eff_convert") or row.get("rr") or "").strip() or "미확인"
     if key == "wet":
         return str(row.get("wet") or "").strip() or "미확인"
+    if key == "car_type":
+        return str(row.get("car_knd_nm") or row.get("car_type") or "").strip() or "미확인"
     return "미확인"
 
 
@@ -9259,6 +9350,7 @@ def _metric_label(metric: str) -> str:
         "noise": "정숙성",
         "fuel_efficiency": "연비",
         "wet": "빗길 성능",
+        "price": "최종 혜택가",
         "price_grade": "상품 등급",
         "release": "출시 시점",
         "origin": "원산지",
@@ -9269,6 +9361,34 @@ def _metric_label(metric: str) -> str:
         "mileage": "마일리지/수명",
         "grade": "상품 등급",
     }.get(metric, "주요 특성")
+
+
+def _comparison_sub_intent_for_metric(metric: str) -> str:
+    if metric == "release":
+        return "latest_compare"
+    if metric in {"grade", "price_grade"}:
+        return "grade_compare"
+    if metric == "mileage":
+        return "mileage_compare"
+    if metric in {"price", "noise", "fuel_efficiency", "wet", "car_type", "detail"}:
+        return "attribute_compare"
+    return "general_compare"
+
+
+def _comparison_context_from_policy_or_text(user_text: str) -> tuple[str, str, str]:
+    decision = current_discovery_response_decision.get()
+    metadata = getattr(decision, "metadata", None) or {}
+    compare_metric = str(metadata.get("compare_metric") or "").strip()
+    comparison_followup_intent = str(metadata.get("comparison_followup_intent") or "").strip() or "none"
+    frame = build_discovery_intent_frame(user_text)
+    sub_intent = str(frame.sub_intent or "")
+    if not compare_metric:
+        compare_metric = str(frame.entities.get("compare_metric") or "").strip()
+    if not compare_metric and _PRODUCT_PRICE_COMPARE_TEXT_RE.search(user_text):
+        compare_metric = "price"
+    if compare_metric:
+        sub_intent = _comparison_sub_intent_for_metric(compare_metric)
+    return compare_metric, comparison_followup_intent, sub_intent
 
 
 def _compare_numeric_metric(
@@ -9700,11 +9820,7 @@ def _build_product_comparison_event(
     if fallback_event:
         return fallback_event
 
-    frame = build_discovery_intent_frame(user_text)
-    compare_metric = str(frame.entities.get("compare_metric") or "")
-    if not compare_metric and _PRODUCT_PRICE_COMPARE_TEXT_RE.search(user_text):
-        compare_metric = "price"
-    sub_intent = str(frame.sub_intent or "")
+    compare_metric, comparison_followup_intent, sub_intent = _comparison_context_from_policy_or_text(user_text)
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
 
     if not compare_metric and sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
@@ -9837,6 +9953,21 @@ def _build_product_comparison_event(
             rows=(("최종 혜택가", "price"), ("상품 등급", "grade"), ("리뷰", "review")),
             verdict=verdict,
         )
+    elif compare_metric == "car_type":
+        left_car_type = str(left_row.get("car_knd_nm") or left_row.get("car_type") or "").strip() or "미확인"
+        right_car_type = str(right_row.get("car_knd_nm") or right_row.get("car_type") or "").strip() or "미확인"
+        if left_car_type == right_car_type:
+            verdict = f"{left_name}와 {right_name}는 모두 {left_car_type} 기준 상품으로 확인돼요."
+        else:
+            verdict = f"{left_name}는 {left_car_type}, {right_name}는 {right_car_type} 기준 상품으로 확인돼요."
+        assistant = _build_product_comparison_table(
+            left_name,
+            left_row,
+            right_name,
+            right_row,
+            rows=(("차종", "car_type"), ("상품 등급", "grade"), ("특징", "feature")),
+            verdict=verdict,
+        )
     else:
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
@@ -9865,6 +9996,15 @@ def _build_product_comparison_event(
                 {"label": "내 차량 보기", "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "metadata": {
+                "response_shape_key": (
+                    "grade_comparison_summary"
+                    if compare_metric in {"grade", "price_grade"}
+                    else "metric_comparison_summary"
+                ),
+                "compareMetric": compare_metric or "detail",
+                "comparison_followup_intent": comparison_followup_intent or "none",
+            },
         },
     }
 
@@ -12042,6 +12182,20 @@ def _build_discovery_policy_context(
         routing_followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
         if routing_followup_intent == "recent_product_set_size_availability":
             known_slots["discovery_followup_intent"] = routing_followup_intent
+        routing_comparison_followup_intent = str(
+            getattr(routing_result, "comparison_followup_intent", "") or ""
+        ).strip()
+        if routing_comparison_followup_intent in {
+            "continue_previous_compare_metric",
+            "new_compare_metric",
+            "generic_compare",
+        }:
+            known_slots["comparison_followup_intent"] = routing_comparison_followup_intent
+        routing_comparison_metric = str(getattr(routing_result, "comparison_metric", "") or "").strip()
+        if routing_comparison_metric in {
+            "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
+        }:
+            known_slots["comparison_metric"] = routing_comparison_metric
         supported_followup_override = _bare_product_search_followup_override(
             last_user_text,
             context_text=context_text,
@@ -14743,14 +14897,20 @@ class TStationChatServiceV2:
                     stale_payment_amount,
                 )
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
+            missing_preorder_context = any(
+                getattr(merged_slots, field, None) is None
+                for field in (
+                    "shop_id",
+                    "shop_name",
+                    "payment_amount",
+                    "requested_cal_day",
+                    "rsv_hour",
+                )
+            )
             if (
                 preorder_slot_values
                 and merged_slots.goal_type == "place_order"
-                and (
-                    merged_slots.shop_id is None
-                    or merged_slots.shop_name is None
-                    or merged_slots.payment_amount is None
-                )
+                and missing_preorder_context
                 and (
                     merged_slots.goods_no is None
                     or preorder_slot_values.get("goods_no") is None
@@ -15850,6 +16010,12 @@ class TStationChatServiceV2:
                     "complaint_scope": getattr(routing_result, "complaint_scope", None) if routing_result else None,
                     "discovery_followup_intent": (
                         getattr(routing_result, "discovery_followup_intent", None) if routing_result else None
+                    ),
+                    "comparison_followup_intent": (
+                        getattr(routing_result, "comparison_followup_intent", None) if routing_result else None
+                    ),
+                    "comparison_metric": (
+                        getattr(routing_result, "comparison_metric", None) if routing_result else None
                     ),
                     "agent_prompt_profile": (
                         routing_result.agent_prompt_profile.value
@@ -21551,6 +21717,7 @@ class TStationChatServiceV2:
                 )
                 contract_violations = response_contract_violations(
                     template=last_template,
+                    assistant_response_text=draft_for_qc,
                     assistant_response_source=last_assistant_response_source,
                     response_shape_key=current_contract_response_shape_key,
                     called_tools=sorted(called_tool_names),

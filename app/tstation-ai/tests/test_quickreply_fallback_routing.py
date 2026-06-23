@@ -2098,6 +2098,73 @@ def test_overlapping_ventus_s2_aliases_keep_single_or_distinct_products() -> Non
     assert compare_frame.entities["product_names"] == ("Ventus S2", "Ventus S2 AS")
 
 
+def test_router_continue_previous_compare_metric_preserves_release_axis() -> None:
+    frame = build_discovery_intent_frame(
+        "dynapro hpx, dynapro hp3 중에서는?",
+        known_slots={
+            "comparison_followup_intent": "continue_previous_compare_metric",
+            "comparison_metric": "release",
+        },
+    )
+    decision = decide_discovery_response(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "latest_compare"
+    assert frame.entities["compare_metric"] == "release"
+    assert frame.entities["comparison_followup_intent"] == "continue_previous_compare_metric"
+    assert decision.metadata["compare_metric"] == "release"
+    assert decision.metadata["comparison_followup_intent"] == "continue_previous_compare_metric"
+
+
+def test_router_new_compare_metric_overrides_to_price_axis() -> None:
+    frame = build_discovery_intent_frame(
+        "dynapro hpx, dynapro hp3 가격은?",
+        known_slots={
+            "comparison_followup_intent": "new_compare_metric",
+            "comparison_metric": "price",
+        },
+    )
+    decision = decide_discovery_response(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.entities["compare_metric"] == "price"
+    assert frame.entities["comparison_followup_intent"] == "new_compare_metric"
+    assert decision.metadata["compare_metric"] == "price"
+    assert decision.metadata["comparison_followup_intent"] == "new_compare_metric"
+
+
+def test_router_continue_previous_compare_metric_is_not_polluted_by_suv_suffix() -> None:
+    frame = build_discovery_intent_frame(
+        "ion evo as, ion evo as suv 중에서는?",
+        known_slots={
+            "comparison_followup_intent": "continue_previous_compare_metric",
+            "comparison_metric": "release",
+        },
+    )
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "latest_compare"
+    assert frame.entities["product_names"] == ("iON evo AS", "iON evo AS SUV")
+    assert frame.entities["compare_metric"] == "release"
+
+
+def test_router_generic_compare_preserves_detail_axis() -> None:
+    frame = build_discovery_intent_frame(
+        "dynapro hpx, dynapro hp3 중에서는?",
+        known_slots={
+            "comparison_followup_intent": "generic_compare",
+            "comparison_metric": "detail",
+        },
+    )
+    decision = decide_discovery_response(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "general_compare"
+    assert frame.entities["compare_metric"] == "detail"
+    assert decision.metadata["compare_metric"] == "detail"
+    assert decision.metadata["comparison_followup_intent"] == "generic_compare"
+
+
 def test_standalone_two_product_names_ask_clarification_without_single_keyword_plan() -> None:
     user_text = "벤투스 에어S랑 키너지 ST AS"
     messages = [{"role": "user", "content": user_text}]
@@ -6187,6 +6254,61 @@ def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> Non
     assert "최신 상품은 벤투스 에어S입니다." in event["data"]["assistantResponse"]
 
 
+def test_product_compare_event_uses_router_continued_release_metric_and_metadata() -> None:
+    frame = build_discovery_intent_frame(
+        "dynapro hpx, dynapro hp3 중에서는?",
+        known_slots={
+            "comparison_followup_intent": "continue_previous_compare_metric",
+            "comparison_metric": "release",
+        },
+    )
+    decision = decide_discovery_response(frame)
+    decision_token = current_discovery_response_decision.set(decision)
+    try:
+        event = _build_product_comparison_event(
+            "dynapro hpx, dynapro hp3 중에서는?",
+            [
+                ("Dynapro HPX", {"goods_nm": "Dynapro HPX", "t_rls_yearmon": "2024년 3월", "car_knd_nm": "SUV"}),
+                ("Dynapro HP3", {"goods_nm": "Dynapro HP3", "t_rls_yearmon": "2021년 5월", "car_knd_nm": "승용차"}),
+            ],
+        )
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["compareMetric"] == "release"
+    assert event["data"]["metadata"]["comparison_followup_intent"] == "continue_previous_compare_metric"
+    assert event["data"]["metadata"]["response_shape_key"] == "metric_comparison_summary"
+    assert "출시 시점" in event["data"]["assistantResponse"]
+    assert "최신 상품은 Dynapro HPX입니다." in event["data"]["assistantResponse"]
+
+
+def test_product_compare_event_uses_router_new_car_type_metric() -> None:
+    frame = build_discovery_intent_frame(
+        "ion evo as, ion evo as suv 차종 기준으로는?",
+        known_slots={
+            "comparison_followup_intent": "new_compare_metric",
+            "comparison_metric": "car_type",
+        },
+    )
+    decision = decide_discovery_response(frame)
+    decision_token = current_discovery_response_decision.set(decision)
+    try:
+        event = _build_product_comparison_event(
+            "ion evo as, ion evo as suv 차종 기준으로는?",
+            [
+                ("iON evo AS", {"goods_nm": "iON evo AS", "car_knd_nm": "승용차"}),
+                ("iON evo AS SUV", {"goods_nm": "iON evo AS SUV", "car_knd_nm": "SUV"}),
+            ],
+        )
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event["data"]["metadata"]["compareMetric"] == "car_type"
+    assert event["data"]["metadata"]["comparison_followup_intent"] == "new_compare_metric"
+    assert "차종" in event["data"]["assistantResponse"]
+
+
 def test_no_visible_output_fallback_event_prefers_transaction_size_clarification_over_description() -> None:
     contract = build_turn_contract(
         user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
@@ -9146,6 +9268,8 @@ def _routing_result(
     *,
     domains=None,
     execution_plan=None,
+    comparison_followup_intent: str = "none",
+    comparison_metric: str = "none",
     referred_object_status: str = "resolved",
     referred_object_type: str = "none",
     needs_clarification: bool = False,
@@ -9160,6 +9284,8 @@ def _routing_result(
         complaint_scope="none",
         discovery_followup_intent="none",
         carried_discovery_objective="none",
+        comparison_followup_intent=comparison_followup_intent,
+        comparison_metric=comparison_metric,
         referred_object_status=referred_object_status,
         referred_object_type=referred_object_type,
         needs_clarification=needs_clarification,
@@ -9331,6 +9457,48 @@ def test_turn_contract_allows_stock_when_required_slots_are_known() -> None:
     assert contract.intent == "stock_store_search"
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+def test_quick_order_reservation_treats_selected_datepick_as_resolved_booking_datetime() -> None:
+    contract = _transaction_turn_contract(
+        "주문 확정",
+        {
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert contract.intent == "quick_order_reservation"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_confirmation_ready"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime() -> None:
+    contract = _transaction_turn_contract(
+        "주문 확정",
+        {
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert contract.intent == "quick_order_reservation"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+    assert contract.blocking_required_slots == ("booking_datetime",)
+    assert should_guard_required_slots(contract)
 
 
 def test_turn_contract_blocks_templates_that_conflict_with_missing_required_slots() -> None:
@@ -9547,6 +9715,40 @@ def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_tran
 
     assert not violates_response_template_contract(compare_event, contract)
     assert response_contract_violations(contract=contract, **compare_event) == []
+
+
+def test_turn_contract_reports_missing_metric_row_for_compare_continuation() -> None:
+    contract = build_turn_contract(
+        user_text="dynapro hpx, dynapro hp3 중에서는?",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_comparison", sub_intent="latest_compare"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "metric_comparison_summary",
+                "compare_metric": "release",
+                "comparison_followup_intent": "continue_previous_compare_metric",
+            },
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_comparison"],
+            comparison_followup_intent="continue_previous_compare_metric",
+            comparison_metric="release",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="| 항목 | Dynapro HPX | Dynapro HP3 |\n|---|---|---|\n| 상품 등급 | premium | standard |",
+        assistant_response_source="code_product_compare_resolver",
+        response_shape_key="metric_comparison_summary",
+        called_tools=["search_product_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert {"type": "compare_metric_row_missing", "comparison_followup_intent": "continue_previous_compare_metric", "compare_metric": "release", "expected_row": "출시 시점"} in violations
 
 
 def test_response_decision_helper_uses_source_domain_contextvars() -> None:

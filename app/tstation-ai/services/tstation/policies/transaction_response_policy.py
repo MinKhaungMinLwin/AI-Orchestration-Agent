@@ -180,6 +180,18 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
             assistant_guidance="주문 요약을 만들기 전에 누락된 필수 주문 정보를 먼저 수집한다.",
         )
 
+    if _has_selected_booking_datetime(slots):
+        return _decision(
+            response_shape_key="reservation_confirmation_ready",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.PRE_ORDER,
+            forbidden_behaviors=_NO_ORDER_NULL_FORBIDDEN + ("store_hours_instead_of_slots",),
+            assistant_guidance=(
+                "예약 날짜와 시간까지 확정된 주문 흐름에서는 datepick를 다시 요구하지 말고 "
+                "preOrder 확인 또는 quick_order_tool 단계로 이어간다."
+            ),
+        )
+
     return _decision(
         response_shape_key="reservation_slots",
         response_shape=ResponseShape.DATE_PICK,
@@ -216,6 +228,12 @@ def _needs_location_for_nearby_stock(text: str) -> bool:
 def _asks_noon(text: str) -> bool:
     normalized = text.replace(" ", "")
     return "12시" in normalized or "점심시간" in normalized
+
+
+def _has_selected_booking_datetime(slots: dict[str, Any]) -> bool:
+    if slots.get("booking_datetime"):
+        return True
+    return bool(slots.get("requested_cal_day") and slots.get("rsv_hour"))
 
 
 def _available_quantity(tool_result: dict[str, Any]) -> int:
