@@ -13641,7 +13641,47 @@ def test_quick_order_action_payload_blocks_missing_required_fields() -> None:
     assert valid is False
     assert reason.startswith("missing:")
     assert "shop_id" in reason
-    assert "car_no" in reason
+    assert "car_no" not in reason
+    assert "car_lnc_cd" not in reason
+
+
+def test_quick_order_action_payload_allows_missing_vehicle_identity() -> None:
+    preorder_payload = {
+        "isReadyToOrder": True,
+        "orderInfo": {
+            "product": "벤투스 S2 AS 225/45R17",
+            "quantity": 2,
+            "storeName": "티스테이션 한남점",
+            "bookingDateTime": "2026년 6월 24일 (수) 16:00",
+            "paymentAmount": 237600,
+        },
+        "metadata": {
+            "goodsNo": "G000000309783",
+            "shopId": "F07782",
+            "ordQty": 2,
+            "requestedCalDay": "20260624",
+            "rsvHour": "16",
+            "paymentAmount": 237600,
+        },
+    }
+    normalized = _normalize_quick_order_action_payload(
+        {
+            "goodsNo": "G000000309783",
+            "ordQty": 2,
+            "shopId": "F07782",
+            "requestedCalDay": "20260624",
+            "rsvHour": "16",
+            "paymentAmount": 237600,
+        },
+        preorder_payload,
+    )
+
+    valid, reason = _validate_quick_order_action_payload(normalized, preorder_payload)
+
+    assert valid is True
+    assert reason == "ok"
+    assert normalized["car_no"] == ""
+    assert normalized["car_lnc_cd"] == ""
 
 
 def test_turn_contract_promotes_planner_quick_order_execute_over_code_reservation_drift() -> None:

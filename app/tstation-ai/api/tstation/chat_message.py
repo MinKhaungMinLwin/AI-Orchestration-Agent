@@ -244,7 +244,7 @@ def _normalize_quick_order_action_payload(action_payload: dict, preorder_payload
 
 
 def _validate_quick_order_action_payload(normalized: dict, preorder_payload: dict) -> tuple[bool, str]:
-    required = ("goods_no", "shop_id", "requested_cal_day", "rsv_hour", "car_no", "car_lnc_cd")
+    required = ("goods_no", "shop_id", "requested_cal_day", "rsv_hour")
     missing = [field for field in required if not normalized.get(field)]
     if int(normalized.get("ord_qty") or 0) <= 0:
         missing.append("ord_qty")
@@ -593,8 +593,9 @@ async def quick_order_action(
                 "shop_id": str(normalized["shop_id"]),
                 "rsv_date": str(normalized["requested_cal_day"]),
                 "rsv_hour": str(normalized["rsv_hour"]),
-                "car_lnc_cd": str(normalized["car_lnc_cd"]),
             }
+            if normalized.get("car_lnc_cd"):
+                tool_input["car_lnc_cd"] = str(normalized["car_lnc_cd"])
             status_event = {
                 "type": "status",
                 "status": "tool_start",
