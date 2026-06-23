@@ -130,6 +130,7 @@ from services.tstation.chat import (
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
     _is_product_coupon_price_amount_query,
+    _is_coupon_discount_amount_context,
     _is_specific_coupon_usage_query,
     _is_product_comparison_query,
     _tool_error_response_decision,
@@ -4517,9 +4518,23 @@ def test_price_policy_frame_keeps_coupon_product_size_quantity_separate() -> Non
         "ventus air S 2255517 4개 구매하고 싶은데 쿠폰 적용하면 할인받는 금액이 얼마야?"
     )
 
+    assert frame.intent == "product_coupon_discount_amount"
+    assert frame.sub_intent == "coupon_discount_amount"
     assert frame.entities["product_name"] == "Ventus air S"
     assert frame.entities["tire_size"] == "225/55R17"
     assert frame.entities["quantity"] == 4
+
+
+def test_coupon_discount_amount_context_is_independent_price_goal() -> None:
+    slots = ConversationSlots(
+        pending_intent="price",
+        goal_type="coupon_discount_amount",
+        pending_product_name="벤투스 에어S",
+        tire_size="245/45R18",
+        ord_qty=4,
+    )
+
+    assert _is_coupon_discount_amount_context(slots) is True
 
 
 def test_product_coupon_price_amount_query_is_detected() -> None:
@@ -4617,6 +4632,39 @@ def test_size_list_intent_does_not_reuse_other_product_rows_when_pending_product
     )
 
     assert event is None
+
+
+def test_product_size_list_preserves_coupon_discount_amount_metadata() -> None:
+    event = _build_product_size_list_event_from_search_results(
+        "다른 사이즈 확인",
+        [
+            (
+                "벤투스 에어S",
+                {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {"goods_nm": "벤투스 에어S", "tire_size_1": "245/45R18"},
+                            {"goods_nm": "벤투스 에어S", "tire_size_1": "255/45R19"},
+                        ]
+                    },
+                },
+            )
+        ],
+        slots=ConversationSlots(
+            pending_intent="price",
+            goal_type="coupon_discount_amount",
+            pending_product_name="벤투스 에어S",
+            ord_qty=4,
+        ),
+    )
+
+    assert event is not None
+    metadata = event["data"]["metadata"]
+    assert metadata["pendingIntent"] == "price"
+    assert metadata["goalType"] == "coupon_discount_amount"
+    assert metadata["productName"] == "벤투스 에어S"
+    assert metadata["ordQty"] == 4
 
 
 def test_product_size_list_not_found_event_uses_pending_product_cta_contract() -> None:
@@ -4834,6 +4882,43 @@ def test_product_coupon_price_no_product_event_stops_without_price_cta() -> None
     assert "상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요" in assistant
     assert "상품을 찾았어요" not in assistant
     assert "가격 확인" not in labels
+
+
+def test_coupon_discount_amount_size_clarification_preserves_price_goal() -> None:
+    event = _build_transaction_unresolved_product_resolution_event(
+        user_text="다른 사이즈 확인",
+        slots=ConversationSlots(
+            pending_intent="price",
+            goal_type="coupon_discount_amount",
+            pending_product_name="벤투스 에어S",
+            ord_qty=4,
+        ),
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스 에어S", "limit": 10},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {"goods_nm": "벤투스 에어S", "tire_size_1": "245/45R18"},
+                            {"goods_nm": "벤투스 에어S", "tire_size_1": "255/45R19"},
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    metadata = event["data"]["metadata"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "쿠폰 할인금액 확인" in event["data"]["assistantResponse"]
+    assert metadata["pendingIntent"] == "price"
+    assert metadata["goalType"] == "coupon_discount_amount"
+    assert metadata["ordQty"] == 4
+    assert labels[:2] == ["245/45R18", "255/45R19"]
 
 
 def test_product_coupon_eligibility_query_is_resolver_candidate() -> None:

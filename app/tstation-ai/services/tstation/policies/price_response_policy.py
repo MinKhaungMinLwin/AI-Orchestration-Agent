@@ -90,6 +90,13 @@ def build_price_intent_frame(
     elif _COUPON_RE.search(text) and percent_match and re.search(r"적용\s*가능|대상|상품", text):
         intent = "coupon_applicable_products"
         sub_intent = "discount_rate_coupon_targets"
+    elif (
+        _COUPON_RE.search(text)
+        and (entities.get("product_name") or slots.get("goods_no"))
+        and re.search(r"할인\s*받|할인\s*금액|할인액|최종\s*(?:혜택가|금액|가격)|얼마", text, re.IGNORECASE)
+    ):
+        intent = "product_coupon_discount_amount"
+        sub_intent = "coupon_discount_amount"
     elif _COUPON_RE.search(text) and (entities.get("product_name") or slots.get("goods_no")):
         intent = "product_coupon_eligibility"
         sub_intent = "product_or_pattern_coupon"
@@ -146,6 +153,14 @@ def plan_price_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_my_coupons_tool",
             forbidden_tools=("issue_coupon_tool",),
             metadata={"separate_owned_and_downloadable": True, "do_not_require_size_first": True},
+        )
+    if frame.intent == "product_coupon_discount_amount":
+        return ToolPlan(
+            allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+            preferred_tool="get_final_price_tool",
+            required_slots=("goods_no",),
+            forbidden_tools=("get_product_description_tool", "issue_coupon_tool"),
+            metadata={"preserve_price_goal_after_product_resolution": True},
         )
     return ToolPlan(
         allowed_tools=("get_my_coupons_tool", "get_product_promotions_tool"),
@@ -210,6 +225,19 @@ def decide_price_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=("product_or_pattern",),
             forbidden_behaviors=("require_size_first", "mix_owned_and_downloadable_coupons", "promise_coupon_application"),
             assistant_guidance="특정 상품/패턴 쿠폰 문의는 규격 요구보다 쿠폰 적용 대상, 보유 여부, 다운 가능 여부를 분리해 안내한다.",
+        )
+    if frame.intent == "product_coupon_discount_amount":
+        return _decision(
+            response_shape_key="product_coupon_discount_amount",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("goods_no",),
+            forbidden_behaviors=(
+                "use_product_description_as_final",
+                "answer_without_price_tool",
+                "invent_discount",
+            ),
+            assistant_guidance="상품 resolve는 중간 단계로만 사용하고, 최종 응답은 가격/쿠폰 할인금액 계산 결과로 안내한다.",
         )
     return _decision(
         response_shape_key="price_coupon_summary",

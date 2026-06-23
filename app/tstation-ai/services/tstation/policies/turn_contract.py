@@ -15,6 +15,8 @@ _HIGH_RISK_INTENTS = frozenset({
     "price_or_coupon_check",
     "price_coupon_summary",
     "product_coupon_eligibility",
+    "product_coupon_discount_amount",
+    "coupon_discount_amount",
     "coupon_applicable_products",
     "coupon_pattern_applicability",
     "stock_store_search",
@@ -509,7 +511,11 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 {"label": "재고 확인", "domain": "TRANSACTION"},
                 {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
             ]
-        elif pending_intent == "price" or goal_type == "price_inquiry":
+        elif pending_intent == "price" or goal_type in {
+            "price_inquiry",
+            "coupon_discount_amount",
+            "product_coupon_discount_amount",
+        }:
             message = "가격을 확인하려면 먼저 타이어 규격을 확인해야 해요. 확인할 규격을 선택해 주세요."
             quick_replies = [
                 {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},

@@ -31,6 +31,7 @@ GoalType = Literal[
     "store_with_stock",
     "store_finder",
     "price_inquiry",
+    "coupon_discount_amount",
     "place_order",
 ]
 
@@ -403,6 +404,7 @@ class ConversationSlots(BaseModel):
         "store_with_stock": "재고 있는 매장 찾기",
         "store_finder": "매장 찾기",
         "price_inquiry": "가격 조회",
+        "coupon_discount_amount": "쿠폰 할인금액 확인",
         "place_order": "주문 진행",
     }
 
@@ -439,6 +441,11 @@ class ConversationSlots(BaseModel):
             ("region", "지역", frozenset({"region"})),
         ],
         "price_inquiry": [
+            ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
+            ("size", "타이어 사이즈", frozenset({"tire_size"})),
+            ("qty", "수량", frozenset({"ord_qty"})),
+        ],
+        "coupon_discount_amount": [
             ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
             ("size", "타이어 사이즈", frozenset({"tire_size"})),
             ("qty", "수량", frozenset({"ord_qty"})),

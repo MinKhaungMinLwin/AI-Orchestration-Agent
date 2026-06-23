@@ -3980,6 +3980,9 @@ _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
     ("price_inquiry", "model"): MultiAgentDomain.Domain.DISCOVERY,
     ("price_inquiry", "size"): MultiAgentDomain.Domain.DISCOVERY,
     ("price_inquiry", "qty"): MultiAgentDomain.Domain.TRANSACTION,
+    ("coupon_discount_amount", "model"): MultiAgentDomain.Domain.DISCOVERY,
+    ("coupon_discount_amount", "size"): MultiAgentDomain.Domain.DISCOVERY,
+    ("coupon_discount_amount", "qty"): MultiAgentDomain.Domain.TRANSACTION,
     # place_order: identical product pipeline + shop selection in Transaction.
     ("place_order", "model"): MultiAgentDomain.Domain.DISCOVERY,
     ("place_order", "size"): MultiAgentDomain.Domain.DISCOVERY,
@@ -3998,6 +4001,7 @@ _GOAL_NEXT_STEP_DOMAIN: "dict[tuple[str, str], MultiAgentDomain.Domain]" = {
 _GOAL_COMPLETE_DOMAIN: "dict[str, MultiAgentDomain.Domain]" = {
     "store_with_stock": MultiAgentDomain.Domain.TRANSACTION,
     "price_inquiry": MultiAgentDomain.Domain.TRANSACTION,
+    "coupon_discount_amount": MultiAgentDomain.Domain.TRANSACTION,
     "place_order": MultiAgentDomain.Domain.TRANSACTION,
     # store_finder: once region is filled, Transaction runs the store search
     # and applies the captured user_preferences_text (if any) to filter/rank.
@@ -9688,6 +9692,24 @@ def _is_product_coupon_price_amount_query(user_text: str | None) -> bool:
     return bool(_COUPON_WORD_RE.search(text) and _COUPON_PRICE_AMOUNT_QUERY_RE.search(text))
 
 
+_COUPON_DISCOUNT_AMOUNT_GOAL_TYPES = frozenset({
+    "coupon_discount_amount",
+    "product_coupon_discount_amount",
+})
+
+
+def _is_coupon_discount_amount_context(slots: Any | None) -> bool:
+    if slots is None:
+        return False
+    if isinstance(slots, Mapping):
+        pending_intent = str(slots.get("pending_intent") or "").strip()
+        goal_type = str(slots.get("goal_type") or "").strip()
+    else:
+        pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+        goal_type = str(getattr(slots, "goal_type", None) or "").strip()
+    return pending_intent == "price" and goal_type in _COUPON_DISCOUNT_AMOUNT_GOAL_TYPES
+
+
 def _price_row_from_final_price_result(price_result: dict) -> dict | None:
     data = _unwrap_tool_data(price_result)
     if not isinstance(data, dict) or not data:
@@ -9895,7 +9917,7 @@ def _build_product_coupon_price_no_product_event(product_name: str, tire_size: s
 
 def _coupon_target_product_name_for_query(user_text: str) -> str | None:
     frame = build_price_intent_frame(user_text)
-    if frame.intent != "product_coupon_eligibility":
+    if frame.intent not in {"product_coupon_eligibility", "product_coupon_discount_amount"}:
         return None
     product_name = str(frame.entities.get("product_name") or "").strip()
     normalized = _split_product_size_quantity_from_text(product_name, user_text)
@@ -12649,6 +12671,21 @@ def _build_product_size_list_event_from_search_results(
     )
     quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in sizes[:6]]
     quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
+    metadata: dict[str, Any] = {
+        "productName": product_label,
+        "sizes": sizes,
+    }
+    if _is_coupon_discount_amount_context(slots):
+        metadata["pendingIntent"] = "price"
+        metadata["goalType"] = "coupon_discount_amount"
+        for source_key, metadata_key in (
+            ("pending_product_name", "productName"),
+            ("ord_qty", "ordQty"),
+            ("quantity", "quantity"),
+        ):
+            value = _slot_value(slots, source_key)
+            if value not in (None, ""):
+                metadata[metadata_key] = value
     return {
         "type": "data",
         "template": "quickReply",
@@ -12658,10 +12695,7 @@ def _build_product_size_list_event_from_search_results(
             "assistantResponse": assistant_response,
             "quickReplies": quick_replies,
             "predictedDomains": ["DISCOVERY"],
-            "metadata": {
-                "productName": product_label,
-                "sizes": sizes,
-            },
+            "metadata": metadata,
         },
     }
 
@@ -12680,6 +12714,8 @@ def _transactional_pending_intent_from_slots(slots: Any | None) -> str | None:
     return {
         "place_order": "order",
         "price_inquiry": "price",
+        "coupon_discount_amount": "price",
+        "product_coupon_discount_amount": "price",
         "store_with_stock": "stock",
     }.get(goal_type)
 
@@ -12699,6 +12735,8 @@ def _transactional_resolution_action_label(intent: str | None, slots: Any | None
         if availability_intent == "today_install" or _slot_value(slots, "requested_cal_day"):
             return "오늘서비스 구매"
         return "구매"
+    if normalized_intent == "price" and _is_coupon_discount_amount_context(slots):
+        return "쿠폰 할인금액 확인"
     return {
         "price": "가격 확인",
         "stock": "재고 확인",
@@ -17537,7 +17575,7 @@ class TStationChatServiceV2:
                         "pending_product_name": parsed_product_name,
                         "tire_size": parsed_tire_size,
                         "pending_intent": "price",
-                        "goal_type": "price_inquiry",
+                        "goal_type": "coupon_discount_amount",
                         "pending_required_slot": "goods_no",
                     }
                     if parsed_quantity is not None:
@@ -21864,6 +21902,66 @@ class TStationChatServiceV2:
                 )
                 goods_no = str((product_row or {}).get("goods_no") or "").strip()
                 if not goods_no:
+                    fallback_search_input = {"keyword": preferred_keyword, "limit": 10}
+                    emitted_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "search_product_tool",
+                        "display_name": "다른 규격 확인 중...",
+                        "source_domain": "discovery",
+                    })
+                    try:
+                        raw_fallback_search = await asyncio.to_thread(
+                            _search_product_tool.invoke,
+                            fallback_search_input,
+                        )
+                        fallback_search_result = _tool_result_dict(raw_fallback_search)
+                    except Exception as exc:
+                        logger.exception(
+                            "[PRODUCT_COUPON_PRICE] fallback search_product_tool failed for %s",
+                            preferred_keyword,
+                        )
+                        fallback_search_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": str(exc),
+                            "data": {},
+                        }
+                    _record_code_tool_result("search_product_tool", fallback_search_input, fallback_search_result)
+                    emitted_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Compatibility AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": fallback_search_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    emitted_events.append({
+                        "type": "tool",
+                        "input": fallback_search_input,
+                        "output": json.dumps(fallback_search_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "search_product_tool",
+                        "source_domain": "discovery",
+                    })
+                    fallback_rows = _search_result_rows_for_product(
+                        _search_product_rows_from_payload(fallback_search_result),
+                        preferred_keyword,
+                    )
+                    fallback_sizes = _search_result_size_candidates(fallback_rows)
+                    if fallback_sizes:
+                        coupon_slots = {
+                            "pending_intent": "price",
+                            "goal_type": "coupon_discount_amount",
+                            "pending_product_name": preferred_keyword,
+                            "tire_model": preferred_keyword,
+                            "ord_qty": int(target_quantity),
+                        }
+                        return emitted_events, _build_transaction_unresolved_product_size_clarification_event(
+                            preferred_keyword,
+                            fallback_sizes,
+                            pending_intent="price",
+                            slots=coupon_slots,
+                        )
                     return emitted_events, _build_product_coupon_price_no_product_event(
                         preferred_keyword,
                         target_tire_size,
@@ -22648,6 +22746,7 @@ class TStationChatServiceV2:
                 get_product_description_tool as _get_product_description_tool,
             )
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+            from services.tstation.agents.c_transaction_agent.tools import get_final_price_tool as _final_price_tool
             from services.tstation.agents.c_transaction_agent.tools import (
                 transaction_store_preview_tool as _transaction_store_preview_tool,
             )
@@ -22807,6 +22906,60 @@ class TStationChatServiceV2:
                             store_name=store_name,
                             goods_no=goods_no,
                             requested_day_label=requested_day_label,
+                        )
+
+                    if _is_coupon_discount_amount_context(initial_slots):
+                        tire_size = str(tool_input.get("size") or "")
+                        try:
+                            target_quantity = int(getattr(initial_slots, "ord_qty", None) or 1)
+                        except (TypeError, ValueError):
+                            target_quantity = 1
+                        price_input = {"goods_no": goods_no}
+                        emitted_events.append({
+                            "type": "status",
+                            "status": "tool_start",
+                            "tool": "get_final_price_tool",
+                            "display_name": "최종 혜택가 확인 중...",
+                            "source_domain": "transaction",
+                        })
+                        try:
+                            raw_price = await asyncio.to_thread(_final_price_tool.invoke, price_input)
+                            price_result = _tool_result_dict(raw_price)
+                        except Exception as exc:
+                            logger.exception("[PRODUCT_COUPON_PRICE_FOLLOWUP] get_final_price_tool failed for %s", goods_no)
+                            price_result = {
+                                "status": "error",
+                                "http_status": None,
+                                "message": str(exc),
+                                "data": {},
+                            }
+                        _record_code_tool_result("get_final_price_tool", price_input, price_result)
+                        emitted_events.append({
+                            "type": "agent_flow",
+                            "agent": "[Price AF]",
+                            "agent_class": "Transaction Agent",
+                            "status": price_result.get("status", "success"),
+                            "source_domain": "transaction",
+                        })
+                        emitted_events.append({
+                            "type": "tool",
+                            "input": price_input,
+                            "output": json.dumps(price_result, ensure_ascii=False),
+                            "node": "tools",
+                            "tool": "get_final_price_tool",
+                            "source_domain": "transaction",
+                        })
+                        price_event = _build_product_coupon_price_amount_event(
+                            price_result,
+                            product_name=str((row or {}).get("goods_nm") or preferred_keyword),
+                            tire_size=tire_size,
+                            quantity=target_quantity,
+                        )
+                        if price_event is not None:
+                            return emitted_events, price_event
+                        return emitted_events, _build_product_coupon_price_no_product_event(
+                            str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
+                            tire_size,
                         )
 
                     detail_input = {"goods_no": goods_no}
