@@ -8504,13 +8504,14 @@ def test_sized_all_weather_recommendation_uses_all_weather_tool_filter() -> None
 def _recommendation_template_entry(
     *,
     season_nm: str,
+    rcmd_type: str = "all_weather",
     limit: int | None = None,
     requested_limit: int | None = None,
     effective_limit: int | None = None,
     item_count: int = 1,
 ) -> dict:
     args = {
-        "rcmd_type": "all_weather",
+        "rcmd_type": rcmd_type,
         "season_nm": season_nm,
         "tire_size": "235/55R19",
     }
@@ -8558,6 +8559,29 @@ def test_recommendation_response_uses_all_weather_label_when_requested() -> None
     response = event["data"]["assistantResponse"]
     assert "235/55R19 올웨더 조건" in response
     assert "사계절 조건" not in response
+
+
+def test_value_recommendation_response_does_not_claim_unapplied_winter_condition() -> None:
+    event = try_build_template(
+        [_recommendation_template_entry(rcmd_type="value", season_nm="겨울", item_count=3)],
+        "상품을 찾았어요.",
+    )
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert "235/55R19 가성비 조건으로 찾은 상품 3개" in response
+    assert "겨울 조건" not in response
+
+
+def test_snow_recommendation_response_keeps_applied_winter_condition() -> None:
+    event = try_build_template(
+        [_recommendation_template_entry(rcmd_type="snow", season_nm="겨울", item_count=3)],
+        "상품을 찾았어요.",
+    )
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert "235/55R19 겨울 조건으로 찾은 상품 3개" in response
 
 
 def test_recommendation_response_mentions_cap_when_requested_over_ten_and_ten_returned() -> None:

@@ -215,9 +215,11 @@ _RCMD_TYPE_DISPLAY: dict[str, str] = {
     "snow": "겨울용",
     "all_weather": "올웨더",
     "value": "가성비",
+    "discount": "할인",
     "family": "승차감",
     "ev": "전기차용",
 }
+_RCMD_TYPES_WITHOUT_SEASON_FILTER: set[str] = {"value", "discount"}
 
 _INTERNAL_POLICY_TEXT_RE = re.compile(
     r"기준으로\s*답하고|이전\s*추천\s*결과로\s*대체|"
@@ -2309,19 +2311,27 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
         tire_size = _get_str(args, "tire_size")
         season = _get_str(args, "season_nm")
         rcmd_type = _get_str(args, "rcmd_type")
-        if tire_size and season:
-            return f"{tire_size} {season} 조건으로 찾은 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
+        condition_label = _recommendation_condition_label(rcmd_type=rcmd_type, season=season)
+        if tire_size and condition_label:
+            return (
+                f"{tire_size} {condition_label} 조건으로 찾은 상품 {item_count}개입니다. "
+                "원하시는 상품을 선택해 주세요."
+            )
         if tire_size:
             return f"{tire_size} 기준으로 찾은 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
-        if season:
-            return f"{season} 조건으로 찾은 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
-        rcmd_label = _RCMD_TYPE_DISPLAY.get(rcmd_type.lower()) if rcmd_type else ""
-        if rcmd_label:
-            return f"{rcmd_label} 조건으로 찾은 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
+        if condition_label:
+            return f"{condition_label} 조건으로 찾은 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
         if rcmd_type:
             return f"조건에 맞는 상품 {item_count}개입니다. 원하시는 상품을 선택해 주세요."
 
     return _TEMPLATE_DEFAULTS.get("product", "").format(n=item_count)
+
+
+def _recommendation_condition_label(*, rcmd_type: str, season: str) -> str:
+    normalized_rcmd_type = (rcmd_type or "").strip().lower()
+    if season and normalized_rcmd_type not in _RCMD_TYPES_WITHOUT_SEASON_FILTER:
+        return season
+    return _RCMD_TYPE_DISPLAY.get(normalized_rcmd_type, "") if normalized_rcmd_type else ""
 
 
 def _positive_int_or_none(value: Any) -> int | None:
