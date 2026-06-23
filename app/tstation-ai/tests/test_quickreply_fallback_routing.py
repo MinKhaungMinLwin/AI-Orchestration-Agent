@@ -217,6 +217,7 @@ from services.tstation.chat import (
     _build_reservation_store_info_event,
     _reservation_store_not_found_event,
     _build_pure_inventory_stock_event,
+    _build_pure_inventory_store_stock_available_event,
     _pure_inventory_has_store_stock,
     _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
@@ -13081,6 +13082,38 @@ def test_pure_inventory_stock_event_mentions_logistics_date_without_emitting_dat
     assert "물류 재고 기준으로 2026년 6월 26일부터 장착 예약이 가능할 수 있어요" in assistant
     assert "가장 빠른 예약일 확인" in labels
     assert "다른 매장 오늘장착 확인" in labels
+
+
+def test_pure_inventory_stock_event_without_logistics_prompts_other_store_search() -> None:
+    event = _build_pure_inventory_stock_event(
+        store_name="판교점",
+        tire_size="235/45R18",
+        ord_qty=4,
+        logistics_result={"status": "success", "data": {"logistics_qty": 0, "rsv_sale_yn": "N"}},
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert event["data"]["metadata"]["response_shape_key"] == "no_stock_anywhere"
+    assert "물류 재고도 확인되지 않아요" in assistant
+    assert "다른 매장 오늘장착 재고를 검색해볼까요" in assistant
+    assert labels[0] == "다른 매장 검색"
+
+
+def test_pure_inventory_store_stock_available_event_does_not_emit_reservation_ui() -> None:
+    event = _build_pure_inventory_store_stock_available_event(
+        store_name="판교점",
+        tire_size="235/45R18",
+        ord_qty=4,
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["response_shape_key"] == "stock_available"
+    assert event["data"]["metadata"]["reservationUiEmitted"] is False
+    assert "오늘 바로 장착 가능한 매장 재고가 확인돼요" in assistant
+    assert "예약 가능 시간 확인" in labels
 
 
 def test_pure_inventory_stock_helper_treats_matching_today_store_as_available() -> None:
