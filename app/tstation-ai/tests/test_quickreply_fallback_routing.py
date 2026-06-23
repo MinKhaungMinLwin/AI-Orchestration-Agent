@@ -194,6 +194,7 @@ from services.tstation.chat import (
     _ensure_discovery_transaction_recovery_chain,
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
+    _normalize_order_cancel_request_guidance,
     _inject_destination_cta_for_guidance,
     _ensure_my_goods_review_lookup_cta,
     _ensure_store_review_write_cta,
@@ -1709,6 +1710,84 @@ def test_cancel_guidance_injects_order_history_cta() -> None:
     assert event_data["quickReplies"][0]["label"] == "주문 내역 보기"
     assert event_data["quickReplies"][0]["url"].endswith("/mypage/tstation/order-history")
     assert "벤투스 S2 AS 주문 내역" in event_data["assistantResponse"]
+
+
+def test_order_cancel_request_normalizer_blocks_selection_prompt_for_complaint_cancel() -> None:
+    event_data = {
+        "assistantResponse": "어떤 주문을 취소하시겠어요? 아래 주문 내역에서 취소하려는 주문을 선택해 주세요.",
+        "quickReplies": [
+            {"label": "최근 주문 취소", "domain": "TRANSACTION"},
+            {"label": "상품 검색", "domain": "DISCOVERY"},
+        ],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    changed = _normalize_order_cancel_request_guidance(
+        event_data,
+        tool_data_list=[
+            {
+                "tool": "get_orders_of_user_tool",
+                "data": {
+                    "data": {
+                        "orders": [
+                            {"ord_no": "O202606220019363", "goods_nm": "세레니티 플러스"},
+                            {"ord_no": "O202606220019364", "goods_nm": "벤투스 에어S"},
+                        ],
+                    }
+                },
+            }
+        ],
+        last_user_text="고객센터 왜 전화가 안돼? 주문 취소 처리해줘",
+    )
+
+    assert changed is True
+    response = event_data["assistantResponse"]
+    assert "고객센터 연결이 원활하지 않아" in response
+    assert "최근 주문이 여러 건 확인돼요" in response
+    assert "어떤 주문을 취소" not in response
+    assert "주문번호를 말씀" not in response
+    assert event_data["quickReplies"][0] == {
+        "label": "주문 내역 보기",
+        "url": CTAUrls.ORDER_HISTORY,
+        "domain": "TRANSACTION",
+    }
+    assert [chip["label"] for chip in event_data["quickReplies"]] == ["주문 내역 보기", "1:1 문의하기"]
+
+
+def test_order_cancel_request_normalizer_uses_detail_cta_only_for_explicit_order_no() -> None:
+    event_data = {
+        "assistantResponse": "취소 가능한 주문을 확인해 드릴게요. 주문번호를 말씀해 주세요.",
+        "quickReplies": [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    changed = _normalize_order_cancel_request_guidance(
+        event_data,
+        tool_data_list=[],
+        last_user_text="O202606220019363 취소해줘",
+    )
+
+    assert changed is True
+    assert event_data["assistantResponse"] == (
+        "제가 직접 주문을 취소 처리할 수는 없어요.\n"
+        "취소 가능 여부와 취소 버튼은 주문 상세 화면에서 확인해 주세요."
+    )
+    assert event_data["quickReplies"] == [
+        {
+            "label": "주문 상세에서 취소 확인",
+            "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", "O202606220019363"),
+            "domain": "TRANSACTION",
+        }
+    ]
+
+
+def test_order_cancel_request_policy_forbids_cancel_selection_and_processing_promises() -> None:
+    response_decision = decide_transaction_response(intent="order_cancel_request", user_text="최근 주문 취소하고 싶어")
+
+    assert response_decision.metadata["response_shape_key"] == "order_cancel_request_guidance"
+    assert "ask_which_order_to_cancel" in response_decision.forbidden_behaviors
+    assert "ask_order_number_for_cancel_request" in response_decision.forbidden_behaviors
+    assert "promise_cancel_processing" in response_decision.forbidden_behaviors
 
 
 def test_destination_cta_mapper_replaces_generic_discovery_chips_for_order_payment_guidance() -> None:

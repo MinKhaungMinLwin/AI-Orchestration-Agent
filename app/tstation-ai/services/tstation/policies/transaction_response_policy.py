@@ -60,6 +60,8 @@ def decide_transaction_response(
         return _decide_reservation_store_info_lookup()
     if intent == "order_arrival_status_lookup":
         return _decide_order_arrival_status_lookup()
+    if intent == "order_cancel_request":
+        return _decide_order_cancel_request()
     if intent == "maintenance_history_lookup":
         return _decide_maintenance_history_lookup(slots=slots)
     if intent == "maintenance_history_access_policy":
@@ -281,6 +283,27 @@ def _decide_maintenance_history_lookup(*, slots: dict[str, Any]) -> ResponseDeci
             "사용자가 특정 항목을 언급했으면 tool 결과에서 해당 항목을 우선 필터링하고, 결과 응답에는 정비이력보기 CTA를 포함한다."
         ),
         metadata={"requested_service_item": requested_item} if requested_item else None,
+    )
+
+
+def _decide_order_cancel_request() -> ResponseDecision:
+    return _decision(
+        response_shape_key="order_cancel_request_guidance",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "ask_which_order_to_cancel",
+            "ask_order_number_for_cancel_request",
+            "select_order_for_cancel_request",
+            "promise_cancel_availability_check",
+            "promise_cancel_progress",
+            "promise_cancel_processing",
+        ),
+        assistant_guidance=(
+            "챗봇이 직접 주문을 취소 처리할 수 없음을 안내한다. 취소 가능 여부와 취소 버튼은 주문 상세 화면에서 "
+            "사용자가 직접 확인해야 한다. 주문번호가 명확하면 주문 상세 CTA를 제공하고, 없거나 여러 건이면 주문내역 CTA만 제공한다. "
+            "어떤 주문을 취소할지 선택하게 하거나 주문번호를 요구하지 않는다."
+        ),
     )
 
 

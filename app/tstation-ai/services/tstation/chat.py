@@ -4252,6 +4252,20 @@ _ORDER_CANCEL_CTA_TEXT_RE = re.compile(
     r"취소|반품|배송중|출고|택배비|왕복\s*배송비|취소\s*가능\s*여부|최종\s*비용",
     re.IGNORECASE,
 )
+_ORDER_CANCEL_REQUEST_TEXT_RE = re.compile(
+    r"(?:주문|예약|최근\s*주문|내\s*주문|주문번호\s*[A-Z]?\d{8,}).{0,30}(?:취소|캔슬)|"
+    r"(?:취소|캔슬).{0,20}(?:해\s*줘|해주세요|처리|진행|하고\s*싶|할래|하려고|요청)|"
+    r"(?:고객\s*센터|상담|전화).{0,40}(?:취소|캔슬)",
+    re.IGNORECASE,
+)
+_ORDER_CANCEL_SELECTION_PROMPT_RE = re.compile(
+    r"어떤\s*주문을\s*취소하시겠어요|주문번호를\s*말씀해\s*주세요|"
+    r"아래\s*주문\s*내역에서\s*취소하려는\s*주문을\s*선택|"
+    r"취소\s*가능한\s*주문을\s*확인해\s*드릴게요|"
+    r"취소\s*(?:진행|처리)해\s*드릴게요",
+    re.IGNORECASE,
+)
+_ORDER_CANCEL_COMPLAINT_RE = re.compile(r"고객\s*센터|상담|전화\s*(?:안|않|연결)", re.IGNORECASE)
 _PRICE_OR_BENEFIT_ALERT_QUERY_RE = re.compile(
     r"(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)"
     r".{0,40}(?:알림|알람|문자|SMS|sms|알려|연락|통지)|"
@@ -8809,6 +8823,112 @@ def _inject_order_history_chip_for_cancel_guidance(
         event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", *predicted])
     else:
         event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
+
+
+def _order_no_from_cancel_context(assistant_text: str, last_user_text: str) -> str:
+    for text in (last_user_text, assistant_text):
+        match = _ORDER_NO_FOR_DESTINATION_CTA_RE.search(text)
+        if match:
+            return str(match.group("named") or match.group("bare") or "").strip()
+    return ""
+
+
+def _recent_order_count_from_tool_context(tool_data_list: list[dict]) -> int:
+    for entry in reversed(tool_data_list):
+        if not isinstance(entry, dict) or entry.get("tool") != "get_orders_of_user_tool":
+            continue
+        data = _unwrap_tool_data(entry.get("data"))
+        if not isinstance(data, dict):
+            continue
+        orders = data.get("orders") or data.get("list") or data.get("items")
+        if isinstance(orders, list):
+            return len([order for order in orders if isinstance(order, dict)])
+    return 0
+
+
+def _normalize_order_cancel_request_guidance(
+    event_data: dict,
+    *,
+    tool_data_list: list[dict],
+    last_user_text: str,
+) -> bool:
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not (
+        _ORDER_CANCEL_REQUEST_TEXT_RE.search(last_user_text)
+        or _ORDER_CANCEL_SELECTION_PROMPT_RE.search(assistant_text)
+    ):
+        return False
+    if event_data.get("template") not in (None, "quickReply"):
+        return False
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+
+    order_no = _order_no_from_cancel_context(assistant_text, last_user_text)
+    order_count = _recent_order_count_from_tool_context(tool_data_list)
+    if order_no:
+        response = (
+            "제가 직접 주문을 취소 처리할 수는 없어요.\n"
+            "취소 가능 여부와 취소 버튼은 주문 상세 화면에서 확인해 주세요."
+        )
+        primary_chip = {
+            "label": "주문 상세에서 취소 확인",
+            "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", order_no),
+            "domain": "TRANSACTION",
+        }
+    elif order_count > 1:
+        response = (
+            "최근 주문이 여러 건 확인돼요.\n"
+            "취소하려는 주문은 주문내역에서 직접 확인한 뒤, 주문 상세 화면에서 취소 가능 여부를 확인해 주세요."
+        )
+        primary_chip = {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+    else:
+        response = (
+            "제가 직접 주문을 취소 처리할 수는 없어요.\n"
+            "취소 가능 여부와 취소 버튼은 주문 상세 화면에서 확인해 주세요."
+        )
+        primary_chip = {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+
+    if _ORDER_CANCEL_COMPLAINT_RE.search(last_user_text):
+        response = f"고객센터 연결이 원활하지 않아 불편하셨을 수 있어요.\n\n{response}"
+
+    blocked_labels = {
+        "최근 주문 취소",
+        "주문 취소",
+        "주문번호 입력",
+        "다른 주문 확인",
+        "취소 진행",
+        "취소 처리",
+    }
+    filtered: list[dict] = []
+    for chip in chips:
+        if not isinstance(chip, dict):
+            continue
+        label = str(chip.get("label") or "").strip()
+        url = str(chip.get("url") or "").strip()
+        if label in blocked_labels:
+            continue
+        if url in {primary_chip["url"], CTAUrls.ORDER_HISTORY}:
+            continue
+        if label in {"상품 검색", "타이어 추천", "구매하기"}:
+            continue
+        filtered.append(chip)
+
+    secondary = [{"label": "1:1 문의하기", "domain": "SUPPORT"}] if _ORDER_CANCEL_COMPLAINT_RE.search(last_user_text) else []
+    event_data["assistantResponse"] = response
+    event_data["quickReplies"] = [primary_chip, *secondary, *filtered]
+    event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", "SUPPORT"])
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update({
+        "orderCancelGuidanceNormalized": True,
+        "response_shape_key": "order_cancel_request_guidance",
+    })
+    if order_no:
+        metadata["orderNo"] = order_no
+    event_data["metadata"] = metadata
     return True
 
 
@@ -26507,6 +26627,15 @@ class TStationChatServiceV2:
                         )
                     ):
                         logger.info("[QUICKREPLY_FILTER] injected order history chip for cancel guidance")
+                    if (
+                        is_current_quickreply
+                        and _normalize_order_cancel_request_guidance(
+                            event_data,
+                            tool_data_list=[*(prev_tool_data or []), *tool_context_items],
+                            last_user_text=user_query,
+                        )
+                    ):
+                        logger.info("[QUICKREPLY_FILTER] normalized order cancel request guidance")
                     if is_current_quickreply and _inject_destination_cta_for_guidance(event_data):
                         logger.info("[QUICKREPLY_FILTER] injected destination CTA for guidance")
                     if (
