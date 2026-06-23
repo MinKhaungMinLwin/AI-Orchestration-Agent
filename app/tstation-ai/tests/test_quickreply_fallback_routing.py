@@ -132,6 +132,7 @@ from services.tstation.chat import (
     _tool_error_response_decision,
     _tool_parse_failure_response_decision,
     _qc_factual_mismatch_guard_event,
+    _qc_inventory_availability_recovery_event,
     _repair_assistant_response,
     _repair_qc_mismatch_event,
     _tool_error_summary,
@@ -11688,6 +11689,57 @@ def test_inventory_availability_mismatch_is_not_repaired_by_line_deletion() -> N
     assert repaired is None
     assert fallback["assistant_response_source"] == "code_qc_factual_mismatch_guard"
     assert fallback["data"]["metadata"]["qcMismatchFields"] == ["inventory_availability"]
+
+
+def test_inventory_availability_mismatch_recovers_tool_backed_location_event() -> None:
+    mismatches = [
+        qc_verifier.Mismatch(field="inventory_availability", value="tool_available_but_draft_unavailable"),
+    ]
+    tool_data = [
+        {
+            "tool": "transaction_store_preview_tool",
+            "args": {
+                "goods_no": "G000000309780",
+                "ord_qty": 4,
+                "region_code": "해운대",
+                "include_price": True,
+            },
+            "data": {
+                "status": "success",
+                "data": {
+                    "inventory": {
+                        "todayShopArray": [{"shopId": "F00124"}],
+                        "tnaShopArray": [],
+                    },
+                    "schedule": {
+                        "tier": "in_store_logistics_combined",
+                        "stores": [{
+                            "shop_id": "F00124",
+                            "shop_nm": "티스테이션 부산중동점",
+                            "is_installable": True,
+                            "slots": [{"cal_day": "20260624", "tm": "09"}],
+                        }],
+                    },
+                    "stores": [{
+                        "shop_id": "F00124",
+                        "shop_nm": "티스테이션 부산중동점",
+                        "is_installable": True,
+                        "addr_base": "부산광역시 해운대구",
+                        "addr_dtl": "해운대로 749 (중동)",
+                    }],
+                    "candidate_shop_ids": ["F00124"],
+                },
+            },
+        },
+    ]
+
+    event = _qc_inventory_availability_recovery_event(tool_data, mismatches)
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["assistant_response_source"] == "code_qc_inventory_availability_repair"
+    assert event["data"]["metadata"]["qcRepair"]["fields"] == ["inventory_availability"]
+    assert event["data"]["stores"][0]["nameAddress"] == "티스테이션 부산중동점"
 
 
 def test_repair_qc_mismatch_event_updates_assistant_response_without_guard_fallback() -> None:

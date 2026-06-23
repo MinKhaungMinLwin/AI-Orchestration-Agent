@@ -13765,6 +13765,46 @@ def _qc_factual_mismatch_guard_event(mismatches: list[Any]) -> dict:
     }
 
 
+def _qc_inventory_availability_recovery_event(
+    tool_data_list: list[dict],
+    mismatches: list[Any],
+) -> dict[str, Any] | None:
+    fields = {str(getattr(mismatch, "field", "") or "") for mismatch in mismatches if mismatch is not None}
+    if "inventory_availability" not in fields:
+        return None
+    if not any(
+        str(entry.get("tool") or "") in {"transaction_store_preview_tool", "get_store_inventory_tool"}
+        for entry in tool_data_list
+        if isinstance(entry, dict)
+    ):
+        return None
+
+    from services.tstation.template_mapper import try_build_template
+
+    mapped_event = try_build_template(
+        tool_data_list,
+        "재고 있는 매장을 확인했어요. 원하시는 매장을 선택해 주세요.",
+    )
+    if not isinstance(mapped_event, dict) or str(mapped_event.get("template") or "") not in {"location", "datepick"}:
+        return None
+
+    recovered_event = dict(mapped_event)
+    recovered_event["assistant_response_source"] = "code_qc_inventory_availability_repair"
+    data = recovered_event.get("data")
+    if isinstance(data, dict):
+        recovered_data = dict(data)
+        raw_metadata = recovered_data.get("metadata")
+        metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+        metadata["qcRepair"] = {
+            "attempted": True,
+            "fields": sorted(fields),
+            "source": "tool_backed_inventory_availability",
+        }
+        recovered_data["metadata"] = metadata
+        recovered_event["data"] = recovered_data
+    return recovered_event
+
+
 def _trace_final_error_state(
     *,
     tool_errors: list[dict],
@@ -23149,11 +23189,17 @@ class TStationChatServiceV2:
                                     hard_violations,
                                 )
                             elif mismatches and not _parallel_qc:
-                                fallback_event = _qc_factual_mismatch_guard_event(mismatches)
+                                fallback_event = _qc_inventory_availability_recovery_event(
+                                    tool_context_items,
+                                    mismatches,
+                                ) or _qc_factual_mismatch_guard_event(mismatches)
                                 buffered_data_events = [fallback_event]
-                                last_template = "quickReply"
+                                last_template = str(fallback_event.get("template") or "quickReply")
                                 last_template_source = "qc_verifier"
-                                last_assistant_response_source = "code_qc_factual_mismatch_guard"
+                                last_assistant_response_source = str(
+                                    fallback_event.get("assistant_response_source")
+                                    or "code_qc_factual_mismatch_guard"
+                                )
                                 event_data = fallback_event.get("data", {})
                                 assistant_response = str(event_data.get("assistantResponse") or "")
                                 draft_response = assistant_response
