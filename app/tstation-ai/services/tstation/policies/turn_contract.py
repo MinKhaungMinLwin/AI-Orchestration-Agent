@@ -25,6 +25,9 @@ _HIGH_RISK_INTENTS = frozenset({
     "recent_product_set_size_availability",
 })
 _HIGH_RISK_DOMAINS = frozenset({"transaction"})
+_HARD_REQUIRED_SLOT_GUARD_INTENTS = frozenset({
+    "quick_order_execute",
+})
 _REQUIRED_SLOT_BLOCK_TEMPLATES = frozenset({
     "datepick",
     "preOrder",
@@ -69,6 +72,7 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 })
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
+    "unexpected_tool_for_contract",
     "requested_product_attribute_contract_drift",
     "compare_metric_metadata_drift",
     "compare_metric_contract_drift",
@@ -318,17 +322,27 @@ def build_turn_contract(
 
 
 def should_guard_required_slots(contract: TurnContract | None) -> bool:
-    """Return true when executing tools/templates would be riskier than clarifying."""
+    """Return true only when missing slots create an immediate safety risk.
+
+    TurnContract is a final safety verifier, not the primary slot-collection
+    engine. Most intent-dependent missing slots should be handled by the domain
+    policy/resolver layer so normal tool execution can still resolve them.
+    """
 
     if contract is None or not contract.blocking_required_slots:
         return False
+    if _has_blocking_reference(contract):
+        return True
     if contract.risk_level != "high":
         return False
-    if _has_blocking_reference(contract):
+    if contract.has_reference_signal and any(
+        slot in {"product", "product_set", "store", "order", "coupon", "reference"}
+        for slot in contract.blocking_required_slots
+    ):
         return True
     if contract.domain not in _HIGH_RISK_DOMAINS:
         return False
-    return True
+    return str(contract.intent or "") in _HARD_REQUIRED_SLOT_GUARD_INTENTS
 
 
 def build_required_slot_clarification_event(contract: TurnContract) -> dict[str, Any]:
@@ -650,17 +664,28 @@ def _tool_contract_violation(
         return None
     if called_tool_set and called_tool_set <= _COMPARISON_RESOLVER_TOOLS and _is_comparison_contract(contract):
         return None
-    disallowed = [
+    forbidden = [
         str(tool)
         for tool in called_tools
-        if str(tool)
-        and (str(tool) not in contract.allowed_tools or str(tool) in contract.forbidden_tools)
+        if str(tool) and str(tool) in contract.forbidden_tools
     ]
-    if not disallowed:
+    if forbidden:
+        return {
+            "type": "forbidden_tool_for_contract",
+            "called_tools": forbidden,
+            "forbidden_tools": list(contract.forbidden_tools),
+            "severity": "error",
+        }
+    unexpected = [
+        str(tool)
+        for tool in called_tools
+        if str(tool) and str(tool) not in contract.allowed_tools
+    ]
+    if not unexpected:
         return None
     return {
         "type": "unexpected_tool_for_contract",
-        "called_tools": disallowed,
+        "called_tools": unexpected,
         "allowed_tools": list(contract.allowed_tools),
     }
 

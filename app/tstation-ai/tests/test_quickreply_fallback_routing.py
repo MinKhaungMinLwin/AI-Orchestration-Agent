@@ -10085,17 +10085,44 @@ def test_turn_contract_detects_tool_drift_for_favorite_store_lookup() -> None:
 
     violations = response_contract_violations(
         template="location",
-        called_tools=["get_store_list_tool"],
+        called_tools=["get_final_price_tool"],
         source_domain="transaction",
         contract=contract,
     )
 
     assert violations == [{
         "type": "unexpected_tool_for_contract",
-        "severity": "error",
-        "called_tools": ["get_store_list_tool"],
+        "severity": "warning",
+        "called_tools": ["get_final_price_tool"],
         "allowed_tools": ["get_favorite_stores_tool"],
     }]
+    assert hard_contract_violations(violations) == []
+
+
+def test_turn_contract_keeps_forbidden_tool_drift_as_hard_safety_error() -> None:
+    contract = _transaction_turn_contract("내 단골매장 보여줘")
+
+    violations = response_contract_violations(
+        template="location",
+        called_tools=["get_store_list_tool", "get_nearby_stores_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert {
+        "type": "forbidden_tool_for_contract",
+        "severity": "error",
+        "called_tools": ["get_store_list_tool", "get_nearby_stores_tool"],
+        "forbidden_tools": ["search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"],
+    } in violations
+    assert hard_contract_violations(violations) == [
+        {
+            "type": "forbidden_tool_for_contract",
+            "severity": "error",
+            "called_tools": ["get_store_list_tool", "get_nearby_stores_tool"],
+            "forbidden_tools": ["search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"],
+        }
+    ]
 
 
 def test_turn_contract_does_not_block_missing_reference_for_favorite_store_lookup() -> None:
@@ -10281,10 +10308,10 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
     )
     assert violations == [
         {
-            "type": "unexpected_tool_for_contract",
+            "type": "forbidden_tool_for_contract",
             "severity": "error",
             "called_tools": ["search_product_tool"],
-            "allowed_tools": ["search_faq_hybrid_tool"],
+            "forbidden_tools": ["search_product_tool", "get_final_price_tool"],
         }
     ]
 
@@ -10452,7 +10479,7 @@ def test_turn_contract_guards_price_coupon_without_product(user_text: str) -> No
 
     assert contract.intent == "price_or_coupon_check"
     assert contract.blocking_required_slots == ("product",)
-    assert should_guard_required_slots(contract)
+    assert not should_guard_required_slots(contract)
 
 
 @pytest.mark.parametrize("user_text", ["벤투스 에어S 가격 알려줘", "dynapro hp3 가격 알려줘"])
@@ -11196,10 +11223,10 @@ def test_turn_contract_reports_preview_tool_on_pure_stock_contract() -> None:
             "assistant_response_source": "transaction_agent",
         },
         {
-            "type": "unexpected_tool_for_contract",
+            "type": "forbidden_tool_for_contract",
             "severity": "error",
             "called_tools": ["transaction_store_preview_tool"],
-            "allowed_tools": ["get_store_inventory_tool", "get_store_list_tool"],
+            "forbidden_tools": ["transaction_store_preview_tool"],
         },
         {
             "type": "unexpected_preview_tool_for_inventory_only_stock",
