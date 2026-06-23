@@ -11586,6 +11586,50 @@ def test_repair_assistant_response_removes_mismatched_price_and_repasses_qc() ->
     assert qc_verifier.verify_draft(repaired, source) == []
 
 
+def test_qc_flags_unavailable_draft_when_preview_tool_has_candidates() -> None:
+    source = [
+        (
+            "transaction_store_preview_tool",
+            {
+                "status": "success",
+                "data": {
+                    "inventory": {
+                        "todayShopArray": [{"shopId": "F10001"}],
+                        "tnaShopArray": [],
+                    },
+                    "schedule": {
+                        "stores": [{
+                            "shop_id": "F10001",
+                            "shop_nm": "티스테이션 해운대점",
+                            "slots": [{"cal_day": "20260623", "tm": "17"}],
+                        }],
+                    },
+                    "stores": [{"shop_id": "F10001", "shop_nm": "티스테이션 해운대점"}],
+                },
+            },
+        )
+    ]
+
+    mismatches = qc_verifier.verify_draft("해운대 지역에서 오늘 장착 가능한 매장을 확인하지 못했어요.", source)
+
+    assert [m.as_dict() for m in mismatches] == [
+        {"field": "inventory_availability", "value": "tool_available_but_draft_unavailable"},
+    ]
+
+
+def test_inventory_availability_mismatch_is_not_repaired_by_line_deletion() -> None:
+    mismatches = [
+        qc_verifier.Mismatch(field="inventory_availability", value="tool_available_but_draft_unavailable"),
+    ]
+
+    repaired = _repair_assistant_response("오늘 장착 가능한 매장이 없어요.", mismatches)
+    fallback = _qc_factual_mismatch_guard_event(mismatches)
+
+    assert repaired is None
+    assert fallback["assistant_response_source"] == "code_qc_factual_mismatch_guard"
+    assert fallback["data"]["metadata"]["qcMismatchFields"] == ["inventory_availability"]
+
+
 def test_repair_qc_mismatch_event_updates_assistant_response_without_guard_fallback() -> None:
     event = _repair_qc_mismatch_event(
         {

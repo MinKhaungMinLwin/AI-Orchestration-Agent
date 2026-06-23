@@ -11971,6 +11971,9 @@ def _repair_assistant_response(assistant_response: str, mismatches: list[Any]) -
         if not any(value in line for value in mismatch_values)
     ]
     fields = {str(getattr(mismatch, "field", "") or "") for mismatch in mismatches if mismatch is not None}
+    repairable_fields = {"price", "goods_no", "shop_id", "tire_size"}
+    if not fields or not fields <= repairable_fields:
+        return None
 
     guidance: list[str] = []
     if "price" in fields:

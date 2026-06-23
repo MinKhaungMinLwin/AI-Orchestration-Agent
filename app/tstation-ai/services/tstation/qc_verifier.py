@@ -63,6 +63,11 @@ _TIRE_SIZE_PATTERN = re.compile(
     r"\b(?:LT)?\d{2,3}/\d{2}Z?R\d{2}\b",
     re.IGNORECASE,
 )
+_INVENTORY_UNAVAILABLE_PATTERNS = (
+    re.compile(r"(?:재고|장착|예약|오늘\s*서비스|오늘\s*장착).{0,16}(?:없|불가|어렵|확인(?:할\s*수)?\s*없|확인.*못)"),
+    re.compile(r"(?:확인(?:할\s*수)?\s*없|확인.*못).{0,16}(?:재고|장착|예약|매장)"),
+    re.compile(r"(?:가능한|가능)\s*(?:매장|일정|재고).{0,16}(?:없|찾지\s*못|확인.*못)"),
+)
 
 # Skip integers below this threshold as candidate prices — they are usually
 # quantities, ratings, percentages, or page numbers, not won amounts.
@@ -80,7 +85,8 @@ _MAX_QTY_MULTIPLIER = 12
 class Mismatch:
     """A factual mismatch detected between the draft and the source data.
 
-    ``field`` is one of ``"price"``, ``"goods_no"``, ``"shop_id"``.
+    ``field`` is one of ``"price"``, ``"goods_no"``, ``"shop_id"``,
+    ``"tire_size"``, or ``"inventory_availability"``.
     ``value`` is the literal substring as it appears in the draft.
     """
 
@@ -180,6 +186,64 @@ def collect_source_values(structured_sources: Iterable[tuple[str, Any]]) -> dict
     }
 
 
+def _nested_value(obj: Any, path: tuple[str, ...]) -> Any:
+    current = obj
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _non_empty_list_at(obj: Any, *paths: tuple[str, ...]) -> bool:
+    for path in paths:
+        value = _nested_value(obj, path)
+        if isinstance(value, list) and value:
+            return True
+    return False
+
+
+def _has_preview_schedule_slots(output: Any) -> bool:
+    stores = _nested_value(output, ("data", "schedule", "stores"))
+    if not isinstance(stores, list):
+        stores = _nested_value(output, ("schedule", "stores"))
+    if not isinstance(stores, list):
+        return False
+    for store in stores:
+        if isinstance(store, dict) and isinstance(store.get("slots"), list) and store.get("slots"):
+            return True
+    return False
+
+
+def _has_tool_backed_available_inventory(structured_sources: Iterable[tuple[str, Any]]) -> bool:
+    """Return True only when inventory/preview tools provide installable candidates."""
+    for tool_name, output in structured_sources:
+        if not isinstance(output, dict):
+            continue
+        if tool_name == "transaction_store_preview_tool":
+            if _non_empty_list_at(
+                output,
+                ("data", "inventory", "todayShopArray"),
+                ("data", "inventory", "tnaShopArray"),
+                ("data", "stores"),
+                ("inventory", "todayShopArray"),
+                ("inventory", "tnaShopArray"),
+                ("stores",),
+            ):
+                return True
+            if _has_preview_schedule_slots(output):
+                return True
+        elif tool_name == "get_store_inventory_tool" and _non_empty_list_at(
+            output,
+            ("data", "todayShopArray"),
+            ("data", "tnaShopArray"),
+            ("todayShopArray",),
+            ("tnaShopArray",),
+        ):
+            return True
+    return False
+
+
 def _as_normalized_tire_size(value: Any) -> str | None:
     """Coerce a source tire-size value to its canonical uppercase form.
 
@@ -214,6 +278,13 @@ def _extract_price_literals(draft: str) -> list[str]:
 def _normalize_price_literal(literal: str) -> int | None:
     digits = re.sub(r"[^\d]", "", literal)
     return int(digits) if digits else None
+
+
+def _claims_inventory_unavailable(draft: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(draft or "")).strip()
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _INVENTORY_UNAVAILABLE_PATTERNS)
 
 
 # --------------------------------------------------------------------------- #
@@ -309,6 +380,9 @@ def verify_draft(
             seen_sizes.add(normalized)
             if normalized not in valid_sizes:
                 mismatches.append(Mismatch(field="tire_size", value=literal))
+
+    if _has_tool_backed_available_inventory(sources) and _claims_inventory_unavailable(draft):
+        mismatches.append(Mismatch(field="inventory_availability", value="tool_available_but_draft_unavailable"))
 
     return mismatches
 
