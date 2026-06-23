@@ -71,9 +71,11 @@ from services.tstation.policies.turn_contract import (
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
     build_turn_contract,
+    hard_contract_violations,
     response_contract_violations,
     should_guard_required_slots,
     violates_response_template_contract,
+    warning_contract_violations,
 )
 from services.tstation.policies.brand_policy import (
     SUPPORTED_BRANDS,
@@ -22909,6 +22911,9 @@ class TStationChatServiceV2:
 
             _qc_passed = True
             repair_attempt_count = 0
+            contract_violations: list[dict[str, Any]] = []
+            hard_violations: list[dict[str, Any]] = []
+            policy_warnings: list[dict[str, Any]] = []
             _contract_sensitive_qc = bool(
                 turn_contract
                 and (
@@ -22956,8 +22961,10 @@ class TStationChatServiceV2:
                     source_domain=current_contract_source_domain,
                     contract=turn_contract,
                 )
+                hard_violations = hard_contract_violations(contract_violations)
+                policy_warnings = warning_contract_violations(contract_violations)
 
-                if (called_tool_names and qc_skip_reason is None) or (contract_violations and not _parallel_qc):
+                if (called_tool_names and qc_skip_reason is None) or (hard_violations and not _parallel_qc):
                     qc_executed = True
                     try:
                         with _trace_span(
@@ -22978,7 +22985,7 @@ class TStationChatServiceV2:
                             )
                             if (
                                 mismatches
-                                and not contract_violations
+                                and not hard_violations
                                 and not _parallel_qc
                                 and repair_attempt_count <= 1
                             ):
@@ -23020,22 +23027,29 @@ class TStationChatServiceV2:
                                         logger.info("[QC_VERIFIER] repaired factual mismatch before fallback")
                                     else:
                                         mismatches = repaired_mismatches
-                            _qc_passed = not mismatches and not contract_violations
+                            _qc_passed = not mismatches and not hard_violations
                             if _qc_passed:
-                                logger.debug("[QC_VERIFIER] PASS")
-                                _qc_summary = "PASS"
+                                if policy_warnings:
+                                    logger.info("[QC_VERIFIER] PASS with contract warning(s): %s", policy_warnings)
+                                    _qc_summary = f"PASS_WITH_WARNING ({len(policy_warnings)})"
+                                else:
+                                    logger.debug("[QC_VERIFIER] PASS")
+                                    _qc_summary = "PASS"
                             else:
                                 logger.warning(
-                                    "[QC_VERIFIER] %d mismatch(es), %d contract violation(s): %s %s",
+                                    "[QC_VERIFIER] %d mismatch(es), %d hard contract violation(s), "
+                                    "%d warning(s): %s %s %s",
                                     len(mismatches),
-                                    len(contract_violations),
+                                    len(hard_violations),
+                                    len(policy_warnings),
                                     [m.as_dict() for m in mismatches],
-                                    contract_violations,
+                                    hard_violations,
+                                    policy_warnings,
                                 )
                                 _qc_summary = (
                                     f"MISMATCH ({len(mismatches)})"
                                     if mismatches
-                                    else f"CONTRACT_VIOLATION ({len(contract_violations)})"
+                                    else f"CONTRACT_VIOLATION ({len(hard_violations)})"
                                 )
                             _qc_span.update(
                                 output=_truncate({
@@ -23043,9 +23057,11 @@ class TStationChatServiceV2:
                                     "verdict": "PASS" if _qc_passed else "MISMATCH",
                                     "mismatches": [m.as_dict() for m in mismatches],
                                     "contract_violations": contract_violations,
+                                    "hard_contract_violations": hard_violations,
+                                    "qc_policy_warnings": policy_warnings,
                                 }),
                             )
-                            if contract_violations and turn_contract is not None and not _parallel_qc:
+                            if hard_violations and turn_contract is not None and not _parallel_qc:
                                 fallback_event = _build_turn_contract_fallback_event(
                                     turn_contract=turn_contract,
                                     user_text=user_query,
@@ -23067,10 +23083,10 @@ class TStationChatServiceV2:
                                     "content": assistant_response,
                                     "agent": "[TRANSACTION AGENT]",
                                 }]
-                            elif contract_violations and _parallel_qc:
+                            elif hard_violations and _parallel_qc:
                                 logger.warning(
                                     "[TURN_CONTRACT] QC contract violation observed after parallel data emission: %s",
-                                    contract_violations,
+                                    hard_violations,
                                 )
                             elif mismatches and not _parallel_qc:
                                 fallback_event = _qc_factual_mismatch_guard_event(mismatches)
@@ -23210,6 +23226,9 @@ class TStationChatServiceV2:
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "qc_executed": qc_executed,
                 "qc_skip_reason": qc_skip_reason,
+                "contract_violations": contract_violations,
+                "hard_contract_violations": hard_violations,
+                "qc_policy_warnings": policy_warnings,
                 "latency_ms": int(_lat_stream_total_ms),
                 "latency_first_visible_ms": (
                     round(_lat_first_visible_ms) if _lat_first_visible_ms is not None else None

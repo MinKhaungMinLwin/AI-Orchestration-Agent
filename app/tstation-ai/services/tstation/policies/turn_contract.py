@@ -67,6 +67,13 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
 })
+_WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
+    "requested_product_attribute_contract_drift",
+    "compare_metric_metadata_drift",
+    "compare_metric_contract_drift",
+    "compare_metric_row_missing",
+    "forbidden_discovery_first_leg_response",
+})
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
 _DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검색되지\s*않|없어요", re.IGNORECASE)
@@ -550,7 +557,24 @@ def response_contract_violations(
     )
     if quick_order_violation is not None:
         violations.append(quick_order_violation)
-    return violations
+    return [_with_contract_violation_severity(violation) for violation in violations]
+
+
+def _with_contract_violation_severity(violation: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(violation)
+    if normalized.get("severity") in {"error", "warning"}:
+        return normalized
+    violation_type = str(normalized.get("type") or "")
+    normalized["severity"] = "warning" if violation_type in _WARNING_CONTRACT_VIOLATION_TYPES else "error"
+    return normalized
+
+
+def hard_contract_violations(violations: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+    return [violation for violation in violations if str(violation.get("severity") or "error") == "error"]
+
+
+def warning_contract_violations(violations: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+    return [violation for violation in violations if str(violation.get("severity") or "error") == "warning"]
 
 
 def _comparison_metric_metadata_violation(

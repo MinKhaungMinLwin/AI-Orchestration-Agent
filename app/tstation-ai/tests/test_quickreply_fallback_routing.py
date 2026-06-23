@@ -257,9 +257,11 @@ from services.tstation.policies.turn_contract import (
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
     build_turn_contract,
+    hard_contract_violations,
     response_contract_violations,
     should_guard_required_slots,
     violates_response_template_contract,
+    warning_contract_violations,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
@@ -2906,11 +2908,14 @@ def test_requested_product_attribute_contract_drift_is_reported() -> None:
 
     assert {
         "type": "requested_product_attribute_contract_drift",
+        "severity": "warning",
         "requested_product_attribute": "origin",
         "response_shape_key": "product_search_summary",
         "assistant_response_source": "code_product_description",
         "expected_response_shape_key": "product_attribute_summary",
     } in violations
+    assert hard_contract_violations(violations) == []
+    assert warning_contract_violations(violations) == violations
 
 
 def test_brand_filter_search_does_not_become_product_attribute_lookup() -> None:
@@ -9978,6 +9983,7 @@ def test_turn_contract_detects_tool_drift_for_favorite_store_lookup() -> None:
 
     assert violations == [{
         "type": "unexpected_tool_for_contract",
+        "severity": "error",
         "called_tools": ["get_store_list_tool"],
         "allowed_tools": ["get_favorite_stores_tool"],
     }]
@@ -10167,6 +10173,7 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
     assert violations == [
         {
             "type": "unexpected_tool_for_contract",
+            "severity": "error",
             "called_tools": ["search_product_tool"],
             "allowed_tools": ["search_faq_hybrid_tool"],
         }
@@ -10577,6 +10584,7 @@ def test_turn_contract_reports_preorder_confirmation_without_quick_order_tool() 
     assert contract.intent == "quick_order_execute"
     assert {
         "type": "quick_order_execute_without_tool",
+        "severity": "error",
         "assistant_response_source": "transaction_agent",
         "response_shape_key": "transaction_fallback",
         "template": "quickReply",
@@ -10761,6 +10769,7 @@ def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
 
     assert violations == [{
         "type": "forbidden_template",
+        "severity": "error",
         "template": "datepick",
         "fallback_reason": "response_policy_forbidden_behaviors",
         "response_shape_key": "",
@@ -10810,6 +10819,7 @@ def test_turn_contract_reports_missing_inventory_tool_for_pure_stock_contract() 
     assert violations == [
         {
             "type": "stock_contract_fell_back_without_resolution",
+            "severity": "error",
             "assistant_response_source": "transaction_agent",
             "response_shape_key": "transaction_fallback",
             "called_tools": [],
@@ -10861,6 +10871,7 @@ def test_turn_contract_reports_preview_tool_on_pure_stock_contract() -> None:
     assert violations == [
         {
             "type": "forbidden_template",
+            "severity": "error",
             "template": "datepick",
             "fallback_reason": "response_policy_forbidden_behaviors",
             "response_shape_key": "reservation_slots",
@@ -10868,11 +10879,13 @@ def test_turn_contract_reports_preview_tool_on_pure_stock_contract() -> None:
         },
         {
             "type": "unexpected_tool_for_contract",
+            "severity": "error",
             "called_tools": ["transaction_store_preview_tool"],
             "allowed_tools": ["get_store_inventory_tool", "get_store_list_tool"],
         },
         {
             "type": "unexpected_preview_tool_for_inventory_only_stock",
+            "severity": "error",
             "called_tools": ["transaction_store_preview_tool"],
         },
     ]
@@ -10924,11 +10937,13 @@ def test_turn_contract_qc_reports_discovery_first_leg_violation() -> None:
 
     assert violations == [{
         "type": "forbidden_discovery_first_leg_response",
+        "severity": "warning",
         "template": "quickReply",
         "fallback_reason": "missing_required_slots:product",
         "response_shape_key": "product_attribute_summary",
         "assistant_response_source": "code_product_attribute_resolver",
     }]
+    assert hard_contract_violations(violations) == []
 
 
 def test_turn_contract_blocks_price_template_on_price_tool_error() -> None:
@@ -11059,7 +11074,14 @@ def test_turn_contract_reports_missing_metric_row_for_compare_continuation() -> 
         contract=contract,
     )
 
-    assert {"type": "compare_metric_row_missing", "comparison_followup_intent": "continue_previous_compare_metric", "compare_metric": "release", "expected_row": "출시 시점"} in violations
+    assert {
+        "type": "compare_metric_row_missing",
+        "severity": "warning",
+        "comparison_followup_intent": "continue_previous_compare_metric",
+        "compare_metric": "release",
+        "expected_row": "출시 시점",
+    } in violations
+    assert hard_contract_violations(violations) == []
 
 
 def test_turn_contract_reports_compare_metric_metadata_drift() -> None:
@@ -11094,7 +11116,13 @@ def test_turn_contract_reports_compare_metric_metadata_drift() -> None:
         contract=contract,
     )
 
-    assert {"type": "compare_metric_metadata_drift", "compare_metric": "release", "assistant_compare_metric": "detail"} in violations
+    assert {
+        "type": "compare_metric_metadata_drift",
+        "severity": "warning",
+        "compare_metric": "release",
+        "assistant_compare_metric": "detail",
+    } in violations
+    assert hard_contract_violations(violations) == []
 
 
 def test_response_decision_helper_uses_source_domain_contextvars() -> None:
@@ -11235,6 +11263,7 @@ def test_turn_contract_reports_product_template_without_current_source_even_with
 
     assert violations == [{
         "type": "unsupported_product_template_without_current_source",
+        "severity": "error",
         "template": "product",
         "fallback_reason": "missing_required_slots:product",
         "response_shape_key": "product_search_summary",
