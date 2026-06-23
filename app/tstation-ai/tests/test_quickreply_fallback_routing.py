@@ -163,6 +163,8 @@ from services.tstation.chat import (
     _split_product_size_quantity_from_text,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
+    _maintenance_addon_store_context_from_location_template,
+    _maintenance_addon_with_tire_service_event,
     _service_duration_advisory_event,
     _build_vehicle_information_event,
     _build_complaint_scope_guard_event,
@@ -11940,6 +11942,125 @@ def test_alignment_addon_duration_question_is_advisory_not_store_schedule() -> N
     assert not should_guard_required_slots(contract)
     assert "30분~1시간" in event["data"]["assistantResponse"]
     assert event["template"] == "quickReply"
+
+
+def test_tire_service_with_maintenance_addon_uses_transaction_store_service_action() -> None:
+    user_text = "여주점에서 타이어 교체하면서 엔진오일, 실내필터 같이 교체하고 싶어"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=[
+                "support:maintenance_addon_policy_notice",
+                "transaction:maintenance_addon_with_tire_service",
+            ],
+        ),
+    )
+
+    assert frame.intent == "maintenance_addon_with_tire_service"
+    assert frame.sub_intent == "store_service_availability"
+    assert frame.known_slots["store_name"] == "여주점"
+    assert tool_plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
+    assert tool_plan.preferred_tool == "get_store_list_tool"
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "maintenance_addon_with_tire_service"
+    assert "fabricate_maintenance_booking_slot" in response_decision.forbidden_behaviors
+    assert contract.intent == "maintenance_addon_with_tire_service"
+    assert contract.domain == "transaction"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_tire_service_with_maintenance_addon_context_does_not_claim_unverified_store_support() -> None:
+    user_text = "여주점에서 타이어 교체하면서 엔진오일, 실내필터 같이 교체하고 싶어"
+    location_template = {
+        "template": "location",
+        "data": {
+            "stores": [
+                {
+                    "nameAddress": "티스테이션 여주점",
+                    "isAllMyT": False,
+                    "description": "얼라인먼트 | 무상점검",
+                }
+            ],
+            "metadata": [{"shopId": "F00001", "shopName": "티스테이션 여주점", "svc_codes": ["124"]}],
+        },
+    }
+    store_context = _maintenance_addon_store_context_from_location_template(user_text, location_template)
+    event = _maintenance_addon_with_tire_service_event(user_text, store_context=store_context)
+
+    assistant = event["data"]["assistantResponse"]
+    assert event["assistant_response_source"] == "code_maintenance_addon_with_tire_service"
+    assert event["data"]["metadata"]["responseShapeKey"] == "maintenance_addon_with_tire_service"
+    assert event["data"]["metadata"]["maintenanceAddonAvailable"] is False
+    assert "확인되지 않아요" in assistant
+    assert "방문 전 전화로 요청 가능 여부를 확인" in assistant
+    assert "경정비 가능 매장으로 확인돼요" not in assistant
+    assert "예약 가능한 시간" not in assistant
+
+
+def test_tire_service_with_maintenance_addon_context_allows_allmyt_or_svc_code_support() -> None:
+    user_text = "광교점에서 타이어 장착하면서 엔진오일도 같이 하고 싶어"
+    location_template = {
+        "template": "location",
+        "data": {
+            "stores": [
+                {
+                    "nameAddress": "티스테이션 광교점",
+                    "isAllMyT": True,
+                    "description": "경정비 | 무상점검",
+                }
+            ],
+            "metadata": [{"shopId": "F00002", "shopName": "티스테이션 광교점", "svc_codes": ["121"]}],
+        },
+    }
+    store_context = _maintenance_addon_store_context_from_location_template(user_text, location_template)
+    event = _maintenance_addon_with_tire_service_event(user_text, store_context=store_context)
+
+    assistant = event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["maintenanceAddonAvailable"] is True
+    assert event["data"]["metadata"]["svcCodes"] == ["121"]
+    assert "경정비 가능 매장으로 확인돼요" in assistant
+    assert "함께 담아 주문" in assistant
+
+
+def test_cross_domain_plan_preserves_maintenance_addon_transaction_action() -> None:
+    plan = plan_cross_domain_turn(
+        "여주점에서 타이어 교체하면서 엔진오일, 실내필터 같이 교체하고 싶어",
+        known_slots={},
+    )
+
+    assert plan.primary_domain == PolicyDomain.TRANSACTION
+    assert [task.intent for task in plan.subtasks] == [
+        "maintenance_addon_with_tire_service",
+        "maintenance_addon_policy_notice",
+    ]
+    assert plan.response_strategy == "transaction_store_service_check_then_policy_notice"
+
+
+def test_generic_engine_oil_maintenance_question_stays_out_of_addon_transaction_action() -> None:
+    frame = build_transaction_intent_frame("엔진오일 언제 갈아야 해?", known_slots={})
+
+    assert frame.intent == "transaction_fallback"
+
+
+def test_plain_tire_store_schedule_flow_is_not_maintenance_addon() -> None:
+    frame = build_transaction_intent_frame("여주점 타이어 교체 예약 가능해?", known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_schedule"
+    assert tool_plan.preferred_tool == "get_store_schedule_tool"
 
 
 def test_reservation_time_change_still_requires_order_context() -> None:

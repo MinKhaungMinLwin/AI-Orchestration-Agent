@@ -48,6 +48,8 @@ def decide_transaction_response(
         return _decide_store_schedule(text=text, slots=slots)
     if intent == "service_duration_advisory":
         return _decide_service_duration_advisory()
+    if intent == "maintenance_addon_with_tire_service":
+        return _decide_maintenance_addon_with_tire_service()
     if intent == "favorite_store_lookup":
         return _decide_favorite_store_lookup()
     if intent == "inventory_availability":
@@ -184,6 +186,25 @@ def _decide_service_duration_advisory() -> ResponseDecision:
         assistant_guidance=(
             "이미 예약한 서비스에 현장 부가 서비스를 추가할 때의 일반 소요시간 안내는 주문번호 없이 답변한다. "
             "예약 변경/취소/시간 재조정이 아닌 한 datepick이나 예약 슬롯을 제시하지 않는다."
+        ),
+    )
+
+
+def _decide_maintenance_addon_with_tire_service() -> ResponseDecision:
+    return _decision(
+        response_shape_key="maintenance_addon_with_tire_service",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "fabricate_maintenance_booking_slot",
+            "ask_tire_product_for_maintenance_addon",
+            "fallback_to_maintenance_dday_faq",
+            "generic_required_slot_clarification",
+        ),
+        assistant_guidance=(
+            "타이어 교체와 엔진오일/실내필터/와이퍼 등 경정비 동시 요청은 매장 서비스 가능 여부 안내로 처리한다. "
+            "svc_codes 121/122 또는 All My T/경정비 신호가 확인되면 온라인 타이어 주문 시 경정비 함께 주문 가능성을 안내하고, "
+            "확인되지 않으면 타이어 장착은 온라인 주문/예약으로 진행하되 경정비는 방문예약 또는 매장 사전 연락으로 확인하도록 안내한다."
         ),
     )
 

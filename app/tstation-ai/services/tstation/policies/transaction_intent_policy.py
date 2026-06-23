@@ -30,6 +30,9 @@ _SERVICE_DURATION_ADVISORY_RE = re.compile(
     r".{0,40}(?:현장(?:에서)?\s*)?(?:추가|같이|함께).{0,30}(?:시간|얼마나|소요|걸려)",
     re.IGNORECASE,
 )
+_MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
+_TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
+_ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _RESERVATION_CHANGE_RE = re.compile(r"변경|바꿔|옮겨|미뤄|당겨|취소", re.IGNORECASE)
 _NOON_RE = re.compile(r"12\s*시|점심\s*시간", re.IGNORECASE)
 _NEARBY_RE = re.compile(r"근처|주변|가까운|인근", re.IGNORECASE)
@@ -321,6 +324,12 @@ def build_transaction_intent_frame(
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
     )
+    current_maintenance_addon_with_tire = bool(
+        _TIRE_SERVICE_RE.search(text)
+        and _MAINTENANCE_ADDON_SERVICE_RE.search(text)
+        and _ADDON_WITH_RE.search(text)
+        and not current_service_duration_advisory
+    )
     current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
     plain_store_search = (
         current_store_search
@@ -510,6 +519,10 @@ def build_transaction_intent_frame(
         sub_intent = "additional_service_duration"
         if re.search(r"얼라인먼트|휠\s*얼라이먼트", text, re.IGNORECASE):
             entities["service_type"] = "alignment"
+    elif current_maintenance_addon_with_tire:
+        intent = "maintenance_addon_with_tire_service"
+        sub_intent = "store_service_availability"
+        entities["service_type"] = "maintenance_addon"
     elif preserve_pending_today_install:
         intent = "stock_store_search"
         sub_intent = "today_install"
@@ -588,6 +601,10 @@ def build_transaction_intent_frame(
     }
     if intent == "stock_store_search" and requested_cal_day:
         known["availability_intent"] = "today_install"
+    if intent == "maintenance_addon_with_tire_service":
+        known["pending_intent"] = "maintenance_addon_with_tire_service"
+        known["goal_type"] = "store_service_availability"
+        known["service_type"] = "maintenance_addon"
     if intent == "stock_store_search":
         known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
         if requested_cal_day:
@@ -738,6 +755,20 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "service_duration_advisory", "action": action},
         )
 
+    if frame.intent == "maintenance_addon_with_tire_service":
+        return ToolPlan(
+            allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+            preferred_tool="get_store_list_tool",
+            tool_args_patch=_slot_args(frame, "store_name", "shop_id"),
+            forbidden_tools=(
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_maintenance_dday_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
+        )
+
     if frame.intent == "quick_order_reservation":
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_multi_store_schedule_tool", "get_store_schedule_tool"),
@@ -809,6 +840,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "selected_store_schedule"
     if frame.intent == "service_duration_advisory":
         return "service_duration_advisory"
+    if frame.intent == "maintenance_addon_with_tire_service":
+        return "maintenance_addon_with_tire_service"
     return frame.intent or "transaction_fallback"
 
 
@@ -880,6 +913,8 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
         add("store", not frame.known_slots.get("shop_id"))
         add("booking_datetime", not (frame.known_slots.get("requested_cal_day") and frame.known_slots.get("rsv_hour")))
+    elif action == "maintenance_addon_with_tire_service":
+        add("store", not _has_action_store(frame))
     else:
         for slot in frame.missing_slots:
             add(slot, True)

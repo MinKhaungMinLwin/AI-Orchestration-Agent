@@ -271,7 +271,11 @@ def build_turn_contract(
     if intent == "transaction_fallback" and _is_recoverable_today_install_stock_contract(known_slots):
         intent = "stock_store_search"
     if code_intent == "service_duration_advisory":
+        domain = "transaction"
         intent = "service_duration_advisory"
+    if code_intent == "maintenance_addon_with_tire_service":
+        domain = "transaction"
+        intent = "maintenance_addon_with_tire_service"
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
@@ -1453,6 +1457,7 @@ def _reference_guard_exempt_intent(intent: str) -> bool:
         "favorite_store_lookup",
         "oe_re_concept_explanation",
         "service_duration_advisory",
+        "maintenance_addon_with_tire_service",
     }
 
 

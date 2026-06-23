@@ -8352,6 +8352,163 @@ def _service_duration_advisory_event(user_text: str, *, store_name: str | None =
     }
 
 
+_MAINTENANCE_ADDON_CODES = frozenset({"121", "122"})
+
+
+def _maintenance_addon_store_context_from_location_template(user_text: str, template_data: dict | None) -> dict | None:
+    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(user_text, template_data)
+    if not isinstance(selection, dict):
+        if not isinstance(template_data, dict):
+            return None
+        target_template: dict | None = None
+        if template_data.get("template") == "location" and isinstance(template_data.get("data"), dict):
+            target_template = template_data.get("data")
+        elif isinstance(template_data.get("stores"), list):
+            target_template = template_data
+        if not isinstance(target_template, dict):
+            return None
+        stores = target_template.get("stores") or []
+        metadata = target_template.get("metadata") or []
+        if not isinstance(stores, list) or not isinstance(metadata, list) or len(stores) != len(metadata):
+            return None
+        store_match = re.search(r"([가-힣A-Za-z0-9]+(?:점|매장))", user_text or "")
+        store_anchor = store_match.group(1) if store_match else ""
+        if not store_anchor:
+            return None
+        matched: list[dict[str, Any]] = []
+        for store, meta in zip(stores, metadata):
+            if not isinstance(store, dict) or not isinstance(meta, dict):
+                continue
+            name = str(store.get("nameAddress") or store.get("name") or store.get("title") or "")
+            meta_name = str(meta.get("shopName") or meta.get("shop_name") or meta.get("shop_nm") or "")
+            if store_anchor in name or store_anchor in meta_name:
+                matched.append({"store": store, "meta": meta})
+        if len(matched) != 1:
+            return None
+        selection = matched[0]
+    store = selection.get("store") if isinstance(selection.get("store"), dict) else {}
+    meta = selection.get("meta") if isinstance(selection.get("meta"), dict) else {}
+    if not store and not meta:
+        return None
+    return {"store": store, "meta": meta}
+
+
+def _maintenance_addon_svc_codes(store_context: dict | None) -> set[str]:
+    if not isinstance(store_context, dict):
+        return set()
+    codes: set[str] = set()
+    for source_key in ("store", "meta"):
+        source = store_context.get(source_key)
+        if not isinstance(source, dict):
+            continue
+        raw_codes = source.get("svc_codes") or source.get("svcCodes") or source.get("serviceCodes")
+        if isinstance(raw_codes, list):
+            codes.update(str(code).strip() for code in raw_codes if str(code).strip())
+        elif isinstance(raw_codes, str):
+            codes.update(code.strip() for code in re.split(r"[,|/\s]+", raw_codes) if code.strip())
+    return codes
+
+
+def _maintenance_addon_store_name(store_context: dict | None, fallback: str | None = None) -> str:
+    if isinstance(store_context, dict):
+        for source_key in ("store", "meta"):
+            source = store_context.get(source_key)
+            if not isinstance(source, dict):
+                continue
+            for key in ("shopName", "shop_name", "shop_nm", "nameAddress", "name", "title"):
+                value = str(source.get(key) or "").strip()
+                if value:
+                    return value
+    return str(fallback or "").strip()
+
+
+def _maintenance_addon_store_is_allmyt(store_context: dict | None) -> bool:
+    if not isinstance(store_context, dict):
+        return False
+    for source_key in ("store", "meta"):
+        source = store_context.get(source_key)
+        if not isinstance(source, dict):
+            continue
+        for key in ("isAllMyT", "is_all_my_t", "allMyT", "all_my_t"):
+            value = source.get(key)
+            if isinstance(value, bool):
+                return value
+            if str(value).strip().lower() in {"true", "y", "1"}:
+                return True
+    return False
+
+
+def _maintenance_addon_store_description(store_context: dict | None) -> str:
+    parts: list[str] = []
+    if isinstance(store_context, dict):
+        for source_key in ("store", "meta"):
+            source = store_context.get(source_key)
+            if not isinstance(source, dict):
+                continue
+            for key in ("description", "services", "serviceDescription", "svcLabels"):
+                value = source.get(key)
+                if isinstance(value, list):
+                    parts.extend(str(item) for item in value if str(item).strip())
+                elif value:
+                    parts.append(str(value))
+    return " | ".join(parts)
+
+
+def _maintenance_addon_supported_by_context(store_context: dict | None) -> bool:
+    codes = _maintenance_addon_svc_codes(store_context)
+    if codes & _MAINTENANCE_ADDON_CODES:
+        return True
+    if _maintenance_addon_store_is_allmyt(store_context):
+        return True
+    description = _maintenance_addon_store_description(store_context)
+    return bool(re.search(r"경정비|엔진\s*오일|실내\s*필터|와이퍼|배터리", description, re.IGNORECASE))
+
+
+def _maintenance_addon_with_tire_service_event(
+    user_text: str,
+    *,
+    store_context: dict | None = None,
+    store_name: str | None = None,
+) -> dict:
+    store_label = _maintenance_addon_store_name(store_context, store_name)
+    store_phrase = f"{store_label}은 " if store_label else "해당 매장은 "
+    supported = _maintenance_addon_supported_by_context(store_context)
+    if supported:
+        assistant_response = (
+            f"{store_phrase}경정비 가능 매장으로 확인돼요. 온라인으로 타이어를 주문할 때 "
+            "엔진오일/실내필터 같은 경정비 상품을 함께 담아 주문할 수 있는지 확인하고, "
+            "세부 작업 가능 여부는 주문 전후 매장에 한 번 더 확인해 주세요."
+        )
+    else:
+        assistant_response = (
+            f"{store_phrase}현재 확인된 매장 정보만으로는 엔진오일·실내필터 같은 경정비 동시 주문 가능 여부가 "
+            "확인되지 않아요. 타이어 장착은 온라인 주문/예약으로 진행하고, 엔진오일·실내필터는 "
+            "방문예약 또는 매장 방문 전 전화로 요청 가능 여부를 확인해 주세요."
+        )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_maintenance_addon_with_tire_service",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "타이어 주문하기", "domain": "TRANSACTION"},
+                {"label": "매장 정보 확인", "domain": "TRANSACTION"},
+                {"label": "정비 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "maintenance_addon_with_tire_service",
+                "storeName": store_label,
+                "maintenanceAddonAvailable": supported,
+                "svcCodes": sorted(_maintenance_addon_svc_codes(store_context)),
+                "userText": user_text,
+            },
+        },
+    }
+
+
 _PAST_EVENT_QUERY_RE = re.compile(
     r"(?=.*(?:지난|종료(?:된|한)?|끝난|과거|예전|이전|마감(?:된)?))(?=.*(?:이벤트|행사))",
     re.IGNORECASE,
@@ -18545,6 +18702,10 @@ class TStationChatServiceV2:
                             merged_slots.goods_no is not None
                             or merged_slots.tire_model is not None
                             or merged_slots.tire_size is not None
+                            or any(
+                                task.intent == "maintenance_addon_with_tire_service"
+                                for task in cross_domain_plan.subtasks
+                            )
                         )
                     )
                 )
@@ -18893,6 +19054,36 @@ class TStationChatServiceV2:
                 )
             event_data = service_duration_event.get("data") if isinstance(service_duration_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "maintenance_addon_with_tire_service":
+            store_context = _maintenance_addon_store_context_from_location_template(last_user_text, latest_location_tmpl)
+            if store_context is not None:
+                maintenance_addon_event = _maintenance_addon_with_tire_service_event(
+                    last_user_text,
+                    store_context=store_context,
+                    store_name=str((turn_contract.known_slots or {}).get("store_name") or ""),
+                )
+                logger.info(
+                    "[MAINTENANCE_ADDON] context response: text=%r session_id=%s",
+                    last_user_text[:80],
+                    request.session_id,
+                )
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(maintenance_addon_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = (
+                    maintenance_addon_event.get("data")
+                    if isinstance(maintenance_addon_event.get("data"), dict)
+                    else {}
+                )
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if should_guard_required_slots(turn_contract):
             turn_contract_guard_event = _build_turn_contract_fallback_event(
