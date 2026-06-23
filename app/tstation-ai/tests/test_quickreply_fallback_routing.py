@@ -282,6 +282,7 @@ from services.tstation.policies.delivery_policy_gate import (
     decide_delivery_policy_gate,
 )
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import decide_support_response
@@ -13687,12 +13688,95 @@ def test_pure_inventory_stock_event_mentions_logistics_date_without_emitting_dat
 
     assistant = event["data"]["assistantResponse"]
     labels = _labels(event["data"]["quickReplies"])
+    metadata = event["data"]["metadata"]
+    fastest_reply = next(reply for reply in event["data"]["quickReplies"] if reply["label"] == "가장 빠른 예약일 확인")
     assert event["template"] == "quickReply"
     assert event["data"]["metadata"]["response_shape_key"] == "logistics_stock_available"
     assert "오늘 바로 장착 가능한 매장 재고는 확인되지 않아요" in assistant
     assert "물류 재고 기준으로 2026년 6월 26일부터 장착 예약이 가능할 수 있어요" in assistant
     assert "가장 빠른 예약일 확인" in labels
     assert "다른 매장 오늘장착 확인" in labels
+    assert metadata["ctaContext"]["followupMode"] == "logistics_earliest_install_date"
+    assert metadata["ctaContext"]["stock_check_mode"] == "logistics_only"
+    assert metadata["ctaContext"]["rsvInstallDate"] == "20260626"
+    assert fastest_reply["actionId"] == "logistics_earliest_install_date"
+    assert fastest_reply["metadata"]["followupMode"] == "logistics_earliest_install_date"
+
+
+def test_pure_inventory_stock_event_without_logistics_date_does_not_offer_earliest_date_cta() -> None:
+    event = _build_pure_inventory_stock_event(
+        store_name="모란점",
+        tire_size="205/65R15",
+        ord_qty=4,
+        logistics_result={
+            "status": "success",
+            "data": {
+                "logistics_qty": 8,
+                "rsv_sale_yn": "N",
+                "rsv_install_date": "",
+            },
+        },
+        store_context={"shopId": "F00123", "shopName": "티스테이션 모란점"},
+        goods_no="G000000317735",
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    metadata = event["data"]["metadata"]
+    assert event["data"]["metadata"]["response_shape_key"] == "logistics_stock_available"
+    assert metadata["logisticsStockAvailable"] is True
+    assert metadata["reservationSaleAvailable"] is False
+    assert "물류 재고는 확인되지만 현재 예약 가능일은 확정되지 않았어요" in assistant
+    assert "가장 빠른 예약일 확인" not in labels
+    assert "다른 매장 오늘장착 확인" in labels
+
+
+def test_logistics_earliest_install_cta_context_builds_preview_tool_input() -> None:
+    slots = ConversationSlots(
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+
+    preview_input, missing_slot = _cta_preview_input_from_slots(
+        slots,
+        cta_context={
+            "goodsNo": "G000000317735",
+            "ordQty": 4,
+            "tireSize": "205/65R15",
+            "followupMode": "logistics_earliest_install_date",
+            "stock_check_mode": "logistics_only",
+            "currentStoreContext": {
+                "shopId": "F00123",
+                "shopName": "티스테이션 모란점",
+            },
+        },
+    )
+
+    assert missing_slot is None
+    assert preview_input == {
+        "goods_no": "G000000317735",
+        "ord_qty": 4,
+        "include_price": True,
+        "store_nm": "티스테이션 모란점",
+        "stock_check_mode": "logistics_only",
+    }
+
+
+def test_schedule_gate_allows_logistics_earliest_install_followup_instead_of_order_check() -> None:
+    decision = schedule_tool_gate.decide_schedule_tool_gate(
+        user_text="가장 빠른 예약일 확인",
+        tool_args={
+            "shop_id": "F00123",
+            "mode": "logistics_only",
+            "goods_no": "G000000317735",
+            "ord_qty": 4,
+        },
+        recent_context="물류 재고 기준으로 2026년 6월 26일부터 장착 예약이 가능할 수 있어요.",
+    )
+
+    assert decision.allow is True
+    assert decision.action == "allow"
+    assert "Logistics stock follow-up" in decision.reason
 
 
 def test_pure_inventory_stock_event_without_logistics_prompts_other_store_search() -> None:

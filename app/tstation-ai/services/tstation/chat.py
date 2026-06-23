@@ -5044,9 +5044,25 @@ def _cta_preview_input_from_slots(
         preview_input["region_code"] = slots.region
     elif getattr(slots, "shop_name", None):
         preview_input["store_nm"] = slots.shop_name
+    elif store_context.get("shopName"):
+        preview_input["store_nm"] = str(store_context["shopName"])
+    if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
+        preview_input["stock_check_mode"] = "logistics_only"
     if getattr(slots, "requested_cal_day", None):
         preview_input["requested_cal_day"] = slots.requested_cal_day
     return preview_input, None
+
+
+def _is_logistics_earliest_install_date_followup(
+    user_text: str,
+    cta_context: Mapping[str, Any] | None,
+) -> bool:
+    context = cta_context if isinstance(cta_context, Mapping) else {}
+    if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
+        return True
+    if not context.get("logisticsStockAvailable"):
+        return False
+    return bool(re.search(r"가장\s*빠른\s*(?:예약일|장착일|날짜)|예약일\s*확인|장착일\s*확인", user_text or ""))
 
 
 def _preview_today_shop_ids(tool_result: dict[str, Any]) -> set[str]:
@@ -8574,12 +8590,16 @@ def _build_pure_inventory_stock_event(
         if install_date:
             response = f"{base} 다만 물류 재고 기준으로 {install_date}부터 장착 예약이 가능할 수 있어요."
         else:
-            response = f"{base} 다만 물류 재고 기준 예약 가능 여부는 추가 확인할 수 있어요."
+            response = (
+                f"{base} 물류 재고는 확인되지만 현재 예약 가능일은 확정되지 않았어요. "
+                "다른 매장이나 다른 상품 조건으로 확인해드릴게요."
+            )
         quick_replies = [
-            {"label": "가장 빠른 예약일 확인", "domain": "TRANSACTION"},
             {"label": "다른 매장 오늘장착 확인", "domain": "TRANSACTION"},
             {"label": "다른 상품 추천", "domain": "DISCOVERY"},
         ]
+        if install_date:
+            quick_replies.insert(0, {"label": "가장 빠른 예약일 확인", "domain": "TRANSACTION"})
         response_shape_key = "logistics_stock_available"
     else:
         response = f"{base} 물류 재고도 확인되지 않아요. 다른 매장 오늘장착 재고를 검색해볼까요?"
@@ -8606,6 +8626,14 @@ def _build_pure_inventory_stock_event(
         "ordQty": ord_qty,
         "tireSize": tire_size,
         "intentKey": "today_install",
+        "pendingIntent": "stock",
+        "goalType": "store_with_stock",
+        "previousStockResult": "store_inventory_unavailable",
+        "followupMode": "logistics_earliest_install_date",
+        "stock_check_mode": "logistics_only",
+        "logisticsStockAvailable": has_logistics,
+        "reservationSaleAvailable": reservation_sale,
+        "rsvInstallDate": logistics.get("rsv_install_date") or "",
         "currentStoreContext": current_store_context,
     }
     if goods_no:
@@ -8614,7 +8642,20 @@ def _build_pure_inventory_stock_event(
         metadata["currentStoreContext"] = current_store_context
         metadata["ctaContext"] = cta_context
         for reply in quick_replies:
-            if isinstance(reply, dict) and str(reply.get("actionId") or "") == "search_other_store":
+            if not isinstance(reply, dict):
+                continue
+            if str(reply.get("label") or "") == "가장 빠른 예약일 확인":
+                reply["actionId"] = "logistics_earliest_install_date"
+                reply["intentKey"] = "today_install"
+                reply["metadata"] = cta_context
+            if str(reply.get("actionId") or "") == "search_other_store":
+                reply["metadata"] = cta_context
+    else:
+        metadata["ctaContext"] = cta_context
+        for reply in quick_replies:
+            if isinstance(reply, dict) and str(reply.get("label") or "") == "가장 빠른 예약일 확인":
+                reply["actionId"] = "logistics_earliest_install_date"
+                reply["intentKey"] = "today_install"
                 reply["metadata"] = cta_context
     return {
         "type": "data",
@@ -18807,6 +18848,113 @@ class TStationChatServiceV2:
                         mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                         mapped_event["assistant_response_source"] = "code_other_store_stock_search"
 
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_cta_tool_response(preview_input, preview_result, mapped_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                return TStationChatResponse(
+                    content=str((mapped_event.get("data") or {}).get("assistantResponse") or "")
+                )
+            elif chip_action_id == "logistics_earliest_install_date" or (
+                not chip_action_id and _is_logistics_earliest_install_date_followup(last_user_text, cta_context)
+            ):
+                enriched_cta_context = dict(cta_context)
+                merged_slots = _apply_cta_context_to_slots(merged_slots, enriched_cta_context)
+                preview_input, missing_slot = _cta_preview_input_from_slots(
+                    merged_slots,
+                    cta_context=enriched_cta_context,
+                )
+                if missing_slot is not None:
+                    missing_event = _cta_missing_slot_event(missing_slot)
+                    guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(missing_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=guard_text)
+
+                assert preview_input is not None
+                preview_input["stock_check_mode"] = "logistics_only"
+
+                from services.tstation.agents.c_transaction_agent.tools import (
+                    transaction_store_preview_tool as _transaction_store_preview_tool,
+                )
+                from services.tstation.template_mapper import (
+                    current_goal_type as _cta_current_goal_type,
+                    current_pending_intent as _cta_current_pending_intent,
+                    current_user_text as _cta_current_user_text,
+                    try_build_template as _try_build_template,
+                )
+
+                _cta_current_user_text.set(last_user_text)
+                _cta_current_pending_intent.set("stock")
+                _cta_current_goal_type.set("store_with_stock")
+                try:
+                    raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
+                    preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
+                    if not isinstance(preview_result, dict):
+                        preview_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+                except Exception as exc:
+                    logger.exception("[CTA_ACTION] logistics earliest install preview failed input=%s", preview_input)
+                    preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+
+                mapped_event = _try_build_template(
+                    [{"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result}],
+                    "물류 재고 기준으로 가장 빠른 장착 가능 일정을 확인했어요.",
+                )
+                if mapped_event is None:
+                    install_date = str(enriched_cta_context.get("rsvInstallDate") or "").strip()
+                    install_date_text = _format_yyyymmdd_korean(install_date) if install_date else ""
+                    response = (
+                        f"물류 재고 기준으로는 {install_date_text} 이후 장착 가능 여부를 확인할 수 있어요. "
+                        "정확한 예약 시간은 매장과 날짜를 확정한 뒤 확인해 주세요."
+                        if install_date_text
+                        else "물류 재고는 확인되지만 현재 가장 빠른 예약일은 확정되지 않았어요. 다른 매장이나 상품으로 확인해드릴게요."
+                    )
+                    mapped_event = {
+                        "type": "data",
+                        "template": "quickReply",
+                        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                        "assistant_response_source": "code_logistics_earliest_install_date",
+                        "data": {
+                            "assistantResponse": response,
+                            "quickReplies": [
+                                {"label": "다른 매장 오늘장착 확인", "domain": "TRANSACTION"},
+                                {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                                {"label": "다른 상품 추천", "domain": "DISCOVERY"},
+                            ],
+                            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                            "metadata": {
+                                "response_shape_key": "logistics_earliest_install_date",
+                                "stock_check_mode": "logistics_only",
+                                "ctaContext": enriched_cta_context,
+                            },
+                        },
+                    }
+                else:
+                    mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                    mapped_event["assistant_response_source"] = "code_logistics_earliest_install_date"
+
+                merged_slots.pending_intent = "stock"
+                merged_slots.goal_type = "store_with_stock"
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
                 if request.stream:
                     return StreamingResponse(

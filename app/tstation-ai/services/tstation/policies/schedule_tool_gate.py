@@ -77,6 +77,16 @@ def deterministic_schedule_gate_decision(
     if not text:
         return None
 
+    if isinstance(tool_args, dict):
+        mode = str(tool_args.get("mode") or tool_args.get("stock_check_mode") or "").strip().lower()
+        followup_mode = str(tool_args.get("followupMode") or tool_args.get("followup_mode") or "").strip()
+        if mode == "logistics_only" or followup_mode == "logistics_earliest_install_date":
+            return ScheduleToolGateDecision(
+                allow=True,
+                action="allow",
+                reason="Logistics stock follow-up checks pre-order install availability, not existing order status.",
+            )
+
     if (
         isinstance(tool_args, dict)
         and tool_args.get("shop_id")
