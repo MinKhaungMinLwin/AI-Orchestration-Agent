@@ -490,6 +490,10 @@ def build_discovery_intent_frame(
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
     quantity_options = extract_quantity_options(text)
     discovery_followup_intent = str(slots.get("discovery_followup_intent") or "").strip()
+    recent_product_set_followup_type = str(slots.get("recent_product_set_followup_type") or "").strip()
+    recent_product_set_metric = str(slots.get("recent_product_set_metric") or "").strip()
+    recent_product_set_direction = str(slots.get("recent_product_set_direction") or "").strip()
+    recent_product_set_price_basis = str(slots.get("recent_product_set_price_basis") or "").strip()
     comparison_followup_intent = str(slots.get("comparison_followup_intent") or "").strip()
     comparison_metric = str(slots.get("comparison_metric") or "").strip()
 
@@ -509,6 +513,16 @@ def build_discovery_intent_frame(
         entities["quantity_options"] = quantity_options
     if discovery_followup_intent == "recent_product_set_size_availability":
         entities["discovery_followup_intent"] = discovery_followup_intent
+    if recent_product_set_followup_type == "rank_recent_product_set":
+        entities["recent_product_set_followup_type"] = recent_product_set_followup_type
+    if recent_product_set_metric in {
+        "price", "noise", "wet", "snow", "release", "review", "rating", "grade", "vehicle_type", "mileage", "detail",
+    }:
+        entities["recent_product_set_metric"] = recent_product_set_metric
+    if recent_product_set_direction in {"min", "max", "match", "compare"}:
+        entities["recent_product_set_direction"] = recent_product_set_direction
+    if recent_product_set_price_basis in {"cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"}:
+        entities["recent_product_set_price_basis"] = recent_product_set_price_basis
     if comparison_followup_intent in {
         "continue_previous_compare_metric",
         "new_compare_metric",
@@ -606,6 +620,9 @@ def build_discovery_intent_frame(
     ):
         intent = "product_search"
         sub_intent = "recent_product_set_size_availability"
+    elif recent_product_set_followup_type == "rank_recent_product_set" and recent_product_set_metric:
+        intent = "product_search"
+        sub_intent = "recent_product_set_ranking"
     elif (
         len(products) >= 2
         and comparison_followup_intent == "continue_previous_compare_metric"
@@ -792,6 +809,19 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 "get_products_recommendations_tool",
             ),
             metadata={"response_intent": "recent_product_set_size_availability"},
+        )
+    if frame.sub_intent == "recent_product_set_ranking":
+        return ToolPlan(
+            forbidden_tools=(
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_products_recommendations_tool",
+            ),
+            metadata={
+                "response_intent": "recent_product_set_ranking",
+                "metric": entities.get("recent_product_set_metric"),
+                "direction": entities.get("recent_product_set_direction"),
+            },
         )
     if frame.sub_intent == "external_price_comparison_request":
         product_names = entities.get("product_names") or ()

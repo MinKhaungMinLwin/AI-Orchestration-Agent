@@ -20,6 +20,18 @@ def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     comparison_followup_intent = str(frame.entities.get("comparison_followup_intent") or "")
     if comparison_followup_intent:
         metadata["comparison_followup_intent"] = comparison_followup_intent
+    recent_product_set_followup_type = str(frame.entities.get("recent_product_set_followup_type") or "")
+    if recent_product_set_followup_type:
+        metadata["recent_product_set_followup_type"] = recent_product_set_followup_type
+    recent_product_set_metric = str(frame.entities.get("recent_product_set_metric") or "")
+    if recent_product_set_metric:
+        metadata["recent_product_set_metric"] = recent_product_set_metric
+    recent_product_set_direction = str(frame.entities.get("recent_product_set_direction") or "")
+    if recent_product_set_direction:
+        metadata["recent_product_set_direction"] = recent_product_set_direction
+    recent_product_set_price_basis = str(frame.entities.get("recent_product_set_price_basis") or "")
+    if recent_product_set_price_basis:
+        metadata["recent_product_set_price_basis"] = recent_product_set_price_basis
     oe_replacement_type = str(frame.entities.get("oe_replacement_type") or "")
     if oe_replacement_type:
         metadata["oe_replacement_type"] = oe_replacement_type
@@ -101,6 +113,35 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                 "response_shape_key": "quantity_benefit_comparison_missing_product_or_size",
                 "quantity_options": quantity_options,
             },
+        )
+
+    if frame.sub_intent == "recent_product_set_ranking":
+        metric = str(entities.get("recent_product_set_metric") or "")
+        price_basis = str(entities.get("recent_product_set_price_basis") or "")
+        criterion = {
+            "price": f"{price_basis or 'cheapest_final_prc'} 기준",
+            "noise": "소음 dB/소음 라벨 기준",
+            "wet": "빗길 성능 등급 기준",
+            "snow": "눈길/빙판 성능 지표 기준",
+            "release": "출시월/등록일 기준",
+            "review": "리뷰 수 기준",
+            "rating": "평점 기준",
+            "grade": "상품 등급 기준",
+            "vehicle_type": "차종 필드 기준",
+            "mileage": "마일리지/수명 지표 기준",
+            "detail": "상품 상세 필드 기준",
+        }.get(metric, "선택한 비교 기준")
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=("recent_product_set_ranking_without_tool_context", "ranking_without_criterion"),
+            assistant_guidance=(
+                "최근 상품 목록 tool context만 기준으로 순위를 판단한다. 답변에는 반드시 기준을 명시한다 "
+                f"({criterion}). 사이즈가 없거나 서로 다른 규격이면 대표 규격 기준이며 실제 차량 규격별 가격/성능은 달라질 수 있음을 밝힌다. "
+                "필드가 없으면 단정하지 말고 확인 어렵다고 답한다."
+            ),
+            metadata=_metadata(frame, response_shape_key="recent_product_set_ranking_summary"),
         )
 
     if frame.sub_intent in ("attribute_compare", "latest_compare", "general_compare"):

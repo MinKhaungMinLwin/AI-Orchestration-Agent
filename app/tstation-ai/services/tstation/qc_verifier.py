@@ -126,6 +126,26 @@ _SHOP_ID_FIELDS: frozenset[str] = frozenset({"shop_id", "shopId"})
 # tire_size_1 is the canonical field in source_filter.py; tire_size is a legacy
 # alias still seen in some tool outputs.
 _TIRE_SIZE_FIELDS: frozenset[str] = frozenset({"tire_size_1", "tire_size", "tireSize"})
+_PRODUCT_ROW_TOOLS: frozenset[str] = frozenset({
+    "search_product_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+    "get_product_description_tool",
+})
+_RANKING_PRICE_FIELDS: tuple[str, ...] = ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc")
+_RANKING_METRIC_FIELDS: dict[str, tuple[str, ...]] = {
+    "price": _RANKING_PRICE_FIELDS,
+    "review": ("review_count",),
+    "rating": ("rating_avg", "rate"),
+    "release": ("t_rls_yearmon", "sys_reg_dtime"),
+    "noise": ("label_pndb", "label_pnwave", "t_silence"),
+    "wet": ("wet",),
+    "snow": ("t_snow", "t_ice"),
+    "grade": ("prc_grd_nm",),
+    "vehicle_type": ("car_knd_nm",),
+    "mileage": ("t_life_span", "t_tray_ware"),
+}
+_GRADE_ORDER = {"이코노미": 1, "스탠다드": 2, "프리미엄": 3}
 
 
 def _walk(obj: Any, found: set, fields: frozenset[str], coerce):
@@ -287,6 +307,122 @@ def _claims_inventory_unavailable(draft: str) -> bool:
     return any(pattern.search(normalized) for pattern in _INVENTORY_UNAVAILABLE_PATTERNS)
 
 
+def _source_product_rows(structured_sources: Iterable[tuple[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for tool_name, output in structured_sources:
+        if tool_name not in _PRODUCT_ROW_TOOLS or not isinstance(output, dict):
+            continue
+        data = output.get("data")
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            candidates = data.get("items") or []
+        elif isinstance(data, list):
+            candidates = data
+        else:
+            candidates = [data] if isinstance(data, dict) else []
+        for row in candidates:
+            if isinstance(row, dict) and str(row.get("goods_nm") or row.get("titleProductName") or "").strip():
+                rows.append(row)
+    return rows
+
+
+def _coerce_rank_value(value: Any) -> float | str | None:
+    if isinstance(value, bool) or value in (None, "", [], {}):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        digits = re.sub(r"[^\d.]", "", stripped)
+        if digits:
+            try:
+                return float(digits)
+            except ValueError:
+                pass
+        return stripped
+    return None
+
+
+def _ranking_value(row: dict[str, Any], metric: str, price_basis: str | None = None) -> float | str | None:
+    fields = _RANKING_METRIC_FIELDS.get(metric)
+    if not fields:
+        return None
+    if metric == "price" and price_basis in _RANKING_PRICE_FIELDS:
+        fields = (price_basis, *tuple(field for field in fields if field != price_basis))
+    for field in fields:
+        value = _coerce_rank_value(row.get(field))
+        if value is not None:
+            if metric == "grade" and isinstance(value, str):
+                return float(_GRADE_ORDER.get(value, 0)) if value in _GRADE_ORDER else value
+            return value
+    return None
+
+
+def _best_ranking_rows(
+    rows: list[dict[str, Any]],
+    *,
+    metric: str,
+    direction: str,
+    price_basis: str | None = None,
+) -> list[dict[str, Any]]:
+    scored: list[tuple[float | str, dict[str, Any]]] = []
+    for row in rows:
+        value = _ranking_value(row, metric, price_basis=price_basis)
+        if value is not None:
+            scored.append((value, row))
+    if not scored:
+        return []
+    numeric = [(value, row) for value, row in scored if isinstance(value, float)]
+    if numeric:
+        if metric in {"price", "noise"} or direction == "min":
+            best_value = min(value for value, _row in numeric)
+        else:
+            best_value = max(value for value, _row in numeric)
+        return [row for value, row in numeric if value == best_value]
+    if direction == "match":
+        return [row for _value, row in scored]
+    return []
+
+
+def _row_product_name(row: dict[str, Any]) -> str:
+    return str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+
+
+def _ranking_mismatches(
+    draft: str,
+    structured_sources: Iterable[tuple[str, Any]],
+    *,
+    ranking_metric: str | None,
+    ranking_direction: str | None,
+    ranking_price_basis: str | None,
+) -> list[Mismatch]:
+    metric = str(ranking_metric or "").strip()
+    if metric not in _RANKING_METRIC_FIELDS:
+        return []
+    rows = _source_product_rows(structured_sources)
+    if len(rows) < 2:
+        return []
+    direction = str(ranking_direction or "").strip() or ("min" if metric in {"price", "noise"} else "max")
+    best_rows = _best_ranking_rows(rows, metric=metric, direction=direction, price_basis=ranking_price_basis)
+    if not best_rows:
+        return []
+    expected_names = {_row_product_name(row) for row in best_rows if _row_product_name(row)}
+    mentioned_names = {
+        name
+        for row in rows
+        if (name := _row_product_name(row)) and name.casefold() in draft.casefold()
+    }
+    if not mentioned_names or mentioned_names & expected_names:
+        return []
+    return [
+        Mismatch(
+            field="recent_product_set_ranking",
+            value=f"{metric}:expected={','.join(sorted(expected_names))};mentioned={','.join(sorted(mentioned_names))}",
+        )
+    ]
+
+
 # --------------------------------------------------------------------------- #
 #  Arithmetic explanation
 # --------------------------------------------------------------------------- #
@@ -325,6 +461,10 @@ def _is_price_explainable(value: int, source_prices: set[int]) -> bool:
 def verify_draft(
     draft: str,
     structured_sources: Iterable[tuple[str, Any]],
+    *,
+    ranking_metric: str | None = None,
+    ranking_direction: str | None = None,
+    ranking_price_basis: str | None = None,
 ) -> list[Mismatch]:
     """Verify factual claims in the draft against the structured tool outputs.
 
@@ -383,6 +523,16 @@ def verify_draft(
 
     if _has_tool_backed_available_inventory(sources) and _claims_inventory_unavailable(draft):
         mismatches.append(Mismatch(field="inventory_availability", value="tool_available_but_draft_unavailable"))
+
+    mismatches.extend(
+        _ranking_mismatches(
+            draft,
+            sources,
+            ranking_metric=ranking_metric,
+            ranking_direction=ranking_direction,
+            ranking_price_basis=ranking_price_basis,
+        )
+    )
 
     return mismatches
 

@@ -404,6 +404,14 @@ class MultiAgentDomain(BaseModel):
                 data["comparison_followup_intent"] = "none"
             if "comparison_metric" not in data:
                 data["comparison_metric"] = "none"
+            if "recent_product_set_followup_type" not in data:
+                data["recent_product_set_followup_type"] = "none"
+            if "recent_product_set_metric" not in data:
+                data["recent_product_set_metric"] = "none"
+            if "recent_product_set_direction" not in data:
+                data["recent_product_set_direction"] = "none"
+            if "recent_product_set_price_basis" not in data:
+                data["recent_product_set_price_basis"] = "none"
             if "requested_product_attribute" not in data:
                 data["requested_product_attribute"] = "none"
             if "policy_intent" not in data:
@@ -537,6 +545,32 @@ class MultiAgentDomain(BaseModel):
             "turn is not a compare or no stable metric was resolved."
         ),
     )
+    recent_product_set_followup_type: Literal["none", "rank_recent_product_set"] = Field(
+        description=(
+            "Use 'rank_recent_product_set' when the user asks to rank or select from the recent product set "
+            "(e.g. cheapest, quietest, best for snow, most reviews, newest, SUV-compatible). Use 'none' otherwise."
+        ),
+    )
+    recent_product_set_metric: Literal[
+        "none",
+        "price",
+        "noise",
+        "wet",
+        "snow",
+        "release",
+        "review",
+        "rating",
+        "grade",
+        "vehicle_type",
+        "mileage",
+        "detail",
+    ] = Field(description="Ranking metric for recent product set follow-ups, or 'none'.")
+    recent_product_set_direction: Literal["none", "min", "max", "match", "compare"] = Field(
+        description="Ranking direction for recent product set follow-ups."
+    )
+    recent_product_set_price_basis: Literal["none", "cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"] = Field(
+        description="Price basis when recent_product_set_metric='price'. Prefer cheapest_final_prc for cheapest."
+    )
     requested_product_attribute: Literal[
         "none",
         "brand",
@@ -667,6 +701,13 @@ _ROUTER_COMPARISON_METRICS = frozenset({
     "car_type",
     "detail",
 })
+_RECENT_PRODUCT_SET_RANKING_TEXT_RE = re.compile(
+    r"(?:이\s*중|이중|중에|목록|추천(?:해준|된)?|보여준|위\s*상품).{0,30}"
+    r"(?:가장|제일|최저|저렴|싼|조용|소음|눈길|빗길|리뷰|평점|최근|신상|출시|suv|차종|가성비|프리미엄)|"
+    r"(?:가장|제일|최저|저렴|싼|조용|소음|눈길|빗길|리뷰|평점|최근|신상|출시|suv|차종|가성비|프리미엄).{0,30}"
+    r"(?:건|거|상품|타이어)",
+    re.IGNORECASE,
+)
 
 
 def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain | None) -> bool:
@@ -860,6 +901,14 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["comparison_followup_intent"] = "none"
             if "comparison_metric" not in data:
                 data["comparison_metric"] = "none"
+            if "recent_product_set_followup_type" not in data:
+                data["recent_product_set_followup_type"] = "none"
+            if "recent_product_set_metric" not in data:
+                data["recent_product_set_metric"] = "none"
+            if "recent_product_set_direction" not in data:
+                data["recent_product_set_direction"] = "none"
+            if "recent_product_set_price_basis" not in data:
+                data["recent_product_set_price_basis"] = "none"
             if "requested_product_attribute" not in data:
                 data["requested_product_attribute"] = "none"
             if "policy_intent" not in data:
@@ -943,6 +992,29 @@ class _SlimMultiAgentDomain(BaseModel):
     ] = Field(
         description="Resolved comparison axis, or 'none'. First-turn classification should usually return 'none'."
     )
+    recent_product_set_followup_type: Literal["none", "rank_recent_product_set"] = Field(
+        description="Recent product-set follow-up type. First-turn classification should usually return 'none'."
+    )
+    recent_product_set_metric: Literal[
+        "none",
+        "price",
+        "noise",
+        "wet",
+        "snow",
+        "release",
+        "review",
+        "rating",
+        "grade",
+        "vehicle_type",
+        "mileage",
+        "detail",
+    ] = Field(description="Ranking metric for recent product-set follow-ups, or 'none'.")
+    recent_product_set_direction: Literal["none", "min", "max", "match", "compare"] = Field(
+        description="Ranking direction for recent product-set follow-ups."
+    )
+    recent_product_set_price_basis: Literal["none", "cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"] = Field(
+        description="Price basis when recent_product_set_metric='price'."
+    )
     requested_product_attribute: Literal[
         "none",
         "brand",
@@ -1018,7 +1090,7 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 17 outputs:
+Produce 21 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
@@ -1067,7 +1139,34 @@ Complaint routing rule:
    - If comparison_followup_intent=continue_previous_compare_metric, keep the prior compare axis unless the current turn explicitly introduces a new one.
    - If the current turn explicitly says 가격/연비/마일리지/소음/차종/등급/출시일, prefer that current-turn metric and set comparison_followup_intent=new_compare_metric.
 
-11. requested_product_attribute — structured requested product detail field for Discovery product-detail turns:
+11. recent_product_set_followup_type — for Discovery follow-ups that rank/select from a recent product list:
+   - "none": default
+   - "rank_recent_product_set": the user refers to the recent product set and asks which one is cheapest, quietest, best for snow/wet, newest, most reviewed, highest-rated, premium, SUV-compatible, best mileage, or generally best.
+   - Examples after product cards/recommendation/search results: "이중에 가장 저렴한건", "제일 조용한 건", "눈길에 제일 좋은 건", "리뷰 많은 건", "출시일 제일 최근인 건", "SUV에 맞는 건", "가성비 좋은 건".
+   - Do NOT use this for "그거 가격 알려줘" or "가격 알려줘" when the user asks a transaction price for an ambiguous item; those remain referred_object_type=product_set and needs_clarification=true.
+
+12. recent_product_set_metric — metric for rank_recent_product_set:
+   - "none", "price", "noise", "wet", "snow", "release", "review", "rating", "grade", "vehicle_type", "mileage", "detail"
+   - Field basis available in tool context:
+     price → cheapest_final_prc, extra_fvr_sale_prc, sale_prc
+     noise → label_pnwave_nm, label_pndb, t_silence
+     wet → wet
+     snow → t_snow, t_ice, season_nm
+     release → t_rls_yearmon, sys_reg_dtime
+     review → review_count
+     rating → rating_avg, rate
+     grade → prc_grd_nm
+     vehicle_type → car_knd_nm
+     mileage → t_life_span, t_tray_ware
+   - If a metric's source fields are absent in recent tool context, the agent must say it is hard to confirm from available data.
+
+13. recent_product_set_direction — "none", "min", "max", "match", or "compare":
+   - price cheapest and noise dB quietest usually use "min"; review/rating/release/grade/mileage usually use "max"; vehicle_type/SUV-compatible uses "match".
+
+14. recent_product_set_price_basis — "none", "cheapest_final_prc", "extra_fvr_sale_prc", or "sale_prc":
+   - For "가장 저렴한/최저가/가성비" use "cheapest_final_prc" when available and make the answer state that basis.
+
+15. requested_product_attribute — structured requested product detail field for Discovery product-detail turns:
    - "none": default
    - "brand": asks brand/브랜드
    - "manufacturer": asks 제조사/어디꺼/누가 만드는지
@@ -1076,7 +1175,7 @@ Complaint routing rule:
    - When the user asks a product's brand/manufacturer/origin, set requested_product_attribute accordingly even if the turn still needs product search/resolve first.
    - Do NOT use requested_product_attribute for brand-filter shopping requests such as "브리지스톤 타이어 보여줘". That is a product search, so keep requested_product_attribute="none".
 
-12. policy_intent — structured non-transaction policy intent:
+16. policy_intent — structured non-transaction policy intent:
    - "none": default
    - "shipping_fee_policy": 제주/서귀포/도서산간 배송비/추가 비용 정책
    - "online_store_price_policy": 온라인 vs 매장 가격/구매 방식/주문 방식 정책
@@ -1085,7 +1184,7 @@ Complaint routing rule:
    - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
    - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
 
-13. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
+17. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
@@ -1388,6 +1487,10 @@ EXAMPLES (tricky cases):
 - [After previous size continuation for 245/45R18] "키너지 ST AS" → DISCOVERY, discovery_followup_intent=none, agent_prompt_profile=discovery_search, user_behavior="selecting product within the confirmed 245/45R18 recommendation context"
 - [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
+- [After showing multiple products] "이중에 가장 저렴한건?" → DISCOVERY, recent_product_set_followup_type=rank_recent_product_set, recent_product_set_metric=price, recent_product_set_direction=min, recent_product_set_price_basis=cheapest_final_prc
+- [After showing multiple products] "제일 조용한 건?" → DISCOVERY, recent_product_set_followup_type=rank_recent_product_set, recent_product_set_metric=noise, recent_product_set_direction=min
+- [After showing multiple products] "리뷰 많은 건?" → DISCOVERY, recent_product_set_followup_type=rank_recent_product_set, recent_product_set_metric=review, recent_product_set_direction=max
+- [After showing multiple products] "SUV에 맞는 건?" → DISCOVERY, recent_product_set_followup_type=rank_recent_product_set, recent_product_set_metric=vehicle_type, recent_product_set_direction=match
 - "2454518 사이즈 OE 타이어 있음?" → DISCOVERY, discovery_followup_intent=none, referred_object_type=none, needs_clarification=false
 - "OE 타이어 뭐 있어? 다 RE 타이어야?" → DISCOVERY, discovery_followup_intent=none, referred_object_type=none, needs_clarification=false
 - [After showing multiple recommendation/search products] "그거 가격 알려줘" → DISCOVERY, referred_object_status=ambiguous, referred_object_type=product_set, needs_clarification=true (ask which product)
@@ -1420,7 +1523,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, comparison_followup_intent, comparison_metric, requested_product_attribute, policy_intent, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -1448,6 +1551,14 @@ comparison_followup_intent:
 - generic_compare: broad compare with no fixed metric
 comparison_metric:
 - none, release, price, grade, mileage, noise, fuel_efficiency, wet, car_type, detail
+recent_product_set_followup_type:
+- none, rank_recent_product_set
+recent_product_set_metric:
+- none, price, noise, wet, snow, release, review, rating, grade, vehicle_type, mileage, detail
+recent_product_set_direction:
+- none, min, max, match, compare
+recent_product_set_price_basis:
+- none, cheapest_final_prc, extra_fvr_sale_prc, sale_prc
 requested_product_attribute:
 - none, brand, manufacturer, origin, release, noise, fuel_efficiency, wet, price_grade, season, car_type, price, mileage, load, speed
 referred_object_status:
@@ -2066,6 +2177,10 @@ class StreamingMultiAgentCoordinator:
                     carried_discovery_objective=raw_result.carried_discovery_objective,
                     comparison_followup_intent=raw_result.comparison_followup_intent,
                     comparison_metric=raw_result.comparison_metric,
+                    recent_product_set_followup_type=raw_result.recent_product_set_followup_type,
+                    recent_product_set_metric=raw_result.recent_product_set_metric,
+                    recent_product_set_direction=raw_result.recent_product_set_direction,
+                    recent_product_set_price_basis=raw_result.recent_product_set_price_basis,
                     requested_product_attribute=raw_result.requested_product_attribute,
                     referred_object_status=raw_result.referred_object_status,
                     referred_object_type=raw_result.referred_object_type,
@@ -2161,6 +2276,13 @@ class StreamingMultiAgentCoordinator:
             context_parts.append(f"- User behavior: {routing.user_behavior}")
         if routing.flow:
             context_parts.append(f"- Flow so far: {routing.flow}")
+        if getattr(routing, "recent_product_set_followup_type", "none") == "rank_recent_product_set":
+            context_parts.append(
+                "- Recent product-set ranking: "
+                f"metric={getattr(routing, 'recent_product_set_metric', 'none')}, "
+                f"direction={getattr(routing, 'recent_product_set_direction', 'none')}, "
+                f"price_basis={getattr(routing, 'recent_product_set_price_basis', 'none')}"
+            )
 
         if not context_parts:
             return messages
@@ -12711,6 +12833,26 @@ def _build_discovery_policy_context(
         routing_followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
         if routing_followup_intent == "recent_product_set_size_availability":
             known_slots["discovery_followup_intent"] = routing_followup_intent
+        routing_recent_product_set_followup_type = str(
+            getattr(routing_result, "recent_product_set_followup_type", "") or ""
+        ).strip()
+        if routing_recent_product_set_followup_type == "rank_recent_product_set":
+            known_slots["recent_product_set_followup_type"] = routing_recent_product_set_followup_type
+        routing_recent_product_set_metric = str(getattr(routing_result, "recent_product_set_metric", "") or "").strip()
+        if routing_recent_product_set_metric in {
+            "price", "noise", "wet", "snow", "release", "review", "rating", "grade", "vehicle_type", "mileage", "detail",
+        }:
+            known_slots["recent_product_set_metric"] = routing_recent_product_set_metric
+        routing_recent_product_set_direction = str(
+            getattr(routing_result, "recent_product_set_direction", "") or ""
+        ).strip()
+        if routing_recent_product_set_direction in {"min", "max", "match", "compare"}:
+            known_slots["recent_product_set_direction"] = routing_recent_product_set_direction
+        routing_recent_product_set_price_basis = str(
+            getattr(routing_result, "recent_product_set_price_basis", "") or ""
+        ).strip()
+        if routing_recent_product_set_price_basis in {"cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"}:
+            known_slots["recent_product_set_price_basis"] = routing_recent_product_set_price_basis
         routing_comparison_followup_intent = str(
             getattr(routing_result, "comparison_followup_intent", "") or ""
         ).strip()
@@ -13765,6 +13907,58 @@ def _qc_factual_mismatch_guard_event(mismatches: list[Any]) -> dict:
     }
 
 
+def _recent_product_set_ranking_metadata(contract: TurnContract | None) -> dict[str, str]:
+    if contract is None:
+        return {}
+    response_decision = contract.response_decision or {}
+    metadata = response_decision.get("metadata") if isinstance(response_decision, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    known_slots = contract.known_slots or {}
+    followup_type = str(
+        metadata.get("recent_product_set_followup_type")
+        or known_slots.get("recent_product_set_followup_type")
+        or ""
+    ).strip()
+    response_shape_key = str(metadata.get("response_shape_key") or "").strip()
+    if followup_type != "rank_recent_product_set" and response_shape_key != "recent_product_set_ranking_summary":
+        return {}
+    metric = str(
+        metadata.get("recent_product_set_metric")
+        or known_slots.get("recent_product_set_metric")
+        or ""
+    ).strip()
+    if metric not in {
+        "price", "noise", "wet", "snow", "release", "review", "rating", "grade", "vehicle_type", "mileage", "detail",
+    }:
+        return {}
+    direction = str(
+        metadata.get("recent_product_set_direction")
+        or known_slots.get("recent_product_set_direction")
+        or ""
+    ).strip()
+    price_basis = str(
+        metadata.get("recent_product_set_price_basis")
+        or known_slots.get("recent_product_set_price_basis")
+        or ""
+    ).strip()
+    return {"metric": metric, "direction": direction, "price_basis": price_basis}
+
+
+def _prev_tool_data_structured_sources(prev_tool_data: list[dict] | None) -> list[tuple[str, dict]]:
+    sources: list[tuple[str, dict]] = []
+    for entry in prev_tool_data or []:
+        if not isinstance(entry, dict):
+            continue
+        tool_name = str(entry.get("tool") or "").strip()
+        data = entry.get("data")
+        if tool_name and isinstance(data, dict):
+            sources.append((tool_name, data))
+        elif tool_name and isinstance(data, list):
+            sources.append((tool_name, {"data": data}))
+    return sources
+
+
 def _qc_inventory_availability_recovery_event(
     tool_data_list: list[dict],
     mismatches: list[Any],
@@ -14082,7 +14276,7 @@ class TStationChatServiceV2:
         return messages
 
     @staticmethod
-    def _format_tool_context(tool_data: list[dict]) -> str:
+    def _format_tool_context(tool_data: list[dict], *, max_items: int = 3, max_rows: int = 5) -> str:
         """Format accumulated structured tool results as a system prompt for conversation context.
 
         Results are ordered most-recent-first. Each entry shows the tool label,
@@ -14187,7 +14381,7 @@ class TStationChatServiceV2:
                 parts.append(f"{field_name}: {rendered}")
             return " | ".join(parts) if parts else None
 
-        for idx, item in enumerate(tool_data[:3]):
+        for idx, item in enumerate(tool_data[:max_items]):
             tool_name = item.get("tool", "")
             label = tool_labels.get(tool_name, tool_name)
             tool_input = item.get("input", {})
@@ -14202,7 +14396,7 @@ class TStationChatServiceV2:
             lines.append(header)
 
             if isinstance(data, list):
-                for i, row in enumerate(data[:5], 1):
+                for i, row in enumerate(data[:max_rows], 1):
                     if isinstance(row, dict):
                         if row.get("_truncated"):
                             lines.append(f"  ... {row['_truncated']}")
@@ -14567,19 +14761,25 @@ class TStationChatServiceV2:
             return None
 
         slot_values: dict[str, Any] = {}
-        goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+        goods_no = str(
+            metadata.get("goodsId")
+            or metadata.get("goodsNo")
+            or metadata.get("goods_no")
+            or metadata.get("goods_id")
+            or ""
+        ).strip()
         if goods_no:
             slot_values["goods_no"] = goods_no
 
-        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or "").strip()
+        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or metadata.get("storeId") or "").strip()
         if shop_id:
             slot_values["shop_id"] = shop_id
 
-        store_name = str(order_info.get("storeName") or metadata.get("shopName") or "").strip()
+        store_name = str(order_info.get("storeName") or metadata.get("shopName") or metadata.get("storeName") or "").strip()
         if store_name:
             slot_values["shop_name"] = store_name
 
-        raw_qty = order_info.get("quantity") or metadata.get("quantity") or metadata.get("ordQty")
+        raw_qty = order_info.get("quantity") or metadata.get("quantity") or metadata.get("ordQty") or metadata.get("ord_qty")
         if raw_qty is not None:
             try:
                 qty = int(raw_qty)
@@ -14588,7 +14788,7 @@ class TStationChatServiceV2:
             except (TypeError, ValueError):
                 pass
 
-        raw_amount = order_info.get("paymentAmount") or metadata.get("paymentAmount")
+        raw_amount = order_info.get("paymentAmount") or metadata.get("paymentAmount") or metadata.get("payment_amount")
         if raw_amount is not None:
             try:
                 amount = int(raw_amount)
@@ -14602,11 +14802,15 @@ class TStationChatServiceV2:
         if tire_size:
             slot_values["tire_size"] = tire_size
 
-        booking_datetime = str(order_info.get("bookingDateTime") or "").strip()
+        booking_datetime = str(order_info.get("bookingDateTime") or metadata.get("bookingDateTime") or "").strip()
         requested_cal_day = _cal_day_from_korean_date_text(booking_datetime)
+        requested_cal_day = requested_cal_day or str(
+            metadata.get("requestedCalDay") or metadata.get("requested_cal_day") or metadata.get("rsvDate") or ""
+        ).strip()
         if requested_cal_day:
             slot_values["requested_cal_day"] = requested_cal_day
         rsv_hour = _reservation_hour_from_text(booking_datetime)
+        rsv_hour = rsv_hour or str(metadata.get("rsvHour") or metadata.get("rsv_hour") or "").strip()
         if rsv_hour:
             slot_values["rsv_hour"] = rsv_hour
 
@@ -16493,15 +16697,22 @@ class TStationChatServiceV2:
                 if suppress_inherited_recommendation_context:
                     logger.debug("[TOOL_CTX] Skipped recent tool context for product attribute lookup turn")
                 else:
+                    ranking_followup_context = bool(_RECENT_PRODUCT_SET_RANKING_TEXT_RE.search(last_user_text or ""))
                     prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(
                         prev_tool_data,
                         merged_slots,
+                        max_items=5 if ranking_followup_context else 3,
                         intent_group=intent_group,
                     )
-                    tool_context = TStationChatServiceV2._format_tool_context(prompt_tool_data)
+                    tool_context = TStationChatServiceV2._format_tool_context(
+                        prompt_tool_data,
+                        max_items=5 if ranking_followup_context else 3,
+                        max_rows=20 if ranking_followup_context else 5,
+                    )
                     # Cap tool context to avoid consuming too much of the context window
-                    if len(tool_context) > 4000:
-                        tool_context = tool_context[:4000] + "\n... (일부 생략)"
+                    context_limit = 12000 if ranking_followup_context else 4000
+                    if len(tool_context) > context_limit:
+                        tool_context = tool_context[:context_limit] + "\n... (일부 생략)"
                     logger.debug(
                         "[TOOL_CTX] Loaded %d tool results, injected %d (%d chars)",
                         len(prev_tool_data),
@@ -16772,6 +16983,15 @@ class TStationChatServiceV2:
                     ),
                     "comparison_metric": (
                         getattr(routing_result, "comparison_metric", None) if routing_result else None
+                    ),
+                    "recent_product_set_followup_type": (
+                        getattr(routing_result, "recent_product_set_followup_type", None) if routing_result else None
+                    ),
+                    "recent_product_set_metric": (
+                        getattr(routing_result, "recent_product_set_metric", None) if routing_result else None
+                    ),
+                    "recent_product_set_direction": (
+                        getattr(routing_result, "recent_product_set_direction", None) if routing_result else None
                     ),
                     "agent_prompt_profile": (
                         routing_result.agent_prompt_profile.value
@@ -20976,13 +21196,39 @@ class TStationChatServiceV2:
             if not _is_preorder_confirmation_reply(user_query, latest_preorder_tmpl):
                 return None
 
+            preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl) or {}
+            if not preorder_slot_values:
+                return None
             slot_values = (
                 initial_slots.model_dump()
                 if initial_slots is not None and hasattr(initial_slots, "model_dump")
                 else dict(initial_slots or {})
             )
+            slot_values.update({key: value for key, value in preorder_slot_values.items() if value not in (None, "")})
+            slot_values["pending_intent"] = "order"
+            slot_values["goal_type"] = "place_order"
             frame = build_transaction_intent_frame(user_query, known_slots=slot_values)
             if frame.intent != "quick_order_execute":
+                logger.info(
+                    "[QUICK_ORDER_EXECUTE] forcing ready preOrder confirmation despite frame intent=%s missing=%s",
+                    frame.intent,
+                    frame.missing_slots,
+                )
+                frame = IntentFrame(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="quick_order_execute",
+                    sub_intent="confirm",
+                    known_slots={**dict(frame.known_slots), **slot_values},
+                    missing_slots=(),
+                )
+
+            required_fields = ("goods_no", "shop_id", "ord_qty", "requested_cal_day", "rsv_hour")
+            missing_required = tuple(field for field in required_fields if not frame.known_slots.get(field))
+            if missing_required:
+                logger.info(
+                    "[QUICK_ORDER_EXECUTE] ready preOrder confirmation missing required slots=%s",
+                    missing_required,
+                )
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import quick_order_tool as _quick_order_tool
@@ -21000,7 +21246,7 @@ class TStationChatServiceV2:
                 ord_qty = int(frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity") or 0)
             except (TypeError, ValueError):
                 ord_qty = 0
-            if frame.missing_slots or not (goods_no and shop_id and requested_cal_day and rsv_hour and ord_qty > 0):
+            if not (goods_no and shop_id and requested_cal_day and rsv_hour and ord_qty > 0):
                 return None
 
             tool_input: dict[str, Any] = {
@@ -23070,8 +23316,19 @@ class TStationChatServiceV2:
                 )
                 hard_violations = hard_contract_violations(contract_violations)
                 policy_warnings = warning_contract_violations(contract_violations)
+                ranking_qc_metadata = _recent_product_set_ranking_metadata(turn_contract)
+                ranking_qc_sources = (
+                    [*_prev_tool_data_structured_sources(prev_tool_data), *structured_sources]
+                    if ranking_qc_metadata
+                    else structured_sources
+                )
+                ranking_qc_enabled = bool(ranking_qc_metadata and ranking_qc_sources)
 
-                if (called_tool_names and qc_skip_reason is None) or (hard_violations and not _parallel_qc):
+                if (
+                    (called_tool_names and qc_skip_reason is None)
+                    or ranking_qc_enabled
+                    or (hard_violations and not _parallel_qc)
+                ):
                     qc_executed = True
                     try:
                         with _trace_span(
@@ -23081,13 +23338,20 @@ class TStationChatServiceV2:
                             input={
                                 "user_query": user_query,
                                 "draft": draft_for_qc,
-                                "source_tool_count": len(structured_sources),
+                                "source_tool_count": len(ranking_qc_sources),
+                                "ranking_qc": ranking_qc_metadata,
                                 "turn_contract": turn_contract.to_dict() if turn_contract else None,
                             },
                         ) as _qc_span:
                             mismatches = (
-                                qc_verifier.verify_draft(draft_for_qc, structured_sources)
-                                if called_tool_names and qc_skip_reason is None
+                                qc_verifier.verify_draft(
+                                    draft_for_qc,
+                                    ranking_qc_sources,
+                                    ranking_metric=ranking_qc_metadata.get("metric"),
+                                    ranking_direction=ranking_qc_metadata.get("direction"),
+                                    ranking_price_basis=ranking_qc_metadata.get("price_basis"),
+                                )
+                                if (called_tool_names and qc_skip_reason is None) or ranking_qc_enabled
                                 else []
                             )
                             if (
@@ -23109,7 +23373,10 @@ class TStationChatServiceV2:
                                     repair_attempt_count += 1
                                     repaired_mismatches = qc_verifier.verify_draft(
                                         repaired_response,
-                                        structured_sources,
+                                        ranking_qc_sources,
+                                        ranking_metric=ranking_qc_metadata.get("metric"),
+                                        ranking_direction=ranking_qc_metadata.get("direction"),
+                                        ranking_price_basis=ranking_qc_metadata.get("price_basis"),
                                     )
                                     if not repaired_mismatches:
                                         mismatches = []

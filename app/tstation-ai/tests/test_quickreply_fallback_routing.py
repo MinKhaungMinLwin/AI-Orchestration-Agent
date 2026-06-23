@@ -5476,6 +5476,27 @@ def test_tool_context_keeps_price_fields_without_mid_string_truncation() -> None
     assert "cheapest_final_prc: 12230 |" not in context
 
 
+def test_tool_context_can_expand_recent_product_set_for_ranking_followup() -> None:
+    rows = [
+        {
+            "goods_no": f"G00000031028{i}",
+            "goods_nm": f"상품{i}",
+            "tire_size_1": "205/55R16",
+            "cheapest_final_prc": 100000 + i,
+            "label_pndb": 70 + i,
+        }
+        for i in range(1, 8)
+    ]
+
+    context = TStationChatServiceV2._format_tool_context(
+        [{"tool": "search_product_tool", "data": rows}],
+        max_rows=20,
+    )
+
+    assert "상품7" in context
+    assert "cheapest_final_prc: 100007" in context
+
+
 def test_existing_reservation_management_filters_stale_store_schedule_context() -> None:
     selected = TStationChatServiceV2._select_tool_context_for_prompt(
         [
@@ -7739,6 +7760,40 @@ def test_discovery_policy_context_carries_recent_product_set_followup_from_route
     assert response_decision is not None
     assert response_decision.template.value == "quickReply"
     assert response_decision.metadata["response_shape_key"] == "product_search_summary"
+
+
+def test_discovery_policy_context_carries_recent_product_set_ranking_from_router() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:recent_product_set_ranking"],
+        user_behavior="ranking the recently shown product set by cheapest final price",
+        flow="product list shown → user asks cheapest among them",
+        claim_check_type="none",
+        complaint_scope="none",
+        recent_product_set_followup_type="rank_recent_product_set",
+        recent_product_set_metric="price",
+        recent_product_set_direction="min",
+        recent_product_set_price_basis="cheapest_final_prc",
+        agent_prompt_profile="full",
+    )
+
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="이중에 가장 저렴한건?",
+        context_text="상품 세 개 보여줌\n이중에 가장 저렴한건?",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert tool_patch == {}
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] == "recent_product_set_ranking_summary"
+    assert response_decision.metadata["recent_product_set_followup_type"] == "rank_recent_product_set"
+    assert response_decision.metadata["recent_product_set_metric"] == "price"
+    assert response_decision.metadata["recent_product_set_direction"] == "min"
+    assert response_decision.metadata["recent_product_set_price_basis"] == "cheapest_final_prc"
+    assert "기준" in response_decision.assistant_guidance
 
 
 def test_discovery_policy_context_carries_safe_service_objective_into_bare_product_name() -> None:
@@ -11676,6 +11731,64 @@ def test_qc_flags_unavailable_draft_when_preview_tool_has_candidates() -> None:
     assert [m.as_dict() for m in mismatches] == [
         {"field": "inventory_availability", "value": "tool_available_but_draft_unavailable"},
     ]
+
+
+def test_qc_flags_recent_product_set_ranking_when_selected_product_is_not_metric_best() -> None:
+    source = [
+        (
+            "search_product_tool",
+            {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {"goods_nm": "키너지 EX", "cheapest_final_prc": 110000, "sale_prc": 140000},
+                        {"goods_nm": "벤투스 에어S", "cheapest_final_prc": 90000, "sale_prc": 150000},
+                    ]
+                },
+            },
+        )
+    ]
+
+    mismatches = qc_verifier.verify_draft(
+        "쿠폰 적용 최저가 기준으로는 키너지 EX가 가장 저렴해요.",
+        source,
+        ranking_metric="price",
+        ranking_direction="min",
+        ranking_price_basis="cheapest_final_prc",
+    )
+
+    assert [m.as_dict() for m in mismatches] == [
+        {
+            "field": "recent_product_set_ranking",
+            "value": "price:expected=벤투스 에어S;mentioned=키너지 EX",
+        }
+    ]
+
+
+def test_qc_passes_recent_product_set_ranking_when_selected_product_matches_metric_best() -> None:
+    source = [
+        (
+            "search_product_tool",
+            {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {"goods_nm": "키너지 EX", "review_count": 4},
+                        {"goods_nm": "벤투스 에어S", "review_count": 12},
+                    ]
+                },
+            },
+        )
+    ]
+
+    mismatches = qc_verifier.verify_draft(
+        "리뷰 수 기준으로는 벤투스 에어S가 가장 많아요. 리뷰 수는 12건입니다.",
+        source,
+        ranking_metric="review",
+        ranking_direction="max",
+    )
+
+    assert mismatches == []
 
 
 def test_inventory_availability_mismatch_is_not_repaired_by_line_deletion() -> None:
