@@ -2571,7 +2571,66 @@ def _technology_unsized_policy_response(tool_data_list: list[dict]) -> str:
     return ""
 
 
+def _safe_service_product_object_policy_response(tool_data_list: list[dict]) -> str:
+    for entry in reversed(_find_entries(tool_data_list, "search_product_tool")):
+        raw = _unwrap(entry)
+        rows = raw.get("items") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+        if not isinstance(rows, list):
+            continue
+        product_rows = [row for row in rows if isinstance(row, dict)]
+        if not product_rows:
+            continue
+
+        names: list[str] = []
+        sizes: list[str] = []
+        eligible_rows: list[dict] = []
+        rows_with_safe_service_field = 0
+        for row in product_rows:
+            name = _get_str(row, "goods_nm", "title")
+            if name and name not in names:
+                names.append(name)
+            size = _get_str(row, "tire_size_1", "tire_size_2", "tireSize")
+            if size and size not in sizes:
+                sizes.append(size)
+            if "t_rlx_isn_yn" in row:
+                rows_with_safe_service_field += 1
+                if _get_str(row, "t_rlx_isn_yn").upper() in {"Y", "O", "TRUE", "1"}:
+                    eligible_rows.append(row)
+
+        scope = ", ".join(names[:2]) if names else _get_str(_tool_args(entry), "keyword") or "해당 상품"
+        size_text = ", ".join(sizes[:6])
+        if eligible_rows:
+            response = (
+                f"{scope}는 검색 결과의 안심서비스 필드(`t_rlx_isn_yn`) 기준으로 "
+                "안심서비스 대상 가능성이 확인돼요. "
+                "최종 적용 여부는 선택한 규격과 주문/장착 단계에서 확정돼요."
+            )
+            if size_text:
+                response += f"\n확인된 규격은 {size_text} 등이에요. 장착할 규격을 알려주시면 이어서 확인해드릴게요."
+            return response
+        if rows_with_safe_service_field:
+            response = (
+                f"{scope} 검색 결과에서는 안심서비스 대상 필드가 확인된 규격을 찾지 못했어요. "
+                "다른 규격이나 상품으로 다시 확인해드릴 수 있어요."
+            )
+            if size_text:
+                response += f"\n현재 검색된 규격은 {size_text} 등이에요."
+            return response
+        response = (
+            f"{scope} 상품은 찾았지만, 현재 검색 결과만으로는 안심서비스 대상 여부를 확정할 필드가 부족해요. "
+            "규격을 확정한 뒤 주문/상세 단계에서 다시 확인해드릴게요."
+        )
+        if size_text:
+            response += f"\n확인된 규격은 {size_text} 등이에요."
+        return response
+    return ""
+
+
 def _safe_service_unsized_policy_response(tool_data_list: list[dict]) -> str:
+    product_object_response = _safe_service_product_object_policy_response(tool_data_list)
+    if product_object_response:
+        return product_object_response
+
     rows: list[dict] = []
     for entry in reversed(_find_entries(tool_data_list, "get_products_recommendations_tool")):
         args = _tool_args(entry)

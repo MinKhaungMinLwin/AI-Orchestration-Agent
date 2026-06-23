@@ -24,6 +24,7 @@ from services.tstation import chat as chat_module, qc_verifier
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.pii_guardrail import check_pii
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
+from services.tstation.template_mapper import _safe_service_unsized_policy_response
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
@@ -9471,6 +9472,36 @@ def test_pending_object_check_carries_safe_service_topic_into_product_object() -
         response_decision.metadata["response_shape_key"]
         == "safe_service_explanation_then_unsized_recommendation_summary"
     )
+
+
+def test_safe_service_product_object_response_uses_search_result_fields() -> None:
+    response = _safe_service_unsized_policy_response(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "다이나프로 HPX"},
+                "data": {
+                    "items": [
+                        {
+                            "goods_nm": "다이나프로 HPX",
+                            "tire_size_1": "235/55R19",
+                            "t_rlx_isn_yn": "Y",
+                        },
+                        {
+                            "goods_nm": "다이나프로 HPX",
+                            "tire_size_1": "255/55R18",
+                            "t_rlx_isn_yn": "Y",
+                        },
+                    ]
+                },
+            }
+        ]
+    )
+
+    assert "다이나프로 HPX" in response
+    assert "안심서비스 대상 가능성" in response
+    assert "235/55R19" in response
+    assert "차량이나 타이어 사이즈를 알려주시면 안심서비스 가능 상품" not in response
 
 
 def test_pending_object_check_ignores_explicit_product_description_intent() -> None:
