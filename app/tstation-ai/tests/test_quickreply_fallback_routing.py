@@ -7695,6 +7695,57 @@ def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
     assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
+@pytest.mark.parametrize("text", ["첫번째 상품 가격 알려줘", "첫 번째 상품 가격 알려줘", "1번째 상품 가격"])
+def test_goods_no_from_selection_resolves_korean_first_ordinal(text: str) -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G000000319573", "goods_nm": "벤투스 에어S", "tire_size_1": "255/35R18"},
+                {"goods_no": "G000000319574", "goods_nm": "벤투스 S2 AS", "tire_size_1": "255/35R18"},
+            ],
+        }
+    ]
+
+    assert TStationChatServiceV2._resolve_goods_no_from_selection(text, prev_tool_data) == "G000000319573"
+
+
+def test_goods_no_from_selection_resolves_last_ordinal_against_latest_product_list() -> None:
+    prev_tool_data = [
+        {
+            "tool": "search_product_tool",
+            "data": [
+                {"goods_no": "GSTALE000001", "goods_nm": "이전 상품", "tire_size_1": "245/45R18"},
+            ],
+        },
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "GREC00000001", "goods_nm": "벤투스 에어S", "tire_size_1": "255/35R18"},
+                {"goods_no": "GREC00000002", "goods_nm": "벤투스 S2 AS", "tire_size_1": "255/35R18"},
+            ],
+        },
+    ]
+
+    assert TStationChatServiceV2._resolve_goods_no_from_selection("마지막 상품 가격 알려줘", prev_tool_data) == (
+        "GREC00000002"
+    )
+
+
+def test_goods_no_from_selection_keeps_ambiguous_pronoun_unresolved() -> None:
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "data": [
+                {"goods_no": "G000000319573", "goods_nm": "벤투스 에어S", "tire_size_1": "255/35R18"},
+                {"goods_no": "G000000319574", "goods_nm": "벤투스 S2 AS", "tire_size_1": "255/35R18"},
+            ],
+        }
+    ]
+
+    assert TStationChatServiceV2._resolve_goods_no_from_selection("그거 가격 알려줘", prev_tool_data) is None
+
+
 def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> None:
     prev_tool_data = [
         {
@@ -10619,6 +10670,21 @@ def test_goods_no_from_product_template_selection_resolves_named_variant() -> No
     assert (
         _resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
         == "G000000309961"
+    )
+
+
+def test_goods_no_from_product_template_selection_resolves_korean_ordinal() -> None:
+    product_template = {
+        "products": [
+            {"title": "벤투스 에어S 255/35R18", "titleProductName": "벤투스 에어S", "titleTires": "255/35R18"},
+            {"title": "벤투스 S2 AS 255/35R18", "titleProductName": "벤투스 S2 AS", "titleTires": "255/35R18"},
+        ],
+        "metadata": [{"goodsId": "G000000319573"}, {"goodsId": "G000000319574"}],
+    }
+
+    assert (
+        _resolve_goods_no_from_product_template_selection("첫번째 상품 가격 알려줘", product_template)
+        == "G000000319573"
     )
 
 

@@ -10212,6 +10212,40 @@ def _quantity_benefit_pending_values_from_slots(slots: Any | None) -> dict[str, 
     }
 
 
+_KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
+    (("첫번째", "첫째"), 0),
+    (("두번째", "둘째"), 1),
+    (("세번째", "셋째"), 2),
+    (("네번째", "넷째"), 3),
+    (("다섯번째", "다섯째"), 4),
+    (("여섯번째", "여섯째"), 5),
+    (("일곱번째", "일곱째"), 6),
+    (("여덟번째", "여덟째"), 7),
+    (("아홉번째", "아홉째"), 8),
+    (("열번째", "열째"), 9),
+)
+
+
+def _selection_ordinal_index(user_text: str, item_count: int) -> int | None:
+    if not user_text or item_count <= 0:
+        return None
+
+    text = user_text.strip()
+    numeric_match = re.match(r"^\s*(\d+)\s*(?:[\.\)번:]|번째|째)", text)
+    if numeric_match:
+        idx = int(numeric_match.group(1)) - 1
+        return idx if 0 <= idx < item_count else None
+
+    compact = re.sub(r"\s+", "", text)
+    if compact.startswith(("마지막", "끝번째", "끝째")):
+        return item_count - 1
+
+    for prefixes, idx in _KOREAN_SELECTION_ORDINALS:
+        if any(compact.startswith(prefix) for prefix in prefixes):
+            return idx if idx < item_count else None
+    return None
+
+
 def _resolve_goods_no_from_product_template_selection(user_text: str, template_data: dict | None) -> str | None:
     if not user_text or not isinstance(template_data, dict):
         return None
@@ -10226,12 +10260,10 @@ def _resolve_goods_no_from_product_template_selection(user_text: str, template_d
         return None
 
     text = user_text.strip()
-    ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
-    if ordinal_match:
-        idx = int(ordinal_match.group(1)) - 1
-        if 0 <= idx < len(metadata) and isinstance(metadata[idx], dict):
-            goods_no = str(metadata[idx].get("goodsId") or metadata[idx].get("goodsNo") or "").strip()
-            return goods_no or None
+    ordinal_idx = _selection_ordinal_index(text, len(metadata))
+    if ordinal_idx is not None and isinstance(metadata[ordinal_idx], dict):
+        goods_no = str(metadata[ordinal_idx].get("goodsId") or metadata[ordinal_idx].get("goodsNo") or "").strip()
+        return goods_no or None
 
     target_size = normalize_tire_size(text)
     tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
@@ -15009,13 +15041,11 @@ class TStationChatServiceV2:
 
         text = user_text.strip()
 
-        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
-        if ordinal_match:
-            idx = int(ordinal_match.group(1)) - 1
-            if 0 <= idx < len(items):
-                goods_no = items[idx].get("goods_no")
-                if goods_no:
-                    return goods_no
+        ordinal_idx = _selection_ordinal_index(text, len(items))
+        if ordinal_idx is not None:
+            goods_no = items[ordinal_idx].get("goods_no")
+            if goods_no:
+                return goods_no
 
         target_size_from_text = normalize_tire_size(text)
         target_size = target_size_from_text or normalize_tire_size(current_tire_size or "")
