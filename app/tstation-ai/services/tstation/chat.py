@@ -741,6 +741,14 @@ just resolves goods_no inside Discovery. Stay in DISCOVERY for tire picks.
 다른 거 alone, no other anchors), do NOT classify as continuation — route to
 LEADING per AMBIGUOUS RE-TRIGGER rule above.
 
+⚠️ VAGUE NEXT-STEP FOLLOW-UP → stays in TRANSACTION (continuation), NOT LEADING:
+A message like "이제 뭐해야돼?", "다음엔 뭐해야돼?", "뭐 하면 돼?", "어떻게 해야 돼?" has
+no domain keyword by itself, but if the immediately preceding conversation involved an
+order/reservation (주문, 배송, 예약, 매장 방문) → this is a continuation asking "what's my
+next step for that order", NOT an unclear/greeting message. Classify TRANSACTION,
+agent_prompt_profile=transaction_order. Do NOT route to LEADING just because the current
+message itself lacks a keyword — check the recent context first.
+
 Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
 """
 
