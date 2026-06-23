@@ -16424,6 +16424,22 @@ class TStationChatServiceV2:
                         logger.exception("[POLICY][route-fast-path] classifier fallback failed")
                 if (
                     classifier_routing_result is not None
+                    and _router_contract_is_high_confidence_policy(classifier_routing_result)
+                    and classifier_domains == [MultiAgentDomain.Domain.SUPPORT]
+                ):
+                    domains = classifier_domains
+                    routing_result = classifier_routing_result
+                    routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+                    policy_preclassified_skip_decision = False
+                    _classify_path = "llm_policy_override"
+                    logger.info(
+                        "[POLICY][route-fast-path] support policy classifier overrides product resolution: "
+                        "policy_intent=%s confidence=%.2f",
+                        getattr(classifier_routing_result, "policy_intent", None),
+                        float(getattr(classifier_routing_result, "planner_confidence", 0.0) or 0.0),
+                    )
+                elif (
+                    classifier_routing_result is not None
                     and classifier_routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_COUPON
                     and classifier_domains == [MultiAgentDomain.Domain.TRANSACTION]
                 ):

@@ -137,6 +137,7 @@ from services.tstation.chat import (
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
     _promote_completed_speculative_router_contract,
+    _router_contract_is_high_confidence_policy,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
@@ -837,6 +838,29 @@ def test_high_confidence_support_router_contract_blocks_product_price_override()
     assert _should_preserve_router_contract(
         routing_result=routing,
         candidate_override="p0b_transaction_redirect",
+        override_reason=None,
+    )
+
+
+def test_high_confidence_support_policy_contract_survives_wrong_prompt_profile() -> None:
+    routing = MultiAgentDomain(
+        reason="regional price policy",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["explain regional price policy"],
+        user_behavior="asking about regional purchase price policy",
+        flow="policy guidance",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="regional_price_policy",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile="discovery_search",
+    )
+
+    assert _router_contract_is_high_confidence_policy(routing)
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="policy_product_resolution_first",
         override_reason=None,
     )
 
