@@ -240,17 +240,25 @@ def _is_specific_store_recheck_turn(text: str, current_store_name: str | None, s
 def _is_preorder_ready_context(slots: dict[str, Any]) -> bool:
     if not slots:
         return False
+    quantity = slots.get("ord_qty") or slots.get("quantity")
     return bool(
         (slots.get("pending_intent") == "order" or slots.get("goal_type") == "place_order")
-        and (
-            slots.get("goods_no")
-            or slots.get("tire_size")
-            or slots.get("quantity")
-            or slots.get("ord_qty")
-            or slots.get("shop_id")
-            or slots.get("shop_name")
-            or slots.get("store_name")
-        )
+        and slots.get("goods_no")
+        and quantity
+        and (slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
+        and slots.get("requested_cal_day")
+        and slots.get("rsv_hour")
+    )
+
+
+def _is_order_execute_confirmation_context(text: str, slots: dict[str, Any]) -> bool:
+    if not re.search(r"주문\s*확정|결제\s*진행|진행해(?:줘)?|ㅇㅇ|ㅇㅋ|ok|okay", text or "", re.IGNORECASE):
+        return False
+    quantity = slots.get("ord_qty") or slots.get("quantity")
+    return bool(
+        (slots.get("pending_intent") == "order" or slots.get("goal_type") == "place_order")
+        and slots.get("goods_no")
+        and quantity
     )
 
 
@@ -389,8 +397,11 @@ def build_transaction_intent_frame(
         )
     )
     preorder_confirmation = bool(
-        _is_preorder_ready_context(slots)
-        and _is_preorder_confirmation_text(text)
+        _is_preorder_confirmation_text(text)
+        and (
+            _is_preorder_ready_context(slots)
+            or _is_order_execute_confirmation_context(text, slots)
+        )
     )
     quantity = _normalized_quantity(slots, text)
     result_limit = extract_result_limit(text) or slots.get("limit")
@@ -433,7 +444,7 @@ def build_transaction_intent_frame(
         or (
             None
             if plain_store_search and not preserve_transaction_product_context
-            else slots.get("product_name") or slots.get("pattern_name")
+            else slots.get("product_name") or slots.get("tire_model") or slots.get("pattern_name")
         )
     )
     store_name = current_store_name or (

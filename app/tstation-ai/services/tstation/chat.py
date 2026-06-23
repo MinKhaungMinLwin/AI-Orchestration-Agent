@@ -2566,6 +2566,13 @@ class StreamingMultiAgentCoordinator:
         # 노출되어, 할부 계산 같은 후속 질문에서 LLM 이 단가·수량을 임의로 곱해
         # 가짜 총액을 만들지 않도록 한다.
         if tool_name == "get_final_price_tool" and tool_succeeded:
+            if tool_input:
+                input_goods_no = str(tool_input.get("goods_no") or "").strip()
+                if input_goods_no:
+                    tool_slots["goods_no"] = input_goods_no
+                input_tire_size = StreamingMultiAgentCoordinator._tool_input_tire_size(tool_input)
+                if input_tire_size:
+                    tool_slots["tire_size"] = input_tire_size
             price_data = parsed_data.get("data", parsed_data)
             if isinstance(price_data, dict):
                 final_unit = next(
@@ -14746,6 +14753,79 @@ class TStationChatServiceV2:
         return slot_values
 
     @staticmethod
+    def _confirmed_product_slot_values_for_purchase_cta(
+        *,
+        latest_quickreply_tmpl: dict | None = None,
+        latest_product_tmpl: dict | None = None,
+        prev_tool_data: list[dict] | None = None,
+    ) -> dict[str, Any] | None:
+        """Recover a confirmed product for bare purchase/cart CTA turns.
+
+        This only uses sources that already point to one concrete product. It
+        deliberately does not pick the first row from product/recommendation
+        lists, because a bare "구매하기" after an unresolved list still needs a
+        product reselection prompt.
+        """
+        for template, data in (
+            ("quickReply", latest_quickreply_tmpl),
+            ("product", latest_product_tmpl),
+        ):
+            slots = TStationChatServiceV2._confirmed_product_slot_values_from_event({
+                "template": template,
+                "data": data,
+            })
+            if slots:
+                return slots
+
+        for entry in reversed(prev_tool_data or []):
+            if not isinstance(entry, dict):
+                continue
+            tool = str(entry.get("tool") or "")
+            tool_input = entry.get("input") if isinstance(entry.get("input"), dict) else entry.get("args")
+            tool_input = tool_input if isinstance(tool_input, dict) else {}
+
+            if tool == "get_final_price_tool":
+                goods_no = str(tool_input.get("goods_no") or "").strip()
+                if goods_no:
+                    slot_values: dict[str, Any] = {"goods_no": goods_no}
+                    tire_size = normalize_tire_size(str(tool_input.get("tire_size") or tool_input.get("size") or ""))
+                    if tire_size:
+                        slot_values["tire_size"] = tire_size
+                    product_name = str(tool_input.get("product_name") or tool_input.get("goods_nm") or "").strip()
+                    if product_name:
+                        slot_values["tire_model"] = product_name
+                    return slot_values
+
+            if tool == "get_product_description_tool":
+                slot_values = {}
+                goods_no = str(tool_input.get("goods_no") or "").strip()
+                data = entry.get("data")
+                payload = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
+                payload = payload if isinstance(payload, dict) else {}
+                if not goods_no:
+                    goods_no = str(payload.get("goods_no") or "").strip()
+                if goods_no:
+                    slot_values["goods_no"] = goods_no
+                tire_size = normalize_tire_size(
+                    str(
+                        tool_input.get("tire_size")
+                        or tool_input.get("size")
+                        or payload.get("tire_size_1")
+                        or payload.get("tire_size")
+                        or ""
+                    )
+                )
+                if tire_size:
+                    slot_values["tire_size"] = tire_size
+                product_name = str(payload.get("goods_nm") or payload.get("productName") or "").strip()
+                if product_name:
+                    slot_values["tire_model"] = product_name
+                if slot_values.get("goods_no"):
+                    return slot_values
+
+        return None
+
+    @staticmethod
     def _preorder_slot_values_from_data(template_data: dict | None) -> dict[str, Any] | None:
         """Extract durable order slots from a rendered preOrder template payload."""
         if not isinstance(template_data, dict):
@@ -16407,15 +16487,19 @@ class TStationChatServiceV2:
                 current_vehicle_selection_prompt_event.get() is None
                 and _is_quantityless_cart_or_order_cta(last_user_text)
                 and regex_slots.ord_qty is None
+                and regex_slots.tire_size is None
+                and not regex_slots.tire_model
+                and not regex_slots.pending_product_name
             ):
-                quickreply_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event({
-                    "template": "quickReply",
-                    "data": latest_quickreply_tmpl,
-                })
-                if quickreply_product_slots:
+                recovered_product_slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+                    latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    latest_product_tmpl=latest_product_tmpl,
+                    prev_tool_data=prev_tool_data,
+                )
+                if recovered_product_slots:
                     merged_slots = merged_slots.apply_runtime_values(
-                        quickreply_product_slots,
-                        source="quickreply_product_cta",
+                        recovered_product_slots,
+                        source="purchase_cta_product_recovery",
                     )
                     if getattr(merged_slots, "pending_intent", None) is None:
                         merged_slots.pending_intent = "order"
@@ -16428,6 +16512,13 @@ class TStationChatServiceV2:
                             last_user_text,
                         )
                         current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
+                elif merged_slots.goods_no is None:
+                    merged_slots.pending_intent = "order"
+                    merged_slots.goal_type = "place_order"
+                    logger.info(
+                        "[ORDER_CTA] Bare purchase/cart CTA has no confirmed product source; prompting reselection"
+                    )
+                    current_vehicle_selection_prompt_event.set(_build_missing_order_product_reselection_event())
 
             # 3.8) Resolve goods_no from the user's list-selection reply matched against
             # the most recent search_product_tool result. Without this, Discovery may

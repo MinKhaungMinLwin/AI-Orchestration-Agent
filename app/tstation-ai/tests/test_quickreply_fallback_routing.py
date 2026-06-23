@@ -7526,6 +7526,119 @@ def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tir
     )
 
 
+def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> None:
+    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+        latest_quickreply_tmpl={
+            "assistantResponse": "다이나프로 HPX 설명입니다.",
+            "metadata": {
+                "goodsId": "G000000317729",
+                "tireSize": "235/55R19",
+                "productName": "다이나프로 HPX",
+            },
+        },
+        prev_tool_data=[],
+    )
+
+    assert slots == {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "tire_model": "다이나프로 HPX",
+    }
+
+
+def test_purchase_cta_recovers_confirmed_product_from_recent_price_tool_input() -> None:
+    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+        prev_tool_data=[
+            {
+                "tool": "get_final_price_tool",
+                "input": {"goods_no": "G000000317729", "tire_size": "235/55R19"},
+                "data": {"status": "success", "data": {"cheapest_final_prc": 180000}},
+            }
+        ],
+    )
+
+    assert slots == {"goods_no": "G000000317729", "tire_size": "235/55R19"}
+
+
+def test_purchase_cta_does_not_pick_first_product_from_unselected_candidate_list() -> None:
+    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+        prev_tool_data=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "input": {"rcmd_type": "tstation", "tire_size": "235/55R19"},
+                "data": [
+                    {"goods_no": "G1", "goods_nm": "상품1", "tire_size_1": "235/55R19"},
+                    {"goods_no": "G2", "goods_nm": "상품2", "tire_size_1": "235/55R19"},
+                ],
+            }
+        ],
+    )
+
+    assert slots is None
+
+
+def test_final_price_tool_success_preserves_goods_no_for_next_purchase_cta() -> None:
+    slots = ConversationSlots(pending_intent="price", ord_qty=4)
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_final_price_tool",
+        {"status": "success", "data": {"cheapest_final_prc": 180000}},
+        {"goods_no": "G000000317729", "tire_size": "235/55R19"},
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000317729"
+    assert slots.tire_size == "235/55R19"
+
+
+def test_purchase_cta_with_recovered_product_context_routes_to_quick_order_reservation() -> None:
+    frame = build_transaction_intent_frame(
+        "구매하기",
+        known_slots={
+            "goods_no": "G000000317729",
+            "tire_size": "235/55R19",
+            "product_name": "다이나프로 HPX",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert "quantity" in frame.missing_slots
+    assert "store" in frame.missing_slots
+    assert plan.metadata["response_intent"] == "quick_order_reservation"
+
+
+def test_quick_order_reservation_contract_flags_progress_text_without_tool() -> None:
+    contract = build_turn_contract(
+        user_text="구매하기",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="quick_order_reservation"),
+        merged_slots=ConversationSlots(
+            goods_no="G000000317729",
+            tire_size="235/55R19",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="주문 진행을 이어갑니다.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="transaction_fallback",
+        called_tools=[],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert any(v["type"] == "quick_order_reservation_progress_without_tool" for v in violations)
+    assert hard_contract_violations(violations)
+
+
 def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
     prev_tool_data = [
         {

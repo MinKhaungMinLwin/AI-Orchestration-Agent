@@ -82,6 +82,11 @@ _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
 _DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검색되지\s*않|없어요", re.IGNORECASE)
+_ORDER_PROGRESS_ONLY_RE = re.compile(
+    r"(주문|구매|결제).{0,20}(진행|이어|도와|확정\s*단계|단계로)|"
+    r"(진행|이어).{0,20}(주문|구매|결제)",
+    re.IGNORECASE,
+)
 _REFERENCE_SIGNAL_RE = re.compile(
     r"그거|이거|요거|저거|"
     r"그\s*상품|이\s*상품|해당\s*상품|"
@@ -577,6 +582,15 @@ def response_contract_violations(
     )
     if quick_order_violation is not None:
         violations.append(quick_order_violation)
+    quick_order_reservation_violation = _quick_order_reservation_contract_violation(
+        assistant_response_text=assistant_response_text,
+        assistant_response_source=assistant_response_source,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if quick_order_reservation_violation is not None:
+        violations.append(quick_order_reservation_violation)
     return [_with_contract_violation_severity(violation) for violation in violations]
 
 
@@ -845,6 +859,32 @@ def _quick_order_execute_contract_violation(
         return {
             "type": "quick_order_execute_fell_back_without_resolution",
             "assistant_response_source": str(assistant_response_source or ""),
+        }
+    return None
+
+
+def _quick_order_reservation_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    assistant_response_source: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None:
+        return None
+    if str(contract.intent or "") != "quick_order_reservation" and str(contract.known_slots.get("goal_type") or "") != "place_order":
+        return None
+    called_tools = tuple(str(tool) for tool in tuple(called_tools or ()) if str(tool).strip())
+    if called_tools:
+        return None
+    response_text = str(assistant_response_text or "")
+    if str(response_shape_key or "") == "transaction_fallback" or _ORDER_PROGRESS_ONLY_RE.search(response_text):
+        return {
+            "type": "quick_order_reservation_progress_without_tool",
+            "assistant_response_source": str(assistant_response_source or ""),
+            "response_shape_key": str(response_shape_key or ""),
+            "assistant_response_text": response_text[:160],
         }
     return None
 
