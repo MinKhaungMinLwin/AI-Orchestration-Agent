@@ -80,6 +80,9 @@ _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "add_to_cart_tool",
     "get_my_coupons_tool",
     "get_available_coupons_tool",
+    "get_my_reservations_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
 })
 _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "unexpected_tool_for_contract",
@@ -96,6 +99,10 @@ _DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검
 _ORDER_PROGRESS_ONLY_RE = re.compile(
     r"(주문|구매|결제).{0,20}(진행|이어|도와|확정\s*단계|단계로)|"
     r"(진행|이어).{0,20}(주문|구매|결제)",
+    re.IGNORECASE,
+)
+_RESERVATION_STORE_CLAIM_RE = re.compile(
+    r"예약(?:하신|한)?\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
     re.IGNORECASE,
 )
 _REFERENCE_SIGNAL_RE = re.compile(
@@ -276,6 +283,9 @@ def build_turn_contract(
     if code_intent == "maintenance_addon_with_tire_service":
         domain = "transaction"
         intent = "maintenance_addon_with_tire_service"
+    if code_intent == "reservation_store_info_lookup":
+        domain = "transaction"
+        intent = "reservation_store_info_lookup"
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
@@ -680,6 +690,14 @@ def response_contract_violations(
     )
     if quick_order_reservation_violation is not None:
         violations.append(quick_order_reservation_violation)
+    reservation_store_violation = _reservation_store_info_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if reservation_store_violation is not None:
+        violations.append(reservation_store_violation)
     recommendation_disclosure_violation = _recommendation_approximation_disclosure_violation(
         assistant_response_text=assistant_response_text,
         contract=contract,
@@ -1021,6 +1039,29 @@ def _comparison_contract_violation(
             "comparison_followup_intent": comparison_followup_intent,
             "compare_metric": compare_metric or "none",
             "expected_row": expected_row,
+        }
+    return None
+
+
+def _reservation_store_info_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "reservation_store_info_lookup":
+        return None
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    source_tools = {"get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"}
+    if tools & source_tools:
+        return None
+    response_text = str(assistant_response_text or "")
+    if str(response_shape_key or "") == "reservation_store_info_lookup" or _RESERVATION_STORE_CLAIM_RE.search(response_text):
+        return {
+            "type": "reservation_store_claim_without_reservation_source",
+            "response_shape_key": str(response_shape_key or ""),
+            "called_tools": sorted(tools),
         }
     return None
 

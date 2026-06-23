@@ -1529,6 +1529,7 @@ EXAMPLES (tricky cases):
 - "내 주문내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (NOT SUPPORT)
 - "정비이력 보여줘", "내가 관리받은 내역 알려줘" → TRANSACTION, agent_prompt_profile=transaction_order (maintenance/service history lookup, NOT SUPPORT)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
+- "예약한 매장 전화번호", "내 예약 매장 위치", "예약 지점 연락처" → TRANSACTION, agent_prompt_profile=transaction_order (reservation store info lookup from reservation/order source; do NOT infer from recently viewed/searched store)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
 - "내일 2시 예약인데 4시로 바꿀 수 있어?" → TRANSACTION, agent_prompt_profile=transaction_order
 - "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order (check order/logistics state, NOT FAQ)
@@ -7681,6 +7682,146 @@ def _resolve_order_row_for_arrival_query(
     if _ORDER_FIRST_REF_RE.search(user_text or ""):
         return rows[0]
     return rows[0] if len(rows) == 1 else None
+
+
+_RESERVATION_STORE_REF_RE = re.compile(
+    r"예약(?:한|하신)?\s*(?:매장|지점|곳)|내\s*예약\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
+    re.IGNORECASE,
+)
+_RESERVATION_STORE_INFO_RE = re.compile(
+    r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
+    re.IGNORECASE,
+)
+
+
+def _is_reservation_store_info_lookup_query(user_text: str | None) -> bool:
+    text = user_text or ""
+    return bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
+
+
+def _reservation_rows_from_result(tool_result: dict) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    rows = data.get("reservations") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        rows = data.get("items") if isinstance(data, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _reservation_row_value(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, "") and isinstance(row.get("detail"), dict):
+            value = row["detail"].get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _reservation_sort_key(row: dict) -> str:
+    return _reservation_row_value(row, "vst_rsv_dtime", "rsv_dtime", "sys_reg_dtime", "ord_dtime")
+
+
+def _select_reservation_store_row(user_text: str, reservations_result: dict) -> tuple[dict | None, str]:
+    rows = sorted(_reservation_rows_from_result(reservations_result), key=_reservation_sort_key, reverse=True)
+    if not rows:
+        return None, "no_reservation"
+    direct_order = _ORDER_DIRECT_NO_RE.search(user_text or "")
+    if direct_order:
+        ord_no = direct_order.group(0).upper()
+        matches = [row for row in rows if _reservation_row_value(row, "ord_no", "ordNo").upper() == ord_no]
+        if matches:
+            return matches[0], "order_number"
+        return None, "order_number_not_found"
+    if len(rows) == 1:
+        return rows[0], "single_reservation"
+    return None, "ambiguous"
+
+
+def _reservation_store_not_found_event(reason: str) -> dict:
+    if reason == "ambiguous":
+        response = "예약 내역이 여러 건 있어요. 어느 예약 건의 매장인지 선택해 주세요."
+        quick_replies = [
+            {"label": "내 예약 조회", "domain": "TRANSACTION"},
+            {"label": "주문번호로 확인", "domain": "TRANSACTION"},
+        ]
+    else:
+        response = "예약 내역을 먼저 확인해야 해요. 주문번호나 예약번호가 있으면 알려주세요."
+        quick_replies = [
+            {"label": "내 예약 조회", "domain": "TRANSACTION"},
+            {"label": "내 주문 조회", "domain": "TRANSACTION"},
+        ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_reservation_store_info_lookup",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "reservation_store_info_lookup",
+                "reservationStoreSource": "reservation_history",
+                "matchReason": reason,
+            },
+        },
+    }
+
+
+def _build_reservation_store_info_event(reservation_row: dict, *, match_reason: str) -> dict:
+    shop_nm = _reservation_row_value(reservation_row, "shop_nm", "shopName", "store_name", "storeName")
+    tel_no = _format_store_phone(_reservation_row_value(reservation_row, "tel_no", "tel", "phone", "shop_tel_no"))
+    address = " ".join(
+        part
+        for part in (
+            _reservation_row_value(reservation_row, "road_addr_base", "addr_base", "address"),
+            _reservation_row_value(reservation_row, "road_addr_dtl", "addr_dtl"),
+        )
+        if part
+    ).strip()
+    rsv_dtime = _reservation_row_value(reservation_row, "vst_rsv_dtime", "rsv_dtime")
+    rsv_label = _reservation_row_value(reservation_row, "shop_rsv_sct_label", "reservationType") or "예약"
+    ord_no = _reservation_row_value(reservation_row, "ord_no", "ordNo")
+
+    lines = ["예약 내역 기준으로 매장 정보를 확인했어요."]
+    if rsv_label:
+        lines.append(f"- 예약 유형: {rsv_label}")
+    if ord_no:
+        lines.append(f"- 주문번호: {ord_no}")
+    if shop_nm:
+        lines.append(f"- 예약하신 매장: {shop_nm}")
+    if tel_no:
+        lines.append(f"- 전화번호: {tel_no}")
+    else:
+        lines.append("- 전화번호: 예약 내역에서 확인되지 않아요.")
+    if address:
+        lines.append(f"- 주소: {address}")
+    if rsv_dtime:
+        lines.append(f"- 예약 일시: {rsv_dtime}")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_reservation_store_info_lookup",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "내 예약 조회", "domain": "TRANSACTION"},
+                {"label": "내 주문 조회", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "reservation_store_info_lookup",
+                "reservationStoreSource": "reservation_history",
+                "matchReason": match_reason,
+                "shopName": shop_nm,
+                "telNo": tel_no,
+                "ordNo": ord_no,
+            },
+        },
+    }
 
 
 def _date_only(value: object) -> str:
@@ -18757,6 +18898,10 @@ class TStationChatServiceV2:
                                 task.intent == "maintenance_addon_with_tire_service"
                                 for task in cross_domain_plan.subtasks
                             )
+                            or any(
+                                task.intent == "reservation_store_info_lookup"
+                                for task in cross_domain_plan.subtasks
+                            )
                         )
                     )
                 )
@@ -19849,6 +19994,51 @@ class TStationChatServiceV2:
                 match_reason=match_reason,
                 requested_plate=_extract_vehicle_plate_from_text(user_query),
             )
+
+        async def _resolve_reservation_store_info_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_reservation_store_info_lookup_query(user_query):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_my_reservations_tool as _reservations_tool,
+            )
+
+            emitted_events: list[dict] = []
+            reservations_input = {"sct_cd": "all"}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_my_reservations_tool",
+                "display_name": "예약 내역 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_reservations = await asyncio.to_thread(_reservations_tool.invoke, reservations_input)
+                reservations_result = _tool_result_dict(raw_reservations)
+            except Exception as exc:
+                logger.exception("[RESERVATION_STORE_INFO] reservations tool failed")
+                reservations_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_my_reservations_tool", reservations_input, reservations_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": reservations_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": reservations_input,
+                "output": json.dumps(reservations_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_my_reservations_tool",
+                "source_domain": "transaction",
+            })
+
+            reservation_row, match_reason = _select_reservation_store_row(user_query, reservations_result)
+            if reservation_row is None:
+                return emitted_events, _reservation_store_not_found_event(match_reason)
+            return emitted_events, _build_reservation_store_info_event(reservation_row, match_reason=match_reason)
 
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
@@ -22293,6 +22483,22 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(reorder_event, ensure_ascii=False)}\n\n"
             assistant_response = str((reorder_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        reservation_store_info_resolution = await _resolve_reservation_store_info_with_code()
+        if reservation_store_info_resolution is not None:
+            code_events, reservation_store_event = reservation_store_info_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(reservation_store_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((reservation_store_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

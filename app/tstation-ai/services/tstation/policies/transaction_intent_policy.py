@@ -22,6 +22,14 @@ _STORE_SCHEDULE_RE = re.compile(
     r"예약\s*가능|작업\s*가능|장착\s*가능|가능한\s*(?:시간|일정|매장)|가능\s*시간|가능\s*일정|스케줄|몇\s*시|시간",
     re.IGNORECASE,
 )
+_RESERVATION_STORE_REF_RE = re.compile(
+    r"예약(?:한|하신)?\s*(?:매장|지점|곳)|내\s*예약\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
+    re.IGNORECASE,
+)
+_RESERVATION_STORE_INFO_RE = re.compile(
+    r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
+    re.IGNORECASE,
+)
 _SERVICE_DURATION_ADVISORY_RE = re.compile(
     r"(?:예약한\s*거|예약한거|예약|서비스\s*받|작업|교체).{0,40}"
     r"(?:현장(?:에서)?\s*)?(?:얼라인먼트|휠\s*얼라이먼트|엔진오일|실내\s*필터|필터|배터리|와이퍼|경정비)"
@@ -318,6 +326,9 @@ def build_transaction_intent_frame(
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
     current_store_search = bool(_STORE_SEARCH_RE.search(text))
     current_favorite_store_lookup = bool(_FAVORITE_STORE_RE.search(text))
+    current_reservation_store_info_lookup = bool(
+        _RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text)
+    )
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     current_purchase = bool(_PURCHASE_RE.search(text))
@@ -514,7 +525,11 @@ def build_transaction_intent_frame(
         "today_install_candidate_scope": today_install_candidate_scope,
     }
 
-    if current_service_duration_advisory:
+    if current_reservation_store_info_lookup:
+        intent = "reservation_store_info_lookup"
+        sub_intent = "reservation_store_reference"
+        entities["reservation_store_reference"] = True
+    elif current_service_duration_advisory:
         intent = "service_duration_advisory"
         sub_intent = "additional_service_duration"
         if re.search(r"얼라인먼트|휠\s*얼라이먼트", text, re.IGNORECASE):
@@ -605,6 +620,10 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "maintenance_addon_with_tire_service"
         known["goal_type"] = "store_service_availability"
         known["service_type"] = "maintenance_addon"
+    if intent == "reservation_store_info_lookup":
+        known["pending_intent"] = "reservation_store_info_lookup"
+        known["goal_type"] = "reservation_store_info"
+        known["reservation_store_reference"] = True
     if intent == "stock_store_search":
         known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
         if requested_cal_day:
@@ -745,6 +764,16 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "favorite_store_lookup", "action": action},
         )
 
+    if frame.intent == "reservation_store_info_lookup":
+        return ToolPlan(
+            allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool="get_my_reservations_tool",
+            tool_args_patch={"sct_cd": "all"},
+            forbidden_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "reservation_store_info_lookup", "action": action},
+        )
+
     if frame.intent == "service_duration_advisory":
         return ToolPlan(
             allowed_tools=(),
@@ -842,6 +871,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "service_duration_advisory"
     if frame.intent == "maintenance_addon_with_tire_service":
         return "maintenance_addon_with_tire_service"
+    if frame.intent == "reservation_store_info_lookup":
+        return "reservation_store_info_lookup"
     return frame.intent or "transaction_fallback"
 
 

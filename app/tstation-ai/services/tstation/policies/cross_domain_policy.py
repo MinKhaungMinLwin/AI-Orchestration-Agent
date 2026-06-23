@@ -22,6 +22,14 @@ _STOCK_OR_BOOKING_RE = re.compile(
     r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약|오늘\s*서비스|오늘서비스|당일\s*서비스",
     re.IGNORECASE,
 )
+_RESERVATION_STORE_REF_RE = re.compile(
+    r"예약(?:한|하신)?\s*(?:매장|지점|곳)|내\s*예약\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
+    re.IGNORECASE,
+)
+_RESERVATION_STORE_INFO_RE = re.compile(
+    r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
+    re.IGNORECASE,
+)
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
 _TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
@@ -218,6 +226,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
+    needs_reservation_store_info = bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
     needs_maintenance_addon_with_tire = bool(
         _TIRE_SERVICE_RE.search(text)
         and _MAINTENANCE_ADDON_SERVICE_RE.search(text)
@@ -310,6 +319,19 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                 ),
             ),
             response_strategy="transaction_store_service_check_then_policy_notice",
+        )
+
+    if needs_reservation_store_info:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="reservation_store_info_lookup",
+                    reason="예약한 매장 참조는 최근 조회 매장이 아니라 예약/주문 내역 source로 확인해야 함",
+                ),
+            ),
+            response_strategy="reservation_source_then_store_info_response",
         )
 
     if needs_favorite_store_lookup and not has_current_product_hint and not needs_stock_or_booking and not needs_price:

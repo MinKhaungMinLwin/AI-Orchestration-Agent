@@ -179,6 +179,7 @@ from services.tstation.chat import (
     _find_single_confident_coupon_from_owned_coupons,
     _is_order_arrival_status_query,
     _is_order_history_reorder_query,
+    _is_reservation_store_info_lookup_query,
     _is_specific_owned_coupon_lookup_query,
     _infer_followup_recommendation_context,
     _ensure_discovery_transaction_recovery_chain,
@@ -208,6 +209,9 @@ from services.tstation.chat import (
     _pick_product_row_from_search_result,
     _product_search_keyword_candidates,
     _select_order_history_reorder_row,
+    _select_reservation_store_row,
+    _build_reservation_store_info_event,
+    _reservation_store_not_found_event,
     _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
     _past_event_page_event,
@@ -5840,6 +5844,160 @@ def test_plain_store_info_query_extracts_store_name_without_reservation_action()
     assert _extract_plain_store_info_store_name("판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어") is None
     assert _extract_plain_store_info_store_name("고양시청점 예약시간 내일 18시로 변경해줘") is None
     assert _extract_plain_store_info_store_name("고양시청점 18시 예약 가능해?") is None
+    assert _extract_plain_store_info_store_name("예약한 매장에 전화하고 싶어") is None
+
+
+def test_reservation_store_info_lookup_uses_reservation_source_not_viewed_store() -> None:
+    user_text = "예약한 매장에 전화하고 싶어"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"shop_id": "F12345", "shop_name": "티스테이션 광교신도시점"},
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["support:store_contact", "transaction:reservation_store_info_lookup"],
+        ),
+    )
+
+    assert _is_reservation_store_info_lookup_query(user_text)
+    assert frame.intent == "reservation_store_info_lookup"
+    assert frame.known_slots["reservation_store_reference"] is True
+    assert tool_plan.preferred_tool == "get_my_reservations_tool"
+    assert "get_my_reservations_tool" in tool_plan.allowed_tools
+    assert "search_stores_tool" in tool_plan.forbidden_tools
+    assert "get_store_list_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "reservation_store_info_lookup"
+    assert contract.domain == "transaction"
+    assert contract.intent == "reservation_store_info_lookup"
+    assert contract.blocking_required_slots == ()
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="예약하신 매장은 티스테이션 광교신도시점입니다. 전화번호는 031-000-0000입니다.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="reservation_store_info_lookup",
+        called_tools=["get_store_list_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert {
+        "type": "forbidden_tool_for_contract",
+        "severity": "error",
+        "called_tools": ["get_store_list_tool"],
+        "forbidden_tools": ["search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"],
+    } in violations
+    assert {
+        "type": "reservation_store_claim_without_reservation_source",
+        "severity": "error",
+        "response_shape_key": "reservation_store_info_lookup",
+        "called_tools": ["get_store_list_tool"],
+    } in violations
+
+
+def test_reservation_store_info_response_requires_reservation_tool_source() -> None:
+    contract = build_turn_contract(
+        user_text="예약한 매장 전화번호 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="reservation_store_info_lookup"),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+            forbidden_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "reservation_store_info_lookup"},
+        ),
+    )
+
+    bad = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="예약하신 매장은 티스테이션 광교신도시점입니다.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="reservation_store_info_lookup",
+        called_tools=[],
+        contract=contract,
+    )
+    good = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="예약하신 매장은 티스테이션 고양시청점입니다.",
+        assistant_response_source="code_reservation_store_info_lookup",
+        response_shape_key="reservation_store_info_lookup",
+        called_tools=["get_my_reservations_tool"],
+        contract=contract,
+    )
+
+    assert {
+        "type": "reservation_store_claim_without_reservation_source",
+        "severity": "error",
+        "response_shape_key": "reservation_store_info_lookup",
+        "called_tools": [],
+    } in bad
+    assert good == []
+
+
+def test_reservation_store_info_event_uses_reservation_row_fields() -> None:
+    row = {
+        "shop_nm": "티스테이션 고양시청점",
+        "tel_no": "0319719333",
+        "vst_rsv_dtime": "2026-06-16 17:00",
+        "shop_rsv_sct_label": "구매후방문예약",
+        "ord_no": "O202606160000001",
+    }
+    event = _build_reservation_store_info_event(row, match_reason="single_reservation")
+
+    assistant = event["data"]["assistantResponse"]
+    assert event["assistant_response_source"] == "code_reservation_store_info_lookup"
+    assert event["data"]["metadata"]["reservationStoreSource"] == "reservation_history"
+    assert "예약 내역 기준" in assistant
+    assert "예약하신 매장: 티스테이션 고양시청점" in assistant
+    assert "전화번호: 031-971-9333" in assistant
+
+
+def test_reservation_store_info_multiple_or_missing_reservations_do_not_mention_viewed_store() -> None:
+    ambiguous_result = {
+        "status": "success",
+        "data": {
+            "reservations": [
+                {"shop_nm": "티스테이션 A점", "vst_rsv_dtime": "2026-06-16 17:00"},
+                {"shop_nm": "티스테이션 B점", "vst_rsv_dtime": "2026-06-17 17:00"},
+            ]
+        },
+    }
+    row, reason = _select_reservation_store_row("예약한 매장 전화번호 알려줘", ambiguous_result)
+    event = _reservation_store_not_found_event(reason)
+
+    assert row is None
+    assert reason == "ambiguous"
+    assert "어느 예약 건" in event["data"]["assistantResponse"]
+    assert "광교신도시점" not in event["data"]["assistantResponse"]
+
+
+def test_cross_domain_plan_routes_reservation_store_reference_to_transaction() -> None:
+    plan = plan_cross_domain_turn(
+        "예약한 매장에 전화하고 싶어",
+        known_slots={"store_name": "티스테이션 광교신도시점"},
+    )
+
+    assert plan.primary_domain == PolicyDomain.TRANSACTION
+    assert [task.intent for task in plan.subtasks] == ["reservation_store_info_lookup"]
+    assert plan.response_strategy == "reservation_source_then_store_info_response"
+
+
+def test_viewed_store_phone_followup_can_still_use_recent_store_context() -> None:
+    assert _is_reservation_store_info_lookup_query("여기 전화번호 알려줘") is False
+    assert _extract_plain_store_info_store_name("티스테이션 광교신도시점 전화번호 알려줘") == "광교신도시점"
 
 
 def test_transaction_prompt_prioritizes_previous_answer_for_recent_reference_time_change() -> None:

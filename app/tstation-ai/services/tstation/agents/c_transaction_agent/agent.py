@@ -2761,6 +2761,7 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
     → `rsv_dtime` 있으면: "이미 <rsv_dtime> 예약이 잡혀 있어요. 해당 시간에 방문하시면 돼요."
     → `rsv_dtime` 없으면: 배송 도착 후 매장과 방문 일정을 별도로 확인해야 함을 안내. "도착 후 바로 방문 가능" 단정 금지.
 - "내 예약", "예약 조회", "예약 내역", "다음 방문 언제", "예약 어떻게 돼있어" -> call get_my_reservations_tool with sct_cd="all" (default) so 방문예약, 구매후방문예약, 오프라인예약 are searched together. Show 예약 유형(shop_rsv_sct_label), 매장명, 방문일시, 상태 라벨 그대로. 0건이면 "현재 예약된 매장 방문이 없어요 😊" + quickReply 로 매장 찾기 권유.
+- "예약한 매장", "내 예약 매장", "예약 지점", "예약한 곳" + 전화번호/위치/주소/영업정보 문의 -> call get_my_reservations_tool with sct_cd="all" FIRST and answer only from that reservation/order source. Do NOT use a recently viewed/searched/selected store as the reservation store. Do NOT call search_stores_tool/get_store_list_tool/get_nearby_stores_tool to decide what "예약한 매장" means.
 - 매장 방문 시 접수 안내 질문 ("매장 가면 뭐 말해", "예약번호만 말하면 돼?", "방문 당일 어떻게 해", "당일 접수", "도착하면 뭐 해야 해", "접수할 때 뭐 말해", "어떻게 해야해") -> 필요 시 `get_orders_of_user_tool` 로 예약 컨텍스트만 확인 후 응답. 도구 호출 없이 즉시 답변해도 무방.
   → assistantResponse 가이드: "매장 방문 시 접수처에서 **성함과 차량번호**를 말씀해 주시면 예약 확인이 가능해요. 차량 키를 맡기고 안내에 따라 대기하시면 됩니다 😊"
   → ⚠️ 절대 금지: "주문번호", "예약번호", "휴대폰 번호" 등 다른 식별자를 매장 접수 시 말하라고 안내하지 마라. T'Station 매장은 차량번호 기준으로 예약을 조회한다.
