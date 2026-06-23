@@ -11184,6 +11184,27 @@ def _has_sufficient_datepick_order_metadata(slot_values: Mapping[str, Any] | Non
     return bool(goods_no and tire_size and shop_id and qty_ok)
 
 
+def _verified_datepick_order_values(slot_values: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not _has_sufficient_datepick_order_metadata(slot_values):
+        return {}
+    verified: dict[str, Any] = {}
+    for field in (
+        "goods_no",
+        "tire_model",
+        "tire_size",
+        "ord_qty",
+        "shop_id",
+        "shop_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+    ):
+        value = slot_values.get(field) if isinstance(slot_values, Mapping) else None
+        if value is not None:
+            verified[field] = value
+    return verified
+
+
 def _build_store_availability_quantity_prompt_event(
     *,
     product_keyword: str,
@@ -14795,6 +14816,31 @@ class TStationChatServiceV2:
                     logger.info(
                         "[SLOTS] Recovered order slots from latest datepick template: %s",
                         missing_datepick_values,
+                    )
+            verified_datepick_values = (
+                _verified_datepick_order_values(datepick_slot_values)
+                if (
+                    last_user_text
+                    and _DATEPICK_SELECTION_RE.match(last_user_text)
+                    and _is_active_order_flow_slots(merged_slots)
+                )
+                else {}
+            )
+            if verified_datepick_values:
+                enforced_datepick_values = {
+                    field: value
+                    for field, value in verified_datepick_values.items()
+                    if getattr(merged_slots, field, None) != value
+                }
+                if enforced_datepick_values:
+                    merged_slots = merged_slots.apply_runtime_values(
+                        enforced_datepick_values,
+                        source="datepick_recovery_verified",
+                        fill_only=False,
+                    )
+                    logger.info(
+                        "[SLOTS] Enforced verified order slots from datepick metadata: %s",
+                        enforced_datepick_values,
                     )
             if (
                 last_user_text

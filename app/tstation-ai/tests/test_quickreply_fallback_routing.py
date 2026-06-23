@@ -81,6 +81,7 @@ from services.tstation.chat import (
     _build_product_objective_followup_clarification_event,
     _clear_stale_product_slots_for_new_recommendation,
     _datepick_template_recovery_candidate_from_messages,
+    _verified_datepick_order_values,
     _comparison_query_with_recent_context,
     _recent_product_set_size_availability_context,
     _should_clarify_ambiguous_multi_product_query,
@@ -5791,6 +5792,32 @@ def test_datepick_slots_fill_missing_order_state_without_overwriting_preorder_va
     assert updated.shop_name == "기존 매장"
     assert updated.requested_cal_day == "20260624"
     assert updated.rsv_hour == "13"
+
+
+def test_verified_datepick_order_values_extracts_critical_product_context() -> None:
+    values = _verified_datepick_order_values(
+        {
+            "shop_id": "F00405",
+            "shop_name": "티스테이션 판교점",
+            "goods_no": "G000000317900",
+            "tire_model": "Dynapro HPX",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+        }
+    )
+
+    assert values == {
+        "goods_no": "G000000317900",
+        "tire_model": "Dynapro HPX",
+        "tire_size": "235/55R19",
+        "ord_qty": 2,
+        "shop_id": "F00405",
+        "shop_name": "티스테이션 판교점",
+        "requested_cal_day": "20260623",
+        "rsv_hour": "17",
+    }
 
 
 def test_preview_datepick_metadata_preserves_product_slots() -> None:
