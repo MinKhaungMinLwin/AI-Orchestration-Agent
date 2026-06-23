@@ -14456,6 +14456,56 @@ def test_turn_contract_reports_preview_tool_on_pure_stock_contract() -> None:
     ]
 
 
+def test_turn_contract_allows_purchase_bound_preview_datepick_even_with_inventory_mode() -> None:
+    contract = build_turn_contract(
+        user_text="벤투스 S2 AS 225/45R17 2개 한남점 구매할래",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="reservation",
+            known_slots={
+                "goods_no": "G000000309783",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "shop_name": "한남점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+            },
+            entities={"stock_check_mode": "inventory_only"},
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool", "get_store_list_tool"),
+            preferred_tool="transaction_store_preview_tool",
+            metadata={"response_intent": "quick_order_reservation", "stock_check_mode": "inventory_only"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            forbidden_behaviors=("datepick_for_pure_inventory_flow", "preorder_for_pure_inventory_flow"),
+            metadata={"response_shape_key": "reservation_slots", "stock_check_mode": "inventory_only"},
+        ),
+    )
+    event = {
+        "template": "datepick",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_mapper",
+        "response_shape_key": "reservation_slots",
+        "called_tools": ["transaction_store_preview_tool"],
+        "data": {"metadata": {"sourceTool": "transaction_store_preview_tool"}},
+    }
+
+    assert not violates_response_template_contract(event, contract)
+    assert response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["transaction_store_preview_tool"],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
 def test_turn_contract_blocks_general_schedule_datepick_for_preview_stock_contract() -> None:
     contract = build_turn_contract(
         user_text="티스테이션 영등포점",
@@ -14573,6 +14623,45 @@ def test_discovery_first_leg_order_guard_does_not_use_price_clarification() -> N
     assert "구매를 진행하려면 먼저 타이어 규격" in assistant
     assert "가격을 확인하려면" not in assistant
     assert "사이즈 직접 입력" in _labels(fallback_event["data"]["quickReplies"])
+
+
+def test_discovery_first_leg_order_guard_does_not_ask_size_when_product_size_confirmed() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="product_name_search",
+        known_slots={
+            "goods_no": "G000000309783",
+            "tire_size": "225/45R17",
+            "ord_qty": 2,
+            "shop_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_products_recommendations_tool",),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("answer_from_previous_recommendation",),
+            metadata={"response_shape_key": "product_search_summary"},
+        ).to_dict(),
+        risk_level="medium",
+        fallback_reason="response_policy_forbidden_behaviors",
+        planner_intent="resolve_or_describe_product",
+        planner_domains=("discovery",),
+        execution_plan=("discovery:resolve_product", "transaction:stock_store_or_reservation"),
+    )
+
+    fallback_event = build_response_policy_guard_event(contract)
+
+    assistant = fallback_event["data"]["assistantResponse"]
+    assert "타이어 규격" not in assistant
+    assert "예약 가능 시간" in assistant
+    assert "다른 날짜 확인" in _labels(fallback_event["data"]["quickReplies"])
 
 
 def test_turn_contract_qc_reports_discovery_first_leg_violation() -> None:

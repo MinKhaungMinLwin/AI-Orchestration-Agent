@@ -526,12 +526,39 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
         pending_intent = str(known_slots.get("pending_intent") or "").strip()
         goal_type = str(known_slots.get("goal_type") or "").strip()
         if pending_intent == "order" or goal_type == "place_order":
-            message = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
-            quick_replies = [
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-                {"label": "구매 진행", "domain": "TRANSACTION"},
-                {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
-            ]
+            if not (known_slots.get("goods_no") or known_slots.get("tire_size")):
+                message = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
+                quick_replies = [
+                    {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                    {"label": "구매 진행", "domain": "TRANSACTION"},
+                    {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+                ]
+            elif not (known_slots.get("ord_qty") or known_slots.get("quantity")):
+                message = "구매를 진행하려면 수량이 필요해요. 구매할 타이어 수량을 알려주세요."
+                quick_replies = [
+                    {"label": "2개", "domain": "TRANSACTION"},
+                    {"label": "4개", "domain": "TRANSACTION"},
+                    {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+                ]
+            elif not (
+                known_slots.get("shop_id")
+                or known_slots.get("shop_name")
+                or known_slots.get("store_name")
+                or known_slots.get("store_nm")
+            ):
+                message = "구매를 진행하려면 장착 매장이 필요해요. 구매할 매장을 선택해 주세요."
+                quick_replies = [
+                    {"label": "매장 찾기", "domain": "TRANSACTION"},
+                    {"label": "내 주변 매장", "domain": "TRANSACTION"},
+                    {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+                ]
+            else:
+                message = "해당 매장의 예약 가능 시간을 확인하지 못했어요. 다른 날짜나 매장을 확인해드릴게요."
+                quick_replies = [
+                    {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                    {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+                    {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+                ]
         elif pending_intent == "stock" or goal_type == "store_with_stock":
             message = "재고를 확인하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
             quick_replies = [
@@ -648,7 +675,62 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
     forbidden_behaviors = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     if not isinstance(forbidden_behaviors, list | tuple):
         return False
-    return any(template in _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS.get(str(behavior), ()) for behavior in forbidden_behaviors)
+    return any(
+        template in _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS.get(str(behavior), ())
+        for behavior in _effective_forbidden_behaviors(event, contract, forbidden_behaviors)
+    )
+
+
+def _effective_forbidden_behaviors(
+    event: Mapping[str, Any],
+    contract: TurnContract,
+    forbidden_behaviors: list[Any] | tuple[Any, ...],
+) -> tuple[str, ...]:
+    behaviors = tuple(str(behavior) for behavior in forbidden_behaviors)
+    if not _is_purchase_bound_preview_event(event, contract):
+        return behaviors
+    return tuple(
+        behavior
+        for behavior in behaviors
+        if behavior not in {"datepick_for_pure_inventory_flow", "preorder_for_pure_inventory_flow"}
+    )
+
+
+def _is_purchase_bound_preview_event(event: Mapping[str, Any], contract: TurnContract | None) -> bool:
+    if contract is None:
+        return False
+    template = str(event.get("template") or "")
+    if template not in {"datepick", "preOrder"}:
+        return False
+    known_slots = contract.known_slots or {}
+    pending_intent = str(known_slots.get("pending_intent") or "").strip()
+    goal_type = str(known_slots.get("goal_type") or "").strip()
+    intent = str(contract.intent or "")
+    if pending_intent != "order" and goal_type != "place_order" and intent not in {
+        "quick_order_reservation",
+        "quick_order_execute",
+    }:
+        return False
+    if not known_slots.get("goods_no"):
+        return False
+    if not (known_slots.get("ord_qty") or known_slots.get("quantity")):
+        return False
+    if not (
+        known_slots.get("shop_id")
+        or known_slots.get("shop_name")
+        or known_slots.get("store_name")
+        or known_slots.get("store_nm")
+    ):
+        return False
+    called_tools = {
+        str(tool)
+        for tool in tuple(event.get("called_tools") or ())
+        if str(tool).strip()
+    }
+    data = event.get("data")
+    metadata = data.get("metadata") if isinstance(data, Mapping) else None
+    source_tool = str(metadata.get("sourceTool") or metadata.get("source_tool") or "") if isinstance(metadata, Mapping) else ""
+    return "transaction_store_preview_tool" in called_tools or source_tool == "transaction_store_preview_tool"
 
 
 def response_contract_violations(
@@ -1187,6 +1269,15 @@ def _stock_contract_violation(
         return None
     stock_check_mode = str(contract.known_slots.get("stock_check_mode") or "")
     called_tools = tuple(str(tool) for tool in tuple(called_tools or ()) if str(tool).strip())
+    event = {
+        "template": str(template or ""),
+        "called_tools": list(called_tools),
+        "data": {"metadata": {"sourceTool": "transaction_store_preview_tool"}}
+        if "transaction_store_preview_tool" in called_tools
+        else {},
+    }
+    if stock_check_mode == "inventory_only" and _is_purchase_bound_preview_event(event, contract):
+        return None
     if stock_check_mode == "inventory_only":
         if str(response_shape_key or "") == "transaction_fallback" and not called_tools:
             return {
