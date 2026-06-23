@@ -342,6 +342,7 @@ def build_transaction_intent_frame(
     )
     store_scope_product_continuation = (
         confirmed_product_quantity_context
+        and not (plain_store_search and not _OTHER_STORE_RE.search(text))
         and bool(_STORE_SCOPE_FOLLOWUP_RE.search(text) or (current_region and len(text.strip()) <= 20))
         and not current_store_name
         and not current_has_product
@@ -349,6 +350,7 @@ def build_transaction_intent_frame(
         and not extract_quantity(text)
         and not current_price
         and not current_purchase
+        and not current_reservation
     )
     quantity_slot_fill_stock_continuation = (
         _is_stock_flow_context(slots)

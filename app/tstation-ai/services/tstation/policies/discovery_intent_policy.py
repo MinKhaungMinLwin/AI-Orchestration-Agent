@@ -269,6 +269,30 @@ def extract_brand_codes(text: str) -> tuple[str, ...]:
     return tuple(brand_cd for _, brand_cd in matches)
 
 
+def _reorder_grade_compare_products(text: str, products: tuple[str, ...]) -> tuple[str, ...]:
+    if len(products) < 2 or "보다" not in (text or ""):
+        return products
+    normalized = (text or "").casefold()
+    positions: dict[str, int] = {}
+    for product in products:
+        best = -1
+        for needle, display_name, _brand_cd in _PRODUCT_ALIASES:
+            if display_name != product:
+                continue
+            pos = normalized.find(needle.casefold())
+            if pos >= 0 and (best < 0 or pos < best):
+                best = pos
+        if best >= 0:
+            positions[product] = best
+    pivot = normalized.find("보다")
+    after = [product for product in products if positions.get(product, -1) > pivot]
+    before = [product for product in products if product not in after]
+    if not after and len(before) >= 2:
+        before = sorted(before, key=lambda product: positions.get(product, -1), reverse=True)
+        return tuple(before)
+    return tuple(after + before) if after and before else products
+
+
 def extract_brand_code(text: str) -> str | None:
     brand_codes = extract_brand_codes(text)
     return brand_codes[0] if brand_codes else None
@@ -727,6 +751,10 @@ def build_discovery_intent_frame(
         missing_slots = ("tire_size",)
     elif sub_intent == "quantity_benefit_comparison" and not tire_size and not slots.get("goods_no"):
         missing_slots = ("tire_size",)
+
+    if sub_intent == "grade_compare":
+        products = _reorder_grade_compare_products(text, products)
+        entities["product_names"] = products
 
     return IntentFrame(
         domain=PolicyDomain.DISCOVERY,

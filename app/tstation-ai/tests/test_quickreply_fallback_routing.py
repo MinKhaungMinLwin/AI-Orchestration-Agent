@@ -22,6 +22,7 @@ import pytest
 
 from services.tstation import chat as chat_module, qc_verifier
 from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.common.pii_guardrail import check_pii
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.base_agent import (
@@ -2478,8 +2479,7 @@ def test_multi_product_detail_event_shows_price_when_size_is_specific() -> None:
     assert "상품 분류는 사계절 · SUV · COMFORT 기준으로 확인돼요." in assistant
     assert "벤투스 슈퍼 컴포트" not in assistant
     assert "다이나프로 컴포트" not in assistant
-    assert "정가는 152,500원입니다." in assistant
-    assert "정가는 140,800원입니다." in assistant
+    assert "정가는" not in assistant
     assert "확인 가능한 규격은" not in assistant
 
 
@@ -3054,8 +3054,24 @@ def test_search_product_tool_slot_data_preserves_goods_no_for_chained_transactio
     assert slots.pending_intent == "stock"
 
 
+def test_pii_guardrail_detects_delete_request_and_streams_visible_fallback() -> None:
+    assert check_pii("아까 말한 내 전화번호 기록에서 지금 바로 지워줘") == "개인정보 저장 요청"
+
+    events = []
+    for raw in chat_module.TStationChatServiceV2._stream_guardrail_response():
+        if not raw.startswith("data: "):
+            continue
+        payload = raw.removeprefix("data: ").strip()
+        if payload == "[DONE]":
+            continue
+        events.append(json.loads(payload))
+
+    assert any(event.get("type") == "message" for event in events)
+    assert any(event.get("type") == "data" and event.get("template") == "quickReply" for event in events)
+
+
 def test_chained_transaction_policy_refresh_removes_product_required_after_discovery_goods_no() -> None:
-    _tool_patch, decision = _build_transaction_policy_context(
+    _tool_patch, decision, _tool_plan = _build_transaction_policy_context(
         domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
         last_user_text="벤투스 S2 AS 2254517 4개 모란점 재고 확인해줘",
         known_slots={
@@ -5186,7 +5202,7 @@ def test_store_holiday_period_event_matches_scheduled_holiday_date() -> None:
             "data": {
                 "shop_seq": "F204423537",
                 "shop_nm": "티스테이션 한남점",
-                "holiday": "06/14(일), 06/21(일)",
+                "holiday": "06/14(일), 06/21(일), 06/28(일)",
                 "available_slots": ["09", "10", "11"],
                 "tel_no": "027902921",
                 "shop_biz_strt_time": "09",
@@ -6090,7 +6106,7 @@ def test_store_scope_followup_preserves_confirmed_product_slots() -> None:
     assert _is_confirmed_product_store_scope_followup("근처에 다른 매장은?", slots) is True
     assert _is_plain_store_search_reset_allowed("근처에 다른 매장은?", regex_slots, slots) is False
 
-    patch, _decision = _build_transaction_policy_context(
+    patch, _decision, _tool_plan = _build_transaction_policy_context(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
         last_user_text="근처에 다른 매장은?",
         known_slots={
@@ -6126,7 +6142,7 @@ def test_store_candidate_search_followup_clears_stale_store_scope() -> None:
     assert _is_stock_store_candidate_search_followup("오늘 장착 가능 매장 찾아줘", slots) is True
     assert _is_plain_store_search_reset_allowed("오늘 장착 가능 매장 찾아줘", regex_slots, slots) is False
 
-    patch, _decision = _build_transaction_policy_context(
+    patch, _decision, _tool_plan = _build_transaction_policy_context(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
         last_user_text="오늘 장착 가능 매장 찾아줘",
         known_slots={
@@ -8606,15 +8622,15 @@ def test_product_store_purchase_without_size_maps_to_size_selection_product_card
         current_user_text.reset(token)
 
     assert event is not None
-    assert event["template"] == "product"
+    assert event["template"] == "quickReply"
     data = event["data"]
     assert data["assistantResponse"] == "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
-    assert data["isBookingFlow"] is True
-    assert len(data["products"]) == 2
-    assert data["metadata"][0]["pendingIntent"] == "order"
-    assert data["metadata"][0]["requestedFlow"] == "purchase_or_install"
-    assert data["metadata"][0]["ordQty"] == 2
-    assert data["metadata"][0]["shopName"] == "판교점"
+    assert [chip["label"] for chip in data["quickReplies"][:2]] == ["235/55R19", "245/45R19"]
+    assert data["metadata"]["pendingIntent"] == "order"
+    assert data["metadata"]["requestedFlow"] == "purchase_or_install"
+    assert data["metadata"]["ordQty"] == 2
+    assert data["metadata"]["shopName"] == "판교점"
+    assert len(data["metadata"]["products"]) == 2
 
 
 def test_product_description_turn_ignores_stale_booking_goal_for_unsized_summary() -> None:

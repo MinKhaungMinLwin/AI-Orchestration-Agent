@@ -184,18 +184,21 @@ def _decide_inventory_availability(
     )
     if stock_check_mode == "inventory_only":
         requested_qty = _int_or_none(slots.get("quantity") or slots.get("ord_qty")) or 1
-        available_qty = _available_quantity(tool_result)
+        available_qty = _available_quantity_or_none(tool_result)
         has_inventory = bool(
             _has_inventory_rows(tool_result, "todayShopArray")
             or _has_inventory_rows(tool_result, "tnaShopArray")
-            or available_qty > 0
+            or (available_qty is not None and available_qty > 0)
         )
-        if not has_inventory or available_qty < requested_qty:
+        if not has_inventory or (available_qty is not None and available_qty < requested_qty):
             return _decision(
                 response_shape_key="stock_unavailable",
                 response_shape=ResponseShape.NO_RESULT,
                 template=TemplateName.QUICK_REPLY,
-                forbidden_behaviors=("say_available_when_stock_zero",) + _PURE_INVENTORY_FLOW_FORBIDDEN,
+                forbidden_behaviors=(
+                    "say_available_when_stock_zero",
+                    "datepick_for_unavailable_stock",
+                ) + _PURE_INVENTORY_FLOW_FORBIDDEN,
                 assistant_guidance=(
                     "순수 재고 확인 흐름에서는 예약 슬롯이나 주문서로 확장하지 말고, "
                     "재고 불가 사실과 대체 확인 액션만 짧게 안내한다."
@@ -364,7 +367,7 @@ def _has_selected_booking_datetime(slots: dict[str, Any]) -> bool:
     return bool(slots.get("requested_cal_day") and slots.get("rsv_hour"))
 
 
-def _available_quantity(tool_result: dict[str, Any]) -> int:
+def _available_quantity_or_none(tool_result: dict[str, Any]) -> int | None:
     for key in ("available_qty", "stock_qty", "quantity", "qty"):
         value = _int_or_none(_tool_result_value(tool_result, key))
         if value is not None:
@@ -376,7 +379,11 @@ def _available_quantity(tool_result: dict[str, Any]) -> int:
             for store in stores
             if isinstance(store, dict)
         )
-    return 0
+    return None
+
+
+def _available_quantity(tool_result: dict[str, Any]) -> int:
+    return _available_quantity_or_none(tool_result) or 0
 
 
 def _has_inventory_rows(tool_result: dict[str, Any], key: str) -> bool:

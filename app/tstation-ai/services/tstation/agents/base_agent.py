@@ -1916,11 +1916,35 @@ class BaseAgent(ABC):
             return None
         try:
             from services.tstation.policies.response_decision import TemplateName
-            from services.tstation.template_mapper import current_transaction_response_decision
+            from services.tstation.template_mapper import (
+                current_transaction_response_decision,
+                current_transaction_tool_plan,
+            )
         except Exception:
             return None
 
         decision = current_transaction_response_decision.get()
+        tool_plan = current_transaction_tool_plan.get()
+        safe_lookup_intents = {
+            "store_search",
+            "favorite_store_lookup",
+            "product_coupon_eligibility",
+            "coupon_applicable_products",
+            "coupon_pattern_applicability",
+            "order_history_lookup",
+            "reservation_lookup",
+        }
+        tool_plan_intent = ""
+        if tool_plan is not None:
+            metadata = getattr(tool_plan, "metadata", None) or {}
+            tool_plan_intent = str(metadata.get("response_intent") or "")
+        if (
+            tool_plan is not None
+            and tool_name in getattr(tool_plan, "allowed_tools", ())
+            and not getattr(tool_plan, "required_slots", ())
+            and tool_plan_intent in safe_lookup_intents
+        ):
+            return None
         if (
             decision is None
             or decision.template != TemplateName.QUICK_REPLY

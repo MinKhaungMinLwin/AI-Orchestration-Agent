@@ -69,6 +69,7 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 })
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
+_DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검색되지\s*않|없어요", re.IGNORECASE)
 _REFERENCE_SIGNAL_RE = re.compile(
     r"그거|이거|요거|저거|"
     r"그\s*상품|이\s*상품|해당\s*상품|"
@@ -469,6 +470,7 @@ def response_contract_violations(
     event = {
         "template": template or "",
         "assistant_response_source": assistant_response_source or "",
+        "assistant_response_text": assistant_response_text or "",
         "response_shape_key": response_shape_key or "",
         "called_tools": list(called_tools or ()),
         "source_domain": source_domain or ("discovery" if contract.domain == "discovery" else contract.domain),
@@ -813,6 +815,13 @@ def _is_discovery_first_leg_transaction_violation(
         return False
     response_shape_key = str(event.get("response_shape_key") or "")
     assistant_response_source = str(event.get("assistant_response_source") or "")
+    assistant_response_text = str(event.get("assistant_response_text") or "")
+    if not assistant_response_text:
+        data = event.get("data")
+        if isinstance(data, Mapping):
+            assistant_response_text = str(data.get("assistantResponse") or "")
+    if assistant_response_source == "discovery_agent" and _DISCOVERY_NO_RESULT_RE.search(assistant_response_text):
+        return False
     if (
         assistant_response_source == "code_product_compare_resolver"
         and response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}
@@ -820,8 +829,6 @@ def _is_discovery_first_leg_transaction_violation(
         return False
     called_tools = tuple(str(tool) for tool in tuple(event.get("called_tools") or ()))
     if any(tool.startswith("get_final_price_tool") or tool.startswith("get_store") or tool.startswith("quick_order") for tool in called_tools):
-        return False
-    if set(called_tools) & _DISCOVERY_PRODUCT_SOURCE_TOOLS:
         return False
     return (
         response_shape_key in _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES
@@ -1099,7 +1106,9 @@ def _filter_satisfied_required_slots(
     for slot in required_slots:
         if slot == "quantity" and _has_quantity_slot(known_slots):
             continue
-        if slot in {"product", "goods_no"} and (
+        if slot == "goods_no" and known_slots.get("goods_no"):
+            continue
+        if slot == "product" and (
             known_slots.get("goods_no")
             or known_slots.get("product_name")
             or known_slots.get("tire_model")

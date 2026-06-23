@@ -112,6 +112,7 @@ from services.tstation.policies.store_service_gate import (
 from services.tstation.template_mapper import (
     current_discovery_response_decision,
     current_transaction_response_decision,
+    current_transaction_tool_plan,
 )
 from config.tracing import (
     build_trace_config,
@@ -2574,14 +2575,17 @@ class StreamingMultiAgentCoordinator:
                         "availability_intent": getattr(pending_slots, "availability_intent", None),
                         "requested_cal_day": getattr(pending_slots, "requested_cal_day", None),
                     }
-                    transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
-                        domains=domains,
-                        last_user_text=last_user_text_for_policy,
-                        known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
-                        messages=original_messages,
+                    transaction_tool_patch, transaction_response_decision, transaction_tool_plan = (
+                        _build_transaction_policy_context(
+                            domains=domains,
+                            last_user_text=last_user_text_for_policy,
+                            known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
+                            messages=original_messages,
+                        )
                     )
                     current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
                     current_transaction_response_decision.set(transaction_response_decision)
+                    current_transaction_tool_plan.set(transaction_tool_plan)
                     logger.debug(
                         "[POLICY][transaction] refreshed before Transaction agent: goods_no=%r store=%r required=%s",
                         getattr(pending_slots, "goods_no", None),
@@ -3646,7 +3650,7 @@ def _build_service_reservation_redirect_payload(
     chips.extend([
         {"label": "다른 시간 선택", "domain": "TRANSACTION"},
         {
-            "label": "다른 지역 입력",
+            "label": "다른 매장 찾기",
             "domain": "TRANSACTION",
             "actionId": "enter_region",
             "intentKey": "reservation",
@@ -8618,7 +8622,7 @@ def _build_product_coupon_price_amount_event(
         return None
 
     sale_unit = _to_int(row.get("sale_prc"))
-    final_unit = _to_int(row.get("cheapest_final_prc") or row.get("extra_fvr_sale_prc") or row.get("sale_prc"))
+    final_unit = _final_price_from_row(row)
     unit_discount = _to_int(row.get("cheapest_total_discount"))
     if sale_unit is not None and final_unit is not None:
         unit_discount = max(0, sale_unit - final_unit)
@@ -8677,8 +8681,8 @@ def _build_product_coupon_price_no_product_event(product_name: str, tire_size: s
         "assistant_response_source": "code_product_coupon_price_no_product",
         "data": {
             "assistantResponse": (
-                f"{size_label}에 맞는 {product_label} 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
-                "다른 사이즈로 다시 확인하거나, 사이즈 없이 해당 상품 전체를 확인해 주세요."
+                f"{product_label} {size_label} 규격 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
+                "다른 사이즈를 입력하거나 해당 상품의 다른 규격을 확인해 주세요."
             ),
             "quickReplies": [
                 {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
@@ -12853,7 +12857,7 @@ def _build_transaction_policy_context(
     last_user_text: str,
     known_slots: dict[str, Any],
     messages: list[dict] | None = None,
-) -> tuple[dict[str, Any], Any | None]:
+) -> tuple[dict[str, Any], Any | None, Any | None]:
     """Build request-scoped Transaction response policy context.
 
     Phase 2 integration is intentionally read-only: it publishes the response
@@ -12861,7 +12865,7 @@ def _build_transaction_policy_context(
     be suppressed without changing the agent's tool execution plan yet.
     """
     if MultiAgentDomain.Domain.TRANSACTION not in domains or not last_user_text:
-        return {}, None
+        return {}, None, None
     try:
         known_slots = _enrich_today_install_policy_slots(
             last_user_text=last_user_text,
@@ -12882,7 +12886,7 @@ def _build_transaction_policy_context(
                 price_tool_plan.to_dict(),
                 price_response_decision.to_dict(),
             )
-            return {}, price_response_decision
+            return {}, price_response_decision, price_tool_plan
 
         transaction_frame = build_transaction_intent_frame(last_user_text, known_slots=known_slots)
         transaction_tool_plan = plan_transaction_tools(transaction_frame)
@@ -12907,10 +12911,10 @@ def _build_transaction_policy_context(
             transaction_frame.known_slots,
         ):
             transaction_tool_patch["preserve_confirmed_product_slots"] = True
-        return transaction_tool_patch, transaction_response_decision
+        return transaction_tool_patch, transaction_response_decision, transaction_tool_plan
     except Exception:
         logger.exception("[POLICY][transaction] Failed to build transaction policy context")
-        return {}, None
+        return {}, None, None
 
 
 _TODAY_INSTALL_CONTEXT_RE = re.compile(
@@ -17522,7 +17526,7 @@ class TStationChatServiceV2:
             "requested_cal_day": merged_slots.requested_cal_day,
             "rsv_hour": merged_slots.rsv_hour,
         }
-        transaction_tool_patch, transaction_response_decision = _build_transaction_policy_context(
+        transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,
             last_user_text=last_user_text,
             known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
@@ -17530,6 +17534,7 @@ class TStationChatServiceV2:
         )
         current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
         current_transaction_response_decision.set(transaction_response_decision)
+        current_transaction_tool_plan.set(transaction_tool_plan)
         turn_contract: TurnContract | None = None
         try:
             if MultiAgentDomain.Domain.TRANSACTION in domains:
@@ -17808,7 +17813,23 @@ class TStationChatServiceV2:
     @staticmethod
     def _stream_guardrail_response():
         """Stream a guardrail rejection response without invoking any agent."""
+        event = {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.LEADING.value,
+            "assistant_response_source": "code_pii_guardrail",
+            "data": {
+                "assistantResponse": GUARDRAIL_RESPONSE,
+                "quickReplies": [
+                    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                    {"label": "마이페이지 확인", "domain": "SUPPORT"},
+                ],
+                "predictedDomains": ["SUPPORT"],
+            },
+        }
         yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'message', 'content': GUARDRAIL_RESPONSE, 'agent': '[LEADING AGENT]'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
