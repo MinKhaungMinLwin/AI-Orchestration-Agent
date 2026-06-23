@@ -246,8 +246,9 @@ def _decide_inventory_availability(
             or (available_qty is not None and available_qty > 0)
         )
         if not has_inventory or (available_qty is not None and available_qty < requested_qty):
+            response_shape_key = "logistics_stock_available" if _has_logistics_stock_or_reservation(tool_result) else "stock_unavailable"
             return _decision(
-                response_shape_key="stock_unavailable",
+                response_shape_key=response_shape_key,
                 response_shape=ResponseShape.NO_RESULT,
                 template=TemplateName.QUICK_REPLY,
                 forbidden_behaviors=(
@@ -256,7 +257,8 @@ def _decide_inventory_availability(
                 ) + _PURE_INVENTORY_FLOW_FORBIDDEN,
                 assistant_guidance=(
                     "순수 재고 확인 흐름에서는 예약 슬롯이나 주문서로 확장하지 말고, "
-                    "재고 불가 사실과 대체 확인 액션만 짧게 안내한다."
+                    "매장 오늘 장착 가능 재고가 없으면 불가 사실을 먼저 말한다. "
+                    "다만 물류 재고 또는 예약 가능일이 확인되면 datepick/preOrder 없이 물류 기준 가능 일정 안내와 확인 CTA만 제공한다."
                 ),
                 metadata={"stock_check_mode": "inventory_only"},
             )
@@ -473,6 +475,21 @@ def _has_preview_candidate_rows(tool_result: dict[str, Any]) -> bool:
         or _has_inventory_rows(tool_result, "tnaShopArray")
         or any(stores for stores in _preview_store_lists(tool_result))
     )
+
+
+def _has_logistics_stock_or_reservation(tool_result: dict[str, Any]) -> bool:
+    logistics_qty = _int_or_none(_tool_result_value(tool_result, "logistics_qty"))
+    if logistics_qty is None:
+        logistics_qty = _int_or_none(_tool_result_value(tool_result, "logisticsQty"))
+    if logistics_qty is not None and logistics_qty > 0:
+        return True
+    rsv_sale_yn = str(_tool_result_value(tool_result, "rsv_sale_yn") or _tool_result_value(tool_result, "rsvSaleYn") or "").upper()
+    rsv_install_date = str(
+        _tool_result_value(tool_result, "rsv_install_date")
+        or _tool_result_value(tool_result, "rsvInstallDate")
+        or ""
+    ).strip()
+    return rsv_sale_yn == "Y" or bool(rsv_install_date)
 
 
 def _has_preview_schedule_slots(tool_result: dict[str, Any]) -> bool:

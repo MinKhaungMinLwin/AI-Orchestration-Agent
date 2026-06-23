@@ -705,7 +705,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         if stock_check_mode == "inventory_only" and frame.sub_intent == "stock":
             preferred_tool = "get_store_list_tool" if frame.known_slots.get("shop_name") and not frame.known_slots.get("shop_id") else "get_store_inventory_tool"
             return ToolPlan(
-                allowed_tools=("get_store_inventory_tool", "get_store_list_tool"),
+                allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "get_logistics_inventory_tool"),
                 preferred_tool=preferred_tool,
                 tool_args_patch=args,
                 forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "preorder_with_null_required_fields"),

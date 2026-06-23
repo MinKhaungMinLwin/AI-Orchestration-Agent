@@ -214,6 +214,8 @@ from services.tstation.chat import (
     _select_reservation_store_row,
     _build_reservation_store_info_event,
     _reservation_store_not_found_event,
+    _build_pure_inventory_stock_event,
+    _pure_inventory_has_store_stock,
     _product_size_list_keyword_from_context,
     _pickup_service_guard_event,
     _past_event_page_event,
@@ -11355,7 +11357,11 @@ def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() 
     assert frame.sub_intent == "stock"
     assert frame.known_slots["stock_check_mode"] == "inventory_only"
     assert frame.known_slots["shop_name"] == "판교점"
-    assert tool_plan.allowed_tools == ("get_store_inventory_tool", "get_store_list_tool")
+    assert tool_plan.allowed_tools == (
+        "get_store_inventory_tool",
+        "get_store_list_tool",
+        "get_logistics_inventory_tool",
+    )
     assert tool_plan.preferred_tool == "get_store_list_tool"
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == "stock_inventory_lookup"
@@ -12850,6 +12856,89 @@ def test_inventory_availability_pure_stock_path_ignores_preview_slots() -> None:
     assert response_decision.template == TemplateName.LOCATION
     assert "datepick_for_pure_inventory_flow" in response_decision.forbidden_behaviors
     assert "preorder_for_pure_inventory_flow" in response_decision.forbidden_behaviors
+
+
+def test_inventory_only_stock_path_allows_logistics_notice_without_datepick_or_preorder() -> None:
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots={
+            "goods_no": "G000000317735",
+            "tire_size": "235/45R18",
+            "ord_qty": 4,
+            "shop_name": "판교점",
+            "stock_check_mode": "inventory_only",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "inventory": {"todayShopArray": [], "tnaShopArray": []},
+                "logistics": {
+                    "logistics_qty": 12,
+                    "rsv_sale_yn": "Y",
+                    "rsv_install_date": "20260626",
+                },
+            },
+        },
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "logistics_stock_available"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "datepick_for_pure_inventory_flow" in response_decision.forbidden_behaviors
+    assert "preorder_for_pure_inventory_flow" in response_decision.forbidden_behaviors
+
+
+def test_pure_inventory_stock_event_mentions_logistics_date_without_emitting_datepick() -> None:
+    event = _build_pure_inventory_stock_event(
+        store_name="판교점",
+        tire_size="235/45R18",
+        ord_qty=4,
+        logistics_result={
+            "status": "success",
+            "data": {
+                "logistics_qty": 12,
+                "rsv_sale_yn": "Y",
+                "rsv_install_date": "20260626",
+            },
+        },
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["response_shape_key"] == "logistics_stock_available"
+    assert "오늘 바로 장착 가능한 매장 재고는 확인되지 않아요" in assistant
+    assert "물류 재고 기준으로 2026년 6월 26일부터 장착 예약이 가능할 수 있어요" in assistant
+    assert "가장 빠른 예약일 확인" in labels
+    assert "다른 매장 오늘장착 확인" in labels
+
+
+def test_pure_inventory_stock_helper_treats_matching_today_store_as_available() -> None:
+    assert _pure_inventory_has_store_stock(
+        {
+            "status": "success",
+            "data": {
+                "inventory": {
+                    "todayShopArray": [{"shopId": "F00721"}],
+                    "tnaShopArray": [],
+                },
+            },
+        },
+        shop_id="F00721",
+        requested_qty=4,
+    )
+    assert not _pure_inventory_has_store_stock(
+        {
+            "status": "success",
+            "data": {
+                "inventory": {
+                    "todayShopArray": [],
+                    "tnaShopArray": [],
+                },
+            },
+        },
+        shop_id="F00721",
+        requested_qty=4,
+    )
 
 
 def test_turn_contract_qc_reports_forbidden_template_violation() -> None:

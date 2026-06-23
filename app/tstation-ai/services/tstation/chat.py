@@ -7825,6 +7825,131 @@ def _build_reservation_store_info_event(reservation_row: dict, *, match_reason: 
     }
 
 
+def _stock_inventory_rows(raw_inventory: object, key: str) -> list[dict]:
+    if not isinstance(raw_inventory, dict):
+        return []
+    rows = raw_inventory.get(key)
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _stock_inventory_matches_shop(raw_inventory: object, shop_id: str) -> bool:
+    if not shop_id:
+        return False
+    for key in ("todayShopArray", "tnaShopArray"):
+        for row in _stock_inventory_rows(raw_inventory, key):
+            row_shop_id = str(row.get("shopId") or row.get("shop_id") or "").strip()
+            if row_shop_id and row_shop_id == shop_id:
+                return True
+    return False
+
+
+def _int_or_zero(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pure_inventory_has_store_stock(inventory_result: dict, *, shop_id: str, requested_qty: int) -> bool:
+    data = _unwrap_tool_data(inventory_result)
+    inventory = data.get("inventory") if isinstance(data, dict) and isinstance(data.get("inventory"), dict) else data
+    if _stock_inventory_matches_shop(inventory, shop_id):
+        return True
+    available_qty = None
+    if isinstance(data, dict):
+        for key in ("available_qty", "availableQty", "qty"):
+            if key in data:
+                available_qty = _int_or_zero(data.get(key))
+                break
+    return available_qty is not None and available_qty >= max(requested_qty, 1)
+
+
+def _logistics_stock_summary(logistics_result: dict) -> dict[str, Any]:
+    data = _unwrap_tool_data(logistics_result)
+    logistics = data.get("logistics") if isinstance(data, dict) and isinstance(data.get("logistics"), dict) else data
+    if not isinstance(logistics, dict):
+        logistics = {}
+    install_date = str(
+        logistics.get("rsv_install_date")
+        or logistics.get("rsvInstallDate")
+        or logistics.get("install_date")
+        or ""
+    ).strip()
+    install_date = re.sub(r"\D", "", install_date)
+    if len(install_date) != 8:
+        install_date = ""
+    return {
+        "logistics_qty": _int_or_zero(
+            logistics.get("logistics_qty")
+            or logistics.get("logisticsQty")
+            or logistics.get("qty")
+        ),
+        "rsv_sale_yn": str(logistics.get("rsv_sale_yn") or logistics.get("rsvSaleYn") or "").upper(),
+        "rsv_install_date": install_date,
+    }
+
+
+def _format_yyyymmdd_korean(value: str) -> str:
+    text = re.sub(r"\D", "", str(value or ""))
+    if not re.fullmatch(r"\d{8}", text):
+        return str(value or "")
+    return f"{text[:4]}년 {int(text[4:6])}월 {int(text[6:8])}일"
+
+
+def _build_pure_inventory_stock_event(
+    *,
+    store_name: str,
+    tire_size: str,
+    ord_qty: int,
+    logistics_result: dict | None = None,
+) -> dict:
+    logistics = _logistics_stock_summary(logistics_result or {})
+    install_date = _format_yyyymmdd_korean(str(logistics.get("rsv_install_date") or ""))
+    has_logistics = int(logistics.get("logistics_qty") or 0) > 0
+    reservation_sale = str(logistics.get("rsv_sale_yn") or "").upper() == "Y"
+    store_label = store_name or "선택한 매장"
+    base = f"{store_label}에서 {tire_size} {ord_qty}개 기준으로 오늘 바로 장착 가능한 매장 재고는 확인되지 않아요."
+    if has_logistics or reservation_sale:
+        if install_date:
+            response = f"{base} 다만 물류 재고 기준으로 {install_date}부터 장착 예약이 가능할 수 있어요."
+        else:
+            response = f"{base} 다만 물류 재고 기준 예약 가능 여부는 추가 확인할 수 있어요."
+        quick_replies = [
+            {"label": "가장 빠른 예약일 확인", "domain": "TRANSACTION"},
+            {"label": "다른 매장 오늘장착 확인", "domain": "TRANSACTION"},
+            {"label": "다른 상품 추천", "domain": "DISCOVERY"},
+        ]
+        response_shape_key = "logistics_stock_available"
+    else:
+        response = f"{base} 다른 매장이나 조건으로 다시 확인해드릴게요."
+        quick_replies = [
+            {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+            {"label": "대체상품 찾기", "domain": "DISCOVERY"},
+        ]
+        response_shape_key = "no_stock_anywhere"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_pure_inventory_stock_resolver",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "response_shape_key": response_shape_key,
+                "stock_check_mode": "inventory_only",
+                "logisticsStockAvailable": has_logistics,
+                "reservationSaleAvailable": reservation_sale,
+                "rsvInstallDate": logistics.get("rsv_install_date") or "",
+            },
+        },
+    }
+
+
 def _date_only(value: object) -> str:
     text = str(value or "").strip()
     return text[:10] if re.match(r"\d{4}-\d{2}-\d{2}", text) else text
@@ -22941,6 +23066,7 @@ class TStationChatServiceV2:
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
+                get_logistics_inventory_tool as _get_logistics_inventory_tool,
                 get_store_inventory_tool as _get_store_inventory_tool,
                 get_store_list_tool as _get_store_list_tool,
             )
@@ -23069,6 +23195,55 @@ class TStationChatServiceV2:
             })
             tool_entries.append({"tool": "get_store_inventory_tool", "args": inventory_input, "data": inventory_result})
 
+            store_stock_available = _pure_inventory_has_store_stock(
+                inventory_result,
+                shop_id=shop_id,
+                requested_qty=ord_qty,
+            )
+            logistics_result: dict | None = None
+            if not store_stock_available:
+                logistics_input = {"goods_no": goods_no}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_logistics_inventory_tool",
+                    "display_name": "물류 재고 확인 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_logistics = await asyncio.to_thread(_get_logistics_inventory_tool.invoke, logistics_input)
+                    logistics_result = _tool_result_dict(raw_logistics)
+                except Exception as exc:
+                    logger.exception("[PURE_INVENTORY_STOCK] get_logistics_inventory_tool failed goods_no=%s", goods_no)
+                    logistics_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("get_logistics_inventory_tool", logistics_input, logistics_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Inventory AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": logistics_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": logistics_input,
+                    "output": json.dumps(logistics_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_logistics_inventory_tool",
+                    "source_domain": "transaction",
+                })
+                tool_entries.append({
+                    "tool": "get_logistics_inventory_tool",
+                    "args": logistics_input,
+                    "data": logistics_result,
+                })
+                return emitted_events, _build_pure_inventory_stock_event(
+                    store_name=store_name,
+                    tire_size=tire_size,
+                    ord_qty=ord_qty,
+                    logistics_result=logistics_result,
+                )
+
             intro = f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요."
             mapped_event = try_build_template(tool_entries, intro)
             if mapped_event is not None:
@@ -23076,28 +23251,12 @@ class TStationChatServiceV2:
                 mapped_event["assistant_response_source"] = "code_pure_inventory_stock_resolver"
                 return emitted_events, mapped_event
 
-            return emitted_events, {
-                "type": "data",
-                "template": "quickReply",
-                "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-                "assistant_response_source": "code_pure_inventory_stock_resolver",
-                "data": {
-                    "assistantResponse": (
-                        f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요. "
-                        "현재 매장 재고가 바로 확인되지 않아 다른 매장이나 조건으로 다시 확인해드릴게요."
-                    ),
-                    "quickReplies": [
-                        {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
-                        {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
-                        {"label": "대체상품 찾기", "domain": "DISCOVERY"},
-                    ],
-                    "predictedDomains": ["TRANSACTION", "DISCOVERY"],
-                    "metadata": {
-                        "response_shape_key": "stock_unavailable",
-                        "stock_check_mode": "inventory_only",
-                    },
-                },
-            }
+            return emitted_events, _build_pure_inventory_stock_event(
+                store_name=store_name,
+                tire_size=tire_size,
+                ord_qty=ord_qty,
+                logistics_result=logistics_result,
+            )
 
         pure_inventory_stock_resolution = await _resolve_pure_inventory_stock_with_code()
         if pure_inventory_stock_resolution is not None:
