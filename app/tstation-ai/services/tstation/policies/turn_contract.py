@@ -187,6 +187,7 @@ def build_turn_contract(
     blocking_required_slots = _blocking_required_slots(
         required_slots,
         resolvable_required_slots,
+        intent=intent,
         routing_result=routing_result,
     )
     allowed_tools = tuple(tool_plan.allowed_tools) if tool_plan is not None else ()
@@ -204,7 +205,7 @@ def build_turn_contract(
         required_slots=blocking_required_slots,
         tool_plan=tool_plan,
     )
-    if blocking_required_slots and _is_blocking_reference(routing_result):
+    if blocking_required_slots and _is_blocking_reference(routing_result, intent=intent):
         risk_level = "high"
     fallback_reason = _fallback_reason(
         intent=intent,
@@ -777,18 +778,25 @@ def _blocking_required_slots(
     required_slots: tuple[str, ...],
     resolvable_required_slots: tuple[str, ...],
     *,
+    intent: str,
     routing_result: Any | None,
 ) -> tuple[str, ...]:
     blocking = [slot for slot in required_slots if slot not in set(resolvable_required_slots)]
     referred = _referred_objects(routing_result)
-    if referred.get("needs_clarification") and referred.get("status") in {"missing", "ambiguous"}:
+    if (
+        referred.get("needs_clarification")
+        and referred.get("status") in {"missing", "ambiguous"}
+        and not _reference_guard_exempt_intent(intent)
+    ):
         slot = _slot_for_referred_object_type(str(referred.get("type") or "none"))
         if slot not in blocking:
             blocking.append(slot)
     return tuple(blocking)
 
 
-def _is_blocking_reference(routing_result: Any | None) -> bool:
+def _is_blocking_reference(routing_result: Any | None, *, intent: str = "") -> bool:
+    if _reference_guard_exempt_intent(intent):
+        return False
     referred = _referred_objects(routing_result)
     return bool(
         referred.get("needs_clarification")
@@ -797,10 +805,16 @@ def _is_blocking_reference(routing_result: Any | None) -> bool:
 
 
 def _has_blocking_reference(contract: TurnContract) -> bool:
+    if _reference_guard_exempt_intent(contract.intent):
+        return False
     return bool(
         contract.referred_objects.get("needs_clarification")
         and contract.referred_objects.get("status") in {"missing", "ambiguous"}
     )
+
+
+def _reference_guard_exempt_intent(intent: str) -> bool:
+    return str(intent or "") in {"favorite_store_lookup", "oe_re_concept_explanation"}
 
 
 def _slot_for_referred_object_type(object_type: str) -> str:

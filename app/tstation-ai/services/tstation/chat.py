@@ -7735,8 +7735,9 @@ def _delivery_policy_guard_event(user_text: str, recent_context: str = "") -> di
         predicted_domains = ["SUPPORT", "DISCOVERY", "TRANSACTION"]
     elif decision.intent == DeliveryPolicyIntent.ONLINE_STORE_PRICE_POLICY:
         assistant_response = (
+            "서울이든 제주든 온라인 주문 자체는 같은 방식으로 진행돼요. "
+            "주문/결제 단계에서 최종 금액을 확인한 뒤 선택한 장착점에서 장착받는 방식입니다.\n\n"
             "온라인 판매가와 매장 현장 판매가는 행사, 쿠폰, 재고, 매장 운영 조건에 따라 다를 수 있어요. "
-            "온라인 주문은 주문/결제 단계에서 최종 금액을 확인한 뒤 선택한 장착점에서 장착받는 방식입니다.\n\n"
             "제주 지역은 상품 1개당 배송비 1만 원이 추가될 수 있어 최종 결제금액에서 함께 확인해 주세요."
         )
         quick_replies = [

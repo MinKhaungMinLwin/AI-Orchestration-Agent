@@ -802,6 +802,17 @@ def test_delivery_policy_gate_handles_online_store_price_policy() -> None:
     assert "온라인 판매가와 매장 현장 판매가" in event["data"]["assistantResponse"]
 
 
+def test_delivery_policy_gate_handles_regional_purchase_method_policy() -> None:
+    text = "서울이랑 제주 구매방법 달라?"
+    decision = decide_delivery_policy_gate(user_text=text)
+
+    assert decision.intent == DeliveryPolicyIntent.ONLINE_STORE_PRICE_POLICY
+    event = _delivery_policy_guard_event(text)
+    assert event is not None
+    assert event["assistant_response_source"] == "code_online_store_price_policy_guard"
+    assert "서울이든 제주든 온라인 주문 자체는 같은 방식" in event["data"]["assistantResponse"]
+
+
 def test_delivery_policy_gate_handles_regional_product_price_policy() -> None:
     text = "벤투스 에어 S 상품 제주도에서 사는거랑, 서울에서 사는거랑 가격 똑같을까?"
     decision = decide_delivery_policy_gate(user_text=text)
@@ -9651,6 +9662,30 @@ def test_turn_contract_detects_tool_drift_for_favorite_store_lookup() -> None:
         "called_tools": ["get_store_list_tool"],
         "allowed_tools": ["get_favorite_stores_tool"],
     }]
+
+
+def test_turn_contract_does_not_block_missing_reference_for_favorite_store_lookup() -> None:
+    frame = build_transaction_intent_frame("내 단골매장 어디지?", known_slots={})
+    contract = build_turn_contract(
+        user_text="내 단골매장 어디지?",
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text="내 단골매장 어디지?",
+            known_slots=dict(frame.known_slots),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["order or profile lookup to find user's favorite store"],
+            referred_object_status="missing",
+            referred_object_type="none",
+            needs_clarification=True,
+        ),
+    )
+
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
 
 
 def _routing_result(
