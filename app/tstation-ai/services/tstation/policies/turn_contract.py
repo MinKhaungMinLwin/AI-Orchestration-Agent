@@ -66,6 +66,14 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 })
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
+_REFERENCE_SIGNAL_RE = re.compile(
+    r"그거|이거|요거|저거|"
+    r"그\s*상품|이\s*상품|해당\s*상품|"
+    r"그\s*매장|이\s*매장|해당\s*매장|거기|여기|저기|"
+    r"첫\s*번째|1\s*번|두\s*번째|2\s*번|"
+    r"방금\s*거|아까\s*거|최근\s*거|해당\s*건",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +97,7 @@ class TurnContract:
     execution_plan: tuple[str, ...] = ()
     referred_objects: Mapping[str, Any] = field(default_factory=dict)
     planner_confidence: float | None = None
+    has_reference_signal: bool = False
     planner_source: str | None = None
     override_applied: bool = False
     override_reason: str | None = None
@@ -117,6 +126,7 @@ class TurnContract:
             "execution_plan": list(self.execution_plan),
             "referred_objects": dict(self.referred_objects),
             "planner_confidence": self.planner_confidence,
+            "has_reference_signal": self.has_reference_signal,
             "planner_source": self.planner_source,
             "override_applied": self.override_applied,
             "override_reason": self.override_reason,
@@ -180,6 +190,7 @@ def build_turn_contract(
         if oe_replacement_type and not known_slots.get("oe_replacement_type"):
             known_slots["oe_replacement_type"] = oe_replacement_type
 
+    has_reference_signal = _has_reference_signal(user_text)
     required_slots = _merge_tuple(
         intent_frame.missing_slots if intent_frame is not None else (),
         tool_plan.required_slots if tool_plan is not None else (),
@@ -197,6 +208,7 @@ def build_turn_contract(
     )
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan)
     blocking_required_slots = _blocking_required_slots(
+        user_text,
         required_slots,
         resolvable_required_slots,
         intent=intent,
@@ -217,7 +229,11 @@ def build_turn_contract(
         required_slots=blocking_required_slots,
         tool_plan=tool_plan,
     )
-    if blocking_required_slots and _is_blocking_reference(routing_result, intent=intent):
+    if blocking_required_slots and _is_blocking_reference(
+        routing_result,
+        user_text=user_text,
+        intent=intent,
+    ):
         risk_level = "high"
     fallback_reason = _fallback_reason(
         intent=intent,
@@ -244,6 +260,7 @@ def build_turn_contract(
         execution_plan=execution_plan,
         referred_objects=_referred_objects(routing_result),
         planner_confidence=_planner_confidence(routing_result),
+        has_reference_signal=has_reference_signal,
         planner_source=_planner_source(routing_result, cross_domain_plan),
         override_applied=bool(getattr(routing_result, "override_applied", False)),
         override_reason=str(getattr(routing_result, "override_reason", "") or "") or None,
@@ -798,6 +815,7 @@ def _resolvable_required_slots(
 
 
 def _blocking_required_slots(
+    user_text: str,
     required_slots: tuple[str, ...],
     resolvable_required_slots: tuple[str, ...],
     *,
@@ -805,35 +823,65 @@ def _blocking_required_slots(
     routing_result: Any | None,
 ) -> tuple[str, ...]:
     blocking = [slot for slot in required_slots if slot not in set(resolvable_required_slots)]
-    referred = _referred_objects(routing_result)
-    if (
-        referred.get("needs_clarification")
-        and referred.get("status") in {"missing", "ambiguous"}
-        and not _reference_guard_exempt_intent(intent)
+    if _should_apply_reference_guard(
+        user_text=user_text,
+        intent=intent,
+        routing_result=routing_result,
     ):
+        referred = _referred_objects(routing_result)
         slot = _slot_for_referred_object_type(str(referred.get("type") or "none"))
         if slot not in blocking:
             blocking.append(slot)
     return tuple(blocking)
 
 
-def _is_blocking_reference(routing_result: Any | None, *, intent: str = "") -> bool:
-    if _reference_guard_exempt_intent(intent):
-        return False
-    referred = _referred_objects(routing_result)
-    return bool(
-        referred.get("needs_clarification")
-        and referred.get("status") in {"missing", "ambiguous"}
+def _is_blocking_reference(routing_result: Any | None, *, user_text: str = "", intent: str = "") -> bool:
+    return _should_apply_reference_guard(
+        user_text=user_text,
+        intent=intent,
+        routing_result=routing_result,
     )
 
 
 def _has_blocking_reference(contract: TurnContract) -> bool:
     if _reference_guard_exempt_intent(contract.intent):
         return False
-    return bool(
+    referred_type = str(contract.referred_objects.get("type") or "none")
+    if not (
         contract.referred_objects.get("needs_clarification")
         and contract.referred_objects.get("status") in {"missing", "ambiguous"}
-    )
+    ):
+        return False
+    if referred_type == "none":
+        return contract.has_reference_signal
+    if referred_type == "store" and not contract.has_reference_signal:
+        return False
+    return True
+
+
+def _should_apply_reference_guard(
+    *,
+    user_text: str,
+    intent: str,
+    routing_result: Any | None,
+) -> bool:
+    if _reference_guard_exempt_intent(intent):
+        return False
+    referred = _referred_objects(routing_result)
+    if not (
+        referred.get("needs_clarification")
+        and referred.get("status") in {"missing", "ambiguous"}
+    ):
+        return False
+    referred_type = str(referred.get("type") or "none")
+    has_reference_signal = _has_reference_signal(user_text)
+    if referred_type == "none":
+        return has_reference_signal
+    if referred_type == "store" and not has_reference_signal:
+        return False
+    if has_reference_signal:
+        return True
+    return referred_type in {"product", "product_set", "order", "coupon"}
 
 
 def _reference_guard_exempt_intent(intent: str) -> bool:
@@ -848,6 +896,10 @@ def _slot_for_referred_object_type(object_type: str) -> str:
         "order": "order",
         "coupon": "coupon",
     }.get(object_type, "reference")
+
+
+def _has_reference_signal(user_text: str) -> bool:
+    return bool(_REFERENCE_SIGNAL_RE.search(str(user_text or "")))
 
 
 def _slots_from_model(model: Any | None) -> dict[str, Any]:

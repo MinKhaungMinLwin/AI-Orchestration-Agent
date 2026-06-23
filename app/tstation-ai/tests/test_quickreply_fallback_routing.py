@@ -80,6 +80,7 @@ from services.tstation.chat import (
     _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
     _clear_stale_product_slots_for_new_recommendation,
+    _clear_stale_store_search_context_for_general_turn,
     _datepick_template_recovery_candidate_from_messages,
     _verified_datepick_order_values,
     _comparison_query_with_recent_context,
@@ -9729,6 +9730,111 @@ def test_turn_contract_does_not_block_missing_reference_for_favorite_store_looku
 
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+def test_turn_contract_does_not_block_reference_when_router_only_marks_none_reference() -> None:
+    contract = build_turn_contract(
+        user_text="우리나라에 젤 비싼 얼라인먼트 장비는 뭘까?",
+        merged_slots=ConversationSlots(goal_type="store_finder", shop_id="F00721", shop_name="티스테이션 판교점"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["leading:single_domain"],
+            referred_object_status="missing",
+            referred_object_type="none",
+            needs_clarification=True,
+        ),
+    )
+
+    assert contract.blocking_required_slots == ()
+    assert contract.has_reference_signal is False
+    assert not should_guard_required_slots(contract)
+
+
+def test_clear_stale_store_search_context_for_general_turn() -> None:
+    slots = ConversationSlots(
+        goal_type="store_finder",
+        pending_intent="reservation",
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        region="경기",
+        user_preferences_text="얼라인먼트 잘 보는 곳",
+    )
+
+    cleared = _clear_stale_store_search_context_for_general_turn(
+        slots,
+        user_text="우리나라에서 제일 비싼 장비는?",
+        regex_slots=ConversationSlots(),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["leading:single_domain"],
+            referred_object_status="missing",
+            referred_object_type="none",
+            needs_clarification=True,
+        ),
+    )
+
+    assert cleared == {
+        "goal_type": "store_finder",
+        "pending_intent": "reservation",
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "region": "경기",
+        "user_preferences_text": "얼라인먼트 잘 보는 곳",
+    }
+    assert slots.goal_type is None
+    assert slots.pending_intent is None
+    assert slots.shop_id is None
+    assert slots.shop_name is None
+    assert slots.region is None
+
+
+def test_clear_stale_store_search_context_preserves_actual_store_reference_followup() -> None:
+    slots = ConversationSlots(
+        goal_type="store_finder",
+        pending_intent="reservation",
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+    )
+
+    cleared = _clear_stale_store_search_context_for_general_turn(
+        slots,
+        user_text="그 매장 얼라인먼트 잘 봐?",
+        regex_slots=ConversationSlots(),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["leading:single_domain"],
+            referred_object_status="missing",
+            referred_object_type="store",
+            needs_clarification=True,
+        ),
+    )
+
+    assert cleared == {}
+    assert slots.goal_type == "store_finder"
+    assert slots.shop_id == "F00721"
+    assert slots.shop_name == "티스테이션 판교점"
+
+
+def test_clear_stale_store_search_context_preserves_explicit_store_finder_turn() -> None:
+    slots = ConversationSlots(goal_type="store_finder", pending_intent="reservation", shop_id="F00721")
+
+    cleared = _clear_stale_store_search_context_for_general_turn(
+        slots,
+        user_text="얼라인먼트 잘 보는 매장 찾아줘",
+        regex_slots=ConversationSlots(),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["leading:single_domain"],
+            referred_object_status="missing",
+            referred_object_type="none",
+            needs_clarification=True,
+        ),
+    )
+
+    assert cleared == {}
+    assert slots.goal_type == "store_finder"
+    assert slots.pending_intent == "reservation"
+    assert slots.shop_id == "F00721"
 
 
 def test_turn_contract_preserves_router_override_metadata() -> None:

@@ -12941,6 +12941,48 @@ def _is_plain_store_search_reset_allowed(
     return not _is_confirmed_product_store_scope_followup(text, slots)
 
 
+def _clear_stale_store_search_context_for_general_turn(
+    slots: ConversationSlots,
+    *,
+    user_text: str,
+    regex_slots: ConversationSlots,
+    routing_result: MultiAgentDomain | None,
+) -> dict[str, Any]:
+    text = str(user_text or "").strip()
+    if not text or routing_result is None:
+        return {}
+    domains = [
+        getattr(domain, "value", str(domain)).lower()
+        for domain in list(getattr(routing_result, "domains", []) or [])
+    ]
+    if not domains or domains[0] not in {
+        MultiAgentDomain.Domain.LEADING.value,
+        MultiAgentDomain.Domain.SUPPORT.value,
+    }:
+        return {}
+    if regex_slots.pending_intent is not None or regex_slots.shop_name is not None or regex_slots.region is not None:
+        return {}
+    if ConversationSlots.has_store_finder_intent(text):
+        return {}
+    if _STORE_REFERENCE_SIGNAL_RE.search(text):
+        return {}
+    if (
+        getattr(slots, "goal_type", None) != "store_finder"
+        and getattr(slots, "shop_id", None) is None
+        and getattr(slots, "shop_name", None) is None
+    ):
+        return {}
+
+    cleared: dict[str, Any] = {}
+    for field in ("goal_type", "pending_intent", "shop_id", "shop_name", "region", "user_preferences_text"):
+        value = getattr(slots, field, None)
+        if value in (None, "", [], {}):
+            continue
+        cleared[field] = value
+        setattr(slots, field, None)
+    return cleared
+
+
 def _normalize_store_name_for_slot_compare(store_name: str | None) -> str:
     """Normalize store names enough to compare current-turn anchors with carried slots."""
     normalized = re.sub(r"\s+", "", str(store_name or "").strip()).lower()
@@ -13014,6 +13056,11 @@ def _clear_stale_product_identity_for_fresh_transaction(
 
 _RECOMMENDATION_SIZE_REFERENCE_RE = re.compile(
     r"이\s*사이즈|그\s*사이즈|같(?:은|은)\s*사이즈|동일\s*사이즈|해당\s*사이즈",
+    re.IGNORECASE,
+)
+_STORE_REFERENCE_SIGNAL_RE = re.compile(
+    r"그\s*매장|이\s*매장|해당\s*매장|거기|여기|저기|"
+    r"첫\s*번째\s*매장|1\s*번\s*매장|방금\s*매장|아까\s*매장",
     re.IGNORECASE,
 )
 
@@ -16974,6 +17021,17 @@ class TStationChatServiceV2:
         # ordered differently from the deterministic task decomposition.
         cross_domain_plan = None
         try:
+            cleared_stale_store_context = _clear_stale_store_search_context_for_general_turn(
+                merged_slots,
+                user_text=last_user_text,
+                regex_slots=regex_slots,
+                routing_result=routing_result,
+            )
+            if cleared_stale_store_context:
+                logger.info(
+                    "[SLOTS] Cleared stale store-search context for general turn: %s",
+                    cleared_stale_store_context,
+                )
             router_requires_reference_clarification = bool(
                 routing_result is not None
                 and getattr(routing_result, "needs_clarification", False)
