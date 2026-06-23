@@ -130,20 +130,30 @@ def _decide_inventory_availability(
     slots: dict[str, Any],
     tool_result: dict[str, Any],
 ) -> ResponseDecision:
+    if _has_preview_schedule_slots(tool_result):
+        return _decision(
+            response_shape_key="reservation_slots",
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            forbidden_behaviors=("hide_available_stock",),
+            assistant_guidance="예약 가능한 슬롯이 있으면 재고 없음으로 보지 말고 datepick으로 이어간다.",
+        )
+
     requested_qty = _int_or_none(slots.get("quantity") or slots.get("ord_qty")) or 1
     available_qty = _available_quantity(tool_result)
     today_installable = bool(
-        tool_result.get("today_installable")
-        or tool_result.get("today_service_available")
+        _tool_result_value(tool_result, "today_installable")
+        or _tool_result_value(tool_result, "today_service_available")
         or _has_inventory_rows(tool_result, "todayShopArray")
     )
     tna_available = bool(
-        tool_result.get("tna_available")
-        or tool_result.get("is_tna_delivery")
+        _tool_result_value(tool_result, "tna_available")
+        or _tool_result_value(tool_result, "is_tna_delivery")
         or _has_inventory_rows(tool_result, "tnaShopArray")
     )
+    installable_store_available = _has_installable_preview_store(tool_result)
 
-    if available_qty < requested_qty and not today_installable and not tna_available:
+    if available_qty < requested_qty and not today_installable and not tna_available and not installable_store_available:
         return _decision(
             response_shape_key="stock_unavailable",
             response_shape=ResponseShape.NO_RESULT,
@@ -238,10 +248,10 @@ def _has_selected_booking_datetime(slots: dict[str, Any]) -> bool:
 
 def _available_quantity(tool_result: dict[str, Any]) -> int:
     for key in ("available_qty", "stock_qty", "quantity", "qty"):
-        value = _int_or_none(tool_result.get(key))
+        value = _int_or_none(_tool_result_value(tool_result, key))
         if value is not None:
             return value
-    stores = tool_result.get("stores")
+    stores = _tool_result_value(tool_result, "stores")
     if isinstance(stores, list):
         return sum(
             _int_or_none(store.get("available_qty") or store.get("stock_qty")) or 0
@@ -252,8 +262,58 @@ def _available_quantity(tool_result: dict[str, Any]) -> int:
 
 
 def _has_inventory_rows(tool_result: dict[str, Any], key: str) -> bool:
-    rows = tool_result.get(key)
+    rows = _tool_result_value(tool_result, key)
     return isinstance(rows, list) and bool(rows)
+
+
+def _has_installable_preview_store(tool_result: dict[str, Any]) -> bool:
+    for stores in _preview_store_lists(tool_result):
+        if any(isinstance(store, dict) and bool(store.get("is_installable")) for store in stores):
+            return True
+    return False
+
+
+def _has_preview_schedule_slots(tool_result: dict[str, Any]) -> bool:
+    for stores in _preview_store_lists(tool_result):
+        for store in stores:
+            if not isinstance(store, dict):
+                continue
+            slots = store.get("slots")
+            if isinstance(slots, list) and slots:
+                return True
+    return False
+
+
+def _tool_result_value(tool_result: dict[str, Any], key: str) -> Any:
+    if key in tool_result:
+        return tool_result.get(key)
+    data = tool_result.get("data")
+    if isinstance(data, dict):
+        if key in data:
+            return data.get(key)
+        for nested_key in ("inventory", "schedule", "logistics", "price"):
+            nested = data.get(nested_key)
+            if isinstance(nested, dict) and key in nested:
+                return nested.get(key)
+    return None
+
+
+def _preview_store_lists(tool_result: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    lists: list[list[dict[str, Any]]] = []
+    data = tool_result.get("data")
+    if isinstance(data, dict):
+        schedule = data.get("schedule")
+        if isinstance(schedule, dict):
+            stores = schedule.get("stores")
+            if isinstance(stores, list):
+                lists.append(stores)
+        stores = data.get("stores")
+        if isinstance(stores, list):
+            lists.append(stores)
+    stores = tool_result.get("stores")
+    if isinstance(stores, list):
+        lists.append(stores)
+    return lists
 
 
 def _int_or_none(value: Any) -> int | None:

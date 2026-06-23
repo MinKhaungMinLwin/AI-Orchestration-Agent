@@ -9539,6 +9539,44 @@ def test_turn_contract_blocks_datepick_for_unavailable_stock_response_policy() -
     assert "다른 매장 찾기" in _labels(event["data"]["quickReplies"])
 
 
+def test_transaction_preview_tool_result_with_schedule_slots_is_not_treated_as_stock_unavailable() -> None:
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots={
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "inventory": {
+                    "todayShopArray": [{"shopId": "F00721"}],
+                    "tnaShopArray": [{"shopId": "F00721"}],
+                },
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F00721",
+                        "is_installable": True,
+                        "slots": [{"cal_day": "20260623", "tm": "17"}],
+                    }],
+                },
+                "stores": [{
+                    "shop_id": "F00721",
+                    "is_installable": True,
+                }],
+            },
+        },
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "reservation_slots"
+    assert response_decision.template == TemplateName.DATE_PICK
+    assert "datepick_for_unavailable_stock" not in response_decision.forbidden_behaviors
+    assert "preorder" not in response_decision.forbidden_behaviors
+
+
 def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
     frame = IntentFrame(
         domain=PolicyDomain.TRANSACTION,
