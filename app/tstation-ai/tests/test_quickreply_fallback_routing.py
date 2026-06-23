@@ -1891,6 +1891,22 @@ def test_order_cancel_status_event_reports_lookup_result_without_request_guidanc
     assert data["quickReplies"][0]["label"] == "주문 상세 보기"
 
 
+def test_order_cancel_status_event_does_not_treat_tool_error_as_order_status() -> None:
+    event = _build_order_cancel_status_event(
+        {"status": "error", "message": "not found", "data": {"query_no": "O202606170019357"}},
+        {"ord_no": "O202606170019357"},
+    )
+
+    data = event["data"]
+    assert data["metadata"]["response_shape_key"] == "order_cancel_status_summary"
+    assert data["metadata"]["orderCancelStatusLookupFailed"] is True
+    assert "현재 error" not in data["assistantResponse"]
+    assert "확인하지 못했어요" in data["assistantResponse"]
+    assert data["quickReplies"] == [
+        {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+    ]
+
+
 def test_turn_contract_blocks_cancel_status_normalized_as_cancel_request() -> None:
     user_text = "O202606170019357 주문취소된거 맞지?"
     frame = build_transaction_intent_frame(user_text)

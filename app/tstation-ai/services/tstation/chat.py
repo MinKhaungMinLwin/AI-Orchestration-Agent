@@ -9021,13 +9021,33 @@ def _build_order_cancel_status_event(order_status_result: dict, order_row: dict 
     if not isinstance(data, dict):
         data = {}
     order_row = order_row or {}
+    tool_status = str(order_status_result.get("status") or "").strip().lower()
     ord_no = str(data.get("ord_no") or order_row.get("ord_no") or data.get("query_no") or "").strip()
+    if tool_status == "error":
+        response = "해당 주문번호의 주문 내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요."
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_order_cancel_status_lookup",
+            "data": {
+                "assistantResponse": response,
+                "quickReplies": [
+                    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": {
+                    "response_shape_key": "order_cancel_status_summary",
+                    "orderCancelStatusLookup": True,
+                    "orderCancelStatusLookupFailed": True,
+                },
+            },
+        }
     status = str(
         data.get("ord_prgs_stat_nm")
         or data.get("shop_vst_rsv_sts_label")
         or data.get("dlv_prgs_stat_nm")
         or data.get("status_nm")
-        or data.get("status")
         or ""
     ).strip()
     if not status:
