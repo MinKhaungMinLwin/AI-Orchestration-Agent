@@ -322,6 +322,10 @@ from services.tstation.policies.discovery_intent_policy import (
     is_best_seller_request,
     plan_discovery_tools,
 )
+from api.tstation.chat_message import (
+    _normalize_quick_order_action_payload,
+    _validate_quick_order_action_payload,
+)
 from services.tstation.policies.recommendation_scenario_catalog import recommendation_scenario_from_text
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.price_response_policy import build_price_intent_frame, decide_price_response
@@ -13558,6 +13562,7 @@ def test_preorder_summary_guard_preserves_execute_metadata() -> None:
 
     assert preorder is not None
     metadata = preorder["data"]["metadata"]
+    assert metadata["goodsNo"] == "G000000317682"
     assert metadata["goodsId"] == "G000000317682"
     assert metadata["shopId"] == "F00721"
     assert metadata["shopName"] == "티스테이션 판교점"
@@ -13567,6 +13572,60 @@ def test_preorder_summary_guard_preserves_execute_metadata() -> None:
     assert metadata["paymentAmount"] == 314400
     assert metadata["productName"] == "다이나프로 HPX"
     assert metadata["tireSize"] == "235/55R19"
+
+
+def test_quick_order_action_payload_normalizes_legacy_preorder_metadata() -> None:
+    preorder_payload = {
+        "isReadyToOrder": True,
+        "orderInfo": {
+            "product": "다이나프로 HPX 235/55R19",
+            "quantity": 2,
+            "storeName": "티스테이션 판교점",
+            "bookingDateTime": "2026년 6월 23일 (화) 17:00",
+            "paymentAmount": 314400,
+        },
+        "metadata": {
+            "goodsId": "G000000317682",
+            "shopId": "F00721",
+            "carNo": "29조3344",
+            "carLncCd": "W036270",
+        },
+    }
+
+    normalized = _normalize_quick_order_action_payload(
+        {
+            "goodsId": "G000000317682",
+            "shopId": "F00721",
+            "ordQty": 2,
+            "paymentAmount": 314400,
+        },
+        preorder_payload,
+    )
+    valid, reason = _validate_quick_order_action_payload(normalized, preorder_payload)
+
+    assert valid is True
+    assert reason == "ok"
+    assert normalized["goods_no"] == "G000000317682"
+    assert normalized["shop_id"] == "F00721"
+    assert normalized["ord_qty"] == 2
+    assert normalized["requested_cal_day"] == "20260623"
+    assert normalized["rsv_hour"] == "17"
+    assert normalized["car_no"] == "29조3344"
+    assert normalized["car_lnc_cd"] == "W036270"
+
+
+def test_quick_order_action_payload_blocks_missing_required_fields() -> None:
+    normalized = _normalize_quick_order_action_payload(
+        {"goodsNo": "G000000317682", "ordQty": 2},
+        {"metadata": {}, "orderInfo": {}},
+    )
+
+    valid, reason = _validate_quick_order_action_payload(normalized, {})
+
+    assert valid is False
+    assert reason.startswith("missing:")
+    assert "shop_id" in reason
+    assert "car_no" in reason
 
 
 def test_turn_contract_promotes_planner_quick_order_execute_over_code_reservation_drift() -> None:

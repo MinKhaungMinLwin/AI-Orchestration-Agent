@@ -6867,6 +6867,7 @@ def _coerce_order_summary_quickreply_to_preorder(
             "isReadyToOrder": True,
             "isReadyToAddToCart": False,
             "metadata": {
+                "goodsNo": getattr(slot_state, "goods_no", None) if slot_state is not None else None,
                 "goodsId": getattr(slot_state, "goods_no", None) if slot_state is not None else None,
                 "shopId": getattr(slot_state, "shop_id", None) if slot_state is not None else None,
                 "shopName": getattr(slot_state, "shop_name", None) if slot_state is not None else store_name,
@@ -6882,6 +6883,85 @@ def _coerce_order_summary_quickreply_to_preorder(
         },
         "nextAction": {"type": "stop", "domain": None},
     }
+
+
+def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> None:
+    if not isinstance(event_data, dict) or event_data.get("isReadyToOrder") is not True:
+        return
+    order_info = event_data.get("orderInfo") if isinstance(event_data.get("orderInfo"), dict) else {}
+    metadata = event_data.get("metadata") if isinstance(event_data.get("metadata"), dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+        event_data["metadata"] = metadata
+
+    product_text = str(order_info.get("product") or metadata.get("productName") or "").strip()
+    booking_text = str(order_info.get("bookingDateTime") or metadata.get("bookingDateTime") or "").strip()
+    requested_cal_day = (
+        str(metadata.get("requestedCalDay") or metadata.get("requested_cal_day") or "").strip()
+        or _cal_day_from_korean_date_text(booking_text)
+    )
+    rsv_hour = (
+        str(metadata.get("rsvHour") or metadata.get("rsv_hour") or "").strip()
+        or _reservation_hour_from_text(booking_text)
+    )
+    quantity = metadata.get("ordQty") or metadata.get("ord_qty") or metadata.get("quantity") or order_info.get("quantity")
+    payment_amount = (
+        metadata.get("paymentAmount")
+        or metadata.get("payment_amount")
+        or order_info.get("paymentAmount")
+        or (getattr(slot_state, "payment_amount", None) if slot_state is not None else None)
+    )
+    goods_no = (
+        metadata.get("goodsNo")
+        or metadata.get("goodsId")
+        or metadata.get("goods_no")
+        or (getattr(slot_state, "goods_no", None) if slot_state is not None else None)
+    )
+    product_name = (
+        metadata.get("productName")
+        or metadata.get("goodsNm")
+        or (getattr(slot_state, "tire_model", None) if slot_state is not None else None)
+        or re.sub(r"\s*\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\s*$", "", product_text, flags=re.IGNORECASE).strip()
+        or product_text
+    )
+    tire_size = (
+        metadata.get("tireSize")
+        or metadata.get("tire_size")
+        or normalize_tire_size(product_text)
+        or (getattr(slot_state, "tire_size", None) if slot_state is not None else None)
+    )
+    shop_id = metadata.get("shopId") or metadata.get("shop_id") or (
+        getattr(slot_state, "shop_id", None) if slot_state is not None else None
+    )
+    store_name = (
+        metadata.get("storeName")
+        or metadata.get("shopName")
+        or order_info.get("storeName")
+        or (getattr(slot_state, "shop_name", None) if slot_state is not None else None)
+    )
+
+    metadata["goodsNo"] = goods_no
+    metadata.setdefault("goodsId", goods_no)
+    metadata["ordQty"] = quantity
+    metadata["shopId"] = shop_id
+    metadata["requestedCalDay"] = requested_cal_day
+    metadata["rsvHour"] = rsv_hour
+    metadata["paymentAmount"] = payment_amount
+    metadata["productName"] = product_name
+    metadata["tireSize"] = tire_size
+    metadata["storeName"] = store_name
+    metadata.setdefault("shopName", store_name)
+    metadata.setdefault("bookingDateTime", booking_text)
+    for canonical, legacy in (
+        ("carNo", "car_no"),
+        ("carLncCd", "car_lnc_cd"),
+        ("mbrCarRegSeq", "mbr_car_reg_seq"),
+    ):
+        value = metadata.get(canonical) or metadata.get(legacy) or (
+            getattr(slot_state, legacy, None) if slot_state is not None else None
+        )
+        if value not in (None, ""):
+            metadata[canonical] = value
 
 
 def _choose_quickreply_fallback(
@@ -17439,7 +17519,7 @@ class TStationChatServiceV2:
                 product_name,
                 flags=re.IGNORECASE,
             ).strip() or product_name
-        tire_size = normalize_tire_size(product_text)
+        tire_size = normalize_tire_size(metadata.get("tireSize") or metadata.get("tire_size") or product_text)
         if tire_size:
             slot_values["tire_size"] = tire_size
 
@@ -26546,6 +26626,8 @@ class TStationChatServiceV2:
                                 "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
                                 confirmed_product_slots,
                             )
+                    if last_template == "preOrder":
+                        _standardize_preorder_metadata(event_data, pending_slots or initial_slots)
                     preorder_slots = TStationChatServiceV2._preorder_slot_values_from_data(event_data)
                     if preorder_slots:
                         from schemas.tstation.slots import ConversationSlots
