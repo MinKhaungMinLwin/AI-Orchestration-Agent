@@ -10696,6 +10696,89 @@ def test_quick_order_execute_promotes_ready_preorder_confirmation(user_text: str
     assert not should_guard_required_slots(contract)
 
 
+def test_preorder_slot_recovery_uses_ready_preorder_payload_as_execute_source() -> None:
+    preorder = {
+        "template": "preOrder",
+        "data": {
+            "isReadyToOrder": True,
+            "orderInfo": {
+                "product": "다이나프로 HPX 235/55R19",
+                "quantity": 2,
+                "storeName": "티스테이션 판교점",
+                "bookingDateTime": "2026년 6월 23일 (화) 17:00",
+                "paymentAmount": 314400,
+            },
+            "metadata": {
+                "goodsId": "G000000317682",
+                "shopId": "F00721",
+            },
+        },
+    }
+
+    assert TStationChatServiceV2._preorder_slot_values_from_data(preorder) == {
+        "goods_no": "G000000317682",
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "ord_qty": 2,
+        "payment_amount": 314400,
+        "tire_size": "235/55R19",
+        "requested_cal_day": "20260623",
+        "rsv_hour": "17",
+    }
+
+
+def test_turn_contract_promotes_planner_quick_order_execute_over_code_reservation_drift() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="quick_order_reservation",
+        sub_intent="reservation",
+        known_slots={
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "payment_amount": 314400,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="주문 확정",
+        known_slots=dict(frame.known_slots),
+    )
+    routing_result = MultiAgentDomain(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        reason="ready preorder confirmation",
+        execution_plan=["transaction:quick_order_execute"],
+        user_behavior="confirms a ready preOrder card",
+        flow="preorder_confirmation_execute",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.9,
+        agent_prompt_profile="full",
+    )
+
+    contract = build_turn_contract(
+        user_text="주문 확정",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=routing_result,
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert contract.intent == "quick_order_execute"
+    assert "quick_order_tool" in contract.allowed_tools
+    assert {"field": "intent", "code_frame": "quick_order_reservation", "planner": "quick_order_execute"} in [
+        dict(item) for item in contract.contract_drift
+    ]
+
+
 def test_quick_order_execute_blocks_tool_when_required_slots_missing() -> None:
     known_slots = {
         "goods_no": "G000000317682",

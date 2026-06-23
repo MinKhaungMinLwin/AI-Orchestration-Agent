@@ -215,6 +215,8 @@ def build_turn_contract(
     has_reference_signal = _has_reference_signal(user_text)
     if intent == "transaction_fallback" and _is_recoverable_today_install_stock_contract(known_slots):
         intent = "stock_store_search"
+    if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
+        intent = "quick_order_execute"
     required_slots = _merge_tuple(
         intent_frame.missing_slots if intent_frame is not None else (),
         tool_plan.required_slots if tool_plan is not None else (),
@@ -241,6 +243,9 @@ def build_turn_contract(
     )
     allowed_tools = tuple(tool_plan.allowed_tools) if tool_plan is not None else ()
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
+    if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
+        allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
+        forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
     if domain == "support" and policy_intent and policy_intent != "none":
         intent = policy_intent
         allowed_tools = _merge_tuple(
@@ -773,7 +778,15 @@ def _quick_order_execute_contract_violation(
     called_tools: list[str] | tuple[str, ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
-    if contract is None or str(contract.intent or "") != "quick_order_execute":
+    if contract is None:
+        return None
+    is_execute_contract = str(contract.intent or "") == "quick_order_execute"
+    is_execute_planner_drift = (
+        str(contract.planner_intent or "") == "quick_order_execute"
+        and str(contract.intent or "") == "quick_order_reservation"
+        and _has_quick_order_execute_slots(contract.known_slots)
+    )
+    if not (is_execute_contract or is_execute_planner_drift):
         return None
     called_tools = tuple(str(tool) for tool in tuple(called_tools or ()) if str(tool).strip())
     if "quick_order_tool" not in called_tools:
@@ -796,6 +809,23 @@ def _quick_order_execute_contract_violation(
             "assistant_response_source": str(assistant_response_source or ""),
         }
     return None
+
+
+def _has_quick_order_execute_slots(slots: Mapping[str, Any] | None) -> bool:
+    if not isinstance(slots, Mapping):
+        return False
+    quantity = slots.get("ord_qty") or slots.get("quantity")
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    return bool(
+        slots.get("goods_no")
+        and slots.get("shop_id")
+        and slots.get("requested_cal_day")
+        and slots.get("rsv_hour")
+        and has_quantity
+    )
 
 
 def _comparison_metric_row_label(metric: str) -> str:
