@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import logging
 import re
@@ -31,6 +33,39 @@ GoalType = Literal[
     "price_inquiry",
     "place_order",
 ]
+
+
+class RecommendationContext(BaseModel):
+    """Typed recommendation-only context kept separate from durable common slots."""
+
+    scenario: Optional[str] = None
+    applied_rcmd_type: Optional[str] = None
+    applied_vehicle_type: Optional[str] = None
+    applied_season_nm: Optional[str] = None
+    approximation: bool = False
+    approximation_basis: Optional[str] = None
+    source_text: Optional[str] = None
+    fitment_source: Optional[str] = None
+    tool_args_patch: Optional[dict[str, Any]] = None
+    expected_tool_args: Optional[dict[str, Any]] = None
+    scope: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "RecommendationContext" | None) -> "RecommendationContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        data = {key: item for key, item in dict(value).items() if item not in (None, "")}
+        if "scenario" not in data and data.get("recommendation_scenario"):
+            data["scenario"] = data.get("recommendation_scenario")
+        return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
+
+    def to_policy_dict(self) -> dict[str, Any]:
+        data = self.model_dump(exclude_none=True)
+        if self.scenario:
+            data["recommendation_scenario"] = self.scenario
+        return data
 
 
 class ConversationSlots(BaseModel):
@@ -73,7 +108,7 @@ class ConversationSlots(BaseModel):
     recommendation_variants: Optional[list[dict[str, Any]]] = None
     recommendation_limit_per_variant: Optional[int] = None
     recommendation_source_text: Optional[str] = None
-    recommendation_context: Optional[dict[str, Any]] = None
+    recommendation_context: Optional[RecommendationContext] = None
     availability_context: Optional[dict[str, Any]] = None
     order_context: Optional[dict[str, Any]] = None
     quantity_comparison_context: Optional[dict[str, Any]] = None
@@ -984,9 +1019,16 @@ class CanonicalSlotState(BaseModel):
 
     @classmethod
     def from_slots(cls, slots: ConversationSlots) -> "CanonicalSlotState":
+        def _value(value: Any) -> Any:
+            if isinstance(value, RecommendationContext):
+                return value.to_policy_dict()
+            if isinstance(value, BaseModel):
+                return value.model_dump(exclude_none=True)
+            return value
+
         def _group(fields: tuple[str, ...]) -> dict[str, Any]:
             return {
-                field: getattr(slots, field)
+                field: _value(getattr(slots, field))
                 for field in fields
                 if getattr(slots, field, None) is not None
             }
@@ -1014,9 +1056,7 @@ class CanonicalSlotState(BaseModel):
         if current_tire_size:
             slots.tire_size = current_tire_size
         if recommendation_context:
-            slots.recommendation_context = {
-                key: value for key, value in dict(recommendation_context).items() if value not in (None, "")
-            }
+            slots.recommendation_context = RecommendationContext.from_mapping(recommendation_context)
 
         product_reset_fields = (
             "goods_no",

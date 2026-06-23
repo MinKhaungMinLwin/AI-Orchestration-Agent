@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.recommendation_scenario_catalog import (
@@ -11,6 +11,37 @@ from services.tstation.policies.recommendation_scenario_catalog import (
     recommendation_scenario_metadata,
 )
 from services.tstation.policies.response_decision import ToolPlan
+
+
+def _recommendation_context_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "to_policy_dict"):
+        try:
+            return {key: item for key, item in value.to_policy_dict().items() if item not in (None, "")}
+        except Exception:
+            return {}
+    if isinstance(value, Mapping):
+        data = {key: item for key, item in value.items() if item not in (None, "")}
+        if "recommendation_scenario" not in data and data.get("scenario"):
+            data["recommendation_scenario"] = data.get("scenario")
+        return data
+    return {}
+
+
+def _recommendation_expected_tool_args(args: Mapping[str, Any]) -> dict[str, Any]:
+    tracked_keys = (
+        "rcmd_type",
+        "vehicle_type",
+        "season_nm",
+        "tire_size",
+        "brand_cd",
+        "allow_cross_brand_fill",
+        "pfm_nm",
+        "prc_grd",
+        "sort_by",
+    )
+    return {key: args[key] for key in tracked_keys if args.get(key) not in (None, "")}
 
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
@@ -502,9 +533,11 @@ def build_discovery_intent_frame(
     comparison_metric = str(slots.get("comparison_metric") or "").strip()
     discovery_followup_action = str(slots.get("discovery_followup_action") or "").strip()
     router_recommendation_scenario = str(slots.get("recommendation_scenario") or "").strip()
-    recommendation_context = slots.get("recommendation_context") if isinstance(slots.get("recommendation_context"), dict) else {}
+    recommendation_context = _recommendation_context_dict(slots.get("recommendation_context"))
     context_recommendation_scenario = str(
-        (recommendation_context or {}).get("recommendation_scenario") or ""
+        (recommendation_context or {}).get("recommendation_scenario")
+        or (recommendation_context or {}).get("scenario")
+        or ""
     ).strip()
 
     entities: dict[str, Any] = {
@@ -1049,6 +1082,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             "drop_recommendation_scenario",
             "claim_unsupported_scenario_as_exact",
         )
+        metadata["recommendation_expected_tool_args"] = _recommendation_expected_tool_args(args)
     if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
         allowed_tools = ("get_my_cars_tool", "get_products_recommendations_tool")
         required_slots = ("tire_size",)

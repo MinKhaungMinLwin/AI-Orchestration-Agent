@@ -165,6 +165,7 @@ from services.tstation.chat import (
     _direct_tire_delivery_guard_event,
     _build_vehicle_information_event,
     _build_complaint_scope_guard_event,
+    _build_recommendation_contract_fallback_event,
     _choose_quickreply_fallback,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
@@ -190,6 +191,7 @@ from services.tstation.chat import (
     _NON_SELF_CAR_RE,
     _looks_like_generic_dead_end_chips,
     _normalize_discovery_policy_quickreply,
+    _normalize_recommendation_approximation_response,
     _complaint_scope_for_turn,
     _infer_complaint_scope,
     _normalize_existing_reservation_change_quickreply,
@@ -270,7 +272,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
-from schemas.tstation.slots import CanonicalSlotState, ConversationSlots
+from schemas.tstation.slots import CanonicalSlotState, ConversationSlots, RecommendationContext
 from services.tstation.template_mapper import (
     _map_store_detail_info,
     current_discovery_response_decision,
@@ -8869,6 +8871,253 @@ def test_recommendation_scenario_metadata_flows_into_turn_contract() -> None:
     assert contract.known_slots["approximation_basis"] == "SUV/하중 안정성"
     assert decision.metadata["recommendation_scenario"] == "offroad"
     assert decision.metadata["approximation"] is True
+    assert plan.metadata["recommendation_expected_tool_args"] == {
+        "rcmd_type": "heavy_load",
+        "vehicle_type": "suv",
+    }
+
+
+def test_sized_offroad_recommendation_tool_plan_records_expected_tool_args() -> None:
+    frame = build_discovery_intent_frame(
+        "오프로드용 타이어 추천",
+        known_slots={"tire_size": "235/55R19"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert plan.tool_args_patch["rcmd_type"] == "heavy_load"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+    assert plan.tool_args_patch["tire_size"] == "235/55R19"
+    assert plan.metadata["recommendation_expected_tool_args"] == {
+        "rcmd_type": "heavy_load",
+        "vehicle_type": "suv",
+        "tire_size": "235/55R19",
+    }
+
+
+def test_recommendation_tool_input_drift_detected_by_turn_contract() -> None:
+    frame = build_discovery_intent_frame(
+        "오프로드용 타이어 추천",
+        known_slots={"tire_size": "235/55R19"},
+    )
+    plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text="오프로드용 타이어 추천",
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decide_discovery_response(frame),
+    )
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_text="235/55R19 오프로드용 타이어를 추천해드릴게요.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "value", "vehicle_type": "suv", "tire_size": "235/55R19"},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
+
+
+def test_recommendation_tool_input_drift_uses_effective_args() -> None:
+    frame = build_discovery_intent_frame(
+        "오프로드용 타이어 추천",
+        known_slots={"tire_size": "235/55R19"},
+    )
+    plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text="오프로드용 타이어 추천",
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decide_discovery_response(frame),
+    )
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_text="235/55R19 추천 상품 3개입니다. 오프로드 전용 필터가 아니라 SUV/하중 안정성 기준으로 근사 추천한 결과예요.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "tstation"},
+                "effective_args": {"rcmd_type": "heavy_load", "vehicle_type": "suv", "tire_size": "235/55R19"},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
+
+
+def test_recommendation_tool_input_drift_accepts_car_lnc_cd_fitment() -> None:
+    frame = build_discovery_intent_frame(
+        "오프로드용 타이어 추천",
+        known_slots={"tire_size": "235/55R19"},
+    )
+    plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text="오프로드용 타이어 추천",
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decide_discovery_response(frame),
+    )
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_text="내차 기준 추천 상품입니다. 오프로드 전용 필터가 아니라 SUV/하중 안정성 기준으로 근사 추천한 결과예요.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "effective_args": {"rcmd_type": "heavy_load", "vehicle_type": "suv", "car_lnc_cd": "W049847"},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
+
+
+def test_offroad_approximation_disclosure_is_guarded_and_repaired() -> None:
+    frame = build_discovery_intent_frame("오프로드용 타이어 추천", known_slots={"tire_size": "235/55R19"})
+    contract = build_turn_contract(
+        user_text="오프로드용 타이어 추천",
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decide_discovery_response(frame),
+    )
+
+    missing_notice = response_contract_violations(
+        template="product",
+        assistant_response_text="235/55R19 오프로드 전용 타이어 3개입니다.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "heavy_load", "vehicle_type": "suv", "tire_size": "235/55R19"},
+            }
+        ],
+        contract=contract,
+    )
+    assert any(violation["type"] == "claim_unsupported_scenario_as_exact" for violation in missing_notice)
+
+    exact_claim_event = {"assistantResponse": "235/55R19 오프로드 전용 타이어 3개입니다.", "metadata": {}}
+    assert _normalize_recommendation_approximation_response(exact_claim_event, contract) is True
+    assert "오프로드 전용 필터가 아니라 SUV/하중 안정성 기준으로 근사 추천한" in exact_claim_event[
+        "assistantResponse"
+    ]
+    mixed_claim_event = {
+        "assistantResponse": "235/55R19 오프로드 전용 타이어입니다. SUV/하중 안정성 기준으로 추천했어요.",
+        "metadata": {},
+    }
+    assert _normalize_recommendation_approximation_response(mixed_claim_event, contract) is True
+    assert "오프로드 전용 타이어" not in mixed_claim_event["assistantResponse"]
+    assert "오프로드 전용 필터가 아니라" in mixed_claim_event["assistantResponse"]
+    assert "근사 추천한으로" not in mixed_claim_event["assistantResponse"]
+
+    awkward_claim_event = {"assistantResponse": "235/55R19 오프로드 전용으로 추천했어요.", "metadata": {}}
+    assert _normalize_recommendation_approximation_response(awkward_claim_event, contract) is True
+    assert awkward_claim_event["assistantResponse"] == (
+        "오프로드 전용 필터가 아니라 SUV/하중 안정성 기준으로 근사 추천한 결과예요."
+    )
+
+    negated_claim_event = {
+        "assistantResponse": "오프로드 전용이 아니라 SUV/하중 안정성 기준으로 근사 추천한 결과예요.",
+        "metadata": {},
+    }
+    assert _normalize_recommendation_approximation_response(negated_claim_event, contract) is False
+    negated_then_exact_event = {
+        "assistantResponse": (
+            "오프로드 전용이 아니라 SUV/하중 안정성 기준입니다. "
+            "다만 1번은 오프로드 전용 타이어입니다."
+        ),
+        "metadata": {},
+    }
+    assert _normalize_recommendation_approximation_response(negated_then_exact_event, contract) is True
+    assert "다만 1번은 오프로드 전용 타이어입니다" not in negated_then_exact_event["assistantResponse"]
+    assert negated_then_exact_event["assistantResponse"].startswith("오프로드 전용이 아니라")
+
+    event_data = {"assistantResponse": "235/55R19 추천 상품 3개입니다.", "metadata": {}}
+    assert _normalize_recommendation_approximation_response(event_data, contract) is True
+    assert "오프로드 전용 필터가 아니라" in event_data["assistantResponse"]
+    repaired = response_contract_violations(
+        template="product",
+        assistant_response_text=event_data["assistantResponse"],
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "heavy_load", "vehicle_type": "suv", "tire_size": "235/55R19"},
+            }
+        ],
+        contract=contract,
+    )
+    assert not any(
+        violation["type"] in {"claim_unsupported_scenario_as_exact", "recommendation_approximation_disclosure_missing"}
+        for violation in repaired
+    )
+    negated_contract = response_contract_violations(
+        template="product",
+        assistant_response_text="오프로드 전용은 아니고 SUV/하중 안정성 기준으로 근사 추천한 결과예요.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "heavy_load", "vehicle_type": "suv", "tire_size": "235/55R19"},
+            }
+        ],
+        contract=contract,
+    )
+    assert not any(violation["type"] == "claim_unsupported_scenario_as_exact" for violation in negated_contract)
+    negated_then_exact_contract = response_contract_violations(
+        template="product",
+        assistant_response_text=(
+            "오프로드 전용이 아니라 SUV/하중 안정성 기준입니다. "
+            "다만 1번은 오프로드 전용 타이어입니다."
+        ),
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "heavy_load", "vehicle_type": "suv", "tire_size": "235/55R19"},
+            }
+        ],
+        contract=contract,
+    )
+    assert any(
+        violation["type"] == "claim_unsupported_scenario_as_exact" for violation in negated_then_exact_contract
+    )
+
+
+def test_recommendation_contract_fallback_is_discovery_scoped() -> None:
+    frame = build_discovery_intent_frame("오프로드용 타이어 추천", known_slots={"tire_size": "235/55R19"})
+    contract = build_turn_contract(
+        user_text="오프로드용 타이어 추천",
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decide_discovery_response(frame),
+    )
+
+    event = _build_recommendation_contract_fallback_event(
+        [{"type": "recommendation_tool_input_drift", "severity": "error"}],
+        contract,
+    )
+
+    assert event is not None
+    assert event["source_domain"] == "discovery"
+    assert event["assistant_response_source"] == "code_recommendation_contract_guard"
+    assert "다시 선택" in event["data"]["assistantResponse"]
+
+    exact_claim_event = _build_recommendation_contract_fallback_event(
+        [{"type": "claim_unsupported_scenario_as_exact", "severity": "error"}],
+        contract,
+    )
+    assert exact_claim_event is not None
+    assert "조건을 선택" in exact_claim_event["data"]["assistantResponse"]
 
 
 def test_recommendation_scenario_catalog_matches_current_anchor() -> None:
@@ -9768,7 +10017,8 @@ def test_fresh_recommendation_turn_clears_unsized_selected_product_slots() -> No
     assert slots.tire_size == "195/65R15"
     assert slots.ord_qty == 4
     assert slots.payment_amount is None
-    assert slots.recommendation_context["source_text"] == "주말 장거리용으로 다른 거 추천해줘"
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    assert slots.recommendation_context.source_text == "주말 장거리용으로 다른 거 추천해줘"
 
 
 def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
@@ -9833,9 +10083,11 @@ def test_offroad_recommendation_preserves_common_size_and_contextualizes_scenari
     assert slots.ord_qty == 4
     assert slots.goods_no is None
     assert slots.tire_model is None
-    assert slots.recommendation_context["recommendation_scenario"] == "offroad"
-    assert slots.recommendation_context["applied_rcmd_type"] == "heavy_load"
-    assert slots.recommendation_context["applied_vehicle_type"] == "suv"
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    assert slots.recommendation_context.scenario == "offroad"
+    assert slots.recommendation_context.applied_rcmd_type == "heavy_load"
+    assert slots.recommendation_context.applied_vehicle_type == "suv"
+    assert "ord_qty" not in slots.recommendation_context.to_policy_dict()
     assert CanonicalSlotState.from_slots(slots).common["tire_size"] == "235/55R19"
 
 

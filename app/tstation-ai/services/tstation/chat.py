@@ -21,7 +21,7 @@ from config.env import settings
 from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from schemas.tstation.slots import CanonicalSlotState, ConversationSlots
+from schemas.tstation.slots import CanonicalSlotState, ConversationSlots, RecommendationContext
 from services.tstation.agents.router import (
     DECISION_LLM as _decision_llm,
     leading_agent,
@@ -11810,6 +11810,49 @@ def _build_turn_contract_fallback_event(
     return build_response_policy_guard_event(turn_contract)
 
 
+def _build_recommendation_contract_fallback_event(
+    violations: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    turn_contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    violation_types = {str(violation.get("type") or "") for violation in violations}
+    if not (
+        "recommendation_tool_input_drift" in violation_types
+        or "claim_unsupported_scenario_as_exact" in violation_types
+    ):
+        return None
+    known_slots = turn_contract.known_slots if turn_contract is not None else {}
+    tire_size = str(known_slots.get("tire_size") or "").strip()
+    scenario = str(known_slots.get("recommendation_scenario") or "").strip()
+    if "claim_unsupported_scenario_as_exact" in violation_types and scenario == "offroad":
+        assistant = (
+            "오프로드 전용 상품으로 단정할 수는 없어요. "
+            "SUV/하중 안정성 기준으로 근사 추천을 다시 확인할 수 있게 조건을 선택해 주세요."
+        )
+    else:
+        assistant = "추천 조건과 실제 조회 조건이 맞지 않아 조건을 다시 선택해 주세요."
+    if tire_size:
+        assistant += f" 현재 확인된 사이즈는 {tire_size}입니다."
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_recommendation_contract_guard",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "추천 조건 다시 선택", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "recommendation_contract_guard",
+                "violation_types": sorted(violation_types),
+            },
+        },
+    }
+
+
 def _is_size_only_store_availability_continuation(
     user_text: str,
     *,
@@ -12203,6 +12246,18 @@ def _should_suppress_inherited_recommendation_context_for_product_attribute(user
     return normalize_tire_size(user_text) is None
 
 
+def _recommendation_context_policy_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, RecommendationContext):
+        return value.to_policy_dict()
+    if isinstance(value, Mapping):
+        context = RecommendationContext.from_mapping(value)
+        if context is not None:
+            return context.to_policy_dict()
+    return {}
+
+
 def _should_replace_listcar_with_product_attribute_lookup(event: dict | None, user_text: str) -> bool:
     """Return true when a vehicle-list card is an accidental detour for a product attribute question."""
     if not isinstance(event, dict) or event.get("template") != "listCar":
@@ -12466,6 +12521,90 @@ def _normalize_discovery_policy_quickreply(
         return True
 
     return False
+
+
+_RECOMMENDATION_APPROXIMATION_NOTICE_RE = re.compile(
+    r"근사|전용(?:\s*필터)?(?:가|는)?\s*아니|하중\s*안정|SUV\s*/?\s*하중|기준으로\s*추천",
+    re.IGNORECASE,
+)
+_OFFROAD_EXACT_CLAIM_RE = re.compile(r"오프로드\s*전용", re.IGNORECASE)
+_OFFROAD_NEGATED_EXACT_CLAIM_RE = re.compile(
+    r"오프로드\s*전용(?:\s*필터)?(?:이|가|은|는)?\s*(?:아니라|아니고|아님|아닙니다|아닌)",
+    re.IGNORECASE,
+)
+_SENTENCE_WITH_OFFROAD_EXACT_CLAIM_RE = re.compile(
+    r"[^.!?\n。！？]*오프로드\s*전용[^.!?\n。！？]*(?:[.!?。！？]+|$)",
+    re.IGNORECASE,
+)
+
+
+def _offroad_exact_claim_sentences(text: str) -> list[str]:
+    return [
+        match.group(0)
+        for match in _SENTENCE_WITH_OFFROAD_EXACT_CLAIM_RE.finditer(str(text or ""))
+        if _OFFROAD_EXACT_CLAIM_RE.search(match.group(0))
+        and not _OFFROAD_NEGATED_EXACT_CLAIM_RE.search(match.group(0))
+    ]
+
+
+def _recommendation_contract_metadata(contract: Any | None) -> dict[str, Any]:
+    if contract is None:
+        return {}
+    known_slots = getattr(contract, "known_slots", {}) or {}
+    data: dict[str, Any] = {}
+    context = _recommendation_context_policy_dict(known_slots.get("recommendation_context"))
+    data.update(context)
+    for key in (
+        "recommendation_scenario",
+        "applied_rcmd_type",
+        "applied_vehicle_type",
+        "applied_season_nm",
+        "approximation",
+        "approximation_basis",
+    ):
+        if known_slots.get(key) not in (None, ""):
+            data[key] = known_slots[key]
+    response_decision = getattr(contract, "response_decision", {}) or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if isinstance(response_metadata, Mapping):
+        data.update({key: value for key, value in response_metadata.items() if value not in (None, "")})
+    return data
+
+
+def _normalize_recommendation_approximation_response(event_data: dict[str, Any], contract: Any | None) -> bool:
+    metadata = _recommendation_contract_metadata(contract)
+    if metadata.get("approximation") is not True:
+        return False
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    if not assistant_text:
+        return False
+    exact_claim_sentences = _offroad_exact_claim_sentences(assistant_text)
+    if exact_claim_sentences:
+        basis = str(metadata.get("approximation_basis") or "SUV/하중 안정성").strip()
+        event_data["assistantResponse"] = _SENTENCE_WITH_OFFROAD_EXACT_CLAIM_RE.sub(
+            lambda match: (
+                f"오프로드 전용 필터가 아니라 {basis} 기준으로 근사 추천한 결과예요."
+                if match.group(0) in exact_claim_sentences
+                else match.group(0)
+            ),
+            assistant_text,
+        )
+        metadata_data = event_data.get("metadata")
+        if isinstance(metadata_data, dict):
+            metadata_data["recommendationApproximation"] = True
+            metadata_data["approximationBasis"] = basis
+            metadata_data["exactOffroadClaimRepaired"] = True
+        return True
+    if _RECOMMENDATION_APPROXIMATION_NOTICE_RE.search(assistant_text):
+        return False
+    basis = str(metadata.get("approximation_basis") or "SUV/하중 안정성").strip()
+    notice = f" 참고로 오프로드 전용 필터가 아니라 {basis} 기준으로 근사 추천한 결과예요."
+    event_data["assistantResponse"] = assistant_text.rstrip() + notice
+    metadata_data = event_data.get("metadata")
+    if isinstance(metadata_data, dict):
+        metadata_data["recommendationApproximation"] = True
+        metadata_data["approximationBasis"] = basis
+    return True
 
 
 def _normalize_policy_guidance_leak_quickreply(
@@ -12968,10 +13107,13 @@ def _build_discovery_policy_context(
         if vehicle_type:
             known_slots["vehicle_type"] = vehicle_type
         if recommendation_context:
-            known_slots["recommendation_context"] = {
-                key: value for key, value in dict(recommendation_context).items() if value not in (None, "")
-            }
-            scenario = str(known_slots["recommendation_context"].get("recommendation_scenario") or "").strip()
+            normalized_recommendation_context = _recommendation_context_policy_dict(recommendation_context)
+            known_slots["recommendation_context"] = normalized_recommendation_context
+            scenario = str(
+                normalized_recommendation_context.get("recommendation_scenario")
+                or normalized_recommendation_context.get("scenario")
+                or ""
+            ).strip()
             if scenario:
                 known_slots["recommendation_scenario"] = scenario
         transaction_followup_priority = _has_transaction_followup_priority(
@@ -13704,7 +13846,9 @@ def _clear_stale_product_slots_for_new_recommendation(
         "source_text": text,
     }
     if scenario is not None:
-        recommendation_context.update(recommendation_scenario_metadata(scenario))
+        scenario_metadata = recommendation_scenario_metadata(scenario)
+        recommendation_context.update(scenario_metadata)
+        recommendation_context["scenario"] = scenario.key
         recommendation_context["tool_args_patch"] = dict(scenario.tool_args_patch)
     elif current_turn_tire_size:
         recommendation_context["scope"] = "same_fitment"
@@ -18797,12 +18941,45 @@ class TStationChatServiceV2:
                 "data": {},
             }
 
-        def _record_code_tool_result(tool_name: str, tool_input: dict, tool_result: dict) -> None:
+        def _effective_recommendation_tool_args(tool_input: Mapping[str, Any] | None) -> dict[str, Any]:
+            effective = {key: value for key, value in dict(tool_input or {}).items() if value not in (None, "")}
+            if effective.get("ignore_policy_patch"):
+                return effective
+            from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+
+            policy_patch = discovery_tools.current_discovery_recommendation_tool_patch.get() or {}
+            if not isinstance(policy_patch, Mapping) or not policy_patch:
+                return effective
+            if policy_patch.get("rcmd_type"):
+                effective["rcmd_type"] = policy_patch["rcmd_type"]
+            if policy_patch.get("brand_cd"):
+                effective["brand_cd"] = policy_patch["brand_cd"]
+            if not effective.get("tire_size") and not effective.get("car_lnc_cd") and policy_patch.get("tire_size"):
+                effective["tire_size"] = policy_patch["tire_size"]
+            for key in ("sort_by", "season_nm", "pfm_nm", "prc_grd", "vehicle_type"):
+                if not effective.get(key) and policy_patch.get(key):
+                    effective[key] = policy_patch[key]
+            return effective
+
+        def _record_code_tool_result(
+            tool_name: str,
+            tool_input: dict,
+            tool_result: dict,
+            *,
+            effective_tool_input: Mapping[str, Any] | None = None,
+        ) -> None:
             called_tool_names.add(tool_name)
             if tool_error := _tool_error_summary(tool_name, tool_result):
                 tool_errors.append(tool_error)
             structured_sources.append((tool_name, tool_result))
-            mapper_tool_items.append({"tool": tool_name, "args": dict(tool_input or {}), "data": tool_result})
+            mapper_entry = {"tool": tool_name, "args": dict(tool_input or {}), "data": tool_result}
+            if effective_tool_input is None and tool_name == "get_products_recommendations_tool":
+                effective_tool_input = _effective_recommendation_tool_args(tool_input)
+            if effective_tool_input is not None:
+                mapper_entry["effective_args"] = {
+                    key: value for key, value in dict(effective_tool_input).items() if value not in (None, "")
+                }
+            mapper_tool_items.append(mapper_entry)
             filtered = filter_source_data(
                 tool_name,
                 json.dumps(tool_result, ensure_ascii=False),
@@ -22399,11 +22576,16 @@ class TStationChatServiceV2:
                         logger.info("[TURN_CONTRACT] post-tool parse-failure update %s", turn_contract.to_dict())
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
-                        mapper_tool_items.append({
+                        mapper_entry = {
                             "tool": tool_name,
                             "args": dict(input_data or {}) if isinstance(input_data, dict) else {},
                             "data": parsed_for_verifier,
-                        })
+                        }
+                        if tool_name == "get_products_recommendations_tool":
+                            mapper_entry["effective_args"] = _effective_recommendation_tool_args(
+                                input_data if isinstance(input_data, dict) else {}
+                            )
+                        mapper_tool_items.append(mapper_entry)
                         if tool_name == "search_product_tool":
                             search_keyword = str(input_data.get("keyword") or "").strip()
                             search_product_tool_results.append((search_keyword, parsed_for_verifier))
@@ -23398,6 +23580,16 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
+                    if _normalize_recommendation_approximation_response(event_data, turn_contract):
+                        logger.info("[POLICY][discovery] recommendation approximation notice appended")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
                     coerced_event = None
                     if (
                         intent_group != "existing_reservation_management"
@@ -23716,6 +23908,15 @@ class TStationChatServiceV2:
                     compare_metric=current_contract_compare_metric,
                     response_shape_key=current_contract_response_shape_key,
                     called_tools=sorted(called_tool_names),
+                    tool_inputs=[
+                        {
+                            "tool": item.get("tool"),
+                            "args": item.get("args"),
+                            "effective_args": item.get("effective_args"),
+                        }
+                        for item in mapper_tool_items
+                        if isinstance(item, Mapping)
+                    ],
                     source_domain=current_contract_source_domain,
                     contract=turn_contract,
                 )
@@ -23849,7 +24050,10 @@ class TStationChatServiceV2:
                                 }),
                             )
                             if hard_violations and turn_contract is not None and not _parallel_qc:
-                                fallback_event = _build_turn_contract_fallback_event(
+                                fallback_event = _build_recommendation_contract_fallback_event(
+                                    hard_violations,
+                                    turn_contract,
+                                ) or _build_turn_contract_fallback_event(
                                     turn_contract=turn_contract,
                                     user_text=user_query,
                                     tool_data_list=tool_context_items,
@@ -23865,10 +24069,17 @@ class TStationChatServiceV2:
                                 assistant_response = str(event_data.get("assistantResponse") or "")
                                 draft_response = assistant_response
                                 draft_for_qc = assistant_response
+                                fallback_source_domain = str(
+                                    fallback_event.get("source_domain") or current_contract_source_domain or ""
+                                ).lower()
                                 original_message_events = [{
                                     "type": "message",
                                     "content": assistant_response,
-                                    "agent": "[TRANSACTION AGENT]",
+                                    "agent": (
+                                        "[DISCOVERY AGENT]"
+                                        if fallback_source_domain == MultiAgentDomain.Domain.DISCOVERY.value
+                                        else "[TRANSACTION AGENT]"
+                                    ),
                                 }]
                             elif hard_violations and _parallel_qc:
                                 logger.warning(

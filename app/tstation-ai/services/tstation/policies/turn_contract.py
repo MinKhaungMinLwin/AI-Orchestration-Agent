@@ -78,6 +78,7 @@ _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "compare_metric_contract_drift",
     "compare_metric_row_missing",
     "forbidden_discovery_first_leg_response",
+    "recommendation_approximation_disclosure_missing",
 })
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
@@ -218,9 +219,22 @@ def build_turn_contract(
                     known_slots[key] = value
             if intent_frame.entities.get("approximation") is True:
                 known_slots["approximation"] = True
-        if isinstance(recommendation_context, dict):
-            known_slots["recommendation_context"] = {
-                key: value for key, value in recommendation_context.items() if value not in (None, "")
+        normalized_recommendation_context = _recommendation_context_dict(recommendation_context)
+        if normalized_recommendation_context:
+            known_slots["recommendation_context"] = normalized_recommendation_context
+            scenario = str(
+                normalized_recommendation_context.get("recommendation_scenario")
+                or normalized_recommendation_context.get("scenario")
+                or ""
+            ).strip()
+            if scenario and not known_slots.get("recommendation_scenario"):
+                known_slots["recommendation_scenario"] = scenario
+    tool_plan_metadata = tool_plan.metadata if tool_plan is not None else {}
+    if isinstance(tool_plan_metadata, Mapping):
+        expected_tool_args = tool_plan_metadata.get("recommendation_expected_tool_args")
+        if isinstance(expected_tool_args, Mapping):
+            known_slots["recommendation_expected_tool_args"] = {
+                key: value for key, value in expected_tool_args.items() if value not in (None, "")
             }
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if policy_intent and policy_intent != "none":
@@ -523,6 +537,7 @@ def response_contract_violations(
     compare_metric: str | None = None,
     response_shape_key: str | None = None,
     called_tools: list[str] | tuple[str, ...] | None = None,
+    tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
     source_domain: str | None = None,
     contract: TurnContract | None,
 ) -> list[dict[str, Any]]:
@@ -623,7 +638,173 @@ def response_contract_violations(
     )
     if quick_order_reservation_violation is not None:
         violations.append(quick_order_reservation_violation)
+    recommendation_disclosure_violation = _recommendation_approximation_disclosure_violation(
+        assistant_response_text=assistant_response_text,
+        contract=contract,
+    )
+    if recommendation_disclosure_violation is not None:
+        violations.append(recommendation_disclosure_violation)
+    recommendation_tool_drift = _recommendation_tool_input_drift_violation(
+        tool_inputs=tool_inputs,
+        contract=contract,
+    )
+    if recommendation_tool_drift is not None:
+        violations.append(recommendation_tool_drift)
     return [_with_contract_violation_severity(violation) for violation in violations]
+
+
+def _recommendation_metadata(contract: TurnContract | None) -> dict[str, Any]:
+    if contract is None:
+        return {}
+    data: dict[str, Any] = {}
+    context = _recommendation_context_dict(contract.known_slots.get("recommendation_context"))
+    data.update(context)
+    for key in (
+        "recommendation_scenario",
+        "applied_rcmd_type",
+        "applied_vehicle_type",
+        "applied_season_nm",
+        "approximation",
+        "approximation_basis",
+        "recommendation_expected_tool_args",
+    ):
+        if contract.known_slots.get(key) not in (None, ""):
+            data[key] = contract.known_slots[key]
+    response_decision = contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if isinstance(response_metadata, Mapping):
+        for key, value in response_metadata.items():
+            if key.startswith("recommendation_") or key in {
+                "applied_rcmd_type",
+                "applied_vehicle_type",
+                "applied_season_nm",
+                "approximation",
+                "approximation_basis",
+            }:
+                data[key] = value
+    return data
+
+
+_RECOMMENDATION_APPROXIMATION_DISCLOSURE_RE = re.compile(
+    r"근사|전용(?:\s*필터)?(?:가|는)?\s*아니|하중\s*안정|SUV\s*/?\s*하중|기준으로\s*추천",
+    re.IGNORECASE,
+)
+_OFFROAD_EXACT_CLAIM_RE = re.compile(r"오프로드\s*전용", re.IGNORECASE)
+_OFFROAD_NEGATED_EXACT_CLAIM_RE = re.compile(
+    r"오프로드\s*전용(?:\s*필터)?(?:이|가|은|는)?\s*(?:아니라|아니고|아님|아닙니다|아닌)",
+    re.IGNORECASE,
+)
+_SENTENCE_WITH_OFFROAD_EXACT_CLAIM_RE = re.compile(
+    r"[^.!?\n。！？]*오프로드\s*전용[^.!?\n。！？]*(?:[.!?。！？]+|$)",
+    re.IGNORECASE,
+)
+
+
+def _has_unsupported_offroad_exact_claim(text: str) -> bool:
+    return any(
+        _OFFROAD_EXACT_CLAIM_RE.search(sentence)
+        and not _OFFROAD_NEGATED_EXACT_CLAIM_RE.search(sentence)
+        for sentence in (
+            match.group(0)
+            for match in _SENTENCE_WITH_OFFROAD_EXACT_CLAIM_RE.finditer(str(text or ""))
+        )
+    )
+
+
+def _recommendation_approximation_disclosure_violation(
+    *,
+    assistant_response_text: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    metadata = _recommendation_metadata(contract)
+    if metadata.get("approximation") is not True:
+        return None
+    text = str(assistant_response_text or "")
+    if _has_unsupported_offroad_exact_claim(text):
+        return {
+            "type": "claim_unsupported_scenario_as_exact",
+            "recommendation_scenario": metadata.get("recommendation_scenario") or metadata.get("scenario"),
+            "approximation_basis": metadata.get("approximation_basis"),
+        }
+    if _RECOMMENDATION_APPROXIMATION_DISCLOSURE_RE.search(text):
+        return None
+    return {
+        "type": "recommendation_approximation_disclosure_missing",
+        "recommendation_scenario": metadata.get("recommendation_scenario") or metadata.get("scenario"),
+        "approximation_basis": metadata.get("approximation_basis"),
+    }
+
+
+def _tool_input_for(tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None, tool_name: str) -> dict[str, Any]:
+    for item in reversed(tuple(tool_inputs or ())):
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("tool") or item.get("name") or "") != tool_name:
+            continue
+        args = item.get("effective_args")
+        if args is None:
+            args = item.get("effective_input")
+        if args is None:
+            args = item.get("args")
+        if args is None:
+            args = item.get("input")
+        if isinstance(args, Mapping):
+            return {key: value for key, value in args.items() if value not in (None, "")}
+    return {}
+
+
+def _normalized_tool_arg(value: Any) -> str:
+    text = str(value or "").strip()
+    if "." in text and text.lower().startswith("rcmdtype."):
+        text = text.split(".", 1)[1]
+    return text.lower()
+
+
+def _recommendation_tool_input_drift_violation(
+    *,
+    tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    metadata = _recommendation_metadata(contract)
+    actual_args = _tool_input_for(tool_inputs, "get_products_recommendations_tool")
+    if not actual_args:
+        return None
+    expected = metadata.get("recommendation_expected_tool_args")
+    if not isinstance(expected, Mapping):
+        expected = metadata.get("expected_tool_args")
+    if not isinstance(expected, Mapping):
+        context = _recommendation_context_dict(metadata)
+        patch = context.get("tool_args_patch")
+        expected = patch if isinstance(patch, Mapping) else {}
+    expected_args = {key: value for key, value in dict(expected).items() if value not in (None, "")}
+    actual_uses_vehicle_fitment = bool(actual_args.get("car_lnc_cd") and not actual_args.get("tire_size"))
+    if (
+        contract is not None
+        and contract.known_slots.get("tire_size")
+        and "tire_size" not in expected_args
+        and not actual_uses_vehicle_fitment
+    ):
+        expected_args["tire_size"] = contract.known_slots.get("tire_size")
+    if actual_uses_vehicle_fitment:
+        expected_args.pop("tire_size", None)
+    expected_args = {
+        key: expected_args[key]
+        for key in ("rcmd_type", "vehicle_type", "season_nm", "tire_size")
+        if expected_args.get(key) not in (None, "")
+    }
+    if not expected_args:
+        return None
+    drift = {
+        key: {"expected": expected_value, "actual": actual_args.get(key)}
+        for key, expected_value in expected_args.items()
+        if _normalized_tool_arg(actual_args.get(key)) != _normalized_tool_arg(expected_value)
+    }
+    if not drift:
+        return None
+    return {
+        "type": "recommendation_tool_input_drift",
+        "drift": drift,
+    }
 
 
 def _with_contract_violation_severity(violation: Mapping[str, Any]) -> dict[str, Any]:
@@ -1263,6 +1444,22 @@ def _slots_from_model(model: Any | None) -> dict[str, Any]:
         )
         if hasattr(model, name)
     }
+
+
+def _recommendation_context_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "to_policy_dict"):
+        try:
+            return {key: item for key, item in value.to_policy_dict().items() if item not in (None, "")}
+        except Exception:
+            return {}
+    if isinstance(value, Mapping):
+        data = {key: item for key, item in value.items() if item not in (None, "")}
+        if "recommendation_scenario" not in data and data.get("scenario"):
+            data["recommendation_scenario"] = data.get("scenario")
+        return data
+    return {}
 
 
 def _compact_slots(slots: Mapping[str, Any]) -> dict[str, Any]:
