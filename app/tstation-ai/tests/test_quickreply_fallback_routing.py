@@ -3440,6 +3440,24 @@ def test_size_only_store_availability_continuation_recovers_product_context() ->
     ) is True
 
 
+def test_size_only_store_availability_continuation_prefers_current_stock_product_over_stale_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309849",
+        tire_model="벤투스 S2 AS",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        shop_name="판교점",
+    )
+    recent_context = "판교점에 ion evo as 재고 있어?\n상품은 확인했어요. 규격을 알려주세요."
+
+    assert _build_size_only_product_search_tool_input(
+        "2354518",
+        prev_tool_data=[],
+        recent_context=recent_context,
+        slots=slots,
+    ) == {"keyword": "아이온 에보 AS", "limit": 10, "size": "235/45R18"}
+
+
 def test_size_only_store_availability_continuation_requires_availability_context() -> None:
     prev_tool_data = [{
         "tool": "search_product_tool",

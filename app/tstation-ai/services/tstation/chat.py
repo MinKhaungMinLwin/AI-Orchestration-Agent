@@ -12024,6 +12024,23 @@ def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
     return tool_input
 
 
+def _recent_context_product_keyword_for_size_only_search(user_text: str, recent_context: str) -> str | None:
+    current_size = normalize_tire_size(user_text)
+    if not current_size:
+        return None
+    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
+        if normalize_tire_size(line) == current_size and not _fallback_sized_product_keyword(line):
+            continue
+        frame = build_discovery_intent_frame(line)
+        product_names = tuple(frame.entities.get("product_names") or ())
+        if product_names:
+            return _preferred_product_search_keyword(str(product_names[0]))
+        coupon_product = _coupon_target_product_name_for_query(line)
+        if coupon_product:
+            return _preferred_product_search_keyword(coupon_product)
+    return None
+
+
 def _recent_product_keyword_for_size_only_search(
     user_text: str,
     *,
@@ -12035,6 +12052,11 @@ def _recent_product_keyword_for_size_only_search(
         return None
     if _fallback_sized_product_keyword(user_text):
         return None
+
+    if _STORE_AVAILABILITY_CONTINUATION_RE.search(str(recent_context or "")):
+        context_keyword = _recent_context_product_keyword_for_size_only_search(user_text, recent_context)
+        if context_keyword:
+            return context_keyword
 
     pending_product_name = str(getattr(slots, "pending_product_name", None) or "").strip() if slots is not None else ""
     if pending_product_name:
@@ -12062,18 +12084,7 @@ def _recent_product_keyword_for_size_only_search(
                 if row_name:
                     return _preferred_product_search_keyword(row_name)
 
-    current_size = normalize_tire_size(user_text)
-    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
-        if normalize_tire_size(line) == current_size and not _fallback_sized_product_keyword(line):
-            continue
-        frame = build_discovery_intent_frame(line)
-        product_names = tuple(frame.entities.get("product_names") or ())
-        if product_names:
-            return _preferred_product_search_keyword(str(product_names[0]))
-        coupon_product = _coupon_target_product_name_for_query(line)
-        if coupon_product:
-            return _preferred_product_search_keyword(coupon_product)
-    return None
+    return _recent_context_product_keyword_for_size_only_search(user_text, recent_context)
 
 
 def _build_size_only_product_search_tool_input(
