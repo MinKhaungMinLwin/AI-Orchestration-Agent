@@ -1828,6 +1828,8 @@ def test_order_arrival_followup_resolves_recent_order_not_store_schedule() -> No
     assert _is_order_arrival_status_query("그거 매장에 언제 와?")
     assert _is_order_arrival_status_query("그 이후에 매장 가면 돼?")
     assert _is_order_arrival_status_query("O202605120019340 주문 언제 매장 도착해?")
+    assert _is_order_arrival_status_query("타이어 매장에 도착했다고 문자 받았어. 지금 출발하면 될까?")
+    assert _is_order_arrival_status_query("타이어 입고됐다고 연락왔는데 지금 가도 돼?")
     assert not _is_order_arrival_status_query("여주점 예약 가능한 시간 보여줘")
     assert not _is_order_arrival_status_query("O202605120019340 주문췻호건 환불 언제돼?")
     assert not _is_order_arrival_status_query("O202605120019340 카드 취소 언제 승인돼?")
@@ -6626,6 +6628,27 @@ def test_support_fast_path_uses_pickup_and_delivery_policy_gates() -> None:
 def test_support_fast_path_routes_reminding_alarm_settings() -> None:
     assert _support_fast_path("알람 설정하는 페이지 어디야?") == [MultiAgentDomain.Domain.SUPPORT]
     assert _support_fast_path("타이어 교체 알림 신청하고 싶어") == [MultiAgentDomain.Domain.SUPPORT]
+    assert _support_fast_path("타이어 매장에 도착했다고 문자 받았어. 지금 출발하면 될까?") is None
+    assert _support_fast_path("타이어 입고됐다고 연락왔는데 지금 가도 돼?") is None
+
+
+def test_store_arrival_notification_visit_guidance_is_transaction_order_status() -> None:
+    frame = build_transaction_intent_frame("타이어 매장에 도착했다고 문자 받았어. 지금 출발하면 될까?")
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="타이어 매장에 도착했다고 문자 받았어. 지금 출발하면 될까?",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "order_arrival_status_lookup"
+    assert frame.sub_intent == "store_arrival_visit_guidance"
+    assert frame.known_slots["goal_type"] == "store_arrival_visit_guidance"
+    assert tool_plan.preferred_tool == "get_orders_of_user_tool"
+    assert "get_order_status_tool" in tool_plan.allowed_tools
+    assert "search_faq_hybrid_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "order_arrival_status_lookup"
+    assert "route_to_notification_settings" in response_decision.forbidden_behaviors
 
 
 def test_reminding_alarm_event_links_to_cta() -> None:

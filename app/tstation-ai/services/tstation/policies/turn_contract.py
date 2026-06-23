@@ -306,6 +306,9 @@ def build_turn_contract(
     if code_intent == "reservation_store_info_lookup":
         domain = "transaction"
         intent = "reservation_store_info_lookup"
+    if code_intent == "order_arrival_status_lookup":
+        domain = "transaction"
+        intent = "order_arrival_status_lookup"
     if code_intent == "maintenance_history_lookup" or planner_intent == "maintenance_history_lookup":
         domain = "transaction"
         intent = "maintenance_history_lookup"

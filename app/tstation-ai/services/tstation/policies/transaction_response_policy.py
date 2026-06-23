@@ -58,6 +58,8 @@ def decide_transaction_response(
         return _decide_favorite_store_lookup()
     if intent == "reservation_store_info_lookup":
         return _decide_reservation_store_info_lookup()
+    if intent == "order_arrival_status_lookup":
+        return _decide_order_arrival_status_lookup()
     if intent == "maintenance_history_lookup":
         return _decide_maintenance_history_lookup(slots=slots)
     if intent == "price_or_benefit_alert_request":
@@ -237,6 +239,25 @@ def _decide_reservation_store_info_lookup() -> ResponseDecision:
         assistant_guidance=(
             "예약한 매장/예약 지점 참조는 최근 조회 매장이 아니라 예약 내역 source로 확인한다. "
             "get_my_reservations_tool 또는 주문/예약 내역 결과가 없으면 예약 매장을 단정하지 말고 예약번호/주문번호 또는 예약 내역 확인을 요청한다."
+        ),
+    )
+
+
+def _decide_order_arrival_status_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="order_arrival_status_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "route_to_notification_settings",
+            "show_reminding_alarm_cta",
+            "datepick_for_arrival_notification",
+            "generic_store_search_for_arrival_notification",
+        ),
+        assistant_guidance=(
+            "매장 도착/입고 문자를 받은 뒤 방문 가능 여부를 묻는 경우는 알림 설정이 아니라 주문/예약 상태 확인이다. "
+            "주문/예약 source를 확인하고, 예약 시간이 있으면 예약 시간 기준 방문을 권장한다. "
+            "예약 시간이 없으면 방문 전 매장 또는 주문내역 확인을 안내한다."
         ),
     )
 

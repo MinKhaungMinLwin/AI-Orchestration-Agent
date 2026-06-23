@@ -3727,6 +3727,22 @@ _REMINDING_ALARM_QUERY_RE = re.compile(
     r"(?:문자|SMS|sms)로\s*(?:알려|받)",
     re.IGNORECASE,
 )
+_STORE_ARRIVAL_NOTIFICATION_VISIT_RE = re.compile(
+    r"(?:타이어|상품|주문|물건)?\s*"
+    r"(?:매장|장착점|지점)?\s*(?:에\s*)?"
+    r"(?:도착|입고|왔|왔다|왔대|배송\s*완료|배송완료).{0,30}"
+    r"(?:문자|SMS|sms|알림|알람|연락|전화|카톡|알림톡).{0,50}"
+    r"(?:지금|오늘|바로|출발|가도|가면|방문|들러|예약\s*시간|예약시간)|"
+    r"(?:문자|SMS|sms|알림|알람|연락|전화|카톡|알림톡).{0,30}"
+    r"(?:받|왔|왔다|왔어|왔는데|받았).{0,50}"
+    r"(?:타이어|상품|주문|물건|매장|장착점|지점).{0,30}"
+    r"(?:도착|입고|왔|배송\s*완료|배송완료).{0,50}"
+    r"(?:지금|오늘|바로|출발|가도|가면|방문|들러|예약\s*시간|예약시간)|"
+    r"(?:타이어|상품|주문|물건|매장|장착점|지점).{0,30}"
+    r"(?:도착|입고|왔|배송\s*완료|배송완료).{0,50}"
+    r"(?:지금|오늘|바로|출발|가도|가면|방문|들러|예약\s*시간|예약시간)",
+    re.IGNORECASE,
+)
 
 _TRANSACTION_FAST_RE = re.compile(
     r"가격|얼마(?!나)|비용|할인|재고|입고|장착\s*가능|"
@@ -8019,7 +8035,8 @@ def _is_order_arrival_status_query(user_text: str | None) -> bool:
     if re.search(r"예약\s*가능|예약\s*시간|몇\s*시\s*예약|스케줄|시간표", text):
         return False
     return bool(
-        _ORDER_ARRIVAL_STATUS_RE.search(text)
+        _STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text)
+        or _ORDER_ARRIVAL_STATUS_RE.search(text)
         or (_ORDER_DIRECT_NO_RE.search(text) and _ORDER_ARRIVAL_STATUS_KEYWORD_RE.search(text))
     )
 
@@ -14558,7 +14575,7 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
             pickup_decision.reason,
         )
         return [MultiAgentDomain.Domain.SUPPORT]
-    if _REMINDING_ALARM_QUERY_RE.search(text):
+    if _REMINDING_ALARM_QUERY_RE.search(text) and not _is_order_arrival_status_query(text):
         logger.debug("[SUPPORT_FAST_PATH] reminding alarm CTA → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
     if is_warranty_claim_signal(text):
@@ -24257,7 +24274,7 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        if _REMINDING_ALARM_QUERY_RE.search(user_query or ""):
+        if _REMINDING_ALARM_QUERY_RE.search(user_query or "") and not _is_order_arrival_status_query(user_query):
             alarm_event = _reminding_alarm_event()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"

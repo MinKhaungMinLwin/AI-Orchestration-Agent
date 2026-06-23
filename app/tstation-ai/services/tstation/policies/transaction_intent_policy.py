@@ -47,6 +47,22 @@ _RESERVATION_STORE_INFO_RE = re.compile(
     r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
     re.IGNORECASE,
 )
+_STORE_ARRIVAL_NOTIFICATION_VISIT_RE = re.compile(
+    r"(?:타이어|상품|주문|물건)?\s*"
+    r"(?:매장|장착점|지점)?\s*(?:에\s*)?"
+    r"(?:도착|입고|왔|왔다|왔대|배송\s*완료|배송완료).{0,30}"
+    r"(?:문자|SMS|sms|알림|알람|연락|전화|카톡|알림톡).{0,50}"
+    r"(?:지금|오늘|바로|출발|가도|가면|방문|들러|예약\s*시간|예약시간)|"
+    r"(?:문자|SMS|sms|알림|알람|연락|전화|카톡|알림톡).{0,30}"
+    r"(?:받|왔|왔다|왔어|왔는데|받았).{0,50}"
+    r"(?:타이어|상품|주문|물건|매장|장착점|지점).{0,30}"
+    r"(?:도착|입고|왔|배송\s*완료|배송완료).{0,50}"
+    r"(?:지금|오늘|바로|출발|가도|가면|방문|들러|예약\s*시간|예약시간)|"
+    r"(?:타이어|상품|주문|물건|매장|장착점|지점).{0,30}"
+    r"(?:도착|입고|왔|배송\s*완료|배송완료).{0,50}"
+    r"(?:지금|오늘|바로|출발|가도|가면|방문|들러|예약\s*시간|예약시간)",
+    re.IGNORECASE,
+)
 _SERVICE_DURATION_ADVISORY_RE = re.compile(
     r"(?:예약한\s*거|예약한거|예약|서비스\s*받|작업|교체).{0,40}"
     r"(?:현장(?:에서)?\s*)?(?:얼라인먼트|휠\s*얼라이먼트|엔진오일|실내\s*필터|필터|배터리|와이퍼|경정비)"
@@ -388,6 +404,7 @@ def build_transaction_intent_frame(
     current_reservation_store_info_lookup = bool(
         _RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text)
     )
+    current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     current_price_or_benefit_alert = bool(_PRICE_OR_BENEFIT_ALERT_RE.search(text))
@@ -592,7 +609,11 @@ def build_transaction_intent_frame(
         "today_install_candidate_scope": today_install_candidate_scope,
     }
 
-    if current_maintenance_history_lookup:
+    if current_store_arrival_visit_guidance:
+        intent = "order_arrival_status_lookup"
+        sub_intent = "store_arrival_visit_guidance"
+        entities["store_arrival_visit_guidance"] = True
+    elif current_maintenance_history_lookup:
         intent = "maintenance_history_lookup"
         sub_intent = "service_history"
         entities["requested_service_item"] = _requested_maintenance_history_item(text)
@@ -714,6 +735,10 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "reservation_store_info_lookup"
         known["goal_type"] = "reservation_store_info"
         known["reservation_store_reference"] = True
+    if intent == "order_arrival_status_lookup":
+        known["pending_intent"] = "order_arrival_status_lookup"
+        known["goal_type"] = "store_arrival_visit_guidance"
+        known["store_arrival_visit_guidance"] = True
     if intent == "maintenance_history_lookup":
         known["pending_intent"] = "maintenance_history_lookup"
         known["goal_type"] = "maintenance_history_lookup"
@@ -867,6 +892,21 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
             required_slots=action_required_slots,
             metadata={"response_intent": "reservation_store_info_lookup", "action": action},
+        )
+
+    if frame.intent == "order_arrival_status_lookup":
+        return ToolPlan(
+            allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool="get_orders_of_user_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "search_faq_hybrid_tool",
+                "get_store_schedule_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "order_arrival_status_lookup", "action": action},
         )
 
     if frame.intent == "maintenance_history_lookup":
@@ -1025,6 +1065,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "store_service_availability"
     if frame.intent == "reservation_store_info_lookup":
         return "reservation_store_info_lookup"
+    if frame.intent == "order_arrival_status_lookup":
+        return "order_arrival_status_lookup"
     if frame.intent == "maintenance_history_lookup":
         return "maintenance_history_lookup"
     return frame.intent or "transaction_fallback"
