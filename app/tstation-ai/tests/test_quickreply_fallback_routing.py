@@ -6443,6 +6443,81 @@ def test_recent_product_size_availability_query_skips_explicit_unknown_product_n
     assert _is_recent_product_size_availability_query("새상품 ABC 2356018 있을까?") is False
 
 
+def test_router_size_continuation_preserves_recommendation_objective() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:size_for_recommendation_continuation"],
+        user_behavior="providing tire size after unsized recommendation",
+        flow="unsized recommendation -> size follow-up",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="size_for_recommendation_continuation",
+        agent_prompt_profile="discovery_recommendation",
+    )
+
+    context = _recent_product_set_size_availability_context(
+        "2454518",
+        routing_result=routing_result,
+        messages=[
+            {"role": "user", "content": "승용차용 조용한 타이어 추천해줘"},
+            {
+                "role": "assistant",
+                "content": "- 벤투스 S1 에보 Z AS: 설명\n- 키너지 ST AS: 설명\n- 키너지 EX: 설명",
+            },
+            {"role": "user", "content": "2454518"},
+        ],
+    )
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2454518",
+        context_text="승용차용 조용한 타이어 추천해줘\n2454518",
+        tire_size="245/45R18",
+        routing_result=routing_result,
+    )
+
+    assert context is None
+    assert tool_patch == {
+        "vehicle_type": "passenger",
+        "rcmd_type": "low_vibration",
+        "tire_size": "245/45R18",
+    }
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] != "product_search_summary"
+
+
+def test_product_pick_after_size_confirmed_patches_search_tool_with_size() -> None:
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:resolve_or_describe_product"],
+        user_behavior="selecting a product from size-filtered recommendation context",
+        flow="unsized recommendation -> size follow-up -> product pick",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        agent_prompt_profile="discovery_search",
+    )
+
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="키너지 st as",
+        context_text=(
+            "승용차용 조용한 타이어 추천해줘\n"
+            "2454518\n"
+            "직전 추천 상품 기준으로 245/45R18 규격을 확인했어요.\n"
+            "키너지 st as"
+        ),
+        tire_size="245/45R18",
+        routing_result=routing_result,
+    )
+
+    assert tool_patch == {"size": "245/45R18"}
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] == "product_search_summary"
+
+
 def test_discovery_policy_context_carries_recent_product_set_followup_from_router() -> None:
     routing_result = MultiAgentDomain(
         reason="test",

@@ -391,13 +391,18 @@ class MultiAgentDomain(BaseModel):
         ),
     )
     discovery_followup_intent: Literal[
-        "none", "recent_product_set_size_availability", "product_objective_followup"
+        "none",
+        "size_for_recommendation_continuation",
+        "recent_product_set_size_availability",
+        "product_objective_followup",
     ] = Field(
         description=(
-            "For Discovery follow-up turns only. Use 'recent_product_set_size_availability' when the user is not "
-            "naming a new product but asking whether a tire size exists for the recent recommendation/search product set. "
-            "Examples: after showing multiple products, '두개다 2355519 사이즈가 있을까?', '2355519 규격 있어?', "
-            "'위 상품들 235/55R19 돼?'. "
+            "For Discovery follow-up turns only. Use 'size_for_recommendation_continuation' when the previous assistant "
+            "gave an unsized recommendation/summary and the current turn provides only a tire size; this means rerun or "
+            "continue the recommendation with that size while preserving the prior recommendation objective. "
+            "Use 'recent_product_set_size_availability' only when the user asks whether a tire size exists for the "
+            "recent recommendation/search product set. Examples: after showing multiple products, "
+            "'두개다 2355519 사이즈가 있을까?', '2355519 규격 있어?', '위 상품들 235/55R19 돼?'. "
             "Use 'product_objective_followup' when the PREVIOUS assistant turn was a recommendation/clarification tied to "
             "one of: 안심서비스(safe_service), 흡음재(sound_absorber), a product attribute question (attribute_lookup), or "
             "a recommendation filter/condition (recommendation_filter) — AND the current turn names ONLY a product, with "
@@ -523,11 +528,15 @@ class _SlimMultiAgentDomain(BaseModel):
         ),
     )
     discovery_followup_intent: Literal[
-        "none", "recent_product_set_size_availability", "product_objective_followup"
+        "none",
+        "size_for_recommendation_continuation",
+        "recent_product_set_size_availability",
+        "product_objective_followup",
     ] = Field(
         description=(
-            "Discovery follow-up intent: 'none', 'recent_product_set_size_availability', or "
-            "'product_objective_followup'. This is a first-turn classification with no prior context, so this "
+            "Discovery follow-up intent: 'none', 'size_for_recommendation_continuation', "
+            "'recent_product_set_size_availability', or 'product_objective_followup'. "
+            "This is a first-turn classification with no prior context, so this "
             "should almost always be 'none'."
         ),
     )
@@ -606,9 +615,11 @@ Complaint routing rule:
 
 8. discovery_followup_intent — for Discovery follow-up turns:
    - "none": normal case
+   - "size_for_recommendation_continuation": the previous assistant gave an unsized recommendation/summary and the current turn provides only a tire size. Preserve the previous recommendation objective and continue/re-run recommendation with that size.
    - "recent_product_set_size_availability": the user is asking whether a tire size exists for the recent recommendation/search product set, not naming a new product
-   - Use this when the current turn has a tire size and an existence/availability question, recent conversation already showed multiple products, and the current wording is referential/pronominal or otherwise not a new product name search.
-   - Example after a recommendation list: "두개다 2355519 사이즈가 있을까?", "2355519 규격 있어?", "위 상품들 235/55R19 돼?"
+   - Use recent_product_set_size_availability when the current turn has a tire size AND an existence/availability question, recent conversation already showed multiple products, and the current wording is referential/pronominal or otherwise asking about the shown set.
+   - Example size_for_recommendation_continuation: after "승용차용 조용한 타이어 추천" returned an unsized summary, "2454518" means recommend quiet passenger tires in 245/45R18.
+   - Example recent_product_set_size_availability after a recommendation list: "두개다 2355519 사이즈가 있을까?", "2355519 규격 있어?", "위 상품들 235/55R19 돼?"
 
 9. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
@@ -856,6 +867,8 @@ RULES:
   - tstation_service_complaint → SUPPORT
   - out_of_scope_complaint → LEADING with support-scope guidance, no 상담/불편 접수
   - unclear_complaint → LEADING with a clarification question, no immediate 상담 연결
+- After an unsized recommendation/summary, a bare tire size like "2454518" → DISCOVERY with discovery_followup_intent=size_for_recommendation_continuation. Preserve the previous recommendation objective and continue with that size.
+- After size_for_recommendation_continuation, a bare product name from that result set like "키너지 ST AS" → DISCOVERY product resolve/search within the confirmed tire_size context; do not revert to the previous unsized text summary.
 - After a recent recommendation/search list, "두개다 2355519 사이즈가 있을까?" / "2355519 규격 있어?" → DISCOVERY with discovery_followup_intent=recent_product_set_size_availability, not a new product search
 - After the assistant's previous turn asked for missing info (vehicle/size) to answer a 안심서비스/흡음재/attribute/recommendation-condition question, and the current turn names ONLY a product with no new explicit intent → DISCOVERY with discovery_followup_intent=product_objective_followup and carried_discovery_objective set to the matching objective, NOT a fresh bare product search.
 - If the current turn instead states a new explicit intent ("설명해줘", price/stock ask, comparison, a different attribute) → discovery_followup_intent=none even if a prior objective exists in the conversation.
@@ -895,6 +908,8 @@ EXAMPLES (tricky cases):
 - "타이어 주문했는데 계속 오류나고 되는 일이 없어" → SUPPORT, complaint_scope=tstation_service_complaint
 - "너 답변이 계속 틀려서 짜증나" → SUPPORT, complaint_scope=tstation_service_complaint
 - "되는 일이 없어 짜증나" → LEADING, complaint_scope=unclear_complaint
+- [Prior unsized recommendation: "승용차용 조용한 타이어 추천"] "2454518" → DISCOVERY, discovery_followup_intent=size_for_recommendation_continuation, user_behavior="providing tire size for the prior quiet passenger recommendation"
+- [After previous size continuation for 245/45R18] "키너지 ST AS" → DISCOVERY, discovery_followup_intent=none, agent_prompt_profile=discovery_search, user_behavior="selecting product within the confirmed 245/45R18 recommendation context"
 - [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=safe_service (NOT a fresh bare product description)
@@ -937,6 +952,7 @@ complaint_scope:
 - unclear_complaint: complaint/frustration with unclear target
 discovery_followup_intent:
 - none: default
+- size_for_recommendation_continuation: previous turn was an unsized recommendation/summary and current turn provides only tire size; preserve the prior recommendation objective and continue with that size
 - recent_product_set_size_availability: asking size existence for the recent product set, not a new product search
 - product_objective_followup: current turn names only a product, continuing a prior turn's unresolved 안심서비스/흡음재/attribute/recommendation-condition question — NOT a fresh bare product search
 carried_discovery_objective:
@@ -11467,11 +11483,14 @@ def _build_discovery_policy_context(
                     discovery_frame = replace(discovery_frame, entities=merged_entities)
         discovery_tool_plan = plan_discovery_tools(discovery_frame)
         discovery_response_decision = decide_discovery_response(discovery_frame)
-        discovery_tool_patch = (
-            dict(discovery_tool_plan.tool_args_patch)
-            if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
-            else {}
-        )
+        if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool":
+            discovery_tool_patch = dict(discovery_tool_plan.tool_args_patch)
+        elif discovery_tool_plan.preferred_tool == "search_product_tool" and discovery_tool_plan.tool_args_patch.get(
+            "size"
+        ):
+            discovery_tool_patch = {"size": discovery_tool_plan.tool_args_patch["size"]}
+        else:
+            discovery_tool_patch = {}
         if effective_supported_objective == "sound_absorber":
             discovery_tool_patch.pop("brand_cd", None)
         if (
@@ -15477,6 +15496,7 @@ class TStationChatServiceV2:
         from services.tstation.agents.b_discovery_agent.tools import (
             current_confirmed_tire_size,
             current_discovery_recommendation_tool_patch,
+            current_discovery_search_tool_patch,
         )
         from services.tstation.agents.c_transaction_agent.tools import current_transaction_store_preview_tool_patch
         recent_user_texts: list[str] = []
@@ -15508,6 +15528,7 @@ class TStationChatServiceV2:
             goal_type=merged_slots.goal_type,
         )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
+        current_discovery_search_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)
         transaction_known_slots = {
             "tire_size": merged_slots.tire_size,

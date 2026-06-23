@@ -59,6 +59,9 @@ current_confirmed_tire_size: contextvars.ContextVar[str | None] = contextvars.Co
 current_discovery_recommendation_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "current_discovery_recommendation_tool_patch", default={}
 )
+current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_discovery_search_tool_patch", default={}
+)
 
 _RECOMMENDATION_LIMIT_CAP = 10
 
@@ -610,6 +613,31 @@ def search_product_tool(
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
         - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
     """
+    policy_patch = current_discovery_search_tool_patch.get()
+    if policy_patch:
+        before_policy = {
+            "keyword": keyword,
+            "size": size,
+            "brand_cd": brand_cd,
+            "sort_by": sort_by,
+            "min_price": min_price,
+            "max_price": max_price,
+        }
+        if not size and policy_patch.get("size"):
+            size = str(policy_patch["size"])
+        logger.info(
+            "[TOOL][search_product_tool] Applied discovery policy patch=%s before=%s after=%s",
+            policy_patch,
+            before_policy,
+            {
+                "keyword": keyword,
+                "size": size,
+                "brand_cd": brand_cd,
+                "sort_by": sort_by,
+                "min_price": min_price,
+                "max_price": max_price,
+            },
+        )
     normalized_keyword = _strip_brand_only_keyword(keyword)
     if normalized_keyword != keyword:
         logger.debug(
