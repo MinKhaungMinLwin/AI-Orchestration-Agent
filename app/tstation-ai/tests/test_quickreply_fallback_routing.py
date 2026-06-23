@@ -9499,7 +9499,8 @@ def test_safe_service_product_object_response_uses_search_result_fields() -> Non
     )
 
     assert "다이나프로 HPX" in response
-    assert "안심서비스 대상 가능성" in response
+    assert "안심서비스 대상 상품으로 확인" in response
+    assert "t_rlx_isn_yn" not in response
     assert "235/55R19" in response
     assert "차량이나 타이어 사이즈를 알려주시면 안심서비스 가능 상품" not in response
 

@@ -2601,8 +2601,7 @@ def _safe_service_product_object_policy_response(tool_data_list: list[dict]) -> 
         size_text = ", ".join(sizes[:6])
         if eligible_rows:
             response = (
-                f"{scope}는 검색 결과의 안심서비스 필드(`t_rlx_isn_yn`) 기준으로 "
-                "안심서비스 대상 가능성이 확인돼요. "
+                f"{scope}는 안심서비스 대상 상품으로 확인돼요. "
                 "최종 적용 여부는 선택한 규격과 주문/장착 단계에서 확정돼요."
             )
             if size_text:
@@ -2610,7 +2609,7 @@ def _safe_service_product_object_policy_response(tool_data_list: list[dict]) -> 
             return response
         if rows_with_safe_service_field:
             response = (
-                f"{scope} 검색 결과에서는 안심서비스 대상 필드가 확인된 규격을 찾지 못했어요. "
+                f"{scope} 검색 결과에서는 안심서비스 대상 규격을 찾지 못했어요. "
                 "다른 규격이나 상품으로 다시 확인해드릴 수 있어요."
             )
             if size_text:
