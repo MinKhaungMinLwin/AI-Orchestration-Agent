@@ -12,12 +12,14 @@ Run from repo root:
 from __future__ import annotations
 
 import datetime
+import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from services.tstation import qc_verifier
+from services.tstation import chat as chat_module, qc_verifier
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
@@ -73,6 +75,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
     _build_no_visible_output_fallback_event,
+    _build_turn_contract_fallback_event,
     _build_turn_contract_required_slot_guard_event,
     _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
@@ -126,6 +129,8 @@ from services.tstation.chat import (
     _repair_qc_mismatch_event,
     _tool_error_summary,
     _trace_final_error_state,
+    _response_decision_for_source_domain,
+    _response_shape_key_for_source_domain,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
     _should_replace_listcar_with_product_attribute_lookup,
@@ -237,6 +242,7 @@ from services.tstation.policies.transaction_intent_policy import build_transacti
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 from services.tstation.policies.turn_contract import (
+    TurnContract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
     build_turn_contract,
@@ -253,6 +259,7 @@ from services.tstation.template_mapper import (
     current_goal_type,
     current_pending_intent,
     current_runflat_comparison,
+    current_transaction_response_decision,
     current_user_text,
     try_build_template,
 )
@@ -6026,6 +6033,68 @@ def test_turn_contract_required_slot_guard_prefers_size_clarification_for_multi_
     ]
 
 
+def test_turn_contract_fallback_event_prefers_size_clarification_on_response_policy_guard_path() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="product_name_search",
+        known_slots={
+            "ord_qty": 2,
+            "shop_name": "판교점",
+            "availability_intent": "today_install",
+            "requested_cal_day": "20260623",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=("product", "goods_no", "tire_size", "quantity"),
+        blocking_required_slots=("tire_size", "quantity"),
+        resolvable_required_slots=("product", "goods_no"),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_products_recommendations_tool",),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("answer_from_previous_recommendation",),
+            metadata={"response_shape_key": "product_search_summary"},
+        ).to_dict(),
+        risk_level="medium",
+        fallback_reason="missing_required_slots:tire_size,quantity",
+        planner_intent="resolve_or_describe_product",
+        planner_domains=("discovery",),
+        execution_plan=("discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"),
+        referred_objects={"status": "resolved", "type": "none", "needs_clarification": False},
+        planner_confidence=0.0,
+        planner_source="router_llm",
+        contract_drift=({"field": "intent", "planner": "resolve_or_describe_product", "code_frame": "product_search"},),
+    )
+
+    assert contract.blocking_required_slots == ("tire_size", "quantity")
+    assert not should_guard_required_slots(contract)
+
+    event = _build_turn_contract_fallback_event(
+        turn_contract=contract,
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "limit": 10},
+                "data": {
+                    "items": [
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "255/55R18"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "215/55R18"},
+                        {"goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert "Dynapro HPX의 타이어 규격을 선택해 주세요." in event["data"]["assistantResponse"]
+
+
 def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
     contract = build_turn_contract(
         user_text="ventus s2 as, ventus air s 중에 뭐가 더 신상품?",
@@ -6077,6 +6146,17 @@ def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> Non
     assert event is not None
     assert event["template"] == "quickReply"
     assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event.get("source_domain") == "discovery"
+    assert not violates_response_template_contract(
+        {
+            "template": event["template"],
+            "source_domain": event.get("source_domain"),
+            "assistant_response_source": event.get("assistant_response_source"),
+            "response_shape_key": "metric_comparison_summary",
+            "called_tools": ["search_product_tool"],
+        },
+        contract,
+    )
     assert "최신 상품은 벤투스 에어S입니다." in event["data"]["assistantResponse"]
 
 
@@ -9385,6 +9465,113 @@ def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_tran
 
     assert not violates_response_template_contract(compare_event, contract)
     assert response_contract_violations(contract=contract, **compare_event) == []
+
+
+def test_response_decision_helper_uses_source_domain_contextvars() -> None:
+    discovery_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "metric_comparison_summary"},
+    )
+    transaction_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "order_summary"},
+    )
+    discovery_token = current_discovery_response_decision.set(discovery_decision)
+    transaction_token = current_transaction_response_decision.set(transaction_decision)
+    try:
+        assert _response_decision_for_source_domain("discovery") is discovery_decision
+        assert _response_decision_for_source_domain("transaction") is transaction_decision
+        assert _response_decision_for_source_domain("unknown") is transaction_decision
+        assert _response_shape_key_for_source_domain("discovery") == "metric_comparison_summary"
+        assert _response_shape_key_for_source_domain("transaction") == "order_summary"
+        assert _response_shape_key_for_source_domain("unknown") == "order_summary"
+    finally:
+        current_discovery_response_decision.reset(discovery_token)
+        current_transaction_response_decision.reset(transaction_token)
+
+
+def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "metric_comparison_summary"},
+    )
+    discovery_token = current_discovery_response_decision.set(discovery_decision)
+    transaction_token = current_transaction_response_decision.set(None)
+
+    class _FakeCoordinator:
+        def stream(self, *args, **kwargs):
+            yield {"type": "sub-agent", "agent": "[DISCOVERY AGENT]", "status": "start"}
+            yield {
+                "type": "data",
+                "template": "quickReply",
+                "source_domain": "discovery",
+                "assistant_response_source": "code_product_compare_resolver",
+                "data": {
+                    "assistantResponse": "최신 상품은 벤투스 에어S입니다.",
+                    "quickReplies": [{"label": "구매하기", "domain": "TRANSACTION"}],
+                    "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+                    "metadata": {"response_shape_key": "metric_comparison_summary"},
+                },
+            }
+            yield {"type": "sub-agent", "agent": "[DONE]", "status": "success"}
+
+    monkeypatch.setattr(chat_module, "_coordinator", _FakeCoordinator())
+    monkeypatch.setattr(chat_module.settings, "AI_QC_ENABLED", False)
+    monkeypatch.setattr(
+        chat_module,
+        "violates_response_template_contract",
+        lambda *args, **kwargs: (_ for _ in ()).throw(UnboundLocalError("local alias scope error")),
+    )
+
+    turn_contract = build_turn_contract(
+        user_text="무응답 방지 테스트",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_search"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "product_search_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_search"],
+        ),
+    )
+
+    try:
+        async def _collect_events() -> list[str]:
+            return [
+                chunk
+                async for chunk in TStationChatServiceV2._stream_response_multi(
+                    messages=[{"role": "user", "content": "무응답 방지 테스트"}],
+                    domains=[MultiAgentDomain.Domain.DISCOVERY],
+                    initial_slots=ConversationSlots(),
+                    turn_contract=turn_contract,
+                )
+            ]
+
+        events = asyncio.run(_collect_events())
+    finally:
+        current_discovery_response_decision.reset(discovery_token)
+        current_transaction_response_decision.reset(transaction_token)
+
+    assert any(chunk == "data: [DONE]\n\n" for chunk in events)
+
+    parsed_events = []
+    for chunk in events:
+        if not chunk.startswith("data: ") or chunk == "data: [DONE]\n\n":
+            continue
+        parsed_events.append(json.loads(chunk[6:].strip()))
+
+    quickreply_events = [event for event in parsed_events if event.get("type") == "data"]
+    assert quickreply_events
+    assert quickreply_events[-1]["template"] == "quickReply"
+    assert quickreply_events[-1]["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert any(event.get("type") == "DONE" for event in parsed_events)
 
 
 def test_turn_contract_reports_product_template_without_current_source_even_without_called_tools() -> None:

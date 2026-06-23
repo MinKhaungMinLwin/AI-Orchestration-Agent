@@ -107,6 +107,10 @@ from services.tstation.policies.store_service_gate import (
     is_store_visual_detail_request,
     replace_store_review_unavailable_text,
 )
+from services.tstation.template_mapper import (
+    current_discovery_response_decision,
+    current_transaction_response_decision,
+)
 from config.tracing import (
     build_trace_config,
     safe_trace_update,
@@ -164,6 +168,19 @@ _HIGH_RISK_POST_TOOL_CONTRACT_TOOLS = frozenset({
     "get_my_coupons_tool",
     "get_coupon_applicable_products_tool",
 })
+
+
+def _response_decision_for_source_domain(source_domain: str | None) -> ResponseDecision | None:
+    normalized_source_domain = str(source_domain or "").strip().lower()
+    if normalized_source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
+        return current_discovery_response_decision.get()
+    return current_transaction_response_decision.get()
+
+
+def _response_shape_key_for_source_domain(source_domain: str | None) -> str:
+    decision = _response_decision_for_source_domain(source_domain)
+    metadata = getattr(decision, "metadata", None) or {}
+    return str(metadata.get("response_shape_key") or "")
 
 
 def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
@@ -2128,7 +2145,6 @@ class StreamingMultiAgentCoordinator:
                     from services.tstation.agents.c_transaction_agent.tools import (
                         current_transaction_store_preview_tool_patch,
                     )
-                    from services.tstation.template_mapper import current_transaction_response_decision
 
                     transaction_known_slots = {
                         "tire_size": getattr(pending_slots, "tire_size", None),
@@ -8530,9 +8546,7 @@ def _tire_sizes_from_product_rows(rows: list[dict]) -> list[str]:
 
 def _current_product_claim_check_type() -> str:
     try:
-        from services.tstation.template_mapper import current_discovery_response_decision as _decision_context
-
-        decision = _decision_context.get()
+        decision = _response_decision_for_source_domain(MultiAgentDomain.Domain.DISCOVERY.value)
     except Exception:
         return "none"
     metadata = getattr(decision, "metadata", None) or {}
@@ -11010,6 +11024,27 @@ def _build_turn_contract_required_slot_guard_event(
         if unresolved_event is not None:
             return unresolved_event
     return build_required_slot_clarification_event(turn_contract)
+
+
+def _build_turn_contract_fallback_event(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    tool_data_list: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    if "tire_size" in set(turn_contract.blocking_required_slots):
+        unresolved_event = _build_transaction_unresolved_product_resolution_event(
+            user_text=user_text,
+            slots=turn_contract.known_slots,
+            tool_data_list=tool_data_list,
+        )
+        if unresolved_event is not None:
+            return unresolved_event
+    if should_guard_required_slots(turn_contract):
+        return build_required_slot_clarification_event(turn_contract)
+    return build_response_policy_guard_event(turn_contract)
 
 
 def _is_size_only_store_availability_continuation(
@@ -16394,7 +16429,6 @@ class TStationChatServiceV2:
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
         from services.tstation.template_mapper import (
-            current_discovery_response_decision,
             current_ev_suitability_comparison,
             current_excluded_store_ids,
             current_goal_type,
@@ -16402,7 +16436,6 @@ class TStationChatServiceV2:
             current_runflat_comparison,
             current_return_visit_store_flow,
             current_store_date_availability,
-            current_transaction_response_decision,
             current_user_text,
             current_user_preferences_text,
         )
@@ -16593,7 +16626,7 @@ class TStationChatServiceV2:
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if should_guard_required_slots(turn_contract):
-            turn_contract_guard_event = _build_turn_contract_required_slot_guard_event(
+            turn_contract_guard_event = _build_turn_contract_fallback_event(
                 turn_contract=turn_contract,
                 user_text=last_user_text,
                 tool_data_list=prev_tool_data,
@@ -20938,17 +20971,7 @@ class TStationChatServiceV2:
                                     "content": assistant_response,
                                     "agent": "[DISCOVERY AGENT]",
                                 }]
-                    from services.tstation.template_mapper import (
-                        current_discovery_response_decision as _current_discovery_response_decision,
-                    )
-                    from services.tstation.template_mapper import (
-                        current_transaction_response_decision as _current_transaction_response_decision,
-                    )
-                    current_policy_decision = (
-                        _current_discovery_response_decision.get()
-                        if source_domain == MultiAgentDomain.Domain.DISCOVERY.value
-                        else _current_transaction_response_decision.get()
-                    )
+                    current_policy_decision = _response_decision_for_source_domain(source_domain)
                     if _normalize_policy_guidance_leak_quickreply(
                         event_data,
                         source_domain=source_domain,
@@ -21163,7 +21186,7 @@ class TStationChatServiceV2:
                     if _normalize_discovery_policy_quickreply(
                         event_data,
                         source_domain=source_domain,
-                        decision=_current_discovery_response_decision.get(),
+                        decision=_response_decision_for_source_domain(source_domain),
                     ):
                         logger.info("[POLICY][discovery] quickReply normalized by response decision")
                         assistant_response = str(event_data.get("assistantResponse") or "")
@@ -21282,15 +21305,23 @@ class TStationChatServiceV2:
                 validation_event["called_tools"] = sorted(called_tool_names)
                 validation_event["execution_plan"] = list(getattr(turn_contract, "execution_plan", ()) or ())
                 validation_event["source_domain"] = str(event.get("source_domain") or "").lower()
-                event_decision = (
-                    _current_discovery_response_decision.get()
-                    if validation_event["source_domain"] == MultiAgentDomain.Domain.DISCOVERY.value
-                    else _current_transaction_response_decision.get()
+                validation_event["response_shape_key"] = _response_shape_key_for_source_domain(
+                    validation_event["source_domain"]
                 )
-                validation_event["response_shape_key"] = str(
-                    getattr(event_decision, "metadata", {}).get("response_shape_key") or ""
-                )
-                if violates_response_template_contract(validation_event, turn_contract):
+                try:
+                    template_contract_violated = violates_response_template_contract(
+                        validation_event,
+                        turn_contract,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[TURN_CONTRACT] validation failed template=%s source_domain=%s response_shape=%s",
+                        validation_event.get("template"),
+                        validation_event.get("source_domain"),
+                        validation_event.get("response_shape_key"),
+                    )
+                    template_contract_violated = bool(turn_contract)
+                if template_contract_violated and turn_contract is not None:
                     logger.warning(
                         "[TURN_CONTRACT] blocked template=%s response_shape=%s required_slots=%s intent=%s",
                         validation_event.get("template"),
@@ -21298,18 +21329,14 @@ class TStationChatServiceV2:
                         list(turn_contract.required_slots) if turn_contract else [],
                         turn_contract.intent if turn_contract else None,
                     )
-                    event = (
-                        _build_turn_contract_required_slot_guard_event(
-                            turn_contract=turn_contract,
-                            user_text=user_query,
-                            tool_data_list=[
-                                {"tool": tool_name, "data": data}
-                                for tool_name, data in structured_sources
-                            ],
-                        )
-                        if should_guard_required_slots(turn_contract)
-                        else build_response_policy_guard_event(turn_contract)
-                    )
+                    event = _build_turn_contract_fallback_event(
+                        turn_contract=turn_contract,
+                        user_text=user_query,
+                        tool_data_list=[
+                            {"tool": tool_name, "data": data}
+                            for tool_name, data in structured_sources
+                        ],
+                    ) or build_response_policy_guard_event(turn_contract)
                     last_template = "quickReply"
                     last_template_source = "turn_contract"
                     last_assistant_response_source = str(
@@ -21469,30 +21496,12 @@ class TStationChatServiceV2:
                     last_template_source,
                     last_assistant_response_source,
                 )
-                current_contract_response_shape_key = str(
-                    getattr(
-                        (
-                            _current_discovery_response_decision.get()
-                            if last_template_source in {"code_mapper", "turn_contract"}
-                            and last_assistant_response_source
-                            in {
-                                "code_product_attribute_resolver",
-                                "code_product_description",
-                                "discovery_policy",
-                                "code_bare_product_search",
-                                "code_multi_variant_recommendation",
-                                "code_vehicle_auto_select",
-                            }
-                            else _current_transaction_response_decision.get()
-                        ),
-                        "metadata",
-                        {},
-                    ).get("response_shape_key")
-                    or ""
-                )
                 current_contract_source_domain = str(
                     ((buffered_data_events[-1] if buffered_data_events else {}) or {}).get("source_domain") or ""
                 ).lower()
+                current_contract_response_shape_key = _response_shape_key_for_source_domain(
+                    current_contract_source_domain
+                )
                 contract_violations = response_contract_violations(
                     template=last_template,
                     assistant_response_source=last_assistant_response_source,
@@ -21591,18 +21600,14 @@ class TStationChatServiceV2:
                                 }),
                             )
                             if contract_violations and turn_contract is not None and not _parallel_qc:
-                                fallback_event = (
-                                    _build_turn_contract_required_slot_guard_event(
-                                        turn_contract=turn_contract,
-                                        user_text=user_query,
-                                        tool_data_list=[
-                                            {"tool": tool_name, "data": data}
-                                            for tool_name, data in structured_sources
-                                        ],
-                                    )
-                                    if should_guard_required_slots(turn_contract)
-                                    else build_response_policy_guard_event(turn_contract)
-                                )
+                                fallback_event = _build_turn_contract_fallback_event(
+                                    turn_contract=turn_contract,
+                                    user_text=user_query,
+                                    tool_data_list=[
+                                        {"tool": tool_name, "data": data}
+                                        for tool_name, data in structured_sources
+                                    ],
+                                ) or build_response_policy_guard_event(turn_contract)
                                 buffered_data_events = [fallback_event]
                                 last_template = "quickReply"
                                 last_template_source = "turn_contract_qc"
