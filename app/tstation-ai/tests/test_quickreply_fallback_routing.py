@@ -12,10 +12,12 @@ Run from repo root:
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from services.tstation import qc_verifier
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
@@ -110,6 +112,9 @@ from services.tstation.chat import (
     _is_product_coupon_price_amount_query,
     _is_specific_coupon_usage_query,
     _is_product_comparison_query,
+    _tool_error_response_decision,
+    _tool_parse_failure_response_decision,
+    _qc_factual_mismatch_guard_event,
     _tool_error_summary,
     _trace_final_error_state,
     _is_product_attribute_lookup_query,
@@ -217,6 +222,18 @@ from services.tstation.policies.coupon_query_gate import should_consider_coupon_
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
+)
+from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
+from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+from services.tstation.policies.turn_contract import (
+    build_required_slot_clarification_event,
+    build_response_policy_guard_event,
+    build_turn_contract,
+    response_contract_violations,
+    should_guard_required_slots,
+    violates_response_template_contract,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
@@ -8287,3 +8304,335 @@ def test_quantity_benefit_product_selection_continues_to_goods_no_comparison() -
     assert frame.sub_intent == "quantity_benefit_comparison"
     assert frame.known_slots["goods_no"] == "G000000309961"
     assert frame.entities["quantity_options"] == (2, 4)
+
+
+def _transaction_turn_contract(user_text: str, known_slots: dict | None = None):
+    frame = build_transaction_intent_frame(user_text, known_slots=known_slots or {})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    return build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+
+def _routing_result(
+    *,
+    domains=None,
+    execution_plan=None,
+    referred_object_status: str = "resolved",
+    referred_object_type: str = "none",
+    needs_clarification: bool = False,
+) -> MultiAgentDomain:
+    return MultiAgentDomain(
+        reason="test",
+        domains=domains or [MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=execution_plan or ["transaction:price_or_coupon_check"],
+        user_behavior="test",
+        flow="test",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        referred_object_status=referred_object_status,
+        referred_object_type=referred_object_type,
+        needs_clarification=needs_clarification,
+        planner_confidence=0.91,
+        agent_prompt_profile="full",
+    )
+
+
+@pytest.mark.parametrize("user_text", ["그거 구매할래", "이 상품 주문할게", "그거 결제하고 싶어"])
+def test_turn_contract_guards_unclear_purchase_reference_followup(user_text: str) -> None:
+    contract = _transaction_turn_contract(user_text)
+
+    assert contract.required_slots == ("product",)
+    assert contract.risk_level == "high"
+    assert should_guard_required_slots(contract)
+
+    event = build_required_slot_clarification_event(contract)
+    assert event["assistant_response_source"] == "code_turn_contract_required_slot_guard"
+    assert event["template"] == "quickReply"
+    assert "어떤 상품 기준" in event["data"]["assistantResponse"]
+    assert "상품명 입력" in _labels(event["data"]["quickReplies"])
+
+
+@pytest.mark.parametrize("user_text", ["가격 얼마야?", "쿠폰 적용돼?", "할인가 확인해줘"])
+def test_turn_contract_guards_price_coupon_without_product(user_text: str) -> None:
+    contract = _transaction_turn_contract(user_text)
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.blocking_required_slots == ("product",)
+    assert should_guard_required_slots(contract)
+
+
+@pytest.mark.parametrize("user_text", ["벤투스 에어S 가격 알려줘", "dynapro hp3 가격 알려줘"])
+def test_turn_contract_does_not_guard_cross_domain_product_price_resolution(user_text: str) -> None:
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        cross_domain_plan=cross_domain_plan,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:price_or_coupon_check"],
+        ),
+    )
+
+    assert cross_domain_plan.is_cross_domain
+    assert contract.planner_intent == "resolve_or_describe_product"
+    assert contract.intent == "resolve_or_describe_product"
+    assert contract.resolvable_required_slots
+    assert not contract.blocking_required_slots
+    assert not should_guard_required_slots(contract)
+    assert any(item["field"] == "intent" for item in contract.contract_drift)
+
+
+@pytest.mark.parametrize("user_text", ["그거 구매할래", "그거 가격 알려줘", "두 개 다 재고 있어?"])
+def test_turn_contract_blocks_missing_or_ambiguous_referred_object(user_text: str) -> None:
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=_routing_result(
+            referred_object_status="ambiguous" if "두 개" in user_text else "missing",
+            referred_object_type="product_set" if "두 개" in user_text else "product",
+            needs_clarification=True,
+            execution_plan=["transaction:quick_order_reservation"],
+        ),
+    )
+
+    assert contract.referred_objects["needs_clarification"] is True
+    assert contract.blocking_required_slots
+    assert should_guard_required_slots(contract)
+
+
+def test_turn_contract_blocks_missing_reference_even_when_planner_starts_with_discovery() -> None:
+    contract = build_turn_contract(
+        user_text="그거 구매할래",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:quick_order_reservation"],
+            referred_object_status="missing",
+            referred_object_type="product",
+            needs_clarification=True,
+        ),
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.blocking_required_slots == ("product",)
+    assert contract.risk_level == "high"
+    assert should_guard_required_slots(contract)
+
+
+def test_turn_contract_ignores_freeform_execution_plan_as_planner_intent() -> None:
+    contract = build_turn_contract(
+        user_text="가격 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        routing_result=_routing_result(
+            execution_plan=["Run TRANSACTION price flow after resolving context"],
+        ),
+    )
+
+    assert contract.planner_intent is None
+    assert contract.intent == "price_or_coupon_check"
+    assert "run_transaction_price_flow_after_resolving_context" not in {
+        contract.intent,
+        contract.planner_intent,
+    }
+
+
+def test_turn_contract_does_not_clarify_normal_product_description() -> None:
+    contract = _transaction_turn_contract("dynapro hp3 설명해줘")
+
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_turn_contract_allows_stock_when_required_slots_are_known() -> None:
+    contract = _transaction_turn_contract(
+        "재고 확인해줘",
+        {
+            "goods_no": "G000000000001",
+            "tire_size": "225/45R17",
+            "quantity": 4,
+            "region": "서울",
+        },
+    )
+
+    assert contract.intent == "stock_store_search"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_turn_contract_blocks_templates_that_conflict_with_missing_required_slots() -> None:
+    contract = _transaction_turn_contract("그거 구매할래")
+
+    assert violates_response_template_contract({"template": "datepick"}, contract)
+    assert violates_response_template_contract({"template": "preOrder"}, contract)
+    assert violates_response_template_contract({"template": "orderComplete"}, contract)
+    assert not violates_response_template_contract({"template": "quickReply"}, contract)
+
+
+def test_turn_contract_blocks_datepick_for_unavailable_stock_response_policy() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="inventory_availability",
+        known_slots={"goods_no": "G000000000001", "tire_size": "225/45R17", "quantity": 4},
+    )
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots=dict(frame.known_slots),
+        tool_result={"available_qty": 0, "todayShopArray": [], "tnaShopArray": []},
+    )
+    contract = build_turn_contract(
+        user_text="오늘 장착 가능해?",
+        intent_frame=frame,
+        response_decision=response_decision,
+    )
+
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert violates_response_template_contract({"template": "datepick"}, contract)
+    assert violates_response_template_contract({"template": "preOrder"}, contract)
+    assert not violates_response_template_contract({"template": "quickReply"}, contract)
+
+    event = build_response_policy_guard_event(contract)
+    assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert "예약 가능한 재고" in event["data"]["assistantResponse"]
+    assert "다른 매장 찾기" in _labels(event["data"]["quickReplies"])
+
+
+def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="inventory_availability",
+        known_slots={"goods_no": "G000000000001", "tire_size": "225/45R17", "quantity": 4},
+    )
+    response_decision = decide_transaction_response(
+        intent="inventory_availability",
+        known_slots=dict(frame.known_slots),
+        tool_result={"available_qty": 0, "todayShopArray": [], "tnaShopArray": []},
+    )
+    contract = build_turn_contract(
+        user_text="오늘 장착 가능해?",
+        intent_frame=frame,
+        response_decision=response_decision,
+    )
+
+    violations = response_contract_violations(template="datepick", contract=contract)
+
+    assert violations == [{
+        "type": "forbidden_template",
+        "template": "datepick",
+        "fallback_reason": "response_policy_forbidden_behaviors",
+    }]
+
+
+def test_turn_contract_blocks_price_template_on_price_tool_error() -> None:
+    response_decision = _tool_error_response_decision("get_final_price_tool")
+    contract = build_turn_contract(
+        user_text="가격 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=response_decision,
+        routing_result=_routing_result(execution_plan=["transaction:price_or_coupon_check"]),
+    )
+
+    assert violates_response_template_contract({"template": "billProduct"}, contract)
+    assert violates_response_template_contract({"template": "preOrder"}, contract)
+    event = build_response_policy_guard_event(contract)
+    assert "금액을 단정할 수 없" in event["data"]["assistantResponse"]
+
+
+def test_turn_contract_accumulates_post_tool_forbidden_behaviors_across_tools() -> None:
+    price_error_decision = _tool_error_response_decision("get_final_price_tool")
+    accumulated_behaviors = list(price_error_decision.forbidden_behaviors)
+    coupon_success_decision = None
+    if coupon_success_decision is None and accumulated_behaviors:
+        coupon_success_decision = ResponseDecision(
+            response_shape=ResponseShape.NO_RESULT,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=tuple(accumulated_behaviors),
+            assistant_guidance="keep prior post-tool constraints",
+            metadata={"tools": ["get_final_price_tool"]},
+        )
+
+    contract = build_turn_contract(
+        user_text="가격이랑 쿠폰 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=coupon_success_decision,
+        routing_result=_routing_result(execution_plan=["transaction:price_or_coupon_check"]),
+    )
+
+    assert "assert_price_without_tool_result" in contract.response_decision["forbidden_behaviors"]
+    assert violates_response_template_contract({"template": "billProduct"}, contract)
+
+
+def test_turn_contract_treats_high_risk_tool_parse_failure_as_forbidden_behavior() -> None:
+    response_decision = _tool_parse_failure_response_decision("get_final_price_tool")
+    contract = build_turn_contract(
+        user_text="가격 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        response_decision=response_decision,
+        routing_result=_routing_result(execution_plan=["transaction:price_or_coupon_check"]),
+    )
+
+    assert response_decision.metadata["parse_failure"] is True
+    assert "assert_price_without_tool_result" in contract.response_decision["forbidden_behaviors"]
+    assert violates_response_template_contract({"template": "billProduct"}, contract)
+
+
+def test_qc_factual_mismatch_guard_event_uses_safe_fallback() -> None:
+    event = _qc_factual_mismatch_guard_event([
+        qc_verifier.Mismatch(field="price", value="123,456원"),
+        qc_verifier.Mismatch(field="goods_no", value="G000000000001"),
+    ])
+
+    assert event["assistant_response_source"] == "code_qc_factual_mismatch_guard"
+    assert event["template"] == "quickReply"
+    assert "일치하지 않아" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["qcMismatchFields"] == ["goods_no", "price"]
+
+
+def test_env_example_defaults_to_sequential_qc_for_blocking_contracts() -> None:
+    env_example = Path(__file__).resolve().parents[3] / ".env.example"
+
+    assert "AI_QC_ENABLED=true" in env_example.read_text()
+    assert "AI_QC_PARALLEL=false" in env_example.read_text()
+
+
+def test_contract_sensitive_turn_should_disable_parallel_qc_condition() -> None:
+    contract = build_turn_contract(
+        user_text="그거 구매할래",
+        routing_result=_routing_result(
+            referred_object_status="missing",
+            referred_object_type="product",
+            needs_clarification=True,
+        ),
+    )
+
+    contract_sensitive_qc = bool(
+        contract
+        and (
+            contract.blocking_required_slots
+            or contract.resolvable_required_slots
+            or (contract.response_decision or {}).get("forbidden_behaviors")
+        )
+    )
+
+    assert contract_sensitive_qc is True
+    assert not (True and True and not contract_sensitive_qc)

@@ -63,6 +63,16 @@ from services.tstation.policies.price_response_policy import (
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+from services.tstation.policies.turn_contract import (
+    TurnContract,
+    build_required_slot_clarification_event,
+    build_response_policy_guard_event,
+    build_turn_contract,
+    response_contract_violations,
+    should_guard_required_slots,
+    violates_response_template_contract,
+)
 from services.tstation.policies.brand_policy import (
     SUPPORTED_BRANDS,
     unsupported_brand_policy_match,
@@ -143,6 +153,17 @@ current_vehicle_selection_prompt_event: ContextVar[dict | None] = ContextVar(
     "current_vehicle_selection_prompt_event",
     default=None,
 )
+
+_HIGH_RISK_POST_TOOL_CONTRACT_TOOLS = frozenset({
+    "transaction_store_preview_tool",
+    "get_store_inventory_tool",
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "quick_order_tool",
+    "get_store_schedule_tool",
+    "get_my_coupons_tool",
+    "get_coupon_applicable_products_tool",
+})
 
 
 def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
@@ -309,6 +330,14 @@ class MultiAgentDomain(BaseModel):
                 data["discovery_followup_intent"] = "none"
             if "carried_discovery_objective" not in data:
                 data["carried_discovery_objective"] = "none"
+            if "referred_object_status" not in data:
+                data["referred_object_status"] = "resolved"
+            if "referred_object_type" not in data:
+                data["referred_object_type"] = "none"
+            if "needs_clarification" not in data:
+                data["needs_clarification"] = False
+            if "planner_confidence" not in data:
+                data["planner_confidence"] = 0.0
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -388,6 +417,22 @@ class MultiAgentDomain(BaseModel):
             "discovery_followup_intent is not 'product_objective_followup'."
         ),
     )
+    referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
+        description=(
+            "Planner judgment for referential phrases in the current turn. Use 'resolved' when the object is explicit "
+            "or already known, 'resolvable_from_context' when prior cards/history can resolve it, 'missing' when no "
+            "referent exists, and 'ambiguous' when multiple possible referents exist."
+        ),
+    )
+    referred_object_type: Literal["product", "product_set", "store", "order", "coupon", "none"] = Field(
+        description="Type of referred object for this turn, or 'none' when there is no reference."
+    )
+    needs_clarification: bool = Field(
+        description="True when missing or ambiguous referred objects must be clarified before tool execution."
+    )
+    planner_confidence: float = Field(
+        description="Planner confidence from 0.0 to 1.0 for the chosen domains/plan/reference judgment."
+    )
 
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
@@ -448,6 +493,14 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["discovery_followup_intent"] = "none"
             if "carried_discovery_objective" not in data:
                 data["carried_discovery_objective"] = "none"
+            if "referred_object_status" not in data:
+                data["referred_object_status"] = "resolved"
+            if "referred_object_type" not in data:
+                data["referred_object_type"] = "none"
+            if "needs_clarification" not in data:
+                data["needs_clarification"] = False
+            if "planner_confidence" not in data:
+                data["planner_confidence"] = 0.0
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -486,6 +539,14 @@ class _SlimMultiAgentDomain(BaseModel):
             "classification with no prior context, so this should almost always be 'none'."
         ),
     )
+    referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
+        description="First-turn reference status; usually 'resolved' unless the user uses an unclear reference."
+    )
+    referred_object_type: Literal["product", "product_set", "store", "order", "coupon", "none"] = Field(
+        description="Type of referred object, or 'none'."
+    )
+    needs_clarification: bool = Field(description="True when an unclear reference must be clarified.")
+    planner_confidence: float = Field(description="Planner confidence from 0.0 to 1.0.")
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
             "Prompt profile for the selected domain agent. "
@@ -515,7 +576,7 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 9 outputs:
+Produce 13 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
@@ -559,6 +620,15 @@ Complaint routing rule:
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
+
+10. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
+   - "resolved": current turn explicitly names the object or an existing slot/card uniquely identifies it
+   - "resolvable_from_context": prior cards/history can resolve it before transaction execution
+   - "missing": the user says "그거/이거/그 상품" etc. but no referent exists
+   - "ambiguous": more than one possible referent exists ("두 개 다", "첫번째" when list is unavailable/ambiguous)
+11. referred_object_type — "product", "product_set", "store", "order", "coupon", or "none"
+12. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
+13. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
 
 IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
@@ -855,7 +925,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with EXACTLY ONE domain), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -875,6 +945,17 @@ carried_discovery_objective:
 - sound_absorber: continuing a 흡음재 question
 - attribute_lookup: continuing a specific product attribute question (소음/연비/내구성 등)
 - recommendation_filter: continuing a recommendation condition/filter question (계절/차종/가성비/퍼포먼스 등)
+referred_object_status:
+- resolved: explicit object or uniquely resolved context
+- resolvable_from_context: prior tool/card context can resolve before risky transaction execution
+- missing: referential phrase but no object exists
+- ambiguous: multiple possible referents
+referred_object_type:
+- product, product_set, store, order, coupon, none
+needs_clarification:
+- true only for missing/ambiguous referred objects that must not execute tools yet
+planner_confidence:
+- number from 0.0 to 1.0
 agent_prompt_profile:
 - transaction_coupon: coupon/promotion -> transaction_coupon
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
@@ -1491,6 +1572,10 @@ class StreamingMultiAgentCoordinator:
                     complaint_scope=raw_result.complaint_scope,
                     discovery_followup_intent=raw_result.discovery_followup_intent,
                     carried_discovery_objective=raw_result.carried_discovery_objective,
+                    referred_object_status=raw_result.referred_object_status,
+                    referred_object_type=raw_result.referred_object_type,
+                    needs_clarification=raw_result.needs_clarification,
+                    planner_confidence=raw_result.planner_confidence,
                     agent_prompt_profile=raw_result.agent_prompt_profile,
                     flow="",
                 )
@@ -12000,6 +12085,78 @@ def _tool_error_summary(tool_name: str, tool_result: Any) -> dict | None:
     }
 
 
+def _post_tool_policy_intent(tool_name: str) -> str:
+    return {
+        "transaction_store_preview_tool": "inventory_availability",
+        "get_store_inventory_tool": "inventory_availability",
+        "get_final_price_tool": "price_or_coupon_check",
+        "compare_discount_tool": "price_or_coupon_check",
+        "get_my_coupons_tool": "price_or_coupon_check",
+        "get_coupon_applicable_products_tool": "price_or_coupon_check",
+        "quick_order_tool": "quick_order_reservation",
+        "get_store_schedule_tool": "store_schedule",
+    }.get(tool_name, "transaction_fallback")
+
+
+def _tool_error_response_decision(tool_name: str) -> ResponseDecision:
+    forbidden_by_tool = {
+        "get_final_price_tool": ("assert_price_without_tool_result", "preorder"),
+        "compare_discount_tool": ("assert_price_without_tool_result",),
+        "get_my_coupons_tool": ("assert_coupon_without_tool_result",),
+        "get_coupon_applicable_products_tool": ("assert_coupon_without_tool_result",),
+        "quick_order_tool": ("order_complete_on_tool_error",),
+        "get_store_schedule_tool": ("datepick_on_tool_error",),
+    }
+    return ResponseDecision(
+        response_shape=ResponseShape.NO_RESULT,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=forbidden_by_tool.get(tool_name, ("assert_success_without_tool_result",)),
+        assistant_guidance="도구 실패 시 가격/쿠폰/예약/주문을 단정하지 말고 안전한 재시도 안내로 종료한다.",
+        metadata={"response_shape_key": "tool_error_safe_fallback", "tool_name": tool_name},
+    )
+
+
+def _tool_parse_failure_response_decision(tool_name: str) -> ResponseDecision:
+    decision = _tool_error_response_decision(tool_name)
+    metadata = dict(decision.metadata)
+    metadata["response_shape_key"] = "tool_parse_failure_safe_fallback"
+    metadata["parse_failure"] = True
+    return ResponseDecision(
+        response_shape=decision.response_shape,
+        template=decision.template,
+        required_slots=decision.required_slots,
+        forbidden_behaviors=decision.forbidden_behaviors,
+        assistant_guidance="고위험 tool output parse 실패 시 성공/가격/예약/주문/쿠폰을 단정하지 않는다.",
+        metadata=metadata,
+    )
+
+
+def _qc_factual_mismatch_guard_event(mismatches: list[Any]) -> dict:
+    fields = sorted({str(getattr(mismatch, "field", "") or "") for mismatch in mismatches if mismatch is not None})
+    message = "확인된 데이터와 응답 내용이 일치하지 않아 단정 안내를 중단했어요. 다시 조회해 정확히 확인해드릴게요."
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_qc_factual_mismatch_guard",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [
+                {"label": "다시 조회", "domain": "TRANSACTION"},
+                {"label": "상품 다시 선택", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "qcMismatchFields": fields,
+                "qcMismatches": [
+                    mismatch.as_dict() if hasattr(mismatch, "as_dict") else {"value": str(mismatch)}
+                    for mismatch in mismatches
+                ],
+            },
+        },
+    }
+
+
 def _trace_final_error_state(
     *,
     tool_errors: list[dict],
@@ -15189,6 +15346,7 @@ class TStationChatServiceV2:
         # after the older P0 gates so existing hotfixes win first; the policy
         # only fills gaps where classifier output is still single-domain or
         # ordered differently from the deterministic task decomposition.
+        cross_domain_plan = None
         try:
             known_slots = {
                 "goods_no": merged_slots.goods_no,
@@ -15372,6 +15530,65 @@ class TStationChatServiceV2:
         )
         current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
         current_transaction_response_decision.set(transaction_response_decision)
+        turn_contract: TurnContract | None = None
+        try:
+            if MultiAgentDomain.Domain.TRANSACTION in domains:
+                contract_known_slots = _enrich_today_install_policy_slots(
+                    last_user_text=last_user_text,
+                    known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
+                    messages=request.messages,
+                )
+                contract_frame = build_transaction_intent_frame(last_user_text, known_slots=contract_known_slots)
+                contract_tool_plan = plan_transaction_tools(contract_frame)
+                turn_contract = build_turn_contract(
+                    user_text=last_user_text,
+                    intent_frame=contract_frame,
+                    tool_plan=contract_tool_plan,
+                    response_decision=transaction_response_decision,
+                    cross_domain_plan=cross_domain_plan,
+                    routing_result=routing_result,
+                    merged_slots=merged_slots,
+                )
+            elif MultiAgentDomain.Domain.DISCOVERY in domains:
+                discovery_contract_slots = {
+                    "tire_size": merged_slots.tire_size,
+                    "goods_no": merged_slots.goods_no,
+                    "vehicle_type": merged_slots.vehicle_type,
+                }
+                contract_frame = build_discovery_intent_frame(
+                    last_user_text,
+                    known_slots={k: v for k, v in discovery_contract_slots.items() if v not in (None, "")},
+                )
+                contract_tool_plan = plan_discovery_tools(contract_frame)
+                turn_contract = build_turn_contract(
+                    user_text=last_user_text,
+                    intent_frame=contract_frame,
+                    tool_plan=contract_tool_plan,
+                    response_decision=discovery_response_decision,
+                    cross_domain_plan=cross_domain_plan,
+                    routing_result=routing_result,
+                    merged_slots=merged_slots,
+                )
+            else:
+                turn_contract = build_turn_contract(
+                    user_text=last_user_text,
+                    cross_domain_plan=cross_domain_plan,
+                    routing_result=routing_result,
+                    merged_slots=merged_slots,
+                )
+            logger.info("[TURN_CONTRACT] %s", turn_contract.to_dict() if turn_contract else None)
+            if turn_contract and turn_contract.contract_drift:
+                logger.warning("[TURN_CONTRACT] planner/code drift %s", turn_contract.to_dict()["contract_drift"])
+            if request.tracing_id and turn_contract is not None:
+                with _trace_span(
+                    "turn_contract",
+                    trace_id=request.tracing_id,
+                    parent_span_id=_parent_span_id,
+                    input={"user_text": last_user_text},
+                ) as _turn_contract_span:
+                    _turn_contract_span.update(output=turn_contract.to_dict())
+        except Exception:
+            logger.exception("[TURN_CONTRACT] Failed to build turn contract")
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
@@ -15441,6 +15658,31 @@ class TStationChatServiceV2:
             event_data = complaint_guard_event.get("data") if isinstance(complaint_guard_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
+        if should_guard_required_slots(turn_contract):
+            turn_contract_guard_event = build_required_slot_clarification_event(turn_contract)
+            logger.info(
+                "[TURN_CONTRACT] required-slot guard response: contract=%s text=%r session_id=%s",
+                turn_contract.to_dict(),
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(turn_contract_guard_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = (
+                turn_contract_guard_event.get("data")
+                if isinstance(turn_contract_guard_event.get("data"), dict)
+                else {}
+            )
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
         # Post-classifier intercept: 비-타이어 방문 예약 (와이퍼/배터리/얼라인먼트/
         # 경정비 등) 흐름에서 사용자가 datepick 시간 슬롯을 클릭한 turn은 결정적
         # redirect 으로 처리한다. LLM 의 SERVICE RESERVATION REDIRECT 규칙
@@ -15494,6 +15736,7 @@ class TStationChatServiceV2:
                     latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
                     intent_group=intent_group,
+                    turn_contract=turn_contract,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -15529,6 +15772,7 @@ class TStationChatServiceV2:
                 latest_product_tmpl=latest_product_tmpl,
                 prev_tool_data=prev_tool_data,
                 intent_group=intent_group,
+                turn_contract=turn_contract,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -15669,6 +15913,7 @@ class TStationChatServiceV2:
         latest_product_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
         intent_group: str | None = None,
+        turn_contract: TurnContract | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -15706,6 +15951,8 @@ class TStationChatServiceV2:
         pending_slots = None
         deterministic_coupon_event: dict | None = None
         coupon_resolver_ran = False
+        post_tool_forbidden_behaviors: list[str] = []
+        post_tool_policy_metadata: dict[str, Any] = {}
         # Hoisted so the trace summary at end-of-stream can reference QC verdict
         # even when the draft was empty and the QC block below never ran.
         _qc_passed = True
@@ -18936,11 +19183,135 @@ class TStationChatServiceV2:
                     parsed_for_verifier = qc_verifier.parse_tool_output(output_data)
                     if tool_error := _tool_error_summary(tool_name, parsed_for_verifier or output_data):
                         tool_errors.append(tool_error)
+                    if parsed_for_verifier is None and tool_name in _HIGH_RISK_POST_TOOL_CONTRACT_TOOLS:
+                        post_tool_response_decision = _tool_parse_failure_response_decision(tool_name)
+                        for behavior in post_tool_response_decision.forbidden_behaviors:
+                            if behavior not in post_tool_forbidden_behaviors:
+                                post_tool_forbidden_behaviors.append(behavior)
+                        post_tool_policy_metadata.update(dict(post_tool_response_decision.metadata))
+                        post_tool_policy_metadata.setdefault("tools", [])
+                        if tool_name not in post_tool_policy_metadata["tools"]:
+                            post_tool_policy_metadata["tools"].append(tool_name)
+                        aggregate_response_decision = ResponseDecision(
+                            response_shape=post_tool_response_decision.response_shape,
+                            template=post_tool_response_decision.template,
+                            required_slots=post_tool_response_decision.required_slots,
+                            forbidden_behaviors=tuple(post_tool_forbidden_behaviors),
+                            assistant_guidance=post_tool_response_decision.assistant_guidance,
+                            metadata=dict(post_tool_policy_metadata),
+                        )
+                        policy_slots: dict[str, Any] = {}
+                        if initial_slots is not None and hasattr(initial_slots, "model_dump"):
+                            policy_slots.update({
+                                key: value
+                                for key, value in initial_slots.model_dump().items()
+                                if value not in (None, "", [], {})
+                            })
+                        if pending_slots is not None and hasattr(pending_slots, "model_dump"):
+                            policy_slots.update({
+                                key: value
+                                for key, value in pending_slots.model_dump().items()
+                                if value not in (None, "", [], {})
+                            })
+                        if isinstance(input_data, dict):
+                            policy_slots.update({
+                                key: value
+                                for key, value in input_data.items()
+                                if value not in (None, "", [], {})
+                            })
+                        turn_contract = build_turn_contract(
+                            user_text=user_query,
+                            intent_frame=IntentFrame(
+                                domain=PolicyDomain.TRANSACTION,
+                                intent=_post_tool_policy_intent(tool_name),
+                                known_slots=policy_slots,
+                                source=f"tool_parse_failure:{tool_name}",
+                            ),
+                            response_decision=aggregate_response_decision,
+                            routing_result=routing_result,
+                            merged_slots=pending_slots or initial_slots,
+                        )
+                        logger.info("[TURN_CONTRACT] post-tool parse-failure update %s", turn_contract.to_dict())
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
                         if tool_name == "search_product_tool":
                             search_keyword = str(input_data.get("keyword") or "").strip()
                             search_product_tool_results.append((search_keyword, parsed_for_verifier))
+                        elif tool_name in _HIGH_RISK_POST_TOOL_CONTRACT_TOOLS:
+                            policy_slots: dict[str, Any] = {}
+                            if initial_slots is not None and hasattr(initial_slots, "model_dump"):
+                                policy_slots.update({
+                                    key: value
+                                    for key, value in initial_slots.model_dump().items()
+                                    if value not in (None, "", [], {})
+                                })
+                            if pending_slots is not None and hasattr(pending_slots, "model_dump"):
+                                policy_slots.update({
+                                    key: value
+                                    for key, value in pending_slots.model_dump().items()
+                                    if value not in (None, "", [], {})
+                                })
+                            if isinstance(input_data, dict):
+                                policy_slots.update({
+                                    key: value
+                                    for key, value in input_data.items()
+                                    if value not in (None, "", [], {})
+                                })
+                            tool_error_summary = _tool_error_summary(tool_name, parsed_for_verifier)
+                            if tool_name in {"transaction_store_preview_tool", "get_store_inventory_tool"}:
+                                post_tool_intent = "inventory_availability"
+                                post_tool_response_decision = decide_transaction_response(
+                                    intent=post_tool_intent,
+                                    user_text=user_query,
+                                    known_slots=policy_slots,
+                                    tool_result=parsed_for_verifier,
+                                )
+                            elif tool_error_summary is not None:
+                                post_tool_intent = _post_tool_policy_intent(tool_name)
+                                post_tool_response_decision = _tool_error_response_decision(tool_name)
+                            else:
+                                post_tool_intent = _post_tool_policy_intent(tool_name)
+                                post_tool_response_decision = None
+                            if post_tool_response_decision is not None:
+                                for behavior in post_tool_response_decision.forbidden_behaviors:
+                                    if behavior not in post_tool_forbidden_behaviors:
+                                        post_tool_forbidden_behaviors.append(behavior)
+                                post_tool_policy_metadata.update(dict(post_tool_response_decision.metadata))
+                                post_tool_policy_metadata.setdefault("tools", [])
+                                if tool_name not in post_tool_policy_metadata["tools"]:
+                                    post_tool_policy_metadata["tools"].append(tool_name)
+                                post_tool_response_decision = ResponseDecision(
+                                    response_shape=post_tool_response_decision.response_shape,
+                                    template=post_tool_response_decision.template,
+                                    required_slots=post_tool_response_decision.required_slots,
+                                    forbidden_behaviors=tuple(post_tool_forbidden_behaviors),
+                                    assistant_guidance=post_tool_response_decision.assistant_guidance,
+                                    metadata=dict(post_tool_policy_metadata),
+                                )
+                            elif post_tool_forbidden_behaviors:
+                                post_tool_response_decision = ResponseDecision(
+                                    response_shape=ResponseShape.NO_RESULT,
+                                    template=TemplateName.QUICK_REPLY,
+                                    forbidden_behaviors=tuple(post_tool_forbidden_behaviors),
+                                    assistant_guidance=(
+                                        "이전 고위험 tool 결과의 실패/금지 조건을 같은 턴 끝까지 유지한다."
+                                    ),
+                                    metadata=dict(post_tool_policy_metadata),
+                                )
+                            inventory_frame = IntentFrame(
+                                domain=PolicyDomain.TRANSACTION,
+                                intent=post_tool_intent,
+                                known_slots=policy_slots,
+                                source=f"tool_result:{tool_name}",
+                            )
+                            turn_contract = build_turn_contract(
+                                user_text=user_query,
+                                intent_frame=inventory_frame,
+                                response_decision=post_tool_response_decision,
+                                routing_result=routing_result,
+                                merged_slots=pending_slots or initial_slots,
+                            )
+                            logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
                     if tool_name == "search_product_tool" and isinstance(parsed_for_verifier, dict):
                         data = parsed_for_verifier.get("data")
@@ -19946,6 +20317,32 @@ class TStationChatServiceV2:
                         "[QUICKREPLY_FILTER] removed home chip from %s template",
                         last_template,
                     )
+                if violates_response_template_contract(event, turn_contract):
+                    logger.warning(
+                        "[TURN_CONTRACT] blocked template=%s required_slots=%s intent=%s",
+                        event.get("template"),
+                        list(turn_contract.required_slots) if turn_contract else [],
+                        turn_contract.intent if turn_contract else None,
+                    )
+                    event = (
+                        build_required_slot_clarification_event(turn_contract)
+                        if should_guard_required_slots(turn_contract)
+                        else build_response_policy_guard_event(turn_contract)
+                    )
+                    last_template = "quickReply"
+                    last_template_source = "turn_contract"
+                    last_assistant_response_source = str(
+                        event.get("assistant_response_source") or "code_turn_contract_template_guard"
+                    )
+                    event_data = event.get("data", {})
+                    assistant_response = str(event_data.get("assistantResponse") or "")
+                    draft_response = assistant_response
+                    draft_for_qc = assistant_response
+                    original_message_events = [{
+                        "type": "message",
+                        "content": assistant_response,
+                        "agent": "[TRANSACTION AGENT]",
+                    }]
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
@@ -20025,7 +20422,17 @@ class TStationChatServiceV2:
             draft_response = _sanitize_response(draft_response)
 
             _qc_passed = True
-            _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL
+            _contract_sensitive_qc = bool(
+                turn_contract
+                and (
+                    turn_contract.blocking_required_slots
+                    or turn_contract.resolvable_required_slots
+                    or (turn_contract.response_decision or {}).get("forbidden_behaviors")
+                )
+            )
+            _parallel_qc = _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL and not _contract_sensitive_qc
+            if _s.AI_QC_ENABLED and _s.AI_QC_PARALLEL and _contract_sensitive_qc:
+                logger.info("[QC_VERIFIER] forcing sequential QC for contract-sensitive turn")
 
             # PARALLEL MODE: yield data events immediately so FE renders without waiting for QC.
             if _parallel_qc:
@@ -20053,27 +20460,86 @@ class TStationChatServiceV2:
                                 "user_query": user_query,
                                 "draft": draft_for_qc,
                                 "source_tool_count": len(structured_sources),
+                                "turn_contract": turn_contract.to_dict() if turn_contract else None,
                             },
                         ) as _qc_span:
                             mismatches = qc_verifier.verify_draft(draft_for_qc, structured_sources)
-                            _qc_passed = not mismatches
+                            contract_violations = response_contract_violations(
+                                template=last_template,
+                                contract=turn_contract,
+                            )
+                            _qc_passed = not mismatches and not contract_violations
                             if _qc_passed:
                                 logger.debug("[QC_VERIFIER] PASS")
                                 _qc_summary = "PASS"
                             else:
                                 logger.warning(
-                                    "[QC_VERIFIER] %d mismatch(es) in draft: %s",
+                                    "[QC_VERIFIER] %d mismatch(es), %d contract violation(s): %s %s",
                                     len(mismatches),
+                                    len(contract_violations),
                                     [m.as_dict() for m in mismatches],
+                                    contract_violations,
                                 )
-                                _qc_summary = f"MISMATCH ({len(mismatches)})"
+                                _qc_summary = (
+                                    f"MISMATCH ({len(mismatches)})"
+                                    if mismatches
+                                    else f"CONTRACT_VIOLATION ({len(contract_violations)})"
+                                )
                             _qc_span.update(
                                 output=_truncate({
                                     "summary": _qc_summary,
                                     "verdict": "PASS" if _qc_passed else "MISMATCH",
                                     "mismatches": [m.as_dict() for m in mismatches],
+                                    "contract_violations": contract_violations,
                                 }),
                             )
+                            if contract_violations and turn_contract is not None and not _parallel_qc:
+                                fallback_event = (
+                                    build_required_slot_clarification_event(turn_contract)
+                                    if should_guard_required_slots(turn_contract)
+                                    else build_response_policy_guard_event(turn_contract)
+                                )
+                                buffered_data_events = [fallback_event]
+                                last_template = "quickReply"
+                                last_template_source = "turn_contract_qc"
+                                last_assistant_response_source = str(
+                                    fallback_event.get("assistant_response_source")
+                                    or "code_turn_contract_qc_guard"
+                                )
+                                event_data = fallback_event.get("data", {})
+                                assistant_response = str(event_data.get("assistantResponse") or "")
+                                draft_response = assistant_response
+                                draft_for_qc = assistant_response
+                                original_message_events = [{
+                                    "type": "message",
+                                    "content": assistant_response,
+                                    "agent": "[TRANSACTION AGENT]",
+                                }]
+                            elif contract_violations and _parallel_qc:
+                                logger.warning(
+                                    "[TURN_CONTRACT] QC contract violation observed after parallel data emission: %s",
+                                    contract_violations,
+                                )
+                            elif mismatches and not _parallel_qc:
+                                fallback_event = _qc_factual_mismatch_guard_event(mismatches)
+                                buffered_data_events = [fallback_event]
+                                last_template = "quickReply"
+                                last_template_source = "qc_verifier"
+                                last_assistant_response_source = "code_qc_factual_mismatch_guard"
+                                event_data = fallback_event.get("data", {})
+                                assistant_response = str(event_data.get("assistantResponse") or "")
+                                draft_response = assistant_response
+                                draft_for_qc = assistant_response
+                                original_message_events = [{
+                                    "type": "message",
+                                    "content": assistant_response,
+                                    "agent": "[TRANSACTION AGENT]",
+                                }]
+                            elif mismatches and _parallel_qc:
+                                logger.warning(
+                                    "[QC_VERIFIER] factual mismatch observed after parallel data emission: %s",
+                                    [m.as_dict() for m in mismatches],
+                                )
                     except Exception as e:
                         logger.warning(f"[QC_VERIFIER] Verifier failed, using original draft: {e}")
                 elif called_tool_names:
@@ -20188,6 +20654,7 @@ class TStationChatServiceV2:
                 ),
                 "session_id": session_id,
                 "trace_id": trace_id,
+                "turn_contract": turn_contract.to_dict() if turn_contract else None,
                 "qc": "PASS" if _qc_passed else "CORRECTED",
                 "qc_executed": qc_executed,
                 "qc_skip_reason": qc_skip_reason,
