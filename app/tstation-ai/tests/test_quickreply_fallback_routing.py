@@ -270,7 +270,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
-from schemas.tstation.slots import ConversationSlots
+from schemas.tstation.slots import CanonicalSlotState, ConversationSlots
 from services.tstation.template_mapper import (
     _map_store_detail_info,
     current_discovery_response_decision,
@@ -6192,6 +6192,7 @@ def test_store_scope_followup_preserves_confirmed_product_slots() -> None:
 
 
 def test_store_candidate_search_followup_clears_stale_store_scope() -> None:
+    today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y%m%d")
     slots = ConversationSlots(
         goods_no="G000000317729",
         tire_size="235/55R19",
@@ -6199,7 +6200,7 @@ def test_store_candidate_search_followup_clears_stale_store_scope() -> None:
         pending_intent="stock",
         goal_type="store_with_stock",
         availability_intent="today_install",
-        requested_cal_day="20260623",
+        requested_cal_day=today,
         shop_id="F00721",
         shop_name="티스테이션 판교점",
     )
@@ -6226,7 +6227,7 @@ def test_store_candidate_search_followup_clears_stale_store_scope() -> None:
 
     assert patch["goods_no"] == "G000000317729"
     assert patch["quantity"] == 4
-    assert patch["requested_cal_day"] == "20260623"
+    assert patch["requested_cal_day"] == today
     assert "shop_id" not in patch
     assert "shop_name" not in patch
     assert "store_name" not in patch
@@ -8779,6 +8780,19 @@ def test_offroad_recommendation_catalog_generates_stable_policy_patch() -> None:
     assert first_plan.tool_args_patch == second_plan.tool_args_patch
 
 
+def test_sized_offroad_recommendation_preserves_known_size_in_tool_plan() -> None:
+    frame = build_discovery_intent_frame(
+        "오프로드용 타이어 추천",
+        known_slots={"tire_size": "235/55R19"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["recommendation_scenario"] == "offroad"
+    assert plan.tool_args_patch["rcmd_type"] == "heavy_load"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+    assert plan.tool_args_patch["tire_size"] == "235/55R19"
+
+
 def test_offroad_router_scenario_does_not_override_without_current_anchor() -> None:
     frame = build_discovery_intent_frame(
         "타이어 추천",
@@ -9721,6 +9735,7 @@ def test_fresh_recommendation_turn_clears_unsized_selected_product_slots() -> No
     slots = ConversationSlots(
         goods_no="G000000309855",
         tire_size="195/65R15",
+        ord_qty=4,
         payment_amount=412000,
     )
 
@@ -9748,14 +9763,12 @@ def test_fresh_recommendation_turn_clears_unsized_selected_product_slots() -> No
         ],
     )
 
-    assert cleared == {
-        "tire_size": "195/65R15",
-        "goods_no": "G000000309855",
-        "payment_amount": 412000,
-    }
+    assert cleared == {"goods_no": "G000000309855", "payment_amount": 412000}
     assert slots.goods_no is None
-    assert slots.tire_size is None
+    assert slots.tire_size == "195/65R15"
+    assert slots.ord_qty == 4
     assert slots.payment_amount is None
+    assert slots.recommendation_context["source_text"] == "주말 장거리용으로 다른 거 추천해줘"
 
 
 def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
@@ -9789,10 +9802,41 @@ def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
         ],
     )
 
-    assert cleared == {}
-    assert slots.goods_no == "G000000309855"
+    assert cleared == {"goods_no": "G000000309855", "payment_amount": 412000}
+    assert slots.goods_no is None
     assert slots.tire_size == "245/45R18"
-    assert slots.payment_amount == 412000
+    assert slots.payment_amount is None
+
+
+def test_offroad_recommendation_preserves_common_size_and_contextualizes_scenario() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317682",
+        tire_model="다이나프로 HPX",
+        tire_size="235/55R19",
+        ord_qty=4,
+        payment_amount=720000,
+    )
+
+    cleared = _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="오프로드용 타이어 추천",
+        regex_slots=ConversationSlots(),
+        prev_tool_data=[],
+    )
+
+    assert cleared == {
+        "goods_no": "G000000317682",
+        "payment_amount": 720000,
+        "tire_model": "다이나프로 HPX",
+    }
+    assert slots.tire_size == "235/55R19"
+    assert slots.ord_qty == 4
+    assert slots.goods_no is None
+    assert slots.tire_model is None
+    assert slots.recommendation_context["recommendation_scenario"] == "offroad"
+    assert slots.recommendation_context["applied_rcmd_type"] == "heavy_load"
+    assert slots.recommendation_context["applied_vehicle_type"] == "suv"
+    assert CanonicalSlotState.from_slots(slots).common["tire_size"] == "235/55R19"
 
 
 def test_brand_size_recommendation_clears_stale_transaction_product_slots() -> None:
@@ -9820,12 +9864,11 @@ def test_brand_size_recommendation_clears_stale_transaction_product_slots() -> N
         "pending_product_name": "옵티모 H426",
         "pending_quantity_options": [2, 4],
         "pending_required_slot": "tire_size",
-        "ord_qty": 4,
     }
     assert slots.tire_size == "235/55R19"
     assert slots.goods_no is None
     assert slots.pending_product_name is None
-    assert slots.ord_qty is None
+    assert slots.ord_qty == 4
     assert slots.payment_amount is None
 
 

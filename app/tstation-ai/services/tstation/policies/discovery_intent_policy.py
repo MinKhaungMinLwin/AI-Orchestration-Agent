@@ -502,6 +502,10 @@ def build_discovery_intent_frame(
     comparison_metric = str(slots.get("comparison_metric") or "").strip()
     discovery_followup_action = str(slots.get("discovery_followup_action") or "").strip()
     router_recommendation_scenario = str(slots.get("recommendation_scenario") or "").strip()
+    recommendation_context = slots.get("recommendation_context") if isinstance(slots.get("recommendation_context"), dict) else {}
+    context_recommendation_scenario = str(
+        (recommendation_context or {}).get("recommendation_scenario") or ""
+    ).strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -541,10 +545,17 @@ def build_discovery_intent_frame(
         entities["compare_metric"] = comparison_metric
     if discovery_followup_action == "vehicle_based_recommendation_refinement":
         entities["discovery_followup_action"] = discovery_followup_action
-    scenario = recommendation_scenario_from_text(text, router_recommendation_scenario)
+    scenario = recommendation_scenario_from_text(
+        text,
+        router_recommendation_scenario or context_recommendation_scenario,
+    )
     if scenario is not None:
         entities.update(recommendation_scenario_metadata(scenario))
         entities["recommendation_scenario_tool_args_patch"] = dict(scenario.tool_args_patch)
+    if recommendation_context:
+        entities["recommendation_context"] = {
+            key: value for key, value in recommendation_context.items() if value not in (None, "")
+        }
     if len(products) >= 2:
         entities["multi_product_names"] = True
         if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):

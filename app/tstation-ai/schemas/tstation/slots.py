@@ -73,6 +73,12 @@ class ConversationSlots(BaseModel):
     recommendation_variants: Optional[list[dict[str, Any]]] = None
     recommendation_limit_per_variant: Optional[int] = None
     recommendation_source_text: Optional[str] = None
+    recommendation_context: Optional[dict[str, Any]] = None
+    availability_context: Optional[dict[str, Any]] = None
+    order_context: Optional[dict[str, Any]] = None
+    quantity_comparison_context: Optional[dict[str, Any]] = None
+    price_facts: Optional[dict[str, Any]] = None
+    coupon_facts: Optional[dict[str, Any]] = None
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
@@ -931,3 +937,104 @@ class ConversationSlots(BaseModel):
     def has_any(self) -> bool:
         """Return True if at least one slot is filled."""
         return any(v is not None for v in self.model_dump().values())
+
+
+class CanonicalSlotState(BaseModel):
+    """Normalized slot view used by policy/reset code without changing the external slot API."""
+
+    common: dict[str, Any] = {}
+    product: dict[str, Any] = {}
+    store: dict[str, Any] = {}
+    price: dict[str, Any] = {}
+    contexts: dict[str, Any] = {}
+
+    COMMON_FIELDS: ClassVar[tuple[str, ...]] = (
+        "tire_size",
+        "tire_size_front",
+        "tire_size_rear",
+        "vehicle_type",
+        "car_lnc_cd",
+        "car_no",
+        "car_model",
+        "ord_qty",
+        "region",
+    )
+    PRODUCT_FIELDS: ClassVar[tuple[str, ...]] = (
+        "goods_no",
+        "tire_model",
+        "pending_product_name",
+    )
+    STORE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "shop_id",
+        "shop_name",
+        "requested_cal_day",
+        "rsv_hour",
+    )
+    PRICE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "payment_amount",
+        "price_facts",
+        "coupon_facts",
+    )
+    CONTEXT_FIELDS: ClassVar[tuple[str, ...]] = (
+        "recommendation_context",
+        "availability_context",
+        "order_context",
+        "quantity_comparison_context",
+    )
+
+    @classmethod
+    def from_slots(cls, slots: ConversationSlots) -> "CanonicalSlotState":
+        def _group(fields: tuple[str, ...]) -> dict[str, Any]:
+            return {
+                field: getattr(slots, field)
+                for field in fields
+                if getattr(slots, field, None) is not None
+            }
+
+        return cls(
+            common=_group(cls.COMMON_FIELDS),
+            product=_group(cls.PRODUCT_FIELDS),
+            store=_group(cls.STORE_FIELDS),
+            price=_group(cls.PRICE_FIELDS),
+            contexts=_group(cls.CONTEXT_FIELDS),
+        )
+
+    @classmethod
+    def reset_for_new_recommendation(
+        cls,
+        slots: ConversationSlots,
+        *,
+        recommendation_context: Mapping[str, Any] | None = None,
+        current_tire_size: str | None = None,
+        current_product_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset flow-specific state for a new recommendation while preserving common fitment slots."""
+
+        cleared: dict[str, Any] = {}
+        if current_tire_size:
+            slots.tire_size = current_tire_size
+        if recommendation_context:
+            slots.recommendation_context = {
+                key: value for key, value in dict(recommendation_context).items() if value not in (None, "")
+            }
+
+        product_reset_fields = (
+            "goods_no",
+            "payment_amount",
+            "price_facts",
+            "coupon_facts",
+            "order_context",
+            "pending_product_name",
+            "pending_quantity_options",
+            "pending_required_slot",
+        )
+        for field in product_reset_fields:
+            if getattr(slots, field, None) is not None:
+                cleared[field] = getattr(slots, field)
+                setattr(slots, field, None)
+
+        if not current_product_name and slots.tire_model is not None:
+            cleared["tire_model"] = slots.tire_model
+            slots.tire_model = None
+
+        return cleared

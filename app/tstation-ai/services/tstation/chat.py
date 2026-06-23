@@ -21,7 +21,7 @@ from config.env import settings
 from config.prompts import load_client_injection
 from fastapi.responses import StreamingResponse
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from schemas.tstation.slots import ConversationSlots
+from schemas.tstation.slots import CanonicalSlotState, ConversationSlots
 from services.tstation.agents.router import (
     DECISION_LLM as _decision_llm,
     leading_agent,
@@ -58,6 +58,10 @@ from services.tstation.policies.discovery_intent_policy import (
     plan_discovery_tools,
 )
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
+from services.tstation.policies.recommendation_scenario_catalog import (
+    recommendation_scenario_from_text,
+    recommendation_scenario_metadata,
+)
 from services.tstation.policies.price_response_policy import (
     build_price_intent_frame,
     decide_price_response,
@@ -12946,6 +12950,7 @@ def _build_discovery_policy_context(
     tire_size: str | None,
     goods_no: str | None = None,
     vehicle_type: str | None = None,
+    recommendation_context: Mapping[str, Any] | None = None,
     routing_result: Any | None = None,
     pending_intent: str | None = None,
     goal_type: str | None = None,
@@ -12962,6 +12967,13 @@ def _build_discovery_policy_context(
         known_slots = {"tire_size": tire_size} if tire_size else {}
         if vehicle_type:
             known_slots["vehicle_type"] = vehicle_type
+        if recommendation_context:
+            known_slots["recommendation_context"] = {
+                key: value for key, value in dict(recommendation_context).items() if value not in (None, "")
+            }
+            scenario = str(known_slots["recommendation_context"].get("recommendation_scenario") or "").strip()
+            if scenario:
+                known_slots["recommendation_scenario"] = scenario
         transaction_followup_priority = _has_transaction_followup_priority(
             pending_intent=pending_intent,
             goal_type=goal_type,
@@ -13673,56 +13685,42 @@ def _clear_stale_product_slots_for_new_recommendation(
         return {}
     if regex_slots.tire_size is not None and not fresh_brand_or_size_recommendation:
         return {}
-    if _RECOMMENDATION_SIZE_REFERENCE_RE.search(text):
-        return {}
-
-    cleared: dict[str, Any] = {}
     current_turn_tire_size = normalize_tire_size(str(regex_slots.tire_size or ""))
-    preserved_tire_size = normalize_tire_size(str(slots.tire_size or ""))
-    if slots.goods_no:
-        preserved_tire_size = (
-            StreamingMultiAgentCoordinator._resolve_tire_size_from_sized_product_source(
-                slots.goods_no,
-                prev_tool_data,
+    if not current_turn_tire_size and slots.goods_no and prev_tool_data:
+        current_turn_tire_size = normalize_tire_size(
+            str(
+                StreamingMultiAgentCoordinator._resolve_tire_size_from_sized_product_source(
+                    slots.goods_no,
+                    prev_tool_data,
+                )
+                or ""
             )
-            or preserved_tire_size
         )
-    if current_turn_tire_size:
-        preserved_tire_size = current_turn_tire_size
-    elif not (
-        preserved_tire_size
-        and (
-            tire_size_resolved_from_vehicle_selection
-            or any(getattr(slots, field, None) for field in ("car_no", "car_model", "tire_size_front", "tire_size_rear"))
-            or (slots.goods_no and prev_tool_data and StreamingMultiAgentCoordinator._resolve_tire_size_from_sized_product_source(
-                slots.goods_no,
-                prev_tool_data,
-            ))
-        )
-    ):
-        if slots.tire_size is not None:
-            cleared["tire_size"] = slots.tire_size
-            slots.tire_size = None
+    if not current_turn_tire_size:
+        current_turn_tire_size = normalize_tire_size(str(slots.tire_size or ""))
 
-    if slots.goods_no is not None:
-        cleared["goods_no"] = slots.goods_no
-        slots.goods_no = None
-    if slots.payment_amount is not None:
-        cleared["payment_amount"] = slots.payment_amount
-        slots.payment_amount = None
-    if slots.pending_product_name is not None:
-        cleared["pending_product_name"] = slots.pending_product_name
-        slots.pending_product_name = None
-    if slots.pending_quantity_options is not None:
-        cleared["pending_quantity_options"] = slots.pending_quantity_options
-        slots.pending_quantity_options = None
-    if slots.pending_required_slot is not None:
-        cleared["pending_required_slot"] = slots.pending_required_slot
-        slots.pending_required_slot = None
-    if slots.ord_qty is not None and regex_slots.ord_qty is None:
-        cleared["ord_qty"] = slots.ord_qty
-        slots.ord_qty = None
-    return cleared
+    scenario = recommendation_scenario_from_text(text)
+    recommendation_context: dict[str, Any] = {
+        "source_text": text,
+    }
+    if scenario is not None:
+        recommendation_context.update(recommendation_scenario_metadata(scenario))
+        recommendation_context["tool_args_patch"] = dict(scenario.tool_args_patch)
+    elif current_turn_tire_size:
+        recommendation_context["scope"] = "same_fitment"
+    if tire_size_resolved_from_vehicle_selection:
+        recommendation_context["fitment_source"] = "vehicle_selection"
+
+    current_product_name = (
+        str(regex_slots.tire_model or regex_slots.pending_product_name or "").strip()
+        or None
+    )
+    return CanonicalSlotState.reset_for_new_recommendation(
+        slots,
+        recommendation_context=recommendation_context,
+        current_tire_size=current_turn_tire_size,
+        current_product_name=current_product_name,
+    )
 
 
 def _is_active_order_flow_slots(slots: Any | None) -> bool:
@@ -18230,6 +18228,7 @@ class TStationChatServiceV2:
             tire_size=merged_slots.tire_size,
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
+            recommendation_context=merged_slots.recommendation_context,
             routing_result=routing_result,
             pending_intent=merged_slots.pending_intent,
             goal_type=merged_slots.goal_type,

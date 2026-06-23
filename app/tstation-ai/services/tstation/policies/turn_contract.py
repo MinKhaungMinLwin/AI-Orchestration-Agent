@@ -192,6 +192,7 @@ def build_turn_contract(
         stock_check_mode = str(intent_frame.entities.get("stock_check_mode") or "")
         discovery_followup_action = str(intent_frame.entities.get("discovery_followup_action") or "")
         recommendation_scenario = str(intent_frame.entities.get("recommendation_scenario") or "")
+        recommendation_context = intent_frame.entities.get("recommendation_context")
         if requested_product_attribute:
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric:
@@ -217,6 +218,10 @@ def build_turn_contract(
                     known_slots[key] = value
             if intent_frame.entities.get("approximation") is True:
                 known_slots["approximation"] = True
+        if isinstance(recommendation_context, dict):
+            known_slots["recommendation_context"] = {
+                key: value for key, value in recommendation_context.items() if value not in (None, "")
+            }
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
