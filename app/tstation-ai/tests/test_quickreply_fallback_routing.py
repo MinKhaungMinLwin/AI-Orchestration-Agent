@@ -2662,6 +2662,25 @@ def test_discovery_policy_context_preserves_router_requested_origin_attribute() 
     assert decision.metadata["requested_product_attribute"] == "origin"
 
 
+def test_discovery_policy_context_prefers_explicit_brand_attribute_over_router_origin() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="세레니티 플러스 브랜드 어디꺼야?",
+        context_text="세레니티 플러스 브랜드 어디꺼야?",
+        tire_size=None,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_or_describe_product"],
+            requested_product_attribute="origin",
+        ),
+    )
+
+    assert patch == {}
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "product_attribute_summary"
+    assert decision.metadata["requested_product_attribute"] == "brand"
+
+
 def test_product_attribute_event_uses_router_requested_brand_attribute_metadata() -> None:
     decision = decide_discovery_response(
         build_discovery_intent_frame(
@@ -2701,6 +2720,47 @@ def test_product_attribute_event_uses_router_requested_brand_attribute_metadata(
     assert event["assistant_response_source"] == "code_product_attribute_resolver"
     assert "세레니티 플러스의 브랜드는 BRIDGESTONE" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["response_shape_key"] == "product_attribute_summary"
+    assert event["data"]["metadata"]["requested_product_attribute"] == "brand"
+
+
+def test_product_attribute_event_prefers_explicit_brand_attribute_over_stale_origin_metadata() -> None:
+    decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={
+            "response_shape_key": "product_attribute_summary",
+            "requested_product_attribute": "origin",
+        },
+    )
+    decision_token = current_discovery_response_decision.set(decision)
+    text_token = current_user_text.set("세레니티 플러스 브랜드 어디꺼야?")
+    try:
+        event = _build_product_attribute_event_from_search_results(
+            "세레니티 플러스 브랜드 어디꺼야?",
+            [
+                (
+                    "세레니티 플러스",
+                    {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {
+                                    "goods_nm": "세레니티 플러스",
+                                    "brand_nm": "BRIDGESTONE",
+                                    "orpl_nm": "태국",
+                                }
+                            ]
+                        },
+                    },
+                )
+            ],
+        )
+    finally:
+        current_user_text.reset(text_token)
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assert "세레니티 플러스의 브랜드는 BRIDGESTONE" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["requested_product_attribute"] == "brand"
 
 
@@ -9516,6 +9576,81 @@ def _transaction_turn_contract(user_text: str, known_slots: dict | None = None):
         tool_plan=tool_plan,
         response_decision=response_decision,
     )
+
+
+@pytest.mark.parametrize("user_text", ["내 단골매장이 어디지?", "단골매장 보여줘", "자주 가는 매장 알려줘", "마이샵 보여줘"])
+def test_transaction_intent_policy_prioritizes_favorite_store_lookup(user_text: str) -> None:
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots={})
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "favorite_store_lookup"
+    assert frame.missing_slots == ()
+    assert tool_plan.allowed_tools == ("get_favorite_stores_tool",)
+    assert tool_plan.preferred_tool == "get_favorite_stores_tool"
+    assert "get_store_list_tool" in tool_plan.forbidden_tools
+    assert "get_nearby_stores_tool" in tool_plan.forbidden_tools
+    assert tool_plan.metadata["response_intent"] == "favorite_store_lookup"
+    assert response_decision.metadata["response_shape_key"] == "favorite_store_lookup"
+    assert response_decision.template == TemplateName.LOCATION
+    assert contract.allowed_tools == ("get_favorite_stores_tool",)
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_cross_domain_policy_prioritizes_favorite_store_lookup_over_plain_store_search() -> None:
+    plan = plan_cross_domain_turn("내 단골매장이 어디지?", known_slots={})
+
+    assert plan.primary_domain == PolicyDomain.TRANSACTION
+    assert len(plan.subtasks) == 1
+    assert plan.subtasks[0].intent == "favorite_store_lookup"
+    assert plan.subtasks[0].required_slots == ()
+
+
+@pytest.mark.parametrize("user_text", ["강남 매장 알려줘", "근처 매장 찾아줘"])
+def test_non_favorite_store_search_keeps_existing_store_search_paths(user_text: str) -> None:
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+
+    assert frame.intent == "store_search"
+
+
+def test_transaction_followup_other_store_does_not_misclassify_as_favorite_store_lookup() -> None:
+    frame = build_transaction_intent_frame(
+        "다른 매장 보여줘",
+        known_slots={
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "stock"
+
+
+def test_turn_contract_detects_tool_drift_for_favorite_store_lookup() -> None:
+    contract = _transaction_turn_contract("내 단골매장 보여줘")
+
+    violations = response_contract_violations(
+        template="location",
+        called_tools=["get_store_list_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert violations == [{
+        "type": "unexpected_tool_for_contract",
+        "called_tools": ["get_store_list_tool"],
+        "allowed_tools": ["get_favorite_stores_tool"],
+    }]
 
 
 def _routing_result(

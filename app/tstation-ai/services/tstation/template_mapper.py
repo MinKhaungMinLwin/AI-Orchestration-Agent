@@ -1775,26 +1775,30 @@ def _requested_product_attribute_from_decision() -> str:
 
 
 def _requested_product_attribute_metrics() -> list[str]:
-    requested_product_attribute = _requested_product_attribute_from_decision()
-    if requested_product_attribute:
-        return [requested_product_attribute]
     user_text = current_user_text.get()
     metrics: list[str] = []
     for metric, pattern in _PRODUCT_ATTRIBUTE_METRIC_PATTERNS:
         if pattern.search(user_text) and metric not in metrics:
             metrics.append(metric)
-    return metrics or ["noise"]
+    if metrics:
+        return metrics
+    requested_product_attribute = _requested_product_attribute_from_decision()
+    if requested_product_attribute:
+        return [requested_product_attribute]
+    return ["noise"]
 
 
 def _explicit_requested_product_attribute_metrics() -> list[str]:
-    requested_product_attribute = _requested_product_attribute_from_decision()
-    if requested_product_attribute:
-        return [requested_product_attribute]
     user_text = current_user_text.get()
     metrics: list[str] = []
     for metric, pattern in _PRODUCT_ATTRIBUTE_METRIC_PATTERNS:
         if pattern.search(user_text) and metric not in metrics:
             metrics.append(metric)
+    if metrics:
+        return metrics
+    requested_product_attribute = _requested_product_attribute_from_decision()
+    if requested_product_attribute:
+        return [requested_product_attribute]
     return metrics
 
 

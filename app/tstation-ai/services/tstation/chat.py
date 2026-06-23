@@ -210,6 +210,9 @@ def _compare_metric_from_event(event: Mapping[str, Any] | None) -> str:
 
 
 def _requested_product_attribute_from_context(user_text: str) -> str:
+    explicit_requested_product_attribute = str(extract_requested_product_attribute(user_text) or "").strip()
+    if explicit_requested_product_attribute:
+        return explicit_requested_product_attribute
     decision = current_discovery_response_decision.get()
     if decision is not None:
         requested_product_attribute = str(decision.metadata.get("requested_product_attribute") or "").strip()
@@ -219,7 +222,7 @@ def _requested_product_attribute_from_context(user_text: str) -> str:
     requested_product_attribute = str(frame.entities.get("requested_product_attribute") or "").strip()
     if requested_product_attribute:
         return requested_product_attribute
-    return str(extract_requested_product_attribute(user_text) or "").strip()
+    return ""
 
 
 def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
@@ -12380,7 +12383,11 @@ def _build_discovery_policy_context(
         routing_requested_product_attribute = str(
             getattr(routing_result, "requested_product_attribute", "") or ""
         ).strip()
-        if routing_requested_product_attribute in {
+        explicit_requested_product_attribute = str(extract_requested_product_attribute(last_user_text) or "").strip()
+        effective_requested_product_attribute = (
+            explicit_requested_product_attribute or routing_requested_product_attribute
+        )
+        if effective_requested_product_attribute in {
             "brand",
             "manufacturer",
             "origin",
@@ -12396,7 +12403,7 @@ def _build_discovery_policy_context(
             "load",
             "speed",
         }:
-            known_slots["requested_product_attribute"] = routing_requested_product_attribute
+            known_slots["requested_product_attribute"] = effective_requested_product_attribute
         if "comparison_metric" not in known_slots and "comparison_followup_intent" not in known_slots:
             recovered_compare_context = _recent_compare_context_from_messages(last_user_text, messages)
             recovered_followup_intent = str(recovered_compare_context.get("comparison_followup_intent") or "").strip()
