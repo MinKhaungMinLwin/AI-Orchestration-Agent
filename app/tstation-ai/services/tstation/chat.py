@@ -732,6 +732,7 @@ _ROUTER_PROTECTED_ACTIONS = frozenset({
     "cancel",
     "order_history",
     "store_schedule",
+    "store_visit_advisory",
 })
 _RECENT_PRODUCT_SET_RANKING_TEXT_RE = re.compile(
     r"(?:이\s*중|이중|중에|목록|추천(?:해준|된)?|보여준|위\s*상품).{0,30}"
@@ -1264,6 +1265,9 @@ Complaint routing rule:
    - "transaction_order": order history, order status, cart, quick order, order cancellation/cancellation-fee inquiry (must check order/logistics state, not FAQ)
    - "transaction_store": store search, nearby store, store detail, schedule, store inventory, store holiday/closure info, reservation availability on a specific date or holiday period; also use when the user selects a product size/variant (e.g. "255/45R20") AND the conversation history shows an active store reservation/booking intent ("예약", "장착", "방문") — the goal is store schedule, not price
      ⚠️ "매장에서 예약 받아?" / "X일에 예약 가능한지" / "연휴에도 예약 받아" targeting a STORE → transaction_store (NOT transaction_order — those are for "내 예약" personal lookup)
+     ⚠️ Store visit timing/advisory questions are NOT store_schedule/datepick unless the user explicitly asks to see or book reservation slots.
+       Examples: "언제 가야 한가할까?", "토요일 오전은 붐비던데 언제 예약하는 게 좋아?", "대기 적은 시간 알려줘", "점심시간에도 작업 가능하지?", "일요일 문 열어?" → TRANSACTION or SUPPORT advisory, execution_plan=["transaction:store_visit_advisory"], quickReply/text only, do NOT call get_store_schedule_tool.
+       Only slot-lookup examples such as "토요일 예약 가능한 시간 보여줘", "이번 토요일 10시 예약 가능해?", "오늘 오후 예약 잡아줘", "방문예약 가능한 시간 알려줘" should use store_schedule/datepick.
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers ("많이 팔린/베스트셀러/잘 팔리는") — goods_no NOT yet known in context
@@ -2127,18 +2131,6 @@ class StreamingMultiAgentCoordinator:
                 flow="hardcoded store-service availability routing — bypassed transaction store override",
             )
 
-        if cls._is_store_schedule_current_turn_query(text):
-            return MultiAgentDomain(
-                reason="regex routing matched current-turn store schedule availability intent",
-                domains=[MultiAgentDomain.Domain.TRANSACTION],
-                execution_plan=["Run TRANSACTION store-schedule flow for the matched store/date request"],
-                user_behavior="asking whether a named store has reservation or visit slots on a specific date/time",
-                agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
-                claim_check_type="none",
-                complaint_scope="none",
-                flow="hardcoded regex routing — bypassed LLM router",
-            )
-
         if cls._is_transaction_order_current_turn_query(text):
             return MultiAgentDomain(
                 reason="regex routing matched current-turn transaction order-management intent",
@@ -2313,19 +2305,6 @@ class StreamingMultiAgentCoordinator:
                     result.agent_prompt_profile,
                 )
                 result.agent_prompt_profile = AgentPromptProfile.FULL
-
-            if (
-                last_user_text
-                and MultiAgentDomain.Domain.TRANSACTION in (result.domains or [])
-                and self.__class__._is_store_schedule_current_turn_query(last_user_text)
-                and result.agent_prompt_profile != AgentPromptProfile.TRANSACTION_STORE
-            ):
-                logger.info(
-                    "[MULTI-DOMAIN] Store schedule availability pattern detected — forcing profile %s → %s",
-                    result.agent_prompt_profile,
-                    AgentPromptProfile.TRANSACTION_STORE,
-                )
-                result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_STORE
 
             if (
                 last_user_text
@@ -8770,6 +8749,35 @@ def _service_duration_advisory_event(user_text: str, *, store_name: str | None =
             "predictedDomains": ["TRANSACTION", "SUPPORT"],
             "metadata": {
                 "responseShapeKey": "service_duration_advisory",
+                "storeName": store_label,
+                "userText": user_text,
+            },
+        },
+    }
+
+
+def _store_visit_advisory_event(user_text: str, *, store_name: str | None = None) -> dict:
+    store_label = str(store_name or "").strip()
+    store_phrase = f"{store_label}은 " if store_label else "매장은 "
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_store_visit_advisory",
+        "data": {
+            "assistantResponse": (
+                f"{store_phrase}실시간 혼잡도나 대기 차량 수를 바로 확정해 안내하기는 어려워요. "
+                "일반적으로 토요일 오전이나 점심 전후는 붐빌 수 있어 평일 오후, 토요일 이른 시간 이후, "
+                "또는 방문 전 매장 전화 확인을 권장드려요."
+            ),
+            "quickReplies": [
+                {"label": "방문예약하기", "domain": "TRANSACTION"},
+                {"label": "매장 상세보기", "domain": "TRANSACTION"},
+                {"label": "예약 가능 시간 보기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "store_visit_advisory",
                 "storeName": store_label,
                 "userText": user_text,
             },
@@ -19737,6 +19745,29 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = service_duration_event.get("data") if isinstance(service_duration_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "store_visit_advisory":
+            store_visit_event = _store_visit_advisory_event(
+                last_user_text,
+                store_name=str((turn_contract.known_slots or {}).get("store_name") or ""),
+            )
+            logger.info(
+                "[STORE_VISIT_ADVISORY] response: text=%r session_id=%s",
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(store_visit_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = store_visit_event.get("data") if isinstance(store_visit_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "maintenance_addon_with_tire_service":

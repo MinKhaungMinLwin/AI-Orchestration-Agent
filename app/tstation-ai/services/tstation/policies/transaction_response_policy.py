@@ -46,6 +46,8 @@ def decide_transaction_response(
         return _decide_stock_store_search(text=text, slots=slots)
     if intent == "store_schedule":
         return _decide_store_schedule(text=text, slots=slots)
+    if intent == "store_visit_advisory":
+        return _decide_store_visit_advisory()
     if intent == "service_duration_advisory":
         return _decide_service_duration_advisory()
     if intent == "maintenance_addon_with_tire_service":
@@ -170,6 +172,24 @@ def _decide_store_schedule(*, text: str, slots: dict[str, Any]) -> ResponseDecis
         template=TemplateName.DATE_PICK,
         forbidden_behaviors=("store_hours_instead_of_slots",),
         assistant_guidance="상품/수량/매장이 확정된 예약 요청은 영업시간 설명이 아니라 예약 슬롯을 제시한다.",
+    )
+
+
+def _decide_store_visit_advisory() -> ResponseDecision:
+    return _decision(
+        response_shape_key="store_visit_advisory",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "datepick_for_store_visit_advisory",
+            "schedule_tool_for_store_visit_advisory",
+            "force_store_schedule_for_visit_advisory",
+        ),
+        assistant_guidance=(
+            "혼잡도, 대기시간, 점심시간 작업 가능 여부, 휴무/영업 여부, 그냥 가도 되는지 같은 방문 시간 상담은 "
+            "예약 슬롯 조회가 아니므로 datepick을 제시하지 않는다. 실시간 혼잡도 데이터가 없으면 일반적인 방문 권장 시간과 "
+            "매장 직접 확인 CTA를 quickReply로 안내한다."
+        ),
     )
 
 

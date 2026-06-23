@@ -50,6 +50,8 @@ _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "order_complete_on_tool_error": frozenset({"orderComplete"}),
     "datepick_on_tool_error": frozenset({"datepick", "preOrder"}),
     "assert_success_without_tool_result": frozenset({"datepick", "preOrder", "orderComplete", "billProduct"}),
+    "datepick_for_store_visit_advisory": frozenset({"datepick", "preOrder"}),
+    "force_store_schedule_for_visit_advisory": frozenset({"datepick", "preOrder"}),
 }
 _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES = frozenset({
     "product_attribute_summary",

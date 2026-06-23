@@ -64,6 +64,7 @@ from services.tstation.chat import (
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
     _build_store_availability_quantity_prompt_event,
+    _store_visit_advisory_event,
     _is_pure_inventory_stock_ready,
     _is_quantity_only_stock_followup_text,
     _external_price_search_results_from_sources,
@@ -6314,12 +6315,10 @@ def test_order_history_force_routes_to_transaction_order() -> None:
     assert result.agent_prompt_profile == "transaction_order"
 
 
-def test_store_schedule_question_force_routes_to_transaction_store() -> None:
+def test_store_schedule_question_is_not_hard_routed_before_router() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("강남점에서 5/29 예약 가능해?")
 
-    assert result is not None
-    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
-    assert result.agent_prompt_profile == "transaction_store"
+    assert result is None
 
 
 def test_after_hours_store_search_does_not_force_route_to_transaction_order() -> None:
@@ -12546,6 +12545,87 @@ def test_reservation_time_change_still_requires_order_context() -> None:
 
 def test_store_schedule_question_still_allows_datepick_flow() -> None:
     user_text = "모란점 오늘 예약 가능한 시간 알려줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_schedule"
+    assert tool_plan.preferred_tool == "get_store_schedule_tool"
+    assert response_decision.template == TemplateName.DATE_PICK
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "분당정자점 토요일 오전 언제 한가할까?",
+        "토요일 오전에 사람이 많던데 언제 가면 덜 붐벼?",
+        "분당정자점 점심시간에도 작업 가능하지?",
+        "분당정자점 이번 일요일 문 열어?",
+        "분당정자점 그냥 가도 돼?",
+        "분당정자점 지금 가면 대기시간 얼마나 걸려?",
+    ],
+)
+def test_store_visit_timing_advisory_does_not_expand_to_datepick(user_text: str) -> None:
+    known_slots = {} if "점" in user_text else {"store_name": "분당정자점"}
+    frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:store_visit_advisory"],
+        ),
+    )
+    event = _store_visit_advisory_event(user_text, store_name=frame.known_slots.get("store_name"))
+
+    assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
+    assert frame.intent == "store_visit_advisory"
+    assert frame.sub_intent == "store_visit_timing"
+    assert tool_plan.allowed_tools == ()
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert response_decision.metadata["response_shape_key"] == "store_visit_advisory"
+    assert "datepick_for_store_visit_advisory" in response_decision.forbidden_behaviors
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert event["template"] == "quickReply"
+    assert "실시간 혼잡도" in event["data"]["assistantResponse"]
+
+    violations = response_contract_violations(
+        template="datepick",
+        assistant_response_text="예약 가능한 시간을 선택해 주세요.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="store_visit_advisory",
+        called_tools=["get_store_schedule_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+    violation_types = {violation["type"] for violation in violations}
+    assert "forbidden_template" in violation_types
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "분당정자점 토요일 예약 가능한 시간 보여줘",
+        "분당정자점 이번 토요일 10시 예약 가능해?",
+        "분당정자점 오늘 오후 예약 잡아줘",
+        "분당정자점 방문예약 가능한 시간 알려줘",
+    ],
+)
+def test_explicit_store_schedule_lookup_still_allows_datepick(user_text: str) -> None:
     frame = build_transaction_intent_frame(user_text, known_slots={})
     tool_plan = plan_transaction_tools(frame)
     response_decision = decide_transaction_response(
