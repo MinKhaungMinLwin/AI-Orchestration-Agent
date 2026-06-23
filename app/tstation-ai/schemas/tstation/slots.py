@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any, ClassVar, Literal, Mapping, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,31 @@ class RecommendationContext(BaseModel):
         return data
 
 
+class ComparisonContext(BaseModel):
+    """Typed comparison-only context preserved after deterministic compare answers."""
+
+    product_names: list[str] = Field(default_factory=list)
+    compare_metric: Optional[str] = None
+    response_shape_key: Optional[str] = None
+    comparison_followup_intent: Optional[str] = None
+    source: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "ComparisonContext" | None) -> "ComparisonContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        data = {key: item for key, item in dict(value).items() if item not in (None, "")}
+        product_names = data.get("product_names") or data.get("productNames")
+        if isinstance(product_names, (tuple, list)):
+            data["product_names"] = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+        return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
+
+    def to_policy_dict(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+
+
 class ConversationSlots(BaseModel):
     """Conversation slots for tracking confirmed customer information across turns."""
 
@@ -109,6 +134,7 @@ class ConversationSlots(BaseModel):
     recommendation_limit_per_variant: Optional[int] = None
     recommendation_source_text: Optional[str] = None
     recommendation_context: Optional[RecommendationContext] = None
+    comparison_context: Optional[ComparisonContext] = None
     availability_context: Optional[dict[str, Any]] = None
     order_context: Optional[dict[str, Any]] = None
     quantity_comparison_context: Optional[dict[str, Any]] = None
@@ -1012,6 +1038,7 @@ class CanonicalSlotState(BaseModel):
     )
     CONTEXT_FIELDS: ClassVar[tuple[str, ...]] = (
         "recommendation_context",
+        "comparison_context",
         "availability_context",
         "order_context",
         "quantity_comparison_context",
@@ -1021,6 +1048,8 @@ class CanonicalSlotState(BaseModel):
     def from_slots(cls, slots: ConversationSlots) -> "CanonicalSlotState":
         def _value(value: Any) -> Any:
             if isinstance(value, RecommendationContext):
+                return value.to_policy_dict()
+            if isinstance(value, ComparisonContext):
                 return value.to_policy_dict()
             if isinstance(value, BaseModel):
                 return value.model_dump(exclude_none=True)

@@ -997,10 +997,10 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
-            allowed_tools=("search_product_tool", "get_product_description_tool", "get_products_recommendations_tool"),
+            allowed_tools=("search_product_tool", "get_product_description_tool"),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
-            forbidden_tools=("product_card_first_response",),
+            forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
         )
     if entities.get("technology") == "sound_absorber":
         args = {"rcmd_type": "sound_absorber"}

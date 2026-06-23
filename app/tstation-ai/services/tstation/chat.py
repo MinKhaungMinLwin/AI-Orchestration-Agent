@@ -9421,6 +9421,127 @@ _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE = re.compile(
     re.IGNORECASE,
 )
 _PRODUCT_PRICE_COMPARE_TEXT_RE = re.compile(r"가격|금액|혜택가|최종가|할인가|얼마|저렴|비싸", re.IGNORECASE)
+_PRODUCT_RELEASE_COMPARE_TEXT_RE = re.compile(r"신상|신상품|신제품|출시|출시일|최근|최신|새로운|새로\s*나온", re.IGNORECASE)
+_PRODUCT_CAR_TYPE_COMPARE_TEXT_RE = re.compile(r"차종\s*기준|SUV\s*용|승용\s*/\s*SUV|승용차\s*/\s*SUV", re.IGNORECASE)
+_PRODUCT_GRADE_COMPARE_TEXT_RE = re.compile(r"등급|프리미엄|스탠다드|상위", re.IGNORECASE)
+_PRODUCT_MILEAGE_COMPARE_TEXT_RE = re.compile(r"마일리지|수명|오래\s*가|내구", re.IGNORECASE)
+_PRODUCT_NOISE_COMPARE_TEXT_RE = re.compile(r"소음|조용|정숙", re.IGNORECASE)
+_PRODUCT_WET_COMPARE_TEXT_RE = re.compile(r"빗길|젖은\s*노면|wet", re.IGNORECASE)
+_PRODUCT_AXIS_OMITTED_COMPARE_RE = re.compile(
+    r"(?:중에서는|중에(?:는)?|둘은|두\s*상품은|는\s*\?|은\s*\?|어때|어떤데)\s*$",
+    re.IGNORECASE,
+)
+_PRODUCT_COMPARE_REASK_RE = re.compile(
+    r"뭐가\s*더\s*(?:신상|신상품|최신|최근|새로운|저렴|비싸|조용|좋|나아)|"
+    r"그래서\s*뭐가\s*더|다시\s*(?:비교|말해|알려)|"
+    r"(?:신상|최신|가격|등급|마일리지|소음|빗길).*(?:뭐냐고|냐고|라고)",
+    re.IGNORECASE,
+)
+_COMPARISON_METRICS = {
+    "release",
+    "price",
+    "grade",
+    "mileage",
+    "noise",
+    "fuel_efficiency",
+    "wet",
+    "car_type",
+    "detail",
+}
+
+
+def _comparison_context_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        data = dict(value)
+    elif hasattr(value, "to_policy_dict"):
+        data = value.to_policy_dict()
+    elif hasattr(value, "model_dump"):
+        data = value.model_dump(exclude_none=True)
+    else:
+        return {}
+    product_names = data.get("product_names") or data.get("productNames")
+    if isinstance(product_names, (list, tuple)):
+        data["product_names"] = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+    return data
+
+
+def _comparison_context_from_slots(slots: Any | None) -> dict[str, Any]:
+    if slots is None:
+        return {}
+    if isinstance(slots, Mapping):
+        value = slots.get("comparison_context")
+    else:
+        value = getattr(slots, "comparison_context", None)
+    return _comparison_context_dict(value)
+
+
+def _explicit_compare_metric_from_text(user_text: str) -> str:
+    text = user_text or ""
+    if _PRODUCT_RELEASE_COMPARE_TEXT_RE.search(text):
+        return "release"
+    if _PRODUCT_PRICE_COMPARE_TEXT_RE.search(text):
+        return "price"
+    if _PRODUCT_CAR_TYPE_COMPARE_TEXT_RE.search(text):
+        return "car_type"
+    if _PRODUCT_GRADE_COMPARE_TEXT_RE.search(text):
+        return "grade"
+    if _PRODUCT_MILEAGE_COMPARE_TEXT_RE.search(text):
+        return "mileage"
+    if _PRODUCT_NOISE_COMPARE_TEXT_RE.search(text):
+        return "noise"
+    if _PRODUCT_WET_COMPARE_TEXT_RE.search(text):
+        return "wet"
+    return ""
+
+
+def _comparison_query_metric_phrase(compare_metric: str) -> str:
+    return {
+        "release": "출시일 비교",
+        "price": "가격 비교",
+        "grade": "등급 비교",
+        "mileage": "마일리지 비교",
+        "noise": "소음 비교",
+        "fuel_efficiency": "연비 비교",
+        "wet": "빗길 성능 비교",
+        "car_type": "차종 기준 비교",
+        "detail": "비교",
+    }.get(compare_metric, "비교")
+
+
+def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    if str(event.get("assistant_response_source") or "") != "code_product_compare_resolver":
+        return {}
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return {}
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    response_shape_key = str(metadata.get("response_shape_key") or "").strip()
+    if response_shape_key not in {"metric_comparison_summary", "grade_comparison_summary"}:
+        return {}
+    compare_metric = str(metadata.get("compareMetric") or metadata.get("compare_metric") or "detail").strip()
+    if compare_metric not in _COMPARISON_METRICS:
+        compare_metric = "detail"
+    product_names = metadata.get("productNames") or metadata.get("product_names")
+    if not isinstance(product_names, (list, tuple)) or len(product_names) < 2:
+        return {}
+    names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+    if len(names) < 2:
+        return {}
+    return {
+        "comparison_context": {
+            "product_names": names,
+            "compare_metric": compare_metric,
+            "response_shape_key": response_shape_key,
+            "comparison_followup_intent": str(metadata.get("comparison_followup_intent") or "none"),
+            "source": "code_product_compare_resolver",
+        }
+    }
 
 
 def _product_comparison_names(user_text: str) -> tuple[str, ...]:
@@ -9653,22 +9774,35 @@ def _comparison_query_with_recent_context(
     user_text: str,
     messages: list[dict],
     latest_quickreply_tmpl: dict | None = None,
+    slots: Any | None = None,
 ) -> str:
     if _product_comparison_names(user_text):
         return user_text
     user_text = user_text or ""
     if _is_product_compare_context_reset_query(user_text):
         return user_text
+    comparison_context = _comparison_context_from_slots(slots)
+    context_names = tuple(comparison_context.get("product_names") or ())
+    context_metric = str(comparison_context.get("compare_metric") or "").strip()
+    if context_metric not in _COMPARISON_METRICS:
+        context_metric = ""
+    explicit_metric = _explicit_compare_metric_from_text(user_text)
+    effective_metric = explicit_metric or context_metric
+    current_names = _product_names_in_text(user_text)
+    if len(current_names) >= 2 and context_metric and _PRODUCT_AXIS_OMITTED_COMPARE_RE.search(user_text):
+        return f"{current_names[0]}랑 {current_names[1]} {_comparison_query_metric_phrase(effective_metric)}"
+    if len(current_names) == 0 and len(context_names) >= 2 and effective_metric and _PRODUCT_COMPARE_REASK_RE.search(user_text):
+        return f"{context_names[0]}랑 {context_names[1]} {_comparison_query_metric_phrase(effective_metric)}"
     is_description_compare = bool(_PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text))
     if not (is_description_compare or _PRODUCT_COMPARE_FOLLOWUP_RE.search(user_text)):
-        current_names = _product_names_in_text(user_text)
         if len(current_names) >= 2 and _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
             return f"{current_names[0]}랑 {current_names[1]} 비교"
         return user_text
 
-    current_names = _product_names_in_text(user_text)
     recent_names = _recent_product_names_for_comparison(messages)
     suffix = "상품 설명 비교" if is_description_compare else "비교"
+    if effective_metric and not is_description_compare:
+        suffix = _comparison_query_metric_phrase(effective_metric)
 
     if len(current_names) >= 2 and _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
         return f"{current_names[0]}랑 {current_names[1]} {suffix}"
@@ -9685,6 +9819,11 @@ def _comparison_query_with_recent_context(
         and _can_reuse_recent_products_for_comparison(user_text, is_description_compare=is_description_compare)
     ):
         return f"{recent_names[0]}랑 {recent_names[1]} {suffix}"
+    if len(current_names) == 0 and len(context_names) >= 2 and _can_reuse_recent_products_for_comparison(
+        user_text,
+        is_description_compare=is_description_compare,
+    ):
+        return f"{context_names[0]}랑 {context_names[1]} {suffix}"
     return user_text
 
 
@@ -10637,7 +10776,9 @@ def _build_product_comparison_event(
                     if compare_metric in {"grade", "price_grade"}
                     else "metric_comparison_summary"
                 ),
+                "productNames": [left_name, right_name],
                 "compareMetric": compare_metric or "detail",
+                "compare_metric": compare_metric or "detail",
                 "comparison_followup_intent": comparison_followup_intent or "none",
             },
         },
@@ -13182,6 +13323,7 @@ def _build_discovery_policy_context(
     goods_no: str | None = None,
     vehicle_type: str | None = None,
     recommendation_context: Mapping[str, Any] | None = None,
+    comparison_context: Mapping[str, Any] | None = None,
     routing_result: Any | None = None,
     pending_intent: str | None = None,
     goal_type: str | None = None,
@@ -13208,6 +13350,25 @@ def _build_discovery_policy_context(
             ).strip()
             if scenario:
                 known_slots["recommendation_scenario"] = scenario
+        if comparison_context:
+            normalized_comparison_context = _comparison_context_dict(comparison_context)
+            product_names = normalized_comparison_context.get("product_names")
+            compare_metric = str(normalized_comparison_context.get("compare_metric") or "").strip()
+            if isinstance(product_names, list) and len(product_names) >= 2:
+                known_slots["comparison_context"] = normalized_comparison_context
+            if compare_metric in _COMPARISON_METRICS:
+                explicit_metric = _explicit_compare_metric_from_text(last_user_text)
+                current_names = _product_names_in_text(last_user_text)
+                if explicit_metric:
+                    known_slots["comparison_followup_intent"] = (
+                        "continue_previous_compare_metric" if explicit_metric == compare_metric else "new_compare_metric"
+                    )
+                    known_slots["comparison_metric"] = explicit_metric
+                elif _PRODUCT_COMPARE_REASK_RE.search(last_user_text) or (
+                    len(current_names) >= 2 and _PRODUCT_AXIS_OMITTED_COMPARE_RE.search(last_user_text)
+                ):
+                    known_slots["comparison_followup_intent"] = "continue_previous_compare_metric"
+                    known_slots["comparison_metric"] = compare_metric
         transaction_followup_priority = _has_transaction_followup_priority(
             pending_intent=pending_intent,
             goal_type=goal_type,
@@ -18463,6 +18624,7 @@ class TStationChatServiceV2:
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
             recommendation_context=merged_slots.recommendation_context,
+            comparison_context=merged_slots.comparison_context,
             routing_result=routing_result,
             pending_intent=merged_slots.pending_intent,
             goal_type=merged_slots.goal_type,
@@ -20250,6 +20412,7 @@ class TStationChatServiceV2:
                 user_query,
                 messages,
                 latest_quickreply_tmpl,
+                slots=pending_slots or initial_slots,
             )
             product_names = _product_comparison_names(comparison_query)
             if len(product_names) < 2:
@@ -20365,7 +20528,44 @@ class TStationChatServiceV2:
                     )
                 product_rows.append((product_name, row))
 
-            return emitted_events, _build_product_comparison_event(comparison_query, product_rows)
+            compare_event = _build_product_comparison_event(comparison_query, product_rows)
+            _stage_comparison_context_slots(compare_event)
+            return emitted_events, compare_event
+
+        def _stage_comparison_context_slots(event: dict | None) -> None:
+            nonlocal pending_slots
+            values = _comparison_context_values_from_event(event)
+            if not values:
+                return
+            from schemas.tstation.slots import ComparisonContext, ConversationSlots
+
+            context = ComparisonContext.from_mapping(values.get("comparison_context"))
+            if context is None:
+                return
+            base_slots = pending_slots
+            if base_slots is None:
+                base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+            updated_slots = base_slots.apply_runtime_values(
+                {"comparison_context": context},
+                source="comparison_event",
+            )
+            if updated_slots.model_dump() != base_slots.model_dump():
+                pending_slots = updated_slots
+                logger.info(
+                    "[COMPARISON_CONTEXT] staged comparison context for next turn: %s",
+                    context.to_policy_dict(),
+                )
+
+        async def _persist_pending_slots_for_direct_return() -> None:
+            if not session_id or pending_slots is None:
+                return
+            try:
+                from services.tstation.chat_history_service import get_chat_history_service
+
+                history_svc = get_chat_history_service()
+                await history_svc.save_slots_async(session_id, pending_slots, user_id=user_id)
+            except Exception:
+                logger.exception("[COMPARISON_CONTEXT] failed to persist direct-return pending slots")
 
         async def _resolve_multi_product_detail_with_code(
             product_names: tuple[str, ...],
@@ -21644,6 +21844,7 @@ class TStationChatServiceV2:
             product_compare_resolution = await _resolve_product_comparison_with_code(multi_product_compare_query)
             if product_compare_resolution is not None:
                 code_events, compare_event = product_compare_resolution
+                await _persist_pending_slots_for_direct_return()
                 yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
                 for code_event in code_events:
                     yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
@@ -21661,6 +21862,7 @@ class TStationChatServiceV2:
             product_compare_resolution = await _resolve_product_comparison_with_code()
             if product_compare_resolution is not None:
                 code_events, compare_event = product_compare_resolution
+                await _persist_pending_slots_for_direct_return()
                 yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
                 for code_event in code_events:
                     yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
@@ -23116,7 +23318,12 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
                         }]
-                    comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
+                    comparison_query = _comparison_query_with_recent_context(
+                        user_query,
+                        messages,
+                        latest_quickreply_tmpl,
+                        slots=pending_slots or initial_slots,
+                    )
                     deterministic_compare_event = (
                         None
                         if (
@@ -23228,6 +23435,7 @@ class TStationChatServiceV2:
                             last_assistant_response_source = "code_multi_variant_recommendation"
                             event_data = event.get("data", {})
                 if isinstance(event_data, dict):
+                    _stage_comparison_context_slots(event)
                     confirmed_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event(event)
                     if confirmed_product_slots:
                         from schemas.tstation.slots import ConversationSlots
@@ -23388,7 +23596,12 @@ class TStationChatServiceV2:
                             "agent": "[DISCOVERY AGENT]",
                         }]
                     if source_domain == MultiAgentDomain.Domain.DISCOVERY.value:
-                        comparison_query = _comparison_query_with_recent_context(user_query, messages, latest_quickreply_tmpl)
+                        comparison_query = _comparison_query_with_recent_context(
+                            user_query,
+                            messages,
+                            latest_quickreply_tmpl,
+                            slots=pending_slots or initial_slots,
+                        )
                         deterministic_compare_event = (
                             None
                             if _should_skip_product_compare_override(user_query, called_tool_names)

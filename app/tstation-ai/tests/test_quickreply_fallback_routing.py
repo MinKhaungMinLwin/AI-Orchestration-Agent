@@ -272,7 +272,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
-from schemas.tstation.slots import CanonicalSlotState, ConversationSlots, RecommendationContext
+from schemas.tstation.slots import CanonicalSlotState, ComparisonContext, ConversationSlots, RecommendationContext
 from services.tstation.template_mapper import (
     _map_store_detail_info,
     current_discovery_response_decision,
@@ -2079,11 +2079,11 @@ def test_other_recommendation_text_does_not_reuse_recent_compare_products(user_t
 
 @pytest.mark.parametrize(
     ("user_text", "expected"),
-    [
-        ("두 개 특징 비교해줘", "Ventus air S랑 Ventus S2 AS 상품 설명 비교"),
-        ("가격은 둘 중 뭐가 더 저렴해?", "Ventus air S랑 Ventus S2 AS 비교"),
-    ],
-)
+        [
+            ("두 개 특징 비교해줘", "Ventus air S랑 Ventus S2 AS 상품 설명 비교"),
+            ("가격은 둘 중 뭐가 더 저렴해?", "Ventus air S랑 Ventus S2 AS 가격 비교"),
+        ],
+    )
 def test_clear_recent_two_compare_followup_still_reuses_recent_products(user_text: str, expected: str) -> None:
     messages = [
         {"role": "user", "content": "ventus air s, ventus s2 as 비교해줘"},
@@ -2094,6 +2094,94 @@ def test_clear_recent_two_compare_followup_still_reuses_recent_products(user_tex
     query = _comparison_query_with_recent_context(user_text, messages)
 
     assert query == expected
+
+
+def test_comparison_context_carries_release_metric_for_omitted_axis_product_pair() -> None:
+    slots = ConversationSlots(
+        comparison_context=ComparisonContext(
+            product_names=["Ventus S2 AS", "Ventus air S"],
+            compare_metric="release",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        )
+    )
+    messages = [{"role": "user", "content": "dynapro hpx, dynapro hp3 는?"}]
+
+    query = _comparison_query_with_recent_context("dynapro hpx, dynapro hp3 는?", messages, slots=slots)
+    frame = build_discovery_intent_frame(
+        "dynapro hpx, dynapro hp3 는?",
+        known_slots={
+            "comparison_followup_intent": "continue_previous_compare_metric",
+            "comparison_metric": "release",
+        },
+    )
+
+    assert query == "Dynapro HPX랑 Dynapro HP3 출시일 비교"
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "latest_compare"
+    assert frame.entities["compare_metric"] == "release"
+
+
+def test_comparison_context_restores_product_pair_for_release_reask() -> None:
+    slots = ConversationSlots(
+        comparison_context=ComparisonContext(
+            product_names=["Dynapro HPX", "Dynapro HP3"],
+            compare_metric="release",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        )
+    )
+
+    query = _comparison_query_with_recent_context("뭐가 더 신상이냐고", [], slots=slots)
+
+    assert query == "Dynapro HPX랑 Dynapro HP3 출시일 비교"
+
+
+def test_comparison_context_allows_explicit_price_metric_override() -> None:
+    slots = ConversationSlots(
+        comparison_context=ComparisonContext(
+            product_names=["Ventus S2 AS", "Ventus air S"],
+            compare_metric="release",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        )
+    )
+
+    query = _comparison_query_with_recent_context("dynapro hpx, dynapro hp3 가격은?", [], slots=slots)
+    frame = build_discovery_intent_frame(
+        "dynapro hpx, dynapro hp3 가격은?",
+        known_slots={
+            "comparison_followup_intent": "new_compare_metric",
+            "comparison_metric": "price",
+        },
+    )
+
+    assert query == "Dynapro HPX랑 Dynapro HP3 가격 비교"
+    assert frame.intent == "product_comparison"
+    assert frame.entities["compare_metric"] == "price"
+    assert frame.entities["comparison_followup_intent"] == "new_compare_metric"
+
+
+def test_comparison_event_metadata_can_be_promoted_to_comparison_context() -> None:
+    event = _build_product_comparison_event(
+        "ventus s2 as, ventus air S 중에 뭐가 더 신상품?",
+        [
+            ("Ventus S2 AS", {"goods_nm": "벤투스 S2 AS", "t_rls_yearmon": "2020년 1월"}),
+            ("Ventus air S", {"goods_nm": "벤투스 에어S", "t_rls_yearmon": "2024년 1월"}),
+        ],
+    )
+
+    values = chat_module._comparison_context_values_from_event(event)
+
+    assert values == {
+        "comparison_context": {
+            "product_names": ["벤투스 S2 AS", "벤투스 에어S"],
+            "compare_metric": "release",
+            "response_shape_key": "metric_comparison_summary",
+            "comparison_followup_intent": "none",
+            "source": "code_product_compare_resolver",
+        }
+    }
 
 
 def test_other_recommendation_text_does_not_rebuild_compare_event_from_previous_results() -> None:
