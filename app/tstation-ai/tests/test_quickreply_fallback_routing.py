@@ -2122,6 +2122,23 @@ def test_comparison_context_carries_release_metric_for_omitted_axis_product_pair
     assert frame.entities["compare_metric"] == "release"
 
 
+def test_comparison_context_allows_direct_resolver_for_omitted_axis_product_pair() -> None:
+    slots = ConversationSlots(
+        comparison_context=ComparisonContext(
+            product_names=["Ventus S2 AS", "Ventus air S"],
+            compare_metric="release",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        )
+    )
+
+    assert _should_resolve_compare_target_product_pair(
+        "dynapro hpx, dynapro hp3 는?",
+        [{"role": "user", "content": "dynapro hpx, dynapro hp3 는?"}],
+        slots=slots,
+    )
+
+
 def test_comparison_context_restores_product_pair_for_release_reask() -> None:
     slots = ConversationSlots(
         comparison_context=ComparisonContext(
@@ -11589,6 +11606,24 @@ def test_discovery_first_leg_product_search_no_result_is_not_contract_tool_viola
 
 def test_cross_domain_plan_keeps_two_product_difference_as_discovery_comparison() -> None:
     plan = plan_cross_domain_turn("아이온 에보 as 랑 아이온 에보 as suv 는 무슨 차이야?", known_slots={})
+
+    assert plan.primary_domain == PolicyDomain.DISCOVERY
+    assert [task.intent for task in plan.subtasks] == ["product_comparison"]
+    assert not plan.is_cross_domain
+
+
+def test_cross_domain_plan_keeps_omitted_axis_pair_as_comparison_with_context() -> None:
+    plan = plan_cross_domain_turn(
+        "dynapro hpx, dynapro hp3 는?",
+        known_slots={
+            "comparison_context": {
+                "product_names": ["Ventus S2 AS", "Ventus air S"],
+                "compare_metric": "release",
+                "response_shape_key": "metric_comparison_summary",
+                "source": "code_product_compare_resolver",
+            }
+        },
+    )
 
     assert plan.primary_domain == PolicyDomain.DISCOVERY
     assert [task.intent for task in plan.subtasks] == ["product_comparison"]

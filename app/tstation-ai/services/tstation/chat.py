@@ -9761,12 +9761,21 @@ def _should_resolve_compare_target_product_pair(
     user_text: str,
     messages: list[dict],
     latest_quickreply_tmpl: dict | None = None,
+    slots: Any | None = None,
 ) -> bool:
     if _is_product_compare_context_reset_query(user_text):
         return False
     if not _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
-        return False
-    comparison_query = _comparison_query_with_recent_context(user_text, messages, latest_quickreply_tmpl)
+        comparison_context = _comparison_context_from_slots(slots)
+        context_metric = str(comparison_context.get("compare_metric") or "").strip()
+        current_names = _product_names_in_text(user_text)
+        if not (
+            context_metric in _COMPARISON_METRICS
+            and len(current_names) >= 2
+            and _PRODUCT_AXIS_OMITTED_COMPARE_RE.search(user_text or "")
+        ):
+            return False
+    comparison_query = _comparison_query_with_recent_context(user_text, messages, latest_quickreply_tmpl, slots=slots)
     return len(_product_comparison_names(comparison_query)) >= 2
 
 
@@ -17545,6 +17554,9 @@ class TStationChatServiceV2:
                 "shop_id": merged_slots.shop_id,
                 "store_name": merged_slots.shop_name,
             }
+            comparison_context_for_policy = _comparison_context_dict(merged_slots.comparison_context)
+            if comparison_context_for_policy:
+                policy_known_slots["comparison_context"] = comparison_context_for_policy
             policy_plan = plan_cross_domain_turn(last_user_text, known_slots=policy_known_slots)
             policy_domains = _agent_domains_from_cross_domain_values(
                 agent_domain_values_for_initial_route(policy_plan, known_slots=policy_known_slots)
@@ -21856,7 +21868,12 @@ class TStationChatServiceV2:
                 yield "data: [DONE]\n\n"
                 return
 
-        if _should_resolve_compare_target_product_pair(user_query, messages, latest_quickreply_tmpl):
+        if _should_resolve_compare_target_product_pair(
+            user_query,
+            messages,
+            latest_quickreply_tmpl,
+            slots=pending_slots or initial_slots,
+        ):
             product_compare_resolution = await _resolve_product_comparison_with_code()
             if product_compare_resolution is not None:
                 code_events, compare_event = product_compare_resolution

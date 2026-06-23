@@ -53,6 +53,10 @@ _SUPPORT_RE = re.compile(
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
 _COMPARISON_SIGNAL_RE = re.compile(r"비교|차이|중(?:에|에서는)|뭐가\s*달라|무슨\s*차이", re.IGNORECASE)
+_OMITTED_COMPARISON_AXIS_RE = re.compile(
+    r"(?:중에서는|중에(?:는)?|둘은|두\s*상품은|는\s*\?|은\s*\?|어때|어떤데)\s*$",
+    re.IGNORECASE,
+)
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _WARRANTY_CLAIM_WEAR_RE = re.compile(
     r"다\s*닳|빨리\s*닳|벌써\s*닳|조기\s*마모|편마모|마모|수명|하자|문제|이상|불량|품질|"
@@ -212,9 +216,15 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
     has_warranty_claim_signal = is_warranty_claim_signal(text, known_slots=slots)
+    comparison_context = slots.get("comparison_context") if isinstance(slots.get("comparison_context"), dict) else {}
+    comparison_metric = str(comparison_context.get("compare_metric") or slots.get("comparison_metric") or "").strip()
+    has_prior_comparison_axis = bool(comparison_metric and comparison_metric != "none")
     has_product_comparison_signal = (
         len(tuple(_PRODUCT_HINT_RE.finditer(text))) >= 2
-        and bool(_COMPARISON_SIGNAL_RE.search(text))
+        and (
+            bool(_COMPARISON_SIGNAL_RE.search(text))
+            or (has_prior_comparison_axis and bool(_OMITTED_COMPARISON_AXIS_RE.search(text)))
+        )
         and not needs_stock_or_booking
     )
 
