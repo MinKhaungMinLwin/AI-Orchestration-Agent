@@ -651,6 +651,22 @@ _NON_TRANSACTION_POLICY_PLAN_RE = re.compile(
     r"policy|faq|shipping-fee|online/store price|price policy|delivery/shipping-fee",
     re.IGNORECASE,
 )
+_ROUTER_COMPARISON_FOLLOWUP_INTENTS = frozenset({
+    "continue_previous_compare_metric",
+    "new_compare_metric",
+    "generic_compare",
+})
+_ROUTER_COMPARISON_METRICS = frozenset({
+    "release",
+    "price",
+    "grade",
+    "mileage",
+    "noise",
+    "fuel_efficiency",
+    "wet",
+    "car_type",
+    "detail",
+})
 
 
 def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain | None) -> bool:
@@ -668,6 +684,24 @@ def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain 
         return True
     execution_plan = tuple(str(item) for item in (getattr(routing_result, "execution_plan", None) or ()))
     return bool(execution_plan and all(_NON_TRANSACTION_POLICY_PLAN_RE.search(item) for item in execution_plan))
+
+
+def _router_contract_is_high_confidence_comparison(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE:
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if domains != [MultiAgentDomain.Domain.DISCOVERY]:
+        return False
+    comparison_followup_intent = str(getattr(routing_result, "comparison_followup_intent", "") or "").strip()
+    comparison_metric = str(getattr(routing_result, "comparison_metric", "") or "").strip()
+    if comparison_followup_intent in _ROUTER_COMPARISON_FOLLOWUP_INTENTS:
+        return True
+    referred_object_type = str(getattr(routing_result, "referred_object_type", "") or "").strip()
+    return referred_object_type == "product_set" and comparison_metric in _ROUTER_COMPARISON_METRICS
 
 
 def _explicit_current_turn_override_reason(
@@ -703,9 +737,15 @@ def _should_preserve_router_contract(
 ) -> bool:
     if routing_result is None:
         return False
-    if not _router_contract_is_high_confidence_policy(routing_result):
+    is_high_confidence_comparison = _router_contract_is_high_confidence_comparison(routing_result)
+    if not (is_high_confidence_comparison or _router_contract_is_high_confidence_policy(routing_result)):
         return False
-    if override_reason in {
+    if is_high_confidence_comparison and override_reason in {
+        "explicit_current_turn_stock_or_booking",
+        "explicit_current_turn_purchase",
+    }:
+        return False
+    if not is_high_confidence_comparison and override_reason in {
         "missing_goods_no_for_explicit_transaction",
         "explicit_current_turn_price_lookup",
         "explicit_current_turn_stock_or_booking",
@@ -16570,6 +16610,23 @@ class TStationChatServiceV2:
                         "[POLICY][route-fast-path] support policy classifier overrides product resolution: "
                         "policy_intent=%s confidence=%.2f",
                         getattr(classifier_routing_result, "policy_intent", None),
+                        float(getattr(classifier_routing_result, "planner_confidence", 0.0) or 0.0),
+                    )
+                elif (
+                    classifier_routing_result is not None
+                    and _router_contract_is_high_confidence_comparison(classifier_routing_result)
+                    and classifier_domains == [MultiAgentDomain.Domain.DISCOVERY]
+                ):
+                    domains = classifier_domains
+                    routing_result = classifier_routing_result
+                    routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+                    policy_preclassified_skip_decision = False
+                    _classify_path = "llm_comparison_override"
+                    logger.info(
+                        "[POLICY][route-fast-path] comparison classifier overrides product resolution: "
+                        "comparison_followup_intent=%s comparison_metric=%s confidence=%.2f",
+                        getattr(classifier_routing_result, "comparison_followup_intent", None),
+                        getattr(classifier_routing_result, "comparison_metric", None),
                         float(getattr(classifier_routing_result, "planner_confidence", 0.0) or 0.0),
                     )
                 elif (

@@ -67,6 +67,7 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
 })
+_COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "requested_product_attribute_contract_drift",
     "compare_metric_metadata_drift",
@@ -642,6 +643,8 @@ def _tool_contract_violation(
         and _is_discovery_first_leg_transaction_contract(contract)
     ):
         return None
+    if called_tool_set and called_tool_set <= _COMPARISON_RESOLVER_TOOLS and _is_comparison_contract(contract):
+        return None
     disallowed = [
         str(tool)
         for tool in called_tools
@@ -655,6 +658,19 @@ def _tool_contract_violation(
         "called_tools": disallowed,
         "allowed_tools": list(contract.allowed_tools),
     }
+
+
+def _is_comparison_contract(contract: TurnContract | None) -> bool:
+    if contract is None:
+        return False
+    if str(contract.intent or "") == "product_comparison":
+        return True
+    response_decision = contract.response_decision or {}
+    metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if not isinstance(metadata, Mapping):
+        return False
+    response_shape_key = str(metadata.get("response_shape_key") or "")
+    return response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}
 
 
 def _comparison_contract_violation(

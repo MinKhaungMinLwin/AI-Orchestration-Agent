@@ -52,6 +52,7 @@ _SUPPORT_RE = re.compile(
     re.IGNORECASE,
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
+_COMPARISON_SIGNAL_RE = re.compile(r"비교|차이|중(?:에|에서는)|뭐가\s*달라|무슨\s*차이", re.IGNORECASE)
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _WARRANTY_CLAIM_WEAR_RE = re.compile(
     r"다\s*닳|빨리\s*닳|벌써\s*닳|조기\s*마모|편마모|마모|수명|하자|문제|이상|불량|품질|"
@@ -211,6 +212,24 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
     has_warranty_claim_signal = is_warranty_claim_signal(text, known_slots=slots)
+    has_product_comparison_signal = (
+        len(tuple(_PRODUCT_HINT_RE.finditer(text))) >= 2
+        and bool(_COMPARISON_SIGNAL_RE.search(text))
+        and not needs_stock_or_booking
+    )
+
+    if has_product_comparison_signal:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="product_comparison",
+                    reason="두 개 이상 상품명과 비교/차이 신호가 있어 단일 상품 설명으로 축소하지 않음",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
 
     if needs_regional_price_policy:
         return CrossDomainPlan(

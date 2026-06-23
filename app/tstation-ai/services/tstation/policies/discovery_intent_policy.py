@@ -55,7 +55,7 @@ _QUANTITY_OPTION_RE = re.compile(r"(\d{1,2})\s*(?:개|본)")
 _QUANTITY_BENEFIT_RE = re.compile(r"할인|혜택|가격|금액|최종가|저렴|싼|싸|쿠폰", re.IGNORECASE)
 _QUANTITY_COMPARE_RE = re.compile(r"비교|중에|살까|고민|더|차이|낫|유리|얼마나", re.IGNORECASE)
 _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNORECASE)
-_COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
+_COMPARE_RE = re.compile(r"비교|차이|무슨\s*차이|뭐가\s*달라|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
 _BEST_SELLER_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|"
@@ -901,7 +901,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
-            allowed_tools=("search_product_tool", "get_products_recommendations_tool"),
+            allowed_tools=("search_product_tool", "get_product_description_tool", "get_products_recommendations_tool"),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("product_card_first_response",),

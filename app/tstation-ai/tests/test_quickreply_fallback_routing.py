@@ -139,6 +139,7 @@ from services.tstation.chat import (
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
     _promote_completed_speculative_router_contract,
+    _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
@@ -10313,6 +10314,65 @@ def test_discovery_first_leg_product_search_no_result_is_not_contract_tool_viola
     )
 
     assert not violations
+
+
+def test_cross_domain_plan_keeps_two_product_difference_as_discovery_comparison() -> None:
+    plan = plan_cross_domain_turn("아이온 에보 as 랑 아이온 에보 as suv 는 무슨 차이야?", known_slots={})
+
+    assert plan.primary_domain == PolicyDomain.DISCOVERY
+    assert [task.intent for task in plan.subtasks] == ["product_comparison"]
+    assert not plan.is_cross_domain
+
+
+def test_high_confidence_router_comparison_is_preserved_over_product_resolution_override() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_comparison"],
+        comparison_followup_intent="generic_compare",
+        comparison_metric="detail",
+        referred_object_type="product_set",
+    )
+
+    assert _router_contract_is_high_confidence_comparison(routing)
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="cross_domain_policy_route",
+        override_reason="explicit_current_turn_price_lookup",
+    )
+
+
+def test_product_comparison_tool_contract_allows_description_lookup_for_table_basis() -> None:
+    frame = build_discovery_intent_frame("아이온 에보 as 랑 아이온 에보 as suv 는 무슨 차이야?")
+    tool_plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text="아이온 에보 as 랑 아이온 에보 as suv 는 무슨 차이야?",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_comparison"],
+            comparison_followup_intent="generic_compare",
+            comparison_metric="detail",
+            referred_object_type="product_set",
+        ),
+    )
+
+    assert frame.intent == "product_comparison"
+    assert "get_product_description_tool" in tool_plan.allowed_tools
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="| 항목 | 아이온 에보 AS | 아이온 에보 AS SUV |\n|---|---|---|\n| 특징 | x | y |",
+        assistant_response_source="code_product_compare_resolver",
+        compare_metric="detail",
+        response_shape_key="metric_comparison_summary",
+        called_tools=["search_product_tool", "get_product_description_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert violations == []
 
 
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "이 상품 주문할게", "그거 결제하고 싶어"])
